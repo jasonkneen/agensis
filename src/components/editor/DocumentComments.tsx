@@ -9,6 +9,8 @@ interface DocumentCommentsProps {
   replyMap: Record<string, DocumentComment[]>;
   currentUserId?: string;
   currentUserEmail: string;
+  pendingAnchor?: string;
+  onAnchorConsumed?: () => void;
   onCreate: (input: CreateCommentInput) => void;
   onResolve: (id: string, resolved: boolean) => void;
   onDelete: (id: string) => void;
@@ -37,14 +39,23 @@ export function DocumentComments({
   topLevel,
   replyMap,
   currentUserEmail,
+  pendingAnchor,
+  onAnchorConsumed,
   onCreate,
   onResolve,
   onDelete,
   onClose,
 }: DocumentCommentsProps) {
   const [newContent, setNewContent] = useState('');
+  const [anchorText, setAnchorText] = useState('');
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
+
+  // When a pending anchor arrives from the doc selection, absorb it
+  if (pendingAnchor && pendingAnchor !== anchorText) {
+    setAnchorText(pendingAnchor);
+    onAnchorConsumed?.();
+  }
 
   const visibleTopLevel = useMemo(
     () => topLevel.filter(c => showResolved || !c.resolved),
@@ -58,8 +69,10 @@ export function DocumentComments({
     onCreate({
       content: newContent.trim(),
       parent_id: replyTo,
+      anchor_text: replyTo ? undefined : anchorText || undefined,
     });
     setNewContent('');
+    setAnchorText('');
     setReplyTo(null);
   };
 
@@ -176,6 +189,39 @@ export function DocumentComments({
         borderTop: '1px solid var(--border-subtle)',
         flexShrink: 0,
       }}>
+        {anchorText && !replyTo && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '6px',
+            marginBottom: '6px',
+            padding: '4px 6px',
+            background: 'var(--canvas-overlay)',
+            borderLeft: '2px solid var(--accent)',
+            borderRadius: '2px',
+            fontSize: '10px',
+            fontStyle: 'italic',
+            color: 'var(--text-muted)',
+          }}>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>
+              &ldquo;{anchorText.slice(0, 120)}{anchorText.length > 120 ? '...' : ''}&rdquo;
+            </span>
+            <button
+              onClick={() => setAnchorText('')}
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                padding: 0,
+                flexShrink: 0,
+              }}
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
         {replyTo && (
           <div style={{
             display: 'flex',

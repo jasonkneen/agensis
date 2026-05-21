@@ -193,15 +193,27 @@ export default function App() {
     const session = await createSession();
     if (session) {
       openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId });
+      logEvent({
+        event_type: 'chat_created',
+        entity_type: 'chat',
+        entity_id: session.id,
+        title: `New chat: ${session.title || 'Untitled'}`,
+      });
     }
-  }, [createSession, openWindow, activeLayerId]);
+  }, [createSession, openWindow, activeLayerId, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
     const doc = await createDocument();
     if (doc) {
       openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId });
+      logEvent({
+        event_type: 'document_created',
+        entity_type: 'document',
+        entity_id: doc.id,
+        title: `New document: ${doc.title || 'Untitled'}`,
+      });
     }
-  }, [createDocument, openWindow, activeLayerId]);
+  }, [createDocument, openWindow, activeLayerId, logEvent]);
 
   const handleOpenMemory = useCallback(() => {
     const existing = windows.find(w => w.type === 'memory');
@@ -652,11 +664,30 @@ export default function App() {
                 onShareWindow={handleShareWindow}
                 onSendMessage={wrappedSendMessage}
                 onSetActiveSession={setActiveSession}
-                onDeleteDocument={deleteDocument}
+                onDeleteDocument={async (id) => {
+                  const doc = documents.find(d => d.id === id);
+                  await deleteDocument(id);
+                  if (doc) {
+                    logEvent({
+                      event_type: 'document_deleted',
+                      entity_type: 'document',
+                      entity_id: id,
+                      title: `Document deleted: ${doc.title}`,
+                    });
+                  }
+                }}
                 onSaveDocument={saveDocument}
                 onAutoSaveDocument={autoSave}
                 onToggleFavorite={toggleFavorite}
-                onAddFact={addFact}
+                onAddFact={(fact, category) => {
+                  addFact(fact, category);
+                  logEvent({
+                    event_type: 'memory_added',
+                    entity_type: 'memory',
+                    title: `Memory added: ${fact.slice(0, 60)}${fact.length > 60 ? '...' : ''}`,
+                    metadata: { category },
+                  });
+                }}
                 onUpdateFact={updateFact}
                 onDeleteFact={deleteFact}
                 onCreateTask={handleCreateTask}

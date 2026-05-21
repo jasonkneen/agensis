@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle } from 'lucide-react';
-import type { Document } from '../../types';
+import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle, History } from 'lucide-react';
+import type { Document, DocumentVersion } from '../../types';
 import { DocumentCommentsPanel } from '../editor/DocumentCommentsPanel';
+import { DocumentVersionHistoryPanel } from '../editor/DocumentVersionHistoryPanel';
+import { useDocumentVersions } from '../../hooks/useDocumentVersions';
 
 interface DocWindowContentProps {
   document: Document;
@@ -118,9 +120,19 @@ export function DocWindowContent({
 }: DocWindowContentProps) {
   const [title, setTitle] = useState(doc.title);
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [pendingAnchor, setPendingAnchor] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const lastSnapshotContentRef = useRef<string>(doc.content || '');
+  const lastSnapshotTimeRef = useRef<number>(Date.now());
+
+  const { createSnapshot } = useDocumentVersions(
+    doc.id,
+    workspaceId ?? null,
+    userId,
+  );
   const sketchDrawRef = useRef<{
     canvas: HTMLCanvasElement;
     move: (ev: MouseEvent) => void;
@@ -130,12 +142,23 @@ export function DocWindowContent({
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      const savedTitle = newTitle ?? title;
+      const savedContent = newContent ?? contentRef.current?.innerHTML ?? '';
       onAutoSave(doc.id, {
-        title: newTitle ?? title,
-        content: newContent ?? contentRef.current?.innerHTML ?? '',
+        title: savedTitle,
+        content: savedContent,
       });
+
+      // Auto-snapshot: if content changed by >= 100 chars and >= 60s since last snapshot
+      const charDiff = Math.abs(savedContent.length - lastSnapshotContentRef.current.length);
+      const timeSinceLastSnapshot = Date.now() - lastSnapshotTimeRef.current;
+      if (charDiff >= 100 && timeSinceLastSnapshot >= 60000) {
+        lastSnapshotContentRef.current = savedContent;
+        lastSnapshotTimeRef.current = Date.now();
+        createSnapshot(savedTitle, savedContent);
+      }
     }, 800);
-  }, [doc.id, title, onAutoSave]);
+  }, [doc.id, title, onAutoSave, createSnapshot]);
 
   useEffect(() => {
     setTitle(doc.title);
@@ -143,7 +166,19 @@ export function DocWindowContent({
       contentRef.current.innerHTML = doc.content || '';
       hydrateSketchCanvases(contentRef.current);
     }
+    lastSnapshotContentRef.current = doc.content || '';
+    lastSnapshotTimeRef.current = Date.now();
   }, [doc.id]);
+
+  const handleRestoreVersion = useCallback((version: DocumentVersion) => {
+    if (contentRef.current) {
+      contentRef.current.innerHTML = version.content;
+      hydrateSketchCanvases(contentRef.current);
+    }
+    setTitle(version.title);
+    onTitleChange(version.title);
+    triggerAutoSave(version.title, version.content);
+  }, [onTitleChange, triggerAutoSave]);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -380,8 +415,16 @@ export function DocWindowContent({
         <div style={{ flex: 1 }} />
         {canShowComments && (
           <button
-            onClick={() => setCommentsOpen(v => !v)}
-            title={commentsOpen ? 'Hide comments' : 'Show comments'}
+            onClick={() => {
+              if (!commentsOpen) {
+                const sel = window.getSelection();
+                const selectedText = sel?.toString()?.trim() || '';
+                setPendingAnchor(selectedText);
+              }
+              setCommentsOpen(v => !v);
+              if (!commentsOpen) setHistoryOpen(false);
+            }}
+            title={commentsOpen ? 'Hide comments' : 'Comment (select text first to anchor)'}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: '26px', height: '26px',
@@ -393,6 +436,26 @@ export function DocWindowContent({
             onMouseLeave={e => { if (!commentsOpen) e.currentTarget.style.color = 'var(--text-muted)'; }}
           >
             <MessageCircle size={12} />
+          </button>
+        )}
+        {workspaceId && (
+          <button
+            onClick={() => {
+              setHistoryOpen(v => !v);
+              if (!historyOpen) setCommentsOpen(false);
+            }}
+            title={historyOpen ? 'Hide version history' : 'Version history'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: '26px', height: '26px',
+              background: historyOpen ? 'var(--accent-subtle)' : 'transparent',
+              border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+              color: historyOpen ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+            onMouseEnter={e => { if (!historyOpen) e.currentTarget.style.color = 'var(--accent)'; }}
+            onMouseLeave={e => { if (!historyOpen) e.currentTarget.style.color = 'var(--text-muted)'; }}
+          >
+            <History size={12} />
           </button>
         )}
         <button
@@ -459,8 +522,19 @@ export function DocWindowContent({
             userId={userId}
             currentUserEmail={currentUserEmail}
             documentTitle={doc.title}
+            pendingAnchor={pendingAnchor}
+            onAnchorConsumed={() => setPendingAnchor('')}
             onClose={() => setCommentsOpen(false)}
             onCommentCreated={onCommentCreated}
+          />
+        )}
+        {historyOpen && workspaceId && (
+          <DocumentVersionHistoryPanel
+            documentId={doc.id}
+            workspaceId={workspaceId}
+            userId={userId}
+            onRestore={handleRestoreVersion}
+            onClose={() => setHistoryOpen(false)}
           />
         )}
       </div>

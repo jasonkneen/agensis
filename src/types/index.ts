@@ -194,6 +194,17 @@ export const AI_MODELS: AIModel[] = [
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', description: 'Fastest model' },
 ];
 
+export interface DocumentVersion {
+  id: string;
+  document_id: string;
+  workspace_id: string;
+  user_id: string | null;
+  title: string;
+  content: string;
+  version_number: number;
+  created_at: string;
+}
+
 export interface OnboardingStep {
   id: number;
   title: string;
