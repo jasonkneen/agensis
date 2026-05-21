@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { backendClient, getBackendBaseUrl } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
-import type { ChatSession, Message, MemoryFact, Document } from '../types';
+import type { ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
 export function useChat(workspaceId: string | null) {
@@ -10,6 +10,7 @@ export function useChat(workspaceId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async () => {
     if (!workspaceId) return;
@@ -68,12 +69,38 @@ export function useChat(workspaceId: string | null) {
     return data;
   }, [workspaceId]);
 
+  // Top-level messages (no thread parent)
+  const topLevelMessages = messages.filter(m => !m.thread_parent_id);
+
+  // Thread messages for the active thread
+  const threadMessages = activeThreadId
+    ? messages.filter(m => m.thread_parent_id === activeThreadId || m.id === activeThreadId)
+    : [];
+
+  // Thread reply counts per parent message
+  const threadReplyCounts: Record<string, number> = {};
+  messages.forEach(m => {
+    if (m.thread_parent_id) {
+      threadReplyCounts[m.thread_parent_id] = (threadReplyCounts[m.thread_parent_id] || 0) + 1;
+    }
+  });
+
+  const openThread = useCallback((messageId: string) => {
+    setActiveThreadId(messageId);
+  }, []);
+
+  const closeThread = useCallback(() => {
+    setActiveThreadId(null);
+  }, []);
+
   const sendMessage = useCallback(async (
     content: string,
     model: string,
     memoryFacts?: MemoryFact[],
     linkedDocuments?: Document[],
     workspaceContext?: WorkspaceContextSnapshot | null,
+    agent?: WorkspaceAgent | null,
+    threadParentId?: string | null,
   ) => {
     if (!activeSession) return;
 
@@ -82,6 +109,7 @@ export function useChat(workspaceId: string | null) {
       session_id: activeSession.id,
       role: 'user',
       content,
+      thread_parent_id: threadParentId ?? null,
       created_at: new Date().toISOString(),
     };
 
@@ -93,19 +121,22 @@ export function useChat(workspaceId: string | null) {
         session_id: activeSession.id,
         role: 'assistant',
         content: 'You are currently offline. Your message will be sent when you reconnect.',
+        thread_parent_id: threadParentId ?? null,
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, offlineReply]);
       return;
     }
 
-    await backendClient.from('messages').insert({
+    const insertPayload: Record<string, unknown> = {
       session_id: activeSession.id,
       role: 'user',
       content,
-    });
+    };
+    if (threadParentId) insertPayload.thread_parent_id = threadParentId;
+    await backendClient.from('messages').insert(insertPayload);
 
-    if (activeSession.title === 'New Chat') {
+    if (activeSession.title === 'New Chat' && !threadParentId) {
       const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
       await backendClient
         .from('chat_sessions')
@@ -124,6 +155,7 @@ export function useChat(workspaceId: string | null) {
       session_id: activeSession.id,
       role: 'assistant',
       content: '',
+      thread_parent_id: threadParentId ?? null,
       created_at: new Date().toISOString(),
     };
     setMessages(prev => [...prev, placeholderMsg]);
@@ -139,17 +171,29 @@ export function useChat(workspaceId: string | null) {
         ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
         : null;
 
+      // For thread replies, only send thread context
+      const contextMessages = threadParentId
+        ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
+        : messages;
+
+      const agentContext = agent ? {
+        name: agent.name,
+        systemPrompt: agent.system_prompt,
+        model: agent.model,
+      } : null;
+
       const response = await fetch(`${backendBase}/backend/ai-chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })),
-          model,
+          messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: m.content })),
+          model: agent?.model || model,
           memory: memoryContext,
           documents: docContext,
           workspaceContext: workspaceContext ?? null,
+          agentContext,
         }),
       });
 
@@ -159,11 +203,13 @@ export function useChat(workspaceId: string | null) {
         setMessages(prev => prev.map(m =>
           m.id === assistantMsgId ? { ...m, content: errMsg } : m
         ));
-        await backendClient.from('messages').insert({
+        const errInsert: Record<string, unknown> = {
           session_id: activeSession.id,
           role: 'assistant',
           content: errMsg,
-        });
+        };
+        if (threadParentId) errInsert.thread_parent_id = threadParentId;
+        await backendClient.from('messages').insert(errInsert);
         return;
       }
 
@@ -197,11 +243,13 @@ export function useChat(workspaceId: string | null) {
       }
 
       if (fullContent) {
-        await backendClient.from('messages').insert({
+        const assistantInsert: Record<string, unknown> = {
           session_id: activeSession.id,
           role: 'assistant',
           content: fullContent,
-        });
+        };
+        if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
+        await backendClient.from('messages').insert(assistantInsert);
       }
     } catch {
       const errMsg = 'Something went wrong. Please try again.';
@@ -227,6 +275,12 @@ export function useChat(workspaceId: string | null) {
     activeSession,
     setActiveSession,
     messages,
+    topLevelMessages,
+    threadMessages,
+    threadReplyCounts,
+    activeThreadId,
+    openThread,
+    closeThread,
     loading,
     streaming,
     createSession,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -8,6 +8,7 @@ import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { DocWindowContent } from './components/windows/DocWindowContent';
 import { TasksWindowContent } from './components/windows/TasksWindowContent';
 import { ActivityWindowContent } from './components/windows/ActivityWindowContent';
+import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
 import { MemorySection } from './components/memory/MemorySection';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import CommandPalette from './components/search/CommandPalette';
@@ -16,6 +17,7 @@ import { ShareDialog } from './components/sharing/ShareDialog';
 import { CreateWorkspaceDialog } from './components/sharing/CreateWorkspaceDialog';
 import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
+import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -32,9 +34,11 @@ import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
 import { useWorkspaceContext } from './hooks/useWorkspaceContext';
+import { useAgents } from './hooks/useAgents';
+import type { CanvasTemplate } from './lib/canvasTemplates';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent } from './types';
+import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 import bg1 from '../images/download-21.jpg';
@@ -77,7 +81,9 @@ export default function App() {
 
   const {
     sessions, activeSession, setActiveSession, messages, streaming,
-    createSession, sendMessage
+    topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
+    openThread, closeThread,
+    createSession, sendMessage,
   } = useChat(activeWorkspaceId);
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
@@ -142,6 +148,16 @@ export default function App() {
     user?.id,
   );
 
+  const {
+    agents,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+  } = useAgents(activeWorkspaceId || null, user?.id);
+
+  const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+
   const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
     workspaceName: activeWorkspace?.name || 'Workspace',
     documents,
@@ -192,15 +208,27 @@ export default function App() {
     const session = await createSession();
     if (session) {
       openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId });
+      logEvent({
+        event_type: 'chat_created',
+        entity_type: 'chat',
+        entity_id: session.id,
+        title: `New chat: ${session.title || 'Untitled'}`,
+      });
     }
-  }, [createSession, openWindow, activeLayerId]);
+  }, [createSession, openWindow, activeLayerId, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
     const doc = await createDocument();
     if (doc) {
       openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId });
+      logEvent({
+        event_type: 'document_created',
+        entity_type: 'document',
+        entity_id: doc.id,
+        title: `New document: ${doc.title || 'Untitled'}`,
+      });
     }
-  }, [createDocument, openWindow, activeLayerId]);
+  }, [createDocument, openWindow, activeLayerId, logEvent]);
 
   const handleOpenMemory = useCallback(() => {
     const existing = windows.find(w => w.type === 'memory');
@@ -231,6 +259,22 @@ export default function App() {
     }
     openWindow('activity', { title: 'Activity', canvasId: activeLayerId });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
+
+  const handleOpenAgents = useCallback(() => {
+    const existing = windows.find(w => w.type === 'agents');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
+
+  const handleApplyTemplate = useCallback(async (template: CanvasTemplate) => {
+    for (const obj of template.objects) {
+      await addCanvasObject(obj.type as import('./types').CanvasObjectType, obj.overrides as Partial<import('./types').CanvasObject>);
+    }
+  }, [addCanvasObject]);
 
   const handleCreateTask = useCallback(async (input: CreateTaskInput) => {
     const task = await createTask(input);
@@ -328,8 +372,8 @@ export default function App() {
     docs?: Document[],
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot);
-  }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext]);
+    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent);
+  }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleHomeSendMessage = useCallback(async (
     content: string,
@@ -454,6 +498,8 @@ export default function App() {
         onOpenMemory={handleOpenMemory}
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}
+        onOpenAgents={handleOpenAgents}
+        onOpenTemplates={() => setTemplatePickerOpen(true)}
         openTaskCount={openTasks.length}
         recents={recents}
         sessions={sessions}
@@ -508,6 +554,18 @@ export default function App() {
                 members={members}
                 activityEvents={activityEvents}
                 activityLoading={activityLoading}
+                agents={agents}
+                selectedAgent={selectedAgent}
+                onSelectAgent={setSelectedAgent}
+                onCreateAgent={createAgent}
+                onUpdateAgent={updateAgent}
+                onDeleteAgent={deleteAgent}
+                topLevelMessages={topLevelMessages}
+                threadMessages={threadMessages}
+                threadReplyCounts={threadReplyCounts}
+                activeThreadId={activeThreadId}
+                onOpenThread={openThread}
+                onCloseThread={closeThread}
                 useWorkspaceCtx={useWorkspaceCtx}
                 onToggleWorkspaceCtx={() => setUseWorkspaceCtx(v => !v)}
                 onHomeSendMessage={handleHomeSendMessage}
@@ -520,10 +578,29 @@ export default function App() {
                 onShareWindow={handleShareWindow}
                 onSendMessage={wrappedSendMessage}
                 onSetActiveSession={setActiveSession}
-                onDeleteDocument={deleteDocument}
+                onDeleteDocument={async (id) => {
+                  const doc = documents.find(d => d.id === id);
+                  await deleteDocument(id);
+                  if (doc) {
+                    logEvent({
+                      event_type: 'document_deleted',
+                      entity_type: 'document',
+                      entity_id: id,
+                      title: `Document deleted: ${doc.title}`,
+                    });
+                  }
+                }}
                 onAutoSaveDocument={autoSave}
                 onToggleFavorite={toggleFavorite}
-                onAddFact={addFact}
+                onAddFact={(fact, category) => {
+                  addFact(fact, category);
+                  logEvent({
+                    event_type: 'memory_added',
+                    entity_type: 'memory',
+                    title: `Memory added: ${fact.slice(0, 60)}${fact.length > 60 ? '...' : ''}`,
+                    metadata: { category },
+                  });
+                }}
                 onUpdateFact={updateFact}
                 onDeleteFact={deleteFact}
                 onCreateTask={handleCreateTask}
@@ -566,6 +643,12 @@ export default function App() {
               />
             )}
 
+            <CanvasTemplatePicker
+              open={templatePickerOpen}
+              onClose={() => setTemplatePickerOpen(false)}
+              onApply={handleApplyTemplate}
+            />
+
             {minimizedActiveWindows.length > 0 && (
               <div style={{
                 position: 'absolute',
@@ -599,6 +682,7 @@ export default function App() {
                       : win.type === 'memory' ? <Brain size={12} />
                       : win.type === 'tasks' ? <CheckCircle2 size={12} />
                       : win.type === 'activity' ? <Activity size={12} />
+                      : win.type === 'agents' ? <Bot size={12} />
                       : <FileText size={12} />}
                     <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {win.title}
@@ -675,6 +759,18 @@ function CanvasLayerScene({
   members,
   activityEvents,
   activityLoading,
+  agents,
+  selectedAgent,
+  onSelectAgent,
+  onCreateAgent,
+  onUpdateAgent,
+  onDeleteAgent,
+  topLevelMessages,
+  threadMessages,
+  threadReplyCounts,
+  activeThreadId,
+  onOpenThread,
+  onCloseThread,
   useWorkspaceCtx,
   onToggleWorkspaceCtx,
   onHomeSendMessage,
@@ -717,6 +813,18 @@ function CanvasLayerScene({
   members: WorkspaceMember[];
   activityEvents: ActivityEvent[];
   activityLoading: boolean;
+  agents: WorkspaceAgent[];
+  selectedAgent: WorkspaceAgent | null;
+  onSelectAgent: (agent: WorkspaceAgent | null) => void;
+  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; model?: string }) => void;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onDeleteAgent: (id: string) => void;
+  topLevelMessages: import('./types').Message[];
+  threadMessages: import('./types').Message[];
+  threadReplyCounts: Record<string, number>;
+  activeThreadId: string | null;
+  onOpenThread: (messageId: string) => void;
+  onCloseThread: () => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
   onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
@@ -791,14 +899,27 @@ function CanvasLayerScene({
                 <div style={{ flex: 1, minHeight: 0 }}>
                   <ChatWindowContent
                     messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
+                    topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
+                    threadMessages={threadMessages}
+                    threadReplyCounts={threadReplyCounts}
+                    activeThreadId={activeThreadId}
                     streaming={activeSession?.id === win.sessionId ? streaming : false}
                     memoryFacts={facts}
                     documents={documents}
+                    agents={agents}
+                    selectedAgent={selectedAgent}
+                    onSelectAgent={onSelectAgent}
                     canvasGroups={canvasGroups}
                     canvasObjects={canvasObjects}
                     onSendMessage={(content, model, mf, docs) => {
                       if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
                       onSendMessage(content, model, mf, docs);
+                    }}
+                    onOpenThread={onOpenThread}
+                    onCloseThread={onCloseThread}
+                    onSendThreadReply={(content, model) => {
+                      if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
+                      onSendMessage(content, model, facts, undefined);
                     }}
                   />
                 </div>
@@ -908,6 +1029,29 @@ function CanvasLayerScene({
               <ActivityWindowContent
                 events={activityEvents}
                 loading={activityLoading}
+              />
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'agents') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              titleIcon={<Bot size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <AgentsWindowContent
+                agents={agents}
+                onCreateAgent={onCreateAgent}
+                onUpdateAgent={onUpdateAgent}
+                onDeleteAgent={onDeleteAgent}
               />
             </FloatingWindowShell>
           );

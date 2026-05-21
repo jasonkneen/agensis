@@ -39,6 +39,7 @@ export function TasksWindowContent({
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
+  const [newAssignee, setNewAssignee] = useState<string>('');
   const [filter, setFilter] = useState<'open' | 'all' | 'mine'>('open');
 
   const filteredTasks = useMemo(() => {
@@ -62,10 +63,12 @@ export function TasksWindowContent({
     onCreateTask({
       title: newTitle.trim(),
       priority: newPriority,
+      assignee_id: newAssignee || null,
       source_type: 'manual',
     });
     setNewTitle('');
     setNewPriority('normal');
+    setNewAssignee('');
   };
 
   const memberLabel = (assigneeId: string | null) => {
@@ -145,6 +148,29 @@ export function TasksWindowContent({
           <option value="high">High</option>
           <option value="urgent">Urgent</option>
         </select>
+        {members.length > 0 && (
+          <select
+            value={newAssignee}
+            onChange={e => setNewAssignee(e.target.value)}
+            style={{
+              background: 'var(--canvas-raised)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-secondary)',
+              fontSize: '11px',
+              padding: '3px 6px',
+              cursor: 'pointer',
+              maxWidth: '90px',
+            }}
+          >
+            <option value="">Unassigned</option>
+            {members.map(m => (
+              <option key={m.user_id} value={m.user_id}>
+                {m.email?.split('@')[0] || 'Member'}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           onClick={handleAdd}
           disabled={!newTitle.trim()}
@@ -196,9 +222,11 @@ export function TasksWindowContent({
                     key={task.id}
                     task={task}
                     assigneeLabel={memberLabel(task.assignee_id)}
+                    members={members}
                     onToggle={() => onToggleStatus(task)}
                     onDelete={() => onDeleteTask(task.id)}
                     onChangeStatus={(newStatus) => onUpdateTask(task.id, { status: newStatus })}
+                    onChangeAssignee={(assigneeId) => onUpdateTask(task.id, { assignee_id: assigneeId })}
                   />
                 ))}
               </div>
@@ -213,15 +241,19 @@ export function TasksWindowContent({
 function TaskRow({
   task,
   assigneeLabel,
+  members,
   onToggle,
   onDelete,
   onChangeStatus,
+  onChangeAssignee,
 }: {
   task: Task;
   assigneeLabel: string | null;
+  members: WorkspaceMember[];
   onToggle: () => void;
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
+  onChangeAssignee: (assigneeId: string | null) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const done = task.status === 'done';
@@ -310,6 +342,31 @@ function TaskRow({
         </div>
       </div>
       <div style={{ display: 'flex', gap: '4px', opacity: hovered ? 1 : 0, transition: 'opacity var(--transition-fast)' }}>
+        {members.length > 0 && (
+          <select
+            value={task.assignee_id || ''}
+            onChange={e => onChangeAssignee(e.target.value || null)}
+            onClick={e => e.stopPropagation()}
+            title="Assign to"
+            style={{
+              background: 'var(--canvas-raised)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-secondary)',
+              fontSize: '10px',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              maxWidth: '75px',
+            }}
+          >
+            <option value="">Unassigned</option>
+            {members.map(m => (
+              <option key={m.user_id} value={m.user_id}>
+                {m.email?.split('@')[0] || 'Member'}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           value={task.status}
           onChange={e => onChangeStatus(e.target.value as TaskStatus)}

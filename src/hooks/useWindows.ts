@@ -60,6 +60,7 @@ export function useWindows() {
         memory: { width: 440, height: 520 },
         tasks: { width: 440, height: 540 },
         activity: { width: 400, height: 540 },
+        agents: { width: 480, height: 560 },
       };
       const size = sizeMap[type] || sizeMap.chat;
       const pos = getSpawnPosition(prev, size);

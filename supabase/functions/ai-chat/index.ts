@@ -14,15 +14,35 @@ interface WorkspaceContextSnapshot {
   canvas?: string | null;
 }
 
+interface AgentContext {
+  name?: string;
+  systemPrompt?: string;
+  model?: string;
+}
+
 function buildSystemPrompt(
   memory: string | null | undefined,
   documents: string | null | undefined,
   workspaceContext: WorkspaceContextSnapshot | null | undefined,
+  agentContext: AgentContext | null | undefined,
 ): string {
   const sections: string[] = [];
 
+  if (agentContext?.systemPrompt) {
+    sections.push(
+      `You are "${agentContext.name || 'Agent'}", a custom AI agent in a collaborative workspace. Your personality and instructions:`,
+      "",
+      agentContext.systemPrompt,
+      "",
+      "Additionally, follow these workspace guidelines:",
+    );
+  } else {
+    sections.push(
+      "You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.",
+    );
+  }
+
   sections.push(
-    "You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.",
     "",
     "Guidelines:",
     "- Be concise, warm, and thoughtful. Prefer markdown for structure.",
@@ -90,7 +110,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { messages, model, memory, documents, workspaceContext } = await req.json();
+    const { messages, model, memory, documents, workspaceContext, agentContext } = await req.json();
 
     const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
 
@@ -111,7 +131,7 @@ Deno.serve(async (req: Request) => {
       ? "claude-haiku-4-5"
       : "claude-opus-4-5";
 
-    const systemPrompt = buildSystemPrompt(memory, documents, workspaceContext);
+    const systemPrompt = buildSystemPrompt(memory, documents, workspaceContext, agentContext);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

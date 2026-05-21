@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Search, Sparkles, FileText, Paperclip, FolderPlus,
   PanelLeftClose, PanelLeft, MessageSquare, Brain, LogOut,
-  CheckCircle2, Activity,
+  CheckCircle2, Activity, Bot, LayoutTemplate,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
@@ -22,6 +22,8 @@ interface SidebarProps {
   onOpenMemory: () => void;
   onOpenTasks?: () => void;
   onOpenActivity?: () => void;
+  onOpenAgents?: () => void;
+  onOpenTemplates?: () => void;
   openTaskCount?: number;
   recents: Document[];
   sessions: ChatSession[];
@@ -46,6 +48,8 @@ export function Sidebar({
   onOpenMemory,
   onOpenTasks,
   onOpenActivity,
+  onOpenAgents,
+  onOpenTemplates,
   openTaskCount = 0,
   recents,
   sessions,
@@ -93,6 +97,8 @@ export function Sidebar({
         <IconButton icon={<FileText size={16} />} title="New Document" onClick={onNewDocument} />
         {onOpenTasks && <IconButton icon={<CheckCircle2 size={16} />} title={`Tasks${openTaskCount ? ` (${openTaskCount})` : ''}`} onClick={onOpenTasks} />}
         {onOpenActivity && <IconButton icon={<Activity size={16} />} title="Activity" onClick={onOpenActivity} />}
+        {onOpenAgents && <IconButton icon={<Bot size={16} />} title="AI Agents" onClick={onOpenAgents} />}
+        {onOpenTemplates && <IconButton icon={<LayoutTemplate size={16} />} title="Templates" onClick={onOpenTemplates} />}
         <IconButton icon={<Brain size={16} />} title="Memory" onClick={onOpenMemory} />
         <div style={{ flex: 1 }} />
         <IconButton icon={<LogOut size={16} />} title="Sign out" onClick={onSignOut} />
@@ -173,6 +179,26 @@ export function Sidebar({
             onClick={onOpenActivity}
             hovered={hoveredItem === 'activity'}
             onHover={() => setHoveredItem('activity')}
+            onLeave={() => setHoveredItem(null)}
+          />
+        )}
+        {onOpenAgents && (
+          <ActionRow
+            icon={<Bot size={14} />}
+            label="AI Agents"
+            onClick={onOpenAgents}
+            hovered={hoveredItem === 'agents'}
+            onHover={() => setHoveredItem('agents')}
+            onLeave={() => setHoveredItem(null)}
+          />
+        )}
+        {onOpenTemplates && (
+          <ActionRow
+            icon={<LayoutTemplate size={14} />}
+            label="Canvas Templates"
+            onClick={onOpenTemplates}
+            hovered={hoveredItem === 'templates'}
+            onHover={() => setHoveredItem('templates')}
             onLeave={() => setHoveredItem(null)}
           />
         )}

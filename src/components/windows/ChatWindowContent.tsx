@@ -1,28 +1,49 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
-  Send, Plus, Mic, Sparkles, FileText, X, Layers
+  Send, Plus, Mic, Sparkles, FileText, X, Layers, CornerDownRight
 } from 'lucide-react';
 import { ModelSelector } from '../chat/ModelSelector';
-import type { Message, MemoryFact, Document, CanvasGroup, CanvasObject } from '../../types';
+import { ChatThreadPanel } from '../chat/ChatThreadPanel';
+import type { Message, MemoryFact, Document, CanvasGroup, CanvasObject, WorkspaceAgent } from '../../types';
 
 interface ChatWindowContentProps {
   messages: Message[];
+  topLevelMessages?: Message[];
+  threadMessages?: Message[];
+  threadReplyCounts?: Record<string, number>;
+  activeThreadId?: string | null;
   streaming: boolean;
   memoryFacts: MemoryFact[];
   documents: Document[];
+  agents?: WorkspaceAgent[];
+  selectedAgent?: WorkspaceAgent | null;
+  onSelectAgent?: (agent: WorkspaceAgent | null) => void;
   canvasGroups?: CanvasGroup[];
   canvasObjects?: CanvasObject[];
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  onOpenThread?: (messageId: string) => void;
+  onCloseThread?: () => void;
+  onSendThreadReply?: (content: string, model: string) => void;
 }
 
 export function ChatWindowContent({
   messages,
+  topLevelMessages,
+  threadMessages = [],
+  threadReplyCounts = {},
+  activeThreadId,
   streaming,
   memoryFacts,
   documents,
+  agents = [],
+  selectedAgent,
+  onSelectAgent,
   canvasGroups = [],
   canvasObjects = [],
   onSendMessage,
+  onOpenThread,
+  onCloseThread,
+  onSendThreadReply,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState('auto');
@@ -140,10 +161,14 @@ export function ChatWindowContent({
     }
   };
 
+  const displayMessages = topLevelMessages ?? messages;
+  const parentMessage = activeThreadId ? messages.find(m => m.id === activeThreadId) : null;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 14px' }}>
-        {messages.length === 0 ? (
+        {displayMessages.length === 0 ? (
           <div style={{
             display: 'flex',
             flexDirection: 'column',
@@ -169,11 +194,13 @@ export function ChatWindowContent({
           </div>
         ) : (
           <>
-            {messages.map((msg, idx) => (
+            {displayMessages.map((msg, idx) => (
               <MessageBubble
                 key={msg.id}
                 msg={msg}
-                isStreaming={streaming && idx === messages.length - 1 && msg.role === 'assistant'}
+                isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
+                replyCount={threadReplyCounts[msg.id]}
+                onOpenThread={onOpenThread ? () => onOpenThread(msg.id) : undefined}
               />
             ))}
             <div ref={messagesEndRef} />
@@ -304,7 +331,32 @@ export function ChatWindowContent({
                 </button>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <ModelSelector value={selectedModel} onChange={setSelectedModel} />
+                {agents.length > 0 && onSelectAgent && (
+                  <select
+                    value={selectedAgent?.id || ''}
+                    onChange={e => {
+                      const agent = agents.find(a => a.id === e.target.value) || null;
+                      onSelectAgent(agent);
+                    }}
+                    title="Select AI agent"
+                    style={{
+                      background: 'var(--canvas-raised)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius-sm)',
+                      color: selectedAgent ? 'var(--accent)' : 'var(--text-muted)',
+                      fontSize: '10px',
+                      padding: '2px 4px',
+                      cursor: 'pointer',
+                      maxWidth: '80px',
+                    }}
+                  >
+                    <option value="">Hatch AI</option>
+                    {agents.map(a => (
+                      <option key={a.id} value={a.id}>{a.avatar} {a.name}</option>
+                    ))}
+                  </select>
+                )}
+                <ModelSelector value={selectedAgent?.model || selectedModel} onChange={setSelectedModel} />
                 <button
                   onClick={handleSend}
                   disabled={!input.trim() || streaming}
@@ -324,11 +376,21 @@ export function ChatWindowContent({
           </div>
         </div>
       </div>
+      </div>
+      {activeThreadId && parentMessage && onCloseThread && onSendThreadReply && (
+        <ChatThreadPanel
+          parentMessage={parentMessage}
+          threadMessages={threadMessages}
+          streaming={streaming}
+          onSendReply={onSendThreadReply}
+          onClose={onCloseThread}
+        />
+      )}
     </div>
   );
 }
 
-function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boolean }) {
+function MessageBubble({ msg, isStreaming, replyCount, onOpenThread }: { msg: Message; isStreaming?: boolean; replyCount?: number; onOpenThread?: () => void }) {
   const isUser = msg.role === 'user';
   return (
     <div className="msg-animate" style={{
@@ -368,6 +430,25 @@ function MessageBubble({ msg, isStreaming }: { msg: Message; isStreaming?: boole
         ))}
         {isStreaming && msg.content && <span className="typing-cursor" />}
       </div>
+      {onOpenThread && msg.content && !isStreaming && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+          <button
+            onClick={onOpenThread}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: '3px',
+              color: 'var(--text-muted)', fontSize: '10px', padding: '2px 4px',
+              borderRadius: 'var(--radius-sm)',
+              transition: 'color var(--transition-fast)',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--accent)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+          >
+            <CornerDownRight size={10} />
+            {replyCount ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : 'Reply'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
