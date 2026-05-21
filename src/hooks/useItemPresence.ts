@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '../lib/supabase';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { backendClient } from '../lib/backendClient';
 import type { FloatingWindow, ItemPresenceUser } from '../types';
+
+type RealtimeChannel = {
+  on: (...args: any[]) => RealtimeChannel;
+  subscribe: (callback?: (status: string) => void) => RealtimeChannel;
+  unsubscribe: () => Promise<unknown>;
+  send: (message: any) => Promise<unknown>;
+};
 
 interface PresenceSnapshotItem {
   type: 'chat' | 'document';
@@ -132,11 +138,11 @@ export function useItemPresence(
       return;
     }
 
-    const channel = supabase.channel(`item-presence:${workspaceId}`);
+    const channel = backendClient.channel(`item-presence:${workspaceId}`);
     channelRef.current = channel;
 
     channel
-      .on('broadcast', { event: 'presence_snapshot' }, ({ payload }) => {
+      .on('broadcast', { event: 'presence_snapshot' }, ({ payload }: any) => {
         const snapshot = payload as PresenceSnapshotPayload;
         if (!snapshot.userId || snapshot.userId === userId) return;
         setRemotePresence(prev => ({
@@ -150,7 +156,7 @@ export function useItemPresence(
           },
         }));
       })
-      .on('broadcast', { event: 'presence_leave' }, ({ payload }) => {
+      .on('broadcast', { event: 'presence_leave' }, ({ payload }: any) => {
         const leavingId = (payload as { userId?: string }).userId;
         if (!leavingId) return;
         setRemotePresence(prev => {
@@ -159,7 +165,7 @@ export function useItemPresence(
           return next;
         });
       })
-      .subscribe(status => {
+      .subscribe((status: any) => {
         if (status === 'SUBSCRIBED') {
           sendSnapshot();
         }

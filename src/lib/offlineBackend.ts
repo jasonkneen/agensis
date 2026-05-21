@@ -1,20 +1,27 @@
-import { supabase } from './supabase';
+import { backendClient } from './backendClient';
 import { enqueue, cacheSet, cacheGet } from './offlineDb';
 
 export async function offlineInsert(
   table: string,
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
+  const now = new Date().toISOString();
+  const record = {
+    ...payload,
+    id: crypto.randomUUID(),
+    created_at: now,
+    updated_at: now,
+  };
+
   if (navigator.onLine) {
-    const { data, error } = await supabase.from(table).insert(payload).select().single();
+    const { data, error } = await backendClient.from(table).insert(record).select().single();
     if (!error && data) {
       return data;
     }
+    console.warn(`[offlineInsert] Falling back to offline queue for ${table}`, error);
   }
 
-  const tempId = crypto.randomUUID();
-  const record = { ...payload, id: tempId, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-  await enqueue({ table, operation: 'insert', payload });
+  await enqueue({ table, operation: 'insert', payload: record });
   return record;
 }
 
@@ -26,7 +33,7 @@ export async function offlineUpdate(
   const fullPayload = { ...updates, id, updated_at: new Date().toISOString() };
 
   if (navigator.onLine) {
-    const { data, error } = await supabase.from(table).update(updates).eq('id', id).select().single();
+    const { data, error } = await backendClient.from(table).update(updates).eq('id', id).select().single();
     if (!error && data) return data;
   }
 
@@ -39,7 +46,7 @@ export async function offlineDelete(
   id: string,
 ): Promise<boolean> {
   if (navigator.onLine) {
-    const { error } = await supabase.from(table).delete().eq('id', id);
+    const { error } = await backendClient.from(table).delete().eq('id', id);
     if (!error) return true;
   }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
+import { backendClient } from '../lib/backendClient';
 
 export interface WorkspaceMember {
   id: string;
@@ -20,7 +20,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     if (!workspaceId) return;
     setLoading(true);
 
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('workspace_members')
       .select('*')
       .eq('workspace_id', workspaceId)
@@ -32,7 +32,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
 
   const fetchAutoShare = useCallback(async () => {
     if (!workspaceId) return;
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('workspaces')
       .select('auto_share')
       .eq('id', workspaceId)
@@ -49,7 +49,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     if (!workspaceId) return;
     const newValue = !autoShare;
     setAutoShareState(newValue);
-    const { error } = await supabase
+    const { error } = await backendClient
       .from('workspaces')
       .update({ auto_share: newValue })
       .eq('id', workspaceId);
@@ -65,7 +65,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
   const inviteByEmail = useCallback(async (email: string): Promise<{ error: string | null }> => {
     if (!workspaceId || !currentUserId) return { error: 'Not ready' };
 
-    const { data: users, error: lookupErr } = await supabase
+    const { data: users, error: lookupErr } = await backendClient
       .rpc('lookup_user_by_email', { lookup_email: email });
 
     if (lookupErr || !users || users.length === 0) {
@@ -83,7 +83,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
       return { error: 'This user already has access.' };
     }
 
-    const { error: insertErr } = await supabase
+    const { error: insertErr } = await backendClient
       .from('workspace_members')
       .insert({
         workspace_id: workspaceId,
@@ -99,7 +99,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
   }, [workspaceId, currentUserId, members, fetchMembers]);
 
   const removeMember = useCallback(async (memberId: string) => {
-    await supabase
+    await backendClient
       .from('workspace_members')
       .delete()
       .eq('id', memberId);
@@ -107,7 +107,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
   }, []);
 
   const updateMemberRole = useCallback(async (memberId: string, role: 'editor' | 'viewer') => {
-    await supabase
+    await backendClient
       .from('workspace_members')
       .update({ role })
       .eq('id', memberId);

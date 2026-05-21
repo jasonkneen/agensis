@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { backendClient } from '../lib/backendClient';
+
+type RealtimeChannel = {
+  on: (...args: any[]) => RealtimeChannel;
+  subscribe: (callback?: (status: string) => void) => RealtimeChannel;
+  unsubscribe: () => Promise<unknown>;
+  send: (message: any) => Promise<unknown>;
+};
 
 export interface CursorPresence {
   id: string;
@@ -90,17 +96,17 @@ export function useMultiplayerCursors(
   useEffect(() => {
     if (!workspaceId || !userId) return;
 
-    const channel = supabase.channel(`cursors:${workspaceId}`);
+    const channel = backendClient.channel(`cursors:${workspaceId}`);
 
     channel
-      .on('broadcast', { event: 'cursor_move' }, ({ payload }) => {
+      .on('broadcast', { event: 'cursor_move' }, ({ payload }: any) => {
         upsertCursor(payload as CursorPresence);
       })
-      .on('broadcast', { event: 'cursor_leave' }, ({ payload }) => {
+      .on('broadcast', { event: 'cursor_leave' }, ({ payload }: any) => {
         const leavingId = (payload as { id: string }).id;
         setCursors(prev => prev.filter(cursor => cursor.id !== leavingId));
       })
-      .subscribe((status) => {
+      .subscribe((status: any) => {
         if (status === 'SUBSCRIBED') {
           sendCursor(-100, -100);
         }

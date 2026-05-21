@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Document } from '../types';
 
 export function useDocuments(workspaceId: string | null) {
@@ -12,7 +12,7 @@ export function useDocuments(workspaceId: string | null) {
     if (!workspaceId) return;
     setLoading(true);
     const data = await cachedFetch<Document[]>(`documents_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('documents')
         .select('*')
         .eq('workspace_id', workspaceId)

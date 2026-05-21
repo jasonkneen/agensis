@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import type { User, Session } from '@supabase/supabase-js';
+import { backendClient } from '../lib/backendClient';
+
+type User = { id: string; email?: string | null };
+type Session = { access_token: string; user: User };
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
@@ -8,13 +10,13 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
+    backendClient.auth.getSession().then(({ data: { session: s } }: any) => {
       setSession(s);
       setUser(s?.user ?? null);
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = backendClient.auth.onAuthStateChange((_event: any, s: any) => {
       setSession(s);
       setUser(s?.user ?? null);
     });
@@ -23,7 +25,7 @@ export function useAuth() {
   }, []);
 
   const signUp = useCallback(async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await backendClient.auth.signUp({ email, password });
     if (error) return { error: error.message };
     if (data.user) {
       await seedWorkspaces(data.user.id);
@@ -32,20 +34,20 @@ export function useAuth() {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await backendClient.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
     return { error: null };
   }, []);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    await backendClient.auth.signOut();
   }, []);
 
   return { user, session, loading, signUp, signIn, signOut };
 }
 
 async function seedWorkspaces(userId: string) {
-  const { data: existing } = await supabase
+  const { data: existing } = await backendClient
     .from('workspaces')
     .select('id')
     .eq('user_id', userId)
@@ -53,7 +55,7 @@ async function seedWorkspaces(userId: string) {
 
   if (existing && existing.length > 0) return;
 
-  await supabase.from('workspaces').insert([
+  await backendClient.from('workspaces').insert([
     { name: 'Personal', description: 'Your personal workspace', icon: '🌱', user_id: userId },
     { name: 'Work', description: 'Professional workspace', icon: '💼', user_id: userId },
   ]);

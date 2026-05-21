@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineDelete } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineDelete } from '../lib/offlineBackend';
 import type { UploadedFile } from '../types';
 
 export function useFiles(workspaceId: string | null) {
@@ -11,7 +11,7 @@ export function useFiles(workspaceId: string | null) {
     if (!workspaceId) return;
     setLoading(true);
     const data = await cachedFetch<UploadedFile[]>(`files_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('uploaded_files')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -35,7 +35,7 @@ export function useFiles(workspaceId: string | null) {
       type: f.type,
       storage_path: '',
     }));
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('uploaded_files')
       .insert(inserts)
       .select();

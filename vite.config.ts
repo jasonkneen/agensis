@@ -6,6 +6,14 @@ export default defineConfig({
   // Use relative asset URLs so the same bundle works when served from a web
   // root and when loaded from disk inside the Electron desktop wrapper.
   base: './',
+  server: {
+    proxy: {
+      '/backend': {
+        target: 'http://127.0.0.1:3142',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({

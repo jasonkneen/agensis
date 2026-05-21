@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch } from '../lib/offlineBackend';
 import type { ActivityEvent, ActivityEventType } from '../types';
 
 export interface LogEventInput {
@@ -24,7 +24,7 @@ export function useActivity(workspaceId: string | null, userId?: string) {
     }
     setLoading(true);
     const data = await cachedFetch<ActivityEvent[]>(`activity_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('activity_events')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -42,19 +42,19 @@ export function useActivity(workspaceId: string | null, userId?: string) {
 
   useEffect(() => {
     if (!workspaceId) return;
-    const channel = supabase
+    const channel = backendClient
       .channel(`activity:${workspaceId}`)
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: 'INSERT', schema: 'public', table: 'activity_events', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: any) => {
           const row = payload.new as ActivityEvent;
           setEvents(prev => prev.some(e => e.id === row.id) ? prev : [row, ...prev].slice(0, 100));
         },
       )
       .subscribe();
     return () => {
-      supabase.removeChannel(channel);
+      backendClient.removeChannel(channel);
     };
   }, [workspaceId]);
 
@@ -66,7 +66,7 @@ export function useActivity(workspaceId: string | null, userId?: string) {
     loggedKeysRef.current.add(key);
     setTimeout(() => loggedKeysRef.current.delete(key), 2000);
 
-    await supabase.from('activity_events').insert({
+    await backendClient.from('activity_events').insert({
       workspace_id: workspaceId,
       user_id: userId ?? null,
       event_type: input.event_type,

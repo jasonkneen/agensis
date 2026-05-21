@@ -1,7 +1,9 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
+const { startBackendServer } = require('../server/index.cjs');
 
 const isDev = !app.isPackaged;
+let backendServer = null;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -37,10 +39,22 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (!process.env.HATCH_BACKEND_EXTERNAL) {
+    backendServer = startBackendServer();
+  }
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  if (backendServer) {
+    backendServer.close();
+    backendServer = null;
+  }
 });
 
 app.on('activate', () => {

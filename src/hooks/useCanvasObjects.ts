@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { backendClient } from '../lib/backendClient';
 import type { CanvasObject, CanvasObjectType, CanvasGroup } from '../types';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+
+type RealtimeChannel = {
+  on: (...args: any[]) => RealtimeChannel;
+  subscribe: (callback?: (status: string) => void) => RealtimeChannel;
+  unsubscribe: () => Promise<unknown>;
+  send: (message: any) => Promise<unknown>;
+};
 
 interface BroadcastCanvasObjectPayload {
   senderId?: string;
@@ -26,12 +32,12 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
     if (!workspaceId) return;
     setLoading(true);
     const [objRes, grpRes] = await Promise.all([
-      supabase
+      backendClient
         .from('canvas_objects')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('z_index', { ascending: true }),
-      supabase
+      backendClient
         .from('canvas_groups')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -61,12 +67,12 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
   useEffect(() => {
     if (!workspaceId) return;
 
-    const channel = supabase
+    const channel = backendClient
       .channel(`canvas:${workspaceId}`)
       .on(
         'broadcast',
         { event: 'object_upsert' },
-        ({ payload }) => {
+        ({ payload }: any) => {
           const { senderId, object } = payload as BroadcastCanvasObjectPayload;
           if (senderId && userId && senderId === userId) return;
           const normalized = { ...object, layer_id: object.layer_id || 'base' } as CanvasObject;
@@ -82,16 +88,16 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       .on(
         'broadcast',
         { event: 'object_delete' },
-        ({ payload }) => {
+        ({ payload }: any) => {
           const { senderId, id } = payload as BroadcastCanvasDeletePayload;
           if (senderId && userId && senderId === userId) return;
           setObjects(prev => prev.filter(o => o.id !== id));
         }
       )
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: 'INSERT', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: any) => {
           const obj = { ...(payload.new as CanvasObject), layer_id: (payload.new as CanvasObject).layer_id || 'base' } as CanvasObject;
           setObjects(prev => {
             if (prev.find(o => o.id === obj.id)) return prev;
@@ -100,31 +106,31 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         }
       )
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: 'UPDATE', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: any) => {
           const obj = { ...(payload.new as CanvasObject), layer_id: (payload.new as CanvasObject).layer_id || 'base' } as CanvasObject;
           setObjects(prev => prev.map(o => o.id === obj.id ? { ...o, ...obj } : o));
         }
       )
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: 'DELETE', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: any) => {
           const old = payload.old as { id: string };
           setObjects(prev => prev.filter(o => o.id !== old.id));
         }
       )
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: '*', schema: 'public', table: 'canvas_groups', filter: `workspace_id=eq.${workspaceId}` },
         () => {
-          supabase
+          backendClient
             .from('canvas_groups')
             .select('*')
             .eq('workspace_id', workspaceId)
             .order('created_at', { ascending: true })
-            .then(({ data }) => {
+            .then(({ data }: any) => {
               if (data) setGroups(data as CanvasGroup[]);
             });
         }
@@ -158,7 +164,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       ...overrides,
     };
 
-    const firstAttempt = await supabase
+    const firstAttempt = await backendClient
       .from('canvas_objects')
       .insert(insertPayload)
       .select()
@@ -170,7 +176,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       const fallbackPayload = Object.fromEntries(
         Object.entries(insertPayload).filter(([key]) => key !== 'layer_id')
       );
-      const retry = await supabase
+      const retry = await backendClient
         .from('canvas_objects')
         .insert(fallbackPayload)
         .select()
@@ -225,7 +231,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
     }
 
     pendingSaveTimersRef.current[id] = window.setTimeout(async () => {
-      await supabase
+      await backendClient
         .from('canvas_objects')
         .update({ ...updates, updated_at: new Date().toISOString() })
         .eq('id', id);
@@ -247,7 +253,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         id,
       } satisfies BroadcastCanvasDeletePayload,
     });
-    await supabase
+    await backendClient
       .from('canvas_objects')
       .delete()
       .eq('id', id);
@@ -255,7 +261,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
 
   const deleteObjectsInLayer = useCallback(async (layerId: string) => {
     setObjects(prev => prev.filter(o => (o.layer_id || 'base') !== layerId));
-    await supabase
+    await backendClient
       .from('canvas_objects')
       .delete()
       .eq('workspace_id', workspaceId)
@@ -269,7 +275,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
 
   const createGroup = useCallback(async (name: string, objectIds: string[], color?: string): Promise<CanvasGroup | null> => {
     if (!workspaceId) return null;
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('canvas_groups')
       .insert({
         workspace_id: workspaceId,
@@ -292,13 +298,13 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
   const deleteGroup = useCallback(async (groupId: string) => {
     setObjects(prev => prev.map(o => o.group_id === groupId ? { ...o, group_id: null } : o));
     setGroups(prev => prev.filter(g => g.id !== groupId));
-    await supabase.from('canvas_objects').update({ group_id: null }).eq('group_id', groupId);
-    await supabase.from('canvas_groups').delete().eq('id', groupId);
+    await backendClient.from('canvas_objects').update({ group_id: null }).eq('group_id', groupId);
+    await backendClient.from('canvas_groups').delete().eq('id', groupId);
   }, []);
 
   const renameGroup = useCallback(async (groupId: string, name: string) => {
     setGroups(prev => prev.map(g => g.id === groupId ? { ...g, name } : g));
-    await supabase.from('canvas_groups').update({ name }).eq('id', groupId);
+    await backendClient.from('canvas_groups').update({ name }).eq('id', groupId);
   }, []);
 
   return {

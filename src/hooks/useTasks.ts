@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
 
 export interface CreateTaskInput {
@@ -26,7 +26,7 @@ export function useTasks(workspaceId: string | null, userId?: string) {
     }
     setLoading(true);
     const data = await cachedFetch<Task[]>(`tasks_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('tasks')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -43,12 +43,12 @@ export function useTasks(workspaceId: string | null, userId?: string) {
 
   useEffect(() => {
     if (!workspaceId) return;
-    const channel = supabase
+    const channel = backendClient
       .channel(`tasks:${workspaceId}`)
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: '*', schema: 'public', table: 'tasks', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: any) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new as Task;
             setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
@@ -63,7 +63,7 @@ export function useTasks(workspaceId: string | null, userId?: string) {
       )
       .subscribe();
     return () => {
-      supabase.removeChannel(channel);
+      backendClient.removeChannel(channel);
     };
   }, [workspaceId]);
 

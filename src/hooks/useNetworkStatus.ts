@@ -1,11 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
-import { peekQueue, dequeue } from '../lib/offlineDb';
+import { backendClient } from '../lib/backendClient';
+import { peekQueue, dequeue, clearQueue as clearOfflineQueue } from '../lib/offlineDb';
+
+function getErrorMessage(error: unknown) {
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  if (typeof error === 'string') return error;
+  return 'Unknown sync error';
+}
 
 export function useNetworkStatus() {
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const syncingRef = useRef(false);
 
   useEffect(() => {
@@ -24,28 +33,47 @@ export function useNetworkStatus() {
     syncingRef.current = true;
     setSyncing(true);
 
+    let failed = false;
+
     try {
-      const items = await peekQueue();
+      const items = (await peekQueue()).sort((a, b) => a.created_at - b.created_at);
       setPendingCount(items.length);
+
+      if (items.length === 0) {
+        setSyncError(null);
+      }
 
       for (const item of items) {
         try {
           if (item.operation === 'insert') {
-            const { error } = await supabase.from(item.table).insert(item.payload);
+            const { error } = await backendClient.from(item.table).insert(item.payload);
             if (error) throw error;
           } else if (item.operation === 'update') {
             const { id: rowId, ...rest } = item.payload as Record<string, unknown> & { id: string };
-            const { error } = await supabase.from(item.table).update(rest).eq('id', rowId);
+            const { error } = await backendClient.from(item.table).update(rest).eq('id', rowId);
             if (error) throw error;
           } else if (item.operation === 'delete') {
-            const { error } = await supabase.from(item.table).delete().eq('id', item.payload.id as string);
+            const { error } = await backendClient.from(item.table).delete().eq('id', item.payload.id as string);
             if (error) throw error;
           }
           if (item.id != null) await dequeue(item.id);
           setPendingCount(prev => Math.max(0, prev - 1));
-        } catch {
+        } catch (error) {
+          failed = true;
+          const message = getErrorMessage(error);
+          setSyncError(`Sync blocked on ${item.table} ${item.operation}: ${message}`);
+          console.error('[offline-sync] Failed to flush queued change', {
+            table: item.table,
+            operation: item.operation,
+            payload: item.payload,
+            error,
+          });
           break;
         }
+      }
+
+      if (!failed) {
+        setSyncError(null);
       }
     } finally {
       syncingRef.current = false;
@@ -65,9 +93,15 @@ export function useNetworkStatus() {
     return () => clearInterval(interval);
   }, [online, flushQueue]);
 
+  const clearPendingQueue = useCallback(async () => {
+    await clearOfflineQueue();
+    setPendingCount(0);
+    setSyncError(null);
+  }, []);
+
   useEffect(() => {
     peekQueue().then(items => setPendingCount(items.length));
   }, []);
 
-  return { online, syncing, pendingCount, flushQueue };
+  return { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue };
 }

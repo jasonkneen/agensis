@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { MemoryFact } from '../types';
 
 export function useMemory(workspaceId: string | null) {
@@ -11,7 +11,7 @@ export function useMemory(workspaceId: string | null) {
     if (!workspaceId) return;
     setLoading(true);
     const data = await cachedFetch<MemoryFact[]>(`memory_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('memory_facts')
         .select('*')
         .eq('workspace_id', workspaceId)

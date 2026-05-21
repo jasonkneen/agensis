@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch } from '../lib/offlineSupabase';
+import { backendClient, getBackendBaseUrl } from '../lib/backendClient';
+import { cachedFetch } from '../lib/offlineBackend';
 import type { ChatSession, Message, MemoryFact, Document } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
@@ -14,7 +14,7 @@ export function useChat(workspaceId: string | null) {
   const fetchSessions = useCallback(async () => {
     if (!workspaceId) return;
     const data = await cachedFetch<ChatSession[]>(`sessions_${workspaceId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('chat_sessions')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -32,7 +32,7 @@ export function useChat(workspaceId: string | null) {
   const fetchMessages = useCallback(async (sessionId: string) => {
     setLoading(true);
     const data = await cachedFetch<Message[]>(`messages_${sessionId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('messages')
         .select('*')
         .eq('session_id', sessionId)
@@ -55,7 +55,7 @@ export function useChat(workspaceId: string | null) {
   const createSession = useCallback(async (model = 'auto') => {
     if (!workspaceId) return null;
     if (!navigator.onLine) return null;
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('chat_sessions')
       .insert({ workspace_id: workspaceId, title: 'New Chat', model })
       .select()
@@ -99,7 +99,7 @@ export function useChat(workspaceId: string | null) {
       return;
     }
 
-    await supabase.from('messages').insert({
+    await backendClient.from('messages').insert({
       session_id: activeSession.id,
       role: 'user',
       content,
@@ -107,7 +107,7 @@ export function useChat(workspaceId: string | null) {
 
     if (activeSession.title === 'New Chat') {
       const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
-      await supabase
+      await backendClient
         .from('chat_sessions')
         .update({ title, updated_at: new Date().toISOString() })
         .eq('id', activeSession.id);
@@ -129,8 +129,7 @@ export function useChat(workspaceId: string | null) {
     setMessages(prev => [...prev, placeholderMsg]);
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      const backendBase = getBackendBaseUrl();
 
       const memoryContext = memoryFacts && memoryFacts.length > 0
         ? memoryFacts.map(f => `[${f.category}] ${f.fact}`).join('\n')
@@ -140,11 +139,10 @@ export function useChat(workspaceId: string | null) {
         ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
         : null;
 
-      const response = await fetch(`${supabaseUrl}/functions/v1/ai-chat`, {
+      const response = await fetch(`${backendBase}/backend/ai-chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabaseKey}`,
         },
         body: JSON.stringify({
           messages: [...messages, userMsg].map(m => ({ role: m.role, content: m.content })),
@@ -161,7 +159,7 @@ export function useChat(workspaceId: string | null) {
         setMessages(prev => prev.map(m =>
           m.id === assistantMsgId ? { ...m, content: errMsg } : m
         ));
-        await supabase.from('messages').insert({
+        await backendClient.from('messages').insert({
           session_id: activeSession.id,
           role: 'assistant',
           content: errMsg,
@@ -199,7 +197,7 @@ export function useChat(workspaceId: string | null) {
       }
 
       if (fullContent) {
-        await supabase.from('messages').insert({
+        await backendClient.from('messages').insert({
           session_id: activeSession.id,
           role: 'assistant',
           content: fullContent,
@@ -216,7 +214,7 @@ export function useChat(workspaceId: string | null) {
   }, [activeSession, messages]);
 
   const deleteSession = useCallback(async (id: string) => {
-    await supabase.from('chat_sessions').delete().eq('id', id);
+    await backendClient.from('chat_sessions').delete().eq('id', id);
     setSessions(prev => prev.filter(s => s.id !== id));
     if (activeSession?.id === id) {
       setActiveSession(null);

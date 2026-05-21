@@ -7,7 +7,7 @@ A realtime collaborative workspace for chat, documents, memory, files, and a sha
 
 ## What it is
 
-Open Hatch is a multiplayer workspace app built with React, TypeScript, Vite, and Supabase. A **workspace** is the top-level shared room. Inside a workspace, users can:
+Open Hatch is a multiplayer workspace app built with React, TypeScript, Vite, Neon Postgres, and a local Node Backend server. A **workspace** is the top-level shared room. Inside a workspace, users can:
 
 - chat with AI
 - create and edit documents
@@ -41,7 +41,8 @@ Open Hatch is a multiplayer workspace app built with React, TypeScript, Vite, an
 - React 18
 - TypeScript
 - Vite
-- Supabase
+- Neon Postgres
+- Node / Express / WebSocket backend
 - Lucide React
 - Vite PWA plugin
 
@@ -55,61 +56,35 @@ npm install
 
 ### 2. Configure environment
 
-Create a `.env` file with your own Supabase project values:
+Create a `.env` file with your Neon database connection and AI key:
 
 ```bash
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+DATABASE_URL=postgresql://user:password@host/db?sslmode=require
+NEON_API_KEY=your_neon_admin_key
+ANTHROPIC_API_KEY=your_anthropic_api_key
 ```
 
-These are **not included** in the repo. Anyone cloning this project should create their own Supabase project and supply their own values.
+### 3. Bootstrap the Neon database
 
-### 3. Set up Supabase
-
-This app is still built on **Supabase**. What is removed from the repo is any private project configuration or secret value — not the Supabase integration itself.
-
-Database schema and migrations live in:
+The schema lives at:
 
 ```text
-supabase/migrations/
+database/neon-schema.sql
 ```
 
-Typical setup flow:
+Apply it with:
 
 ```bash
-# install Supabase CLI if needed
-npm install -g supabase
-
-# login and link to your project
-supabase login
-supabase link --project-ref YOUR_PROJECT_REF
-
-# apply the schema to your hosted project
-supabase db push
+npm run db:neon:push
 ```
 
-For local development with local Supabase:
+### 4. Run the local backend server
 
 ```bash
-supabase start
-supabase db reset
+npm run backend
 ```
 
-### 4. Configure server-side AI secret
-
-The AI chat function uses a **server-side** secret, not a browser-exposed Vite env var.
-
-Set this in Supabase secrets:
-
-```bash
-supabase secrets set ANTHROPIC_API_KEY=your_key_here
-```
-
-Then deploy the function if needed:
-
-```bash
-supabase functions deploy ai-chat
-```
+This serves the Neon-backed database API, local auth, realtime websocket bridge, and AI chat route.
 
 ### 5. Run the app
 
@@ -117,37 +92,55 @@ supabase functions deploy ai-chat
 npm run dev
 ```
 
-### 6. Production build
+### 6. Run the Electron app in development
+
+```bash
+npm run electron:dev
+```
+
+This starts Vite, waits for the dev server, then launches Electron pointed at the local app.
+
+### 7. Production build
 
 ```bash
 npm run build
 ```
 
-### 7. Typecheck
+### 8. Package Electron
+
+```bash
+npm run electron:dist
+```
+
+Packaged desktop artifacts are written to:
+
+```text
+release/
+```
+
+### 9. Typecheck
 
 ```bash
 npm run typecheck
 ```
 
-### 8. Lint
+### 10. Lint
 
 ```bash
 npm run lint
 ```
 
-## Supabase
+## Backend
 
-This repository assumes a Supabase backend, but **you bring your own project**.
+This repository now runs on a Neon-backed local backend server.
 
 At minimum, a fresh setup should:
 
-- create a Supabase project
-- set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
-- apply the migrations in `supabase/migrations/`
-- set the `ANTHROPIC_API_KEY` secret for the `ai-chat` function
-- deploy the `ai-chat` function if using hosted inference
-
-If you are setting this project up fresh, apply the migrations before testing auth, sharing, multiplayer canvas, or chat.
+- provision a Neon Postgres database
+- set `DATABASE_URL`
+- run `npm run db:neon:push`
+- set `ANTHROPIC_API_KEY` if using AI chat
+- run `npm run backend`
 
 ## Project structure
 
@@ -155,10 +148,12 @@ If you are setting this project up fresh, apply the migrations before testing au
 src/
   components/   UI components
   hooks/        app state and realtime hooks
-  lib/          Supabase and offline helpers
+  lib/          backend client and offline helpers
   types/        shared types
-supabase/
-  migrations/   database schema changes
+server/
+  index.cjs     Neon-backed API + realtime websocket server
+database/
+  neon-schema.sql
 ```
 
 ## Current product shape
@@ -173,7 +168,7 @@ Open Hatch currently focuses on:
 ## Notes
 
 - this is an app repo, not a published npm package
-- realtime behavior depends on Supabase being configured correctly
+- realtime behavior depends on the local backend server websocket bridge
 - workspace sharing and presence depend on authenticated users and workspace membership
 
 ## License

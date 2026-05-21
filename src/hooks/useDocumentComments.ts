@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { DocumentComment } from '../types';
 
 export interface CreateCommentInput {
@@ -25,7 +25,7 @@ export function useDocumentComments(
     }
     setLoading(true);
     const data = await cachedFetch<DocumentComment[]>(`comments_${documentId}`, async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('document_comments')
         .select('*')
         .eq('document_id', documentId)
@@ -42,12 +42,12 @@ export function useDocumentComments(
 
   useEffect(() => {
     if (!documentId) return;
-    const channel = supabase
+    const channel = backendClient
       .channel(`doc-comments:${documentId}`)
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: '*', schema: 'public', table: 'document_comments', filter: `document_id=eq.${documentId}` },
-        (payload) => {
+        (payload: any) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new as DocumentComment;
             setComments(prev => prev.some(c => c.id === row.id) ? prev : [...prev, row]);
@@ -62,7 +62,7 @@ export function useDocumentComments(
       )
       .subscribe();
     return () => {
-      supabase.removeChannel(channel);
+      backendClient.removeChannel(channel);
     };
   }, [documentId]);
 

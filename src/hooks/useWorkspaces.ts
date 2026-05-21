@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '../lib/supabase';
-import { cachedFetch, offlineInsert } from '../lib/offlineSupabase';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert } from '../lib/offlineBackend';
 import type { Workspace } from '../types';
 
 export function useWorkspaces(userId: string | undefined) {
@@ -13,7 +13,7 @@ export function useWorkspaces(userId: string | undefined) {
       return;
     }
     const data = await cachedFetch<Workspace[]>('workspaces', async () => {
-      const { data } = await supabase
+      const { data } = await backendClient
         .from('workspaces')
         .select('*')
         .order('created_at', { ascending: true });
@@ -43,7 +43,7 @@ export function useWorkspaces(userId: string | undefined) {
   }, [userId]);
 
   const updateWorkspace = useCallback(async (id: string, updates: Partial<Workspace>) => {
-    const { data } = await supabase
+    const { data } = await backendClient
       .from('workspaces')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)

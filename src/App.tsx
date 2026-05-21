@@ -82,7 +82,7 @@ export default function App() {
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
   const { uploadFiles } = useFiles(activeWorkspaceId);
-  const { online, syncing, pendingCount, flushQueue } = useNetworkStatus();
+  const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
   const { mode: themeMode, setTheme } = useTheme();
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
   const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindows();
@@ -469,7 +469,9 @@ export default function App() {
           online={online}
           syncing={syncing}
           pendingCount={pendingCount}
+          syncError={syncError}
           onSync={flushQueue}
+          onClearQueue={clearPendingQueue}
         />
 
         <main ref={canvasRef} style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>

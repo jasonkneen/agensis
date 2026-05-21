@@ -13,15 +13,21 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "icon": "node scripts/generate-icon.cjs",
+    "backend": "node server/index.cjs",
+    "db:neon:push": "bash scripts/neon-push.sh",
+    "electron:dev": "node scripts/electron-dev.mjs",
     "electron:build": "npm run icon && vite build && electron-builder",
     "electron:dist": "npm run icon && vite build && electron-builder --publish never"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "lucide-react": "^0.344.0",
+    "postgres": "^3.4.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "vite-plugin-pwa": "^1.2.0"
+    "vite-plugin-pwa": "^1.2.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
@@ -53,13 +59,27 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "server/**/*",
+      ".env",
       "package.json"
     ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "dmg": {
@@ -67,8 +87,18 @@
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -79,8 +109,18 @@
     "linux": {
       "category": "Office",
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb", "arch": ["x64"] }
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "publish": {
