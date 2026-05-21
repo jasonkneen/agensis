@@ -33,6 +33,7 @@ export interface Message {
   session_id: string;
   role: 'user' | 'assistant';
   content: string;
+  thread_parent_id?: string | null;
   created_at: string;
 }
 
@@ -96,9 +97,9 @@ export interface CanvasGroup {
 
 export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow' | 'text' | 'eraser' | 'sticky_note';
 
-export type ActiveView = 'chat' | 'document' | 'memory' | 'files' | 'tasks' | 'activity';
+export type ActiveView = 'chat' | 'document' | 'memory' | 'files' | 'tasks' | 'activity' | 'agents';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'tasks' | 'activity';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'tasks' | 'activity' | 'agents';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -203,6 +204,19 @@ export interface DocumentVersion {
   content: string;
   version_number: number;
   created_at: string;
+}
+
+export interface WorkspaceAgent {
+  id: string;
+  workspace_id: string;
+  name: string;
+  avatar: string;
+  description: string;
+  system_prompt: string;
+  model: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface OnboardingStep {
