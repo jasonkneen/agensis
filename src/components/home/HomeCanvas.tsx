@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Send, Plus, Mic, FileText, X } from 'lucide-react';
 import { ModelSelector } from '../chat/ModelSelector';
+import { getSetting } from '../../lib/settings';
 import type { Document, MemoryFact } from '../../types';
 import bg1 from '../../../images/download-21.jpg';
 import bg2 from '../../../images/download-22.jpg';
@@ -25,7 +26,7 @@ export function HomeCanvas({
   onSendMessage,
 }: HomeCanvasProps) {
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState('auto');
+  const [selectedModel, setSelectedModel] = useState(() => getSetting('ai_default_model'));
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [docPickerQuery, setDocPickerQuery] = useState('');

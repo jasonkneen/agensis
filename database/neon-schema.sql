@@ -150,10 +150,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at timestamptz DEFAULT now()
 );
 
+-- Sub-tasks / nesting: a task may have a parent task.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
 
 CREATE TABLE IF NOT EXISTS document_comments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -171,6 +175,22 @@ CREATE TABLE IF NOT EXISTS document_comments (
 CREATE INDEX IF NOT EXISTS idx_document_comments_document_id ON document_comments(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_workspace_id ON document_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_parent_id ON document_comments(parent_id);
+
+CREATE TABLE IF NOT EXISTS task_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id uuid,
+  parent_id uuid REFERENCES task_comments(id) ON DELETE CASCADE,
+  content text NOT NULL,
+  resolved boolean DEFAULT false,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_comments_task_id ON task_comments(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_comments_workspace_id ON task_comments(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_task_comments_parent_id ON task_comments(parent_id);
 
 CREATE TABLE IF NOT EXISTS activity_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -18,6 +18,8 @@ import { CreateWorkspaceDialog } from './components/sharing/CreateWorkspaceDialo
 import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
+import { SettingsDialog } from './components/settings/SettingsDialog';
+import { getSetting } from './lib/settings';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -132,7 +134,7 @@ export default function App() {
     bringToFront: bringCanvasObjectToFront,
     createGroup: createCanvasGroup,
     deleteGroup: deleteCanvasGroup,
-  } = useCanvasObjects(activeWorkspaceId || null, user?.id, 'base');
+  } = useCanvasObjects(activeWorkspaceId || null, user?.id, activeLayerId);
 
   const {
     tasks,
@@ -157,6 +159,7 @@ export default function App() {
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
     workspaceName: activeWorkspace?.name || 'Workspace',
@@ -166,7 +169,9 @@ export default function App() {
     canvasObjects,
   });
 
-  const visibleCanvasObjects = canvasObjects;
+  const visibleCanvasObjects = canvasObjects.filter(
+    obj => (obj.layer_id || 'base') === activeLayerId,
+  );
   const visibleGroupIds = new Set(visibleCanvasObjects.map(obj => obj.group_id).filter(Boolean));
   const visibleCanvasGroups = canvasGroups.filter(group => visibleGroupIds.has(group.id));
   const activeWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
@@ -271,10 +276,15 @@ export default function App() {
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
 
   const handleApplyTemplate = useCallback(async (template: CanvasTemplate) => {
+    // Each template becomes its own self-contained board (canvas layer).
+    const layerId = createLayer(template.name);
     for (const obj of template.objects) {
-      await addCanvasObject(obj.type as import('./types').CanvasObjectType, obj.overrides as Partial<import('./types').CanvasObject>);
+      await addCanvasObject(
+        obj.type as import('./types').CanvasObjectType,
+        { ...obj.overrides, layer_id: layerId } as Partial<import('./types').CanvasObject>,
+      );
     }
-  }, [addCanvasObject]);
+  }, [createLayer, addCanvasObject]);
 
   const handleCreateTask = useCallback(async (input: CreateTaskInput) => {
     const task = await createTask(input);
@@ -332,7 +342,7 @@ export default function App() {
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId });
   }, [setActiveSession, openWindow, activeLayerId]);
 
-  const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(true);
+  const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const lastExtractedMessageRef = useRef<string | null>(null);
 
   // When an assistant message finishes streaming, scan for `TASK: ...` lines
@@ -508,6 +518,7 @@ export default function App() {
         onThemeChange={setTheme}
         userEmail={user.email || ''}
         onSignOut={signOut}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, position: 'relative' }}>
@@ -626,6 +637,7 @@ export default function App() {
               onBringToFront={bringCanvasObjectToFront}
               onCreateGroup={createCanvasGroup}
               onDeleteGroup={deleteCanvasGroup}
+              onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
             />
 
             {showCanvasGrid && (
@@ -735,6 +747,15 @@ export default function App() {
         open={createWorkspaceDialogOpen}
         onClose={() => setCreateWorkspaceDialogOpen(false)}
         onCreate={handleCreateWorkspaceSubmit}
+      />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        workspaceName={activeWorkspace?.name || 'Personal'}
+        userEmail={user.email || ''}
+        themeMode={themeMode}
+        onThemeChange={setTheme}
       />
     </div>
   );
@@ -1004,6 +1025,8 @@ function CanvasLayerScene({
                 tasks={tasks}
                 members={members}
                 currentUserEmail={userEmail}
+                workspaceId={workspaceId}
+                currentUserId={userId}
                 onCreateTask={onCreateTask}
                 onUpdateTask={onUpdateTask}
                 onToggleStatus={onToggleTaskStatus}

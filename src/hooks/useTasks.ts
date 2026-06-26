@@ -10,6 +10,7 @@ export interface CreateTaskInput {
   priority?: TaskPriority;
   due_date?: string | null;
   assignee_id?: string | null;
+  parent_id?: string | null;
   source_type?: TaskSourceType;
   source_id?: string | null;
 }
@@ -73,6 +74,7 @@ export function useTasks(workspaceId: string | null, userId?: string) {
       workspace_id: workspaceId,
       created_by: userId ?? null,
       assignee_id: input.assignee_id ?? null,
+      parent_id: input.parent_id ?? null,
       title: input.title,
       description: input.description ?? '',
       status: input.status ?? 'todo',

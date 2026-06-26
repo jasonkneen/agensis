@@ -86,13 +86,13 @@ export function useCanvasLayers(workspaceId: string | null) {
     [layers, activeLayerId]
   );
 
-  const createLayer = useCallback(() => {
+  const createLayer = useCallback((name?: string) => {
     const nextId = generateLayerId();
     setLayers(prev => {
       const nextNumber = prev.length + 1;
       return [
         ...prev.map(layer => layer.id === activeLayerId ? { ...layer, minimized: true } : layer),
-        { id: nextId, name: `Workspace ${nextNumber}`, minimized: false },
+        { id: nextId, name: name?.trim() || `Workspace ${nextNumber}`, minimized: false },
       ];
     });
     setActiveLayerId(nextId);

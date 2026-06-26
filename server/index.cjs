@@ -21,6 +21,7 @@ const ALLOWED_TABLES = new Set([
   'canvas_objects',
   'tasks',
   'document_comments',
+  'task_comments',
   'activity_events',
 ]);
 
@@ -58,6 +59,43 @@ function loadEnvFile() {
   }
 
   return;
+}
+
+// Secret keys that the settings dialog is allowed to read/write. Anything not
+// in this list is rejected so the endpoint can't inject arbitrary env vars.
+const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
+
+function resolveEnvPath() {
+  const candidates = [
+    path.join(process.cwd(), '.env'),
+    path.join(__dirname, '..', '.env'),
+  ];
+  for (const envPath of candidates) {
+    if (fs.existsSync(envPath)) return envPath;
+  }
+  return candidates[0];
+}
+
+function maskSecret(value) {
+  if (!value) return '';
+  if (value.length <= 8) return '••••••';
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function upsertEnvKeys(updates) {
+  const envPath = resolveEnvPath();
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const lines = existing.length ? existing.split(/\r?\n/) : [];
+  for (const [key, value] of Object.entries(updates)) {
+    const idx = lines.findIndex((line) => line.trim().startsWith(`${key}=`));
+    if (idx === -1) {
+      lines.push(`${key}=${value}`);
+    } else {
+      lines[idx] = `${key}=${value}`;
+    }
+    process.env[key] = value; // apply immediately, no restart needed
+  }
+  fs.writeFileSync(envPath, lines.join('\n'));
 }
 
 function getDatabaseUrl() {
@@ -412,6 +450,42 @@ function createApp() {
       const result = await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
       notifyDbSubscribers(table, 'DELETE', result);
       res.json({ data: single ? (result[0] ?? null) : null, error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.get('/backend/settings/secrets', (req, res) => {
+    try {
+      loadEnvFile();
+      const keys = MANAGED_SECRET_KEYS.map((key) => {
+        const value = process.env[key] || '';
+        return { key, configured: !!value, preview: maskSecret(value) };
+      });
+      res.json({ data: { keys }, error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/settings/secrets', (req, res) => {
+    try {
+      const body = req.body || {};
+      const updates = {};
+      for (const key of MANAGED_SECRET_KEYS) {
+        // Only apply keys that were explicitly provided (non-undefined). An
+        // empty string intentionally clears the key.
+        if (typeof body[key] === 'string') updates[key] = body[key].trim();
+      }
+      if (Object.keys(updates).length === 0) {
+        return jsonError(res, 400, new Error('No managed keys provided'));
+      }
+      upsertEnvKeys(updates);
+      const keys = MANAGED_SECRET_KEYS.map((key) => {
+        const value = process.env[key] || '';
+        return { key, configured: !!value, preview: maskSecret(value) };
+      });
+      res.json({ data: { keys }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }

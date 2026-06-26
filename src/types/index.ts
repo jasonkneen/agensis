@@ -110,6 +110,7 @@ export interface Task {
   workspace_id: string;
   created_by: string | null;
   assignee_id: string | null;
+  parent_id: string | null;
   title: string;
   description: string;
   status: TaskStatus;
@@ -118,6 +119,18 @@ export interface Task {
   source_type: TaskSourceType | null;
   source_id: string | null;
   completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskComment {
+  id: string;
+  task_id: string;
+  workspace_id: string;
+  user_id: string | null;
+  parent_id: string | null;
+  content: string;
+  resolved: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -446,3 +446,10 @@ export const backendClient: any = {
     },
   },
 };
+
+// Resolve a backend path against the active base URL (handles dev proxy,
+// Electron file:// and explicit VITE_BACKEND_BASE_URL the same way the rest
+// of the client does). Used by features that hit raw endpoints (e.g. settings).
+export function apiUrl(path: string) {
+  return backendUrl(path);
+}

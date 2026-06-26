@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
   Search, Sparkles, FileText, Paperclip, FolderPlus,
   PanelLeftClose, PanelLeft, MessageSquare, Brain, LogOut,
-  CheckCircle2, Activity, Bot, LayoutTemplate,
+  CheckCircle2, Activity, Bot, LayoutTemplate, Settings,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
@@ -32,6 +32,7 @@ interface SidebarProps {
   onThemeChange: (mode: ThemeMode) => void;
   userEmail: string;
   onSignOut: () => void;
+  onOpenSettings: () => void;
 }
 
 export function Sidebar({
@@ -55,6 +56,7 @@ export function Sidebar({
   sessions,
   themeMode,
   onThemeChange,
+  onOpenSettings,
   userEmail,
   onSignOut,
 }: SidebarProps) {
@@ -279,6 +281,25 @@ export function Sidebar({
               {workspace?.name || 'Personal'}
             </p>
           </div>
+          <button
+            onClick={onOpenSettings}
+            title="Settings"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'var(--text-muted)',
+              padding: '4px',
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              flexShrink: 0,
+              transition: 'color var(--transition-fast)',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+          >
+            <Settings size={14} />
+          </button>
           <button
             onClick={onSignOut}
             title="Sign out"

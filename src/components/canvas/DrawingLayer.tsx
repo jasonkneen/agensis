@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
-import { Pencil, X, Trash2, Group, Ungroup, Link2, Unlink } from 'lucide-react';
+import { Pencil, X, Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
 import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup } from '../../types';
 
 interface DrawingLayerProps {
@@ -15,6 +15,7 @@ interface DrawingLayerProps {
   onBringToFront: (id: string) => void;
   onCreateGroup: (name: string, objectIds: string[], color?: string) => Promise<CanvasGroup | null>;
   onDeleteGroup: (groupId: string) => void;
+  onCreateTask?: (input: { title: string; sourceId: string }) => void;
 }
 
 const STICKY_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff', '#fed7aa'];
@@ -30,6 +31,7 @@ export function DrawingLayer({
   onBringToFront,
   onCreateGroup,
   onDeleteGroup,
+  onCreateTask,
 }: DrawingLayerProps) {
   const [tool, setTool] = useState<CanvasTool>('select');
   const [color, setColor] = useState('#3b82f6');
@@ -536,6 +538,15 @@ export function DrawingLayer({
       }).join(' ')
     : null;
 
+  const singleSelectedObj = selectedIds.size === 1
+    ? objects.find(o => o.id === Array.from(selectedIds)[0])
+    : undefined;
+  const taskFromObj = singleSelectedObj
+    && (singleSelectedObj.type === 'sticky_note' || singleSelectedObj.type === 'text')
+    && (singleSelectedObj.text_content || '').trim()
+    ? singleSelectedObj
+    : undefined;
+
   const selectionBar = selectedIds.size > 0 && !editingTextId ? (
     <SelectionActionBar
       count={selectedIds.size}
@@ -544,10 +555,16 @@ export function DrawingLayer({
       hasSticky={hasStickyInSelection}
       attachMode={attachMode}
       bottomOffset={drawingActive ? 84 : 16}
+      canCreateTask={!!taskFromObj && !!onCreateTask}
       onGroup={handleGroup}
       onUngroup={handleUngroup}
       onAttach={() => setAttachMode(true)}
       onDetach={handleDetach}
+      onCreateTask={() => {
+        if (taskFromObj && onCreateTask) {
+          onCreateTask({ title: (taskFromObj.text_content || '').trim(), sourceId: taskFromObj.id });
+        }
+      }}
       onDelete={() => {
         selectedIds.forEach(id => onDeleteObject(id));
         setSelectedIds(new Set());
@@ -1247,10 +1264,12 @@ function SelectionActionBar({
   hasSticky,
   attachMode,
   bottomOffset,
+  canCreateTask,
   onGroup,
   onUngroup,
   onAttach,
   onDetach,
+  onCreateTask,
   onDelete,
 }: {
   count: number;
@@ -1259,10 +1278,12 @@ function SelectionActionBar({
   hasSticky: boolean;
   attachMode: boolean;
   bottomOffset: number;
+  canCreateTask: boolean;
   onGroup: () => void;
   onUngroup: () => void;
   onAttach: () => void;
   onDetach: () => void;
+  onCreateTask: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -1308,6 +1329,9 @@ function SelectionActionBar({
       )}
       {hasAttached && (
         <ActionButton icon={<Unlink size={13} />} label="Detach" onClick={onDetach} />
+      )}
+      {canCreateTask && (
+        <ActionButton icon={<ListTodo size={13} />} label="Create task" onClick={onCreateTask} />
       )}
       <ActionButton
         icon={<Trash2 size={13} />}
