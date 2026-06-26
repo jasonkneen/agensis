@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { backendClient, getBackendBaseUrl } from '../lib/backendClient';
+import { backendClient, getBackendBaseUrl, apiAuthHeaders } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import type { ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -186,6 +186,7 @@ export function useChat(workspaceId: string | null) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...apiAuthHeaders(),
         },
         body: JSON.stringify({
           messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: m.content })),

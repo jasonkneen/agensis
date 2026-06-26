@@ -1,5 +1,16 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Server-managed settings (e.g. API keys). Stored in the DB so they work on
+-- serverless deploys with a read-only filesystem (Netlify/Vercel), not just
+-- where a writable .env exists. Intentionally NOT exposed via the generic
+-- /backend/db/* endpoints — only the dedicated /backend/settings routes read
+-- or write it, and reads return masked values.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key text PRIMARY KEY,
+  value text NOT NULL DEFAULT '',
+  updated_at timestamptz DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS app_users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text NOT NULL UNIQUE,
@@ -52,6 +63,10 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
+
+-- Threaded replies: a message may be a reply to another message.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_parent_id uuid REFERENCES messages(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_messages_thread_parent_id ON messages(thread_parent_id);
 
 CREATE TABLE IF NOT EXISTS memory_facts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -175,6 +190,35 @@ CREATE TABLE IF NOT EXISTS document_comments (
 CREATE INDEX IF NOT EXISTS idx_document_comments_document_id ON document_comments(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_workspace_id ON document_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_parent_id ON document_comments(parent_id);
+
+CREATE TABLE IF NOT EXISTS workspace_agents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  avatar text NOT NULL DEFAULT '🤖',
+  description text DEFAULT '',
+  system_prompt text NOT NULL DEFAULT '',
+  model text NOT NULL DEFAULT 'auto',
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
+
+CREATE TABLE IF NOT EXISTS document_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id uuid,
+  title text NOT NULL,
+  content text NOT NULL DEFAULT '',
+  version_number integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_versions_doc_version ON document_versions(document_id, version_number DESC);
+CREATE INDEX IF NOT EXISTS idx_document_versions_workspace_id ON document_versions(workspace_id);
 
 CREATE TABLE IF NOT EXISTS task_comments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

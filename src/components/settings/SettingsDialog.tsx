@@ -6,7 +6,7 @@ import {
 import type { ThemeMode } from '../../hooks/useTheme';
 import { AI_MODELS } from '../../types';
 import { getSettings, setSetting } from '../../lib/settings';
-import { apiUrl } from '../../lib/backendClient';
+import { apiUrl, apiAuthHeaders } from '../../lib/backendClient';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -248,7 +248,7 @@ function SecretsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl('/backend/settings/secrets'));
+      const res = await fetch(apiUrl('/backend/settings/secrets'), { headers: apiAuthHeaders() });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
       setKeys(json.data?.keys || []);
@@ -270,7 +270,7 @@ function SecretsPanel() {
     try {
       const res = await fetch(apiUrl('/backend/settings/secrets'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
         body: JSON.stringify(payload),
       });
       const json = await res.json();
@@ -302,7 +302,7 @@ function SecretsPanel() {
   return (
     <div>
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.5 }}>
-        Keys are stored on the server (in <code>.env</code>) and never kept in the browser. Leave a field blank to keep the current value.
+        Keys are stored securely in the workspace database (never in the browser), so they work across devices and on serverless deploys. Leave a field blank to keep the current value.
       </p>
       {keys.map(k => (
         <Field

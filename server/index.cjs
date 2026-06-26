@@ -22,6 +22,8 @@ const ALLOWED_TABLES = new Set([
   'tasks',
   'document_comments',
   'task_comments',
+  'document_versions',
+  'workspace_agents',
   'activity_events',
 ]);
 
@@ -62,19 +64,8 @@ function loadEnvFile() {
 }
 
 // Secret keys that the settings dialog is allowed to read/write. Anything not
-// in this list is rejected so the endpoint can't inject arbitrary env vars.
+// in this list is rejected so the endpoint can't write arbitrary settings.
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
-
-function resolveEnvPath() {
-  const candidates = [
-    path.join(process.cwd(), '.env'),
-    path.join(__dirname, '..', '.env'),
-  ];
-  for (const envPath of candidates) {
-    if (fs.existsSync(envPath)) return envPath;
-  }
-  return candidates[0];
-}
 
 function maskSecret(value) {
   if (!value) return '';
@@ -82,20 +73,173 @@ function maskSecret(value) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-function upsertEnvKeys(updates) {
-  const envPath = resolveEnvPath();
-  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-  const lines = existing.length ? existing.split(/\r?\n/) : [];
-  for (const [key, value] of Object.entries(updates)) {
-    const idx = lines.findIndex((line) => line.trim().startsWith(`${key}=`));
-    if (idx === -1) {
-      lines.push(`${key}=${value}`);
-    } else {
-      lines[idx] = `${key}=${value}`;
-    }
-    process.env[key] = value; // apply immediately, no restart needed
+// Settings are persisted in the app_settings table (DB), not .env — so they
+// work on serverless deploys with a read-only filesystem.
+async function getSettingValue(key) {
+  const rows = await getDb().unsafe('select value from app_settings where key = $1 limit 1', [key]);
+  return rows[0]?.value || '';
+}
+
+async function setSettingValue(key, value) {
+  await getDb().unsafe(
+    `insert into app_settings (key, value, updated_at) values ($1, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [key, value],
+  );
+}
+
+// Resolve a managed secret: DB value first, then env var as a fallback (so an
+// ANTHROPIC_API_KEY set via the host environment still works out of the box).
+async function resolveSecret(key) {
+  loadEnvFile();
+  const dbValue = await getSettingValue(key).catch(() => '');
+  return dbValue || process.env[key] || '';
+}
+
+async function listManagedSecrets() {
+  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
+    const value = await resolveSecret(key);
+    return { key, configured: !!value, preview: maskSecret(value) };
+  }));
+}
+
+// ============================================================
+// AUTH: signed session tokens + workspace access control
+// ============================================================
+
+let cachedAuthSecret = null;
+
+// HMAC signing secret, persisted in the DB so tokens survive restarts and work
+// on serverless (no writable .env). Generated once on first use.
+async function getAuthSecret() {
+  if (cachedAuthSecret) return cachedAuthSecret;
+  let secret = await getSettingValue('AUTH_SECRET').catch(() => '');
+  if (!secret) {
+    secret = crypto.randomBytes(32).toString('hex');
+    await setSettingValue('AUTH_SECRET', secret);
   }
-  fs.writeFileSync(envPath, lines.join('\n'));
+  cachedAuthSecret = secret;
+  return secret;
+}
+
+async function issueToken(userId) {
+  const secret = await getAuthSecret();
+  const sig = crypto.createHmac('sha256', secret).update(String(userId)).digest('base64url');
+  return `${userId}.${sig}`;
+}
+
+async function verifyToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const dot = token.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const userId = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const secret = await getAuthSecret();
+  const expected = crypto.createHmac('sha256', secret).update(userId).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return userId;
+}
+
+// Express middleware: require a valid Bearer token, set req.userId.
+async function requireAuth(req, res, next) {
+  try {
+    const header = req.headers['authorization'] || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+    const userId = await verifyToken(token);
+    if (!userId) return jsonError(res, 401, new Error('Authentication required'));
+    req.userId = userId;
+    next();
+  } catch (error) {
+    jsonError(res, 401, new Error('Authentication failed'));
+  }
+}
+
+// True if the user owns the workspace or is a member of it.
+async function userCanAccessWorkspace(userId, workspaceId) {
+  if (!userId || !workspaceId) return false;
+  const rows = await getDb().unsafe(
+    `select 1 from workspaces where id = $1 and user_id = $2
+     union all
+     select 1 from workspace_members where workspace_id = $1 and user_id = $2
+     limit 1`,
+    [workspaceId, userId],
+  );
+  return rows.length > 0;
+}
+
+// Tables whose rows are scoped to a workspace and therefore subject to
+// membership checks. Maps table -> how to find its workspace id.
+const WORKSPACE_SCOPED_TABLES = new Set([
+  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
+  'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
+  'task_comments', 'document_versions', 'workspace_agents', 'activity_events',
+]);
+
+function findFilterValue(filters, column) {
+  if (!Array.isArray(filters)) return undefined;
+  const f = filters.find((x) => x && x.column === column && x.operator === 'eq');
+  return f ? f.value : undefined;
+}
+
+// Resolve the workspace id a db operation targets, looking through parent rows
+// when the table/filter doesn't carry workspace_id directly. Returns
+// { workspaceId } when determinable, or { unscoped: true } when access can't be
+// constrained to a single workspace (caller decides how strict to be).
+async function resolveOperationWorkspace(table, { values, filters }) {
+  // Insert: workspace id (or a parent that has one) comes from the row values.
+  if (values) {
+    if (values.workspace_id) return { workspaceId: values.workspace_id };
+    if (table === 'messages' && values.session_id) {
+      const rows = await getDb().unsafe('select workspace_id from chat_sessions where id = $1 limit 1', [values.session_id]);
+      if (rows[0]) return { workspaceId: rows[0].workspace_id };
+    }
+    return { unscoped: true };
+  }
+  // Select/update/delete: derive from filters.
+  const directWs = findFilterValue(filters, 'workspace_id');
+  if (directWs) return { workspaceId: directWs };
+
+  const parentLookups = [
+    { col: 'document_id', sql: 'select workspace_id from documents where id = $1 limit 1' },
+    { col: 'task_id', sql: 'select workspace_id from tasks where id = $1 limit 1' },
+    { col: 'session_id', sql: 'select workspace_id from chat_sessions where id = $1 limit 1' },
+    { col: 'group_id', sql: 'select workspace_id from canvas_groups where id = $1 limit 1' },
+  ];
+  for (const lookup of parentLookups) {
+    const v = findFilterValue(filters, lookup.col);
+    if (v) {
+      const rows = await getDb().unsafe(lookup.sql, [v]);
+      if (rows[0]) return { workspaceId: rows[0].workspace_id };
+    }
+  }
+  // Row id filter on a workspace-scoped table → look up that row's workspace.
+  const idVal = findFilterValue(filters, 'id');
+  if (idVal && WORKSPACE_SCOPED_TABLES.has(table)) {
+    const rows = await getDb().unsafe(`select workspace_id from ${quoteIdent(table)} where id = $1 limit 1`, [idVal]);
+    if (rows[0]) return { workspaceId: rows[0].workspace_id };
+  }
+  return { unscoped: true };
+}
+
+// Enforce workspace membership for a db operation. Throws { status, message }
+// on denial. Unscoped operations on scoped tables are rejected so a caller
+// can't read/modify across all workspaces by omitting the filter.
+async function enforceWorkspaceAccess(userId, table, payload) {
+  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
+  const resolved = await resolveOperationWorkspace(table, payload);
+  if (resolved.unscoped) {
+    const err = new Error('A workspace filter is required for this operation');
+    err.status = 400;
+    throw err;
+  }
+  const ok = await userCanAccessWorkspace(userId, resolved.workspaceId);
+  if (!ok) {
+    const err = new Error('You do not have access to this workspace');
+    err.status = 403;
+    throw err;
+  }
 }
 
 function getDatabaseUrl() {
@@ -104,8 +248,8 @@ function getDatabaseUrl() {
 }
 
 function getAnthropicApiKey() {
-  loadEnvFile();
-  return process.env.ANTHROPIC_API_KEY;
+  // DB-stored key first (set via Settings → Secret keys), env var as fallback.
+  return resolveSecret('ANTHROPIC_API_KEY');
 }
 
 function getDb() {
@@ -193,11 +337,23 @@ function verifyPassword(password, passwordHash) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
 }
 
-function buildSystemPrompt(memory, documents, workspaceContext) {
+function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   const sections = [];
+  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
+    if (agentContext.name) {
+      sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared Hatch workspace.`);
+    }
+    if (agentContext.systemPrompt) {
+      sections.push(agentContext.systemPrompt);
+    }
+    sections.push('');
+  } else {
+    sections.push(
+      'You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
+      '',
+    );
+  }
   sections.push(
-    'You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
-    '',
     'Guidelines:',
     '- Be concise, warm, and thoughtful. Prefer markdown for structure.',
     '- When you reference workspace content, quote the title so teammates can find it.',
@@ -324,6 +480,13 @@ function createApp() {
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
 
+  // Authentication gate for all data, AI, settings and rpc endpoints. Public
+  // routes (/backend/auth/*, /backend/health) are mounted without it.
+  app.use('/backend/db', requireAuth);
+  app.use('/backend/ai-chat', requireAuth);
+  app.use('/backend/settings', requireAuth);
+  app.use('/backend/rpc', requireAuth);
+
   app.get('/backend/health', async (_req, res) => {
     try {
       await getDb().unsafe('select 1');
@@ -348,7 +511,8 @@ function createApp() {
         [email, createPasswordHash(password)],
       );
 
-      res.json({ data: { user: rows[0] }, error: null });
+      const user = rows[0];
+      res.json({ data: { user, token: await issueToken(user.id) }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }
@@ -364,7 +528,13 @@ function createApp() {
       const user = rows[0];
       if (!user || !verifyPassword(password, user.password_hash)) return jsonError(res, 401, new Error('Invalid email or password'));
 
-      res.json({ data: { user: { id: user.id, email: user.email, created_at: user.created_at } }, error: null });
+      res.json({
+        data: {
+          user: { id: user.id, email: user.email, created_at: user.created_at },
+          token: await issueToken(user.id),
+        },
+        error: null,
+      });
     } catch (error) {
       jsonError(res, 500, error);
     }
@@ -384,11 +554,12 @@ function createApp() {
     try {
       const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = req.body || {};
       const tableSql = ensureTable(table);
+      await enforceWorkspaceAccess(req.userId, table, { filters });
       const { clause, params } = buildWhereClause(filters, []);
       const rows = await getDb().unsafe(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
       res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -398,6 +569,9 @@ function createApp() {
       const tableSql = ensureTable(table);
       const rows = Array.isArray(values) ? values : [values];
       if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
+      for (const row of rows) {
+        await enforceWorkspaceAccess(req.userId, table, { values: row });
+      }
 
       const columns = Object.keys(rows[0]);
       const params = [];
@@ -414,7 +588,7 @@ function createApp() {
       notifyDbSubscribers(table, 'INSERT', result);
       res.json({ data: single ? (result[0] ?? null) : result, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -423,6 +597,7 @@ function createApp() {
       const { table, values, filters = [], returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
+      await enforceWorkspaceAccess(req.userId, table, { filters });
 
       const params = [];
       const setClause = Object.keys(values).map((column) => {
@@ -438,7 +613,7 @@ function createApp() {
       notifyDbSubscribers(table, 'UPDATE', result);
       res.json({ data: single ? (result[0] ?? null) : result, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -446,45 +621,48 @@ function createApp() {
     try {
       const { table, filters = [], single = false } = req.body || {};
       const tableSql = ensureTable(table);
+      // Refuse an unfiltered delete — it would wipe the entire table.
+      if (!Array.isArray(filters) || filters.length === 0) {
+        return jsonError(res, 400, new Error('Delete requires at least one filter'));
+      }
+      await enforceWorkspaceAccess(req.userId, table, { filters });
       const where = buildWhereClause(filters, []);
+      if (!where.clause) {
+        return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));
+      }
       const result = await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
       notifyDbSubscribers(table, 'DELETE', result);
       res.json({ data: single ? (result[0] ?? null) : null, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
-  app.get('/backend/settings/secrets', (req, res) => {
+  app.get('/backend/settings/secrets', async (req, res) => {
     try {
-      loadEnvFile();
-      const keys = MANAGED_SECRET_KEYS.map((key) => {
-        const value = process.env[key] || '';
-        return { key, configured: !!value, preview: maskSecret(value) };
-      });
+      const keys = await listManagedSecrets();
       res.json({ data: { keys }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }
   });
 
-  app.post('/backend/settings/secrets', (req, res) => {
+  app.post('/backend/settings/secrets', async (req, res) => {
     try {
       const body = req.body || {};
       const updates = {};
       for (const key of MANAGED_SECRET_KEYS) {
-        // Only apply keys that were explicitly provided (non-undefined). An
-        // empty string intentionally clears the key.
+        // Only apply keys that were explicitly provided. An empty string
+        // intentionally clears the stored key.
         if (typeof body[key] === 'string') updates[key] = body[key].trim();
       }
       if (Object.keys(updates).length === 0) {
         return jsonError(res, 400, new Error('No managed keys provided'));
       }
-      upsertEnvKeys(updates);
-      const keys = MANAGED_SECRET_KEYS.map((key) => {
-        const value = process.env[key] || '';
-        return { key, configured: !!value, preview: maskSecret(value) };
-      });
+      for (const [key, value] of Object.entries(updates)) {
+        await setSettingValue(key, value);
+      }
+      const keys = await listManagedSecrets();
       res.json({ data: { keys }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
@@ -493,10 +671,10 @@ function createApp() {
 
   app.post('/backend/ai-chat', async (req, res) => {
     try {
-      const apiKey = getAnthropicApiKey();
+      const apiKey = await getAnthropicApiKey();
       if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
 
-      const { messages, model, memory, documents, workspaceContext } = req.body || {};
+      const { messages, model, memory, documents, workspaceContext, agentContext } = req.body || {};
       const resolvedModel = !model || model === 'auto'
         ? 'claude-opus-4-5'
         : model === 'claude-opus-4-6'
@@ -520,7 +698,7 @@ function createApp() {
           max_tokens: 4096,
           stream: true,
           messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-          system: buildSystemPrompt(memory, documents, workspaceContext),
+          system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
         }),
       });
 
@@ -534,11 +712,17 @@ function createApp() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value);
-        for (const line of text.split('\n')) {
+        // stream:true keeps multibyte chars intact across chunk boundaries.
+        buffer += decoder.decode(value, { stream: true });
+        // Process only complete lines; keep any trailing partial line buffered
+        // so a `data:` event split across reads isn't dropped.
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
           if (data === '[DONE]') {

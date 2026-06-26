@@ -7,7 +7,10 @@ const BACKEND_BASE = (() => {
   return '';
 })();
 
-const AUTH_STORAGE_KEY = 'hatch_local_session';
+// v2: real signed tokens replaced the old constant 'local-session' token, so
+// pre-auth sessions are intentionally ignored — users sign in once to get a
+// valid token.
+const AUTH_STORAGE_KEY = 'hatch_local_session_v2';
 const authListeners = new Set<(event: string, session: SessionLike | null) => void>();
 
 type SessionLike = {
@@ -74,11 +77,16 @@ function setStoredSession(session: SessionLike | null, event: string) {
   authListeners.forEach((listener) => listener(event, session));
 }
 
+function authHeaders(): Record<string, string> {
+  const token = getStoredSession()?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function postJson<T = unknown>(path: string, body: unknown): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }> {
   try {
     const response = await fetch(backendUrl(path), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body ?? {}),
     });
 
@@ -348,11 +356,26 @@ class LocalChannel {
         const matchesTable = !binding.config.table || binding.config.table === message.table;
         const matchesSchema = !binding.config.schema || binding.config.schema === message.schema;
         const matchesEvent = binding.config.event === '*' || binding.config.event === message.payload?.eventType;
-        if (matchesTable && matchesSchema && matchesEvent) {
+        // Honor the per-subscription row filter (e.g. "task_id=eq.<id>"). The
+        // single shared socket fans every row event for a table to every
+        // channel bound to it, so without this a filtered consumer would
+        // receive other rows' events (e.g. a comment on task A surfacing
+        // under task B).
+        if (matchesTable && matchesSchema && matchesEvent && this.matchesFilter(binding.config.filter, message.payload)) {
           binding.callback(message.payload);
         }
       }
     }
+  }
+
+  private matchesFilter(filter: string | undefined, payload: any): boolean {
+    if (!filter) return true;
+    const match = /^([^=]+)=eq\.(.*)$/.exec(filter);
+    if (!match) return true; // unrecognised filter form — don't over-filter
+    const [, column, value] = match;
+    const row = payload?.new ?? payload?.old;
+    if (!row || row[column] === undefined) return true;
+    return String(row[column]) === String(value);
   }
 
   unsubscribe() {
@@ -405,7 +428,7 @@ export const backendClient: any = {
       };
     },
     async signUp({ email, password }: { email: string; password: string }) {
-      const result = await postJson<{ user: SessionLike['user'] }>('/backend/auth/signup', { email, password });
+      const result = await postJson<{ user: SessionLike['user']; token: string }>('/backend/auth/signup', { email, password });
       if (result.error || !result.data?.user) {
         return {
           data: { user: null, session: null },
@@ -413,7 +436,7 @@ export const backendClient: any = {
         };
       }
       const session: SessionLike = {
-        access_token: 'local-session',
+        access_token: result.data.token,
         user: result.data.user,
       };
       setStoredSession(session, 'SIGNED_IN');
@@ -423,7 +446,7 @@ export const backendClient: any = {
       };
     },
     async signInWithPassword({ email, password }: { email: string; password: string }) {
-      const result = await postJson<{ user: SessionLike['user'] }>('/backend/auth/signin', { email, password });
+      const result = await postJson<{ user: SessionLike['user']; token: string }>('/backend/auth/signin', { email, password });
       if (result.error || !result.data?.user) {
         return {
           data: { user: null, session: null },
@@ -431,7 +454,7 @@ export const backendClient: any = {
         };
       }
       const session: SessionLike = {
-        access_token: 'local-session',
+        access_token: result.data.token,
         user: result.data.user,
       };
       setStoredSession(session, 'SIGNED_IN');
@@ -452,4 +475,10 @@ export const backendClient: any = {
 // of the client does). Used by features that hit raw endpoints (e.g. settings).
 export function apiUrl(path: string) {
   return backendUrl(path);
+}
+
+// Authorization header for raw fetch() calls to backend endpoints that don't go
+// through the query builder (e.g. ai-chat, settings).
+export function apiAuthHeaders(): Record<string, string> {
+  return authHeaders();
 }

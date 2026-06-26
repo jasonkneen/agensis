@@ -343,7 +343,7 @@ export default function App() {
   }, [setActiveSession, openWindow, activeLayerId]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
-  const lastExtractedMessageRef = useRef<string | null>(null);
+  const extractedMessageIdsRef = useRef<Set<string>>(new Set());
 
   // When an assistant message finishes streaming, scan for `TASK: ...` lines
   // emitted by the model and materialize them as real tasks in the workspace.
@@ -352,8 +352,10 @@ export default function App() {
     if (!activeWorkspaceId) return;
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.content);
     if (!lastAssistant) return;
-    if (lastExtractedMessageRef.current === lastAssistant.id) return;
-    lastExtractedMessageRef.current = lastAssistant.id;
+    // Track every processed message id (not just the last) so switching
+    // between chats and back doesn't re-extract an already-seen message.
+    if (extractedMessageIdsRef.current.has(lastAssistant.id)) return;
+    extractedMessageIdsRef.current.add(lastAssistant.id);
 
     const lines = lastAssistant.content.split('\n');
     const taskTitles: string[] = [];
