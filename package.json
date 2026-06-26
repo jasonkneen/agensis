@@ -20,6 +20,7 @@
     "electron:dist": "npm run icon && vite build && electron-builder --publish never"
   },
   "dependencies": {
+    "@netlify/database": "^1.1.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "lucide-react": "^0.344.0",
