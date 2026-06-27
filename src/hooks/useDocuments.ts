@@ -4,9 +4,15 @@ import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib
 import type { Document } from '../types';
 
 type RealtimeChannel = {
-  on: (...args: any[]) => RealtimeChannel;
+  on: <T>(type: 'db_changes', config: { event: string; schema: string; table: string; filter?: string }, callback: (payload: DbChangePayload<T>) => void) => RealtimeChannel;
   subscribe: () => RealtimeChannel;
   unsubscribe: () => Promise<unknown>;
+};
+
+type DbChangePayload<T> = {
+  eventType?: string;
+  new?: T;
+  old?: Partial<T>;
 };
 
 export function useDocuments(workspaceId: string | null) {
@@ -41,15 +47,15 @@ export function useDocuments(workspaceId: string | null) {
       .on(
         'db_changes',
         { event: '*', schema: 'public', table: 'documents', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
-          const eventType = payload?.eventType as 'INSERT' | 'UPDATE' | 'DELETE' | undefined;
+        (payload: DbChangePayload<Document>) => {
+          const eventType = payload.eventType;
           if (eventType === 'DELETE') {
-            const oldDoc = payload.old as { id?: string } | undefined;
+            const oldDoc = payload.old;
             if (oldDoc?.id) setDocuments(prev => prev.filter(doc => doc.id !== oldDoc.id));
             return;
           }
 
-          const nextDoc = payload?.new as Document | undefined;
+          const nextDoc = payload.new;
           if (!nextDoc?.id) return;
           setDocuments(prev => {
             const existingIndex = prev.findIndex(doc => doc.id === nextDoc.id);

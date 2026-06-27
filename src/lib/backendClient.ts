@@ -24,7 +24,15 @@ type Filter = {
   value: unknown;
 };
 
-type DbChangeBinding = {
+type LooseJson = ReturnType<typeof JSON.parse>;
+
+type DbChangePayload<T = LooseJson> = {
+  eventType?: string;
+  new?: T;
+  old?: T;
+};
+
+type DbChangeBinding<T = LooseJson> = {
   type: 'db_changes';
   config: {
     event: string;
@@ -32,28 +40,63 @@ type DbChangeBinding = {
     table?: string;
     filter?: string;
   };
-  callback: (payload: any) => void;
+  callback: (payload: DbChangePayload<T>) => void;
 };
 
-type BroadcastBinding = {
+type BroadcastBinding<T = LooseJson> = {
   type: 'broadcast';
   config: {
     event: string;
   };
-  callback: (payload: { payload: any }) => void;
+  callback: (payload: { payload: T }) => void;
 };
 
 type ChannelBinding = DbChangeBinding | BroadcastBinding;
+
+type RealtimeInboundMessage = {
+  type?: string;
+  channel?: string;
+  event?: string;
+  schema?: string;
+  table?: string;
+  payload?: unknown;
+};
+
+type BroadcastSendMessage = {
+  type: 'broadcast';
+  event: string;
+  payload: unknown;
+};
+
+type BackendClient = {
+  from<T = LooseJson>(table: string): QueryBuilder<T>;
+  rpc<T = unknown>(name: string, params: Record<string, unknown>): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }>;
+  channel(name: string): LocalChannel;
+  removeChannel(channel: LocalChannel): Promise<unknown>;
+  auth: {
+    getSession(): Promise<{ data: { session: SessionLike | null } }>;
+    onAuthStateChange(callback: (event: string, session: SessionLike | null) => void): { data: { subscription: { unsubscribe(): void } } };
+    signUp(input: { email: string; password: string }): Promise<{ data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null }>;
+    signInWithPassword(input: { email: string; password: string }): Promise<{ data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null }>;
+    signOut(): Promise<{ error: null }>;
+  };
+};
 
 function backendUrl(path: string) {
   return `${BACKEND_BASE}${path}`;
 }
 
 function getWsUrl() {
+  const token = getStoredSession()?.access_token;
+  const withToken = (url: string) => {
+    if (!token) return url;
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${encodeURIComponent(token)}`;
+  };
   if (BACKEND_BASE) {
-    return `${BACKEND_BASE.replace(/^http/, 'ws')}/backend/ws`;
+    return withToken(`${BACKEND_BASE.replace(/^http/, 'ws')}/backend/ws`);
   }
-  return 'ws://127.0.0.1:3142/backend/ws';
+  return withToken('ws://127.0.0.1:3142/backend/ws');
 }
 
 function getStoredSession(): SessionLike | null {
@@ -112,7 +155,7 @@ async function postJson<T = unknown>(path: string, body: unknown): Promise<{ dat
   }
 }
 
-class QueryBuilder<T = unknown> {
+class QueryBuilder<T = LooseJson> {
   private table: string;
   private action: 'select' | 'insert' | 'update' | 'delete' = 'select';
   private readColumns = '*';
@@ -309,8 +352,14 @@ class LocalChannel {
     this.name = name;
   }
 
-  on(type: 'broadcast' | 'db_changes', config: any, callback: any) {
-    this.bindings.push({ type, config, callback } as ChannelBinding);
+  on<T = LooseJson>(type: 'broadcast', config: BroadcastBinding<T>['config'], callback: BroadcastBinding<T>['callback']): LocalChannel;
+  on<T = LooseJson>(type: 'db_changes', config: DbChangeBinding<T>['config'], callback: DbChangeBinding<T>['callback']): LocalChannel;
+  on(type: 'broadcast' | 'db_changes', config: BroadcastBinding['config'] | DbChangeBinding['config'], callback: BroadcastBinding['callback'] | DbChangeBinding['callback']) {
+    if (type === 'broadcast') {
+      this.bindings.push({ type, config: config as BroadcastBinding['config'], callback: callback as BroadcastBinding['callback'] });
+    } else {
+      this.bindings.push({ type, config: config as DbChangeBinding['config'], callback: callback as DbChangeBinding['callback'] });
+    }
     return this;
   }
 
@@ -337,7 +386,7 @@ class LocalChannel {
     }
   }
 
-  handleMessage(message: any) {
+  handleMessage(message: RealtimeInboundMessage) {
     if (message.type === 'broadcast' && message.channel === this.name) {
       for (const binding of this.bindings) {
         if (binding.type === 'broadcast' && binding.config.event === message.event) {
@@ -348,24 +397,30 @@ class LocalChannel {
     }
 
     if (message.type === 'db_changes') {
+      const payload = this.normalizeDbPayload(message.payload);
       for (const binding of this.bindings) {
         if (binding.type !== 'db_changes') continue;
         const matchesTable = !binding.config.table || binding.config.table === message.table;
         const matchesSchema = !binding.config.schema || binding.config.schema === message.schema;
-        const matchesEvent = binding.config.event === '*' || binding.config.event === message.payload?.eventType;
+        const matchesEvent = binding.config.event === '*' || binding.config.event === payload.eventType;
         // Honor the per-subscription row filter (e.g. "task_id=eq.<id>"). The
         // single shared socket fans every row event for a table to every
         // channel bound to it, so without this a filtered consumer would
         // receive other rows' events (e.g. a comment on task A surfacing
         // under task B).
-        if (matchesTable && matchesSchema && matchesEvent && this.matchesFilter(binding.config.filter, message.payload)) {
-          binding.callback(message.payload);
+        if (matchesTable && matchesSchema && matchesEvent && this.matchesFilter(binding.config.filter, payload)) {
+          binding.callback(payload);
         }
       }
     }
   }
 
-  private matchesFilter(filter: string | undefined, payload: any): boolean {
+  private normalizeDbPayload(payload: unknown): DbChangePayload {
+    if (!payload || typeof payload !== 'object') return {};
+    return payload as DbChangePayload;
+  }
+
+  private matchesFilter(filter: string | undefined, payload: DbChangePayload): boolean {
     if (!filter) return true;
     const match = /^([^=]+)=eq\.(.*)$/.exec(filter);
     if (!match) return true; // unrecognised filter form — don't over-filter
@@ -380,7 +435,7 @@ class LocalChannel {
     return Promise.resolve('ok');
   }
 
-  send(message: { type: string; event: string; payload: any }) {
+  send(message: BroadcastSendMessage) {
     realtimeManager.send({
       action: 'broadcast',
       channel: this.name,
@@ -395,7 +450,7 @@ export function getBackendBaseUrl() {
   return BACKEND_BASE;
 }
 
-export const backendClient: any = {
+export const backendClient: BackendClient = {
   from(table: string) {
     return new QueryBuilder(table);
   },

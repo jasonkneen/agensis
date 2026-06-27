@@ -3,9 +3,11 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { WorkspaceAgent } from '../types';
 
-type AgentRealtimePayload =
-  | { eventType: 'INSERT' | 'UPDATE'; new: WorkspaceAgent; old?: Partial<WorkspaceAgent> }
-  | { eventType: 'DELETE'; old: WorkspaceAgent; new?: Partial<WorkspaceAgent> };
+type AgentRealtimePayload = {
+  eventType?: string;
+  new?: WorkspaceAgent;
+  old?: Partial<WorkspaceAgent>;
+};
 
 export interface CreateAgentInput {
   name: string;
@@ -51,17 +53,20 @@ export function useAgents(workspaceId: string | null, userId?: string) {
     const channel = backendClient
       .channel(`workspace_agents:${workspaceId}`)
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: '*', schema: 'public', table: 'workspace_agents', filter: `workspace_id=eq.${workspaceId}` },
         (payload: AgentRealtimePayload) => {
           if (payload.eventType === 'INSERT') {
-            const row = payload.new as WorkspaceAgent;
+            const row = payload.new;
+            if (!row) return;
             setAgents(prev => prev.some(a => a.id === row.id) ? prev : [...prev, row]);
           } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as WorkspaceAgent;
+            const row = payload.new;
+            if (!row) return;
             setAgents(prev => prev.map(a => a.id === row.id ? row : a));
           } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as WorkspaceAgent;
+            const row = payload.old;
+            if (!row?.id) return;
             setAgents(prev => prev.filter(a => a.id !== row.id));
           }
         },

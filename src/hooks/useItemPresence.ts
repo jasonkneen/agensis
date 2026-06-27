@@ -3,11 +3,14 @@ import { backendClient } from '../lib/backendClient';
 import type { FloatingWindow, ItemPresenceUser, WorkspaceInstanceShareMode } from '../types';
 
 type RealtimeChannel = {
-  on: (...args: any[]) => RealtimeChannel;
+  on: <T>(type: 'broadcast', config: { event: string }, callback: (message: BroadcastPayload<T>) => void) => RealtimeChannel;
   subscribe: (callback?: (status: string) => void) => RealtimeChannel;
   unsubscribe: () => Promise<unknown>;
-  send: (message: any) => Promise<unknown>;
+  send: (message: BroadcastSendMessage) => Promise<unknown>;
 };
+
+type BroadcastPayload<T> = { payload: T };
+type BroadcastSendMessage = { type: 'broadcast'; event: string; payload: unknown };
 
 interface PresenceSnapshotItem {
   type: 'chat' | 'document';
@@ -162,8 +165,8 @@ export function useItemPresence(
     channelRef.current = channel;
 
     channel
-      .on('broadcast', { event: 'presence_snapshot' }, ({ payload }: any) => {
-        const snapshot = payload as PresenceSnapshotPayload;
+      .on('broadcast', { event: 'presence_snapshot' }, ({ payload }: BroadcastPayload<PresenceSnapshotPayload>) => {
+        const snapshot = payload;
         if (!snapshot.userId || snapshot.userId === userId) return;
         setRemotePresence(prev => ({
           ...prev,
@@ -178,8 +181,8 @@ export function useItemPresence(
           },
         }));
       })
-      .on('broadcast', { event: 'presence_leave' }, ({ payload }: any) => {
-        const leavingId = (payload as { userId?: string }).userId;
+      .on('broadcast', { event: 'presence_leave' }, ({ payload }: BroadcastPayload<{ userId?: string }>) => {
+        const leavingId = payload.userId;
         if (!leavingId) return;
         setRemotePresence(prev => {
           const next = { ...prev };
@@ -187,7 +190,7 @@ export function useItemPresence(
           return next;
         });
       })
-      .subscribe((status: any) => {
+      .subscribe((status: string) => {
         if (status === 'SUBSCRIBED') {
           sendSnapshot();
         }

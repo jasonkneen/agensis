@@ -195,7 +195,20 @@ async function userCanAccessWorkspace(userId, workspaceId) {
 const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
-  'task_comments', 'document_versions', 'workspace_agents', 'activity_events',
+  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
+  'activity_events', 'workspace_members',
+]);
+
+const WORKSPACE_MUTATION_TABLES = new Set([
+  'documents', 'chat_sessions', 'messages', 'memory_facts', 'uploaded_files',
+  'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
+  'task_comments', 'document_versions', 'workspace_agents',
+  'activity_events',
+]);
+
+const WORKSPACE_MANAGEMENT_TABLES = new Set([
+  'workspace_members',
+  'agent_webhooks',
 ]);
 
 function findFilterValue(filters, column) {
@@ -260,6 +273,103 @@ async function enforceWorkspaceAccess(userId, table, payload) {
     const err = new Error('You do not have access to this workspace');
     err.status = 403;
     throw err;
+  }
+}
+
+async function getWorkspaceRole(userId, workspaceId) {
+  if (!userId || !workspaceId) return null;
+  const ownerRows = await getDb().unsafe('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
+  if (ownerRows.length > 0) return 'owner';
+  const memberRows = await getDb().unsafe('select role from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
+  return memberRows[0]?.role || null;
+}
+
+function canMutateWorkspace(role) {
+  return role === 'owner' || role === 'admin' || role === 'editor';
+}
+
+function canManageWorkspace(role) {
+  return role === 'owner' || role === 'admin';
+}
+
+function forbidden(message) {
+  const err = new Error(message);
+  err.status = 403;
+  return err;
+}
+
+function badRequest(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+async function enforceWorkspaceRole(userId, workspaceId, mode) {
+  const role = await getWorkspaceRole(userId, workspaceId);
+  if (!role) throw forbidden('You do not have access to this workspace');
+  if (mode === 'manage' && !canManageWorkspace(role)) {
+    throw forbidden('You do not have permission to manage this workspace');
+  }
+  if (mode === 'write' && !canMutateWorkspace(role)) {
+    throw forbidden('You do not have permission to change this workspace');
+  }
+}
+
+async function resolveWorkspaceRowById(id) {
+  if (!id) return null;
+  const rows = await getDb().unsafe('select id from workspaces where id = $1 limit 1', [id]);
+  return rows[0]?.id || null;
+}
+
+function operationRows(values) {
+  if (!values) return [];
+  return Array.isArray(values) ? values : [values];
+}
+
+async function enforceDbOperationAccess(userId, table, action, payload) {
+  if (table === 'app_users') {
+    const idFilter = findFilterValue(payload.filters, 'id');
+    if (action === 'select' && idFilter && String(idFilter) === String(userId)) return;
+    throw forbidden('Direct user table access is not allowed');
+  }
+
+  if (table === 'workspaces') {
+    if (action === 'select') return;
+    if (action === 'insert') {
+      for (const row of operationRows(payload.values)) {
+        if (row && row.user_id && String(row.user_id) !== String(userId)) {
+          throw forbidden('Cannot create a workspace for another user');
+        }
+      }
+      return;
+    }
+    const workspaceId = findFilterValue(payload.filters, 'id') || await resolveWorkspaceRowById(findFilterValue(payload.filters, 'workspace_id'));
+    if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
+    await enforceWorkspaceRole(userId, workspaceId, 'manage');
+    return;
+  }
+
+  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
+
+  const mode = action === 'select'
+    ? 'read'
+    : WORKSPACE_MANAGEMENT_TABLES.has(table)
+      ? 'manage'
+      : WORKSPACE_MUTATION_TABLES.has(table) || table === 'messages'
+        ? 'write'
+        : 'read';
+
+  for (const row of operationRows(payload.values)) {
+    if (!row || typeof row !== 'object') continue;
+    const resolved = await resolveOperationWorkspace(table, { values: row });
+    if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
+    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
+  }
+
+  if (operationRows(payload.values).length === 0) {
+    const resolved = await resolveOperationWorkspace(table, { filters: payload.filters });
+    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
+    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
   }
 }
 
@@ -395,6 +505,19 @@ function buildWhereClause(filters = [], params = []) {
 
   return {
     clause: clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function appendWorkspaceAccessClause(where, userId) {
+  const params = where.params || [];
+  params.push(userId);
+  const ownerParam = `$${params.length}`;
+  params.push(userId);
+  const memberParam = `$${params.length}`;
+  const accessClause = `("workspaces"."user_id" = ${ownerParam} OR EXISTS (SELECT 1 FROM "workspace_members" wm WHERE wm.workspace_id = "workspaces"."id" AND wm.user_id = ${memberParam}))`;
+  return {
+    clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
     params,
   };
 }
@@ -787,22 +910,83 @@ function relayBroadcast(channel, event, payload) {
   }
 }
 
+function tokenFromWsRequest(req) {
+  try {
+    const url = new URL(req.url || '', 'http://localhost');
+    return url.searchParams.get('token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function workspaceIdFromRealtimeChannel(channel) {
+  if (typeof channel !== 'string') return null;
+  const [prefix, workspaceId, ...rest] = channel.split(':');
+  if (rest.length > 0 || !workspaceId) return null;
+  if (!['canvas', 'cursors', 'item-presence'].includes(prefix)) return null;
+  return workspaceId;
+}
+
+async function authorizeRealtimeBinding(userId, channel, binding) {
+  if (!binding || typeof binding !== 'object') throw forbidden('Invalid realtime subscription');
+
+  if (binding.type === 'broadcast') {
+    const workspaceId = workspaceIdFromRealtimeChannel(channel);
+    if (!workspaceId) throw forbidden('Broadcast channel is not allowed');
+    await enforceWorkspaceRole(userId, workspaceId, 'read');
+    return;
+  }
+
+  if (binding.type === 'db_changes') {
+    ensureTable(binding.table);
+    const parsed = parseFilter(binding.filter);
+    if (binding.table === 'workspaces') {
+      if (!parsed) throw forbidden('Workspace realtime subscriptions require a row filter');
+      if (parsed.column === 'id') {
+        await enforceWorkspaceRole(userId, parsed.value, 'read');
+        return;
+      }
+      if (parsed.column === 'user_id' && String(parsed.value) === String(userId)) return;
+      throw forbidden('Workspace realtime filter is not allowed');
+    }
+    const filters = parsed ? [{ column: parsed.column, operator: 'eq', value: parsed.value }] : [];
+    await enforceDbOperationAccess(userId, binding.table, 'select', { filters });
+    return;
+  }
+
+  throw forbidden('Realtime subscription type is not allowed');
+}
+
+async function authorizeRealtimeBroadcast(userId, channel) {
+  const workspaceId = workspaceIdFromRealtimeChannel(channel);
+  if (!workspaceId) throw forbidden('Broadcast channel is not allowed');
+  await enforceWorkspaceRole(userId, workspaceId, 'read');
+}
+
 function attachRealtime(server) {
   const wss = new WebSocketServer({ server, path: '/backend/ws' });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', async (ws, req) => {
+    const userId = await verifyToken(tokenFromWsRequest(req));
+    if (!userId) {
+      ws.close(1008, 'Authentication required');
+      return;
+    }
+    ws.userId = userId;
     ws.subscriptions = [];
     websocketClients.add(ws);
 
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
       try {
         const message = JSON.parse(String(raw || '{}'));
         if (message.action === 'subscribe') {
           const binding = { channel: message.channel, ...(message.binding || {}) };
+          await authorizeRealtimeBinding(ws.userId, message.channel, binding);
           const exists = (ws.subscriptions || []).some((subscription) => JSON.stringify(subscription) === JSON.stringify(binding));
           if (!exists) {
             ws.subscriptions.push(binding);
           }
+          sendWs(ws, { type: 'system', event: 'subscribed', channel: message.channel });
           return;
         }
         if (message.action === 'unsubscribe') {
@@ -810,10 +994,11 @@ function attachRealtime(server) {
           return;
         }
         if (message.action === 'broadcast') {
+          await authorizeRealtimeBroadcast(ws.userId, message.channel);
           relayBroadcast(message.channel, message.event, message.payload);
         }
-      } catch {
-        // ignore malformed messages
+      } catch (error) {
+        sendWs(ws, { type: 'error', message: error?.message || 'Realtime request rejected' });
       }
     });
 
@@ -848,7 +1033,7 @@ function createApp() {
     }
   });
 
-  app.get('/backend/system/capabilities', async (req, res) => {
+  app.get('/backend/system/capabilities', requireAuth, async (req, res) => {
     try {
       const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
       res.json({ data: await detectCapabilities(workspacePath), error: null });
@@ -857,7 +1042,7 @@ function createApp() {
     }
   });
 
-  app.post('/backend/system/inspect-path', async (req, res) => {
+  app.post('/backend/system/inspect-path', requireAuth, async (req, res) => {
     try {
       const inspected = await inspectProjectPath(req.body?.path || '');
       res.json({ data: inspected, error: null });
@@ -866,12 +1051,13 @@ function createApp() {
     }
   });
 
-  app.post('/backend/files/upload', async (req, res) => {
+  app.post('/backend/files/upload', requireAuth, async (req, res) => {
     try {
       const { workspace_id: workspaceId, name, type, contentBase64 } = req.body || {};
       if (!workspaceId || !name || typeof contentBase64 !== 'string') {
         return jsonError(res, 400, new Error('workspace_id, name, and contentBase64 are required'));
       }
+      await enforceWorkspaceRole(req.userId, workspaceId, 'write');
       const id = crypto.randomUUID();
       const buffer = Buffer.from(contentBase64, 'base64');
       const storagePath = storagePathFor(workspaceId, id, name);
@@ -892,11 +1078,12 @@ function createApp() {
     }
   });
 
-  app.get('/backend/files/:id/content', async (req, res) => {
+  app.get('/backend/files/:id/content', requireAuth, async (req, res) => {
     try {
-      const rows = await getDb().unsafe('select name, type, storage_path from uploaded_files where id = $1 limit 1', [req.params.id]);
+      const rows = await getDb().unsafe('select workspace_id, name, type, storage_path from uploaded_files where id = $1 limit 1', [req.params.id]);
       const file = rows[0];
       if (!file?.storage_path) return jsonError(res, 404, new Error('File content is not stored'));
+      await enforceWorkspaceRole(req.userId, file.workspace_id, 'read');
       const fullPath = resolveStoragePath(file.storage_path);
       if (!fs.existsSync(fullPath)) return jsonError(res, 404, new Error('File content is missing on disk'));
       res.setHeader('Content-Type', file.type || 'application/octet-stream');
@@ -907,10 +1094,11 @@ function createApp() {
     }
   });
 
-  app.post('/backend/agent-webhooks', async (req, res) => {
+  app.post('/backend/agent-webhooks', requireAuth, async (req, res) => {
     try {
       const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
       if (!workspaceId || !name) return jsonError(res, 400, new Error('workspace_id and name are required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const token = crypto.randomBytes(32).toString('base64url');
       const rows = await getDb().unsafe(
         `insert into agent_webhooks (workspace_id, agent_id, name, token)
@@ -1040,7 +1228,7 @@ function createApp() {
     }
   });
 
-  app.post('/backend/rpc/lookup_user_by_email', async (req, res) => {
+  app.post('/backend/rpc/lookup_user_by_email', requireAuth, async (req, res) => {
     try {
       const lookupEmail = String(req.body?.lookup_email || '').trim().toLowerCase();
       const rows = await getDb().unsafe('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
@@ -1050,11 +1238,15 @@ function createApp() {
     }
   });
 
-  app.post('/backend/db/select', async (req, res) => {
+  app.post('/backend/db/select', requireAuth, async (req, res) => {
     try {
       const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = req.body || {};
       const tableSql = ensureTable(table);
-      const { clause, params } = buildWhereClause(filters, []);
+      await enforceDbOperationAccess(req.userId, table, 'select', { filters });
+      const where = table === 'workspaces'
+        ? appendWorkspaceAccessClause(buildWhereClause(filters, []), req.userId)
+        : buildWhereClause(filters, []);
+      const { clause, params } = where;
       const rows = await getDb().unsafe(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
       res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
     } catch (error) {
@@ -1062,11 +1254,16 @@ function createApp() {
     }
   });
 
-  app.post('/backend/db/insert', async (req, res) => {
+  app.post('/backend/db/insert', requireAuth, async (req, res) => {
     try {
       const { table, values, returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
-      const rows = Array.isArray(values) ? values : [values];
+      await enforceDbOperationAccess(req.userId, table, 'insert', { values });
+      const rows = (Array.isArray(values) ? values : [values]).map(row => (
+        table === 'workspaces' && row && typeof row === 'object'
+          ? { ...row, user_id: req.userId }
+          : row
+      ));
       if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
 
       const columns = Object.keys(rows[0]);
@@ -1088,11 +1285,12 @@ function createApp() {
     }
   });
 
-  app.post('/backend/db/update', async (req, res) => {
+  app.post('/backend/db/update', requireAuth, async (req, res) => {
     try {
       const { table, values, filters = [], returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
+      await enforceDbOperationAccess(req.userId, table, 'update', { filters });
 
       const params = [];
       const setParts = Object.keys(values).map((column) => {
@@ -1116,7 +1314,7 @@ function createApp() {
     }
   });
 
-  app.post('/backend/db/delete', async (req, res) => {
+  app.post('/backend/db/delete', requireAuth, async (req, res) => {
     try {
       const { table, filters = [], single = false } = req.body || {};
       const tableSql = ensureTable(table);
@@ -1128,6 +1326,7 @@ function createApp() {
       if (!where.clause) {
         return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));
       }
+      await enforceDbOperationAccess(req.userId, table, 'delete', { filters });
       const result = await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
       notifyDbSubscribers(table, 'DELETE', result);
       res.json({ data: single ? (result[0] ?? null) : null, error: null });
@@ -1136,7 +1335,7 @@ function createApp() {
     }
   });
 
-  app.get('/backend/settings/secrets', async (req, res) => {
+  app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
       const keys = await listManagedSecrets();
       res.json({ data: { keys }, error: null });
@@ -1145,7 +1344,7 @@ function createApp() {
     }
   });
 
-  app.post('/backend/settings/secrets', async (req, res) => {
+  app.post('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
       const body = req.body || {};
       const updates = {};
@@ -1167,7 +1366,7 @@ function createApp() {
     }
   });
 
-  app.post('/backend/ai-chat', async (req, res) => {
+  app.post('/backend/ai-chat', requireAuth, async (req, res) => {
     try {
       const apiKey = await getAnthropicApiKey();
       if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));

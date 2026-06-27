@@ -3,6 +3,12 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import type { ActivityEvent, ActivityEventType } from '../types';
 
+type DbChangePayload<T> = {
+  eventType?: string;
+  new?: T;
+  old?: Partial<T>;
+};
+
 export interface LogEventInput {
   event_type: ActivityEventType;
   title: string;
@@ -47,8 +53,9 @@ export function useActivity(workspaceId: string | null, userId?: string) {
       .on(
         'db_changes',
         { event: 'INSERT', schema: 'public', table: 'activity_events', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
-          const row = payload.new as ActivityEvent;
+        (payload: DbChangePayload<ActivityEvent>) => {
+          const row = payload.new;
+          if (!row) return;
           setEvents(prev => prev.some(e => e.id === row.id) ? prev : [row, ...prev].slice(0, 100));
         },
       )

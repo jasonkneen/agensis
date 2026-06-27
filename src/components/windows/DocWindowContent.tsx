@@ -197,7 +197,27 @@ async function runDocAI(prompt: string, title: string, docHtml: string) {
   return fullContent || 'No response.';
 }
 
-function renderGenerativeUiSpec(spec: any) {
+type GenerativeUiIssueItem = {
+  title?: string;
+  status?: string;
+  priority?: string;
+};
+
+type GenerativeUiMetric = {
+  value?: string | number;
+  label?: string;
+};
+
+type GenerativeUiSpec = {
+  type?: string;
+  title?: string;
+  description?: string;
+  body?: string;
+  items?: GenerativeUiIssueItem[];
+  metrics?: GenerativeUiMetric[];
+};
+
+function renderGenerativeUiSpec(spec: GenerativeUiSpec) {
   if (spec?.type === 'issue-list') {
     const items = Array.isArray(spec.items) ? spec.items : [];
     return `<div class="doc-gen-panel">
@@ -206,7 +226,7 @@ function renderGenerativeUiSpec(spec: any) {
         <span>${escapeHtml(spec.description || 'Structured output')}</span>
       </div>
       <div class="doc-gen-list">
-        ${items.map((item: any) => `<div class="doc-gen-item">
+        ${items.map((item) => `<div class="doc-gen-item">
           <span>${escapeHtml(item.title || 'Untitled')}</span>
           <small>${escapeHtml(item.status || 'open')} / ${escapeHtml(item.priority || 'normal')}</small>
         </div>`).join('')}
@@ -217,8 +237,8 @@ function renderGenerativeUiSpec(spec: any) {
   if (spec?.type === 'metric-grid') {
     const metrics = Array.isArray(spec.metrics) ? spec.metrics : [];
     return `<div class="doc-gen-metrics">
-      ${metrics.map((metric: any) => `<div class="doc-gen-metric">
-        <strong>${escapeHtml(metric.value || '')}</strong>
+      ${metrics.map((metric) => `<div class="doc-gen-metric">
+        <strong>${escapeHtml(String(metric.value || ''))}</strong>
         <span>${escapeHtml(metric.label || '')}</span>
       </div>`).join('')}
     </div>`;

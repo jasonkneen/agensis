@@ -82,7 +82,6 @@
       "dist/**/*",
       "electron/**/*",
       "server/**/*",
-      ".env",
       "package.json"
     ],
     "mac": {

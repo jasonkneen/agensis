@@ -2,11 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 
 type RealtimeChannel = {
-  on: (...args: any[]) => RealtimeChannel;
+  on: <T>(type: 'broadcast', config: { event: string }, callback: (message: BroadcastPayload<T>) => void) => RealtimeChannel;
   subscribe: (callback?: (status: string) => void) => RealtimeChannel;
   unsubscribe: () => Promise<unknown>;
-  send: (message: any) => Promise<unknown>;
+  send: (message: BroadcastSendMessage) => Promise<unknown>;
 };
+
+type BroadcastPayload<T> = { payload: T };
+type BroadcastSendMessage = { type: 'broadcast'; event: string; payload: unknown };
 
 export interface CursorPresence {
   id: string;
@@ -99,14 +102,14 @@ export function useMultiplayerCursors(
     const channel = backendClient.channel(`cursors:${workspaceId}`);
 
     channel
-      .on('broadcast', { event: 'cursor_move' }, ({ payload }: any) => {
-        upsertCursor(payload as CursorPresence);
+      .on('broadcast', { event: 'cursor_move' }, ({ payload }: BroadcastPayload<CursorPresence>) => {
+        upsertCursor(payload);
       })
-      .on('broadcast', { event: 'cursor_leave' }, ({ payload }: any) => {
-        const leavingId = (payload as { id: string }).id;
+      .on('broadcast', { event: 'cursor_leave' }, ({ payload }: BroadcastPayload<{ id: string }>) => {
+        const leavingId = payload.id;
         setCursors(prev => prev.filter(cursor => cursor.id !== leavingId));
       })
-      .subscribe((status: any) => {
+      .subscribe((status: string) => {
         if (status === 'SUBSCRIBED') {
           sendCursor(-100, -100);
         }
