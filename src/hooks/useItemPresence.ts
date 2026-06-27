@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
-import type { FloatingWindow, ItemPresenceUser } from '../types';
+import type { FloatingWindow, ItemPresenceUser, WorkspaceInstanceShareMode } from '../types';
 
 type RealtimeChannel = {
   on: (...args: any[]) => RealtimeChannel;
@@ -20,6 +20,8 @@ interface PresenceSnapshotPayload {
   name: string;
   color: string;
   items: PresenceSnapshotItem[];
+  windows?: FloatingWindow[];
+  activeLayerId?: string;
   lastSeen: number;
 }
 
@@ -28,6 +30,8 @@ interface RemotePresenceState {
   name: string;
   color: string;
   items: PresenceSnapshotItem[];
+  windows: FloatingWindow[];
+  activeLayerId: string | null;
   lastSeen: number;
 }
 
@@ -48,8 +52,10 @@ function pickColor(userId: string): string {
 export function useItemPresence(
   workspaceId: string | null,
   windows: FloatingWindow[],
+  activeLayerId: string = 'base',
   userId?: string,
   userEmail?: string,
+  shareMode: WorkspaceInstanceShareMode = 'all',
 ) {
   const [remotePresence, setRemotePresence] = useState<Record<string, RemotePresenceState>>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -96,6 +102,18 @@ export function useItemPresence(
     return items;
   }, []);
 
+  const buildSharedWindows = useCallback((): FloatingWindow[] => {
+    if (shareMode === 'off') return [];
+
+    return windowsRef.current
+      .filter(win => !win.isPrivate)
+      .filter(win => shareMode === 'all' || win.shared)
+      .map(win => ({
+        ...win,
+        ownerUserId: userId || win.ownerUserId || null,
+      }));
+  }, [shareMode, userId]);
+
   const sendSnapshot = useCallback(() => {
     if (!channelRef.current || !userId) return;
 
@@ -104,6 +122,8 @@ export function useItemPresence(
       name: displayName,
       color,
       items: buildItems(),
+      windows: buildSharedWindows(),
+      activeLayerId,
       lastSeen: Date.now(),
     };
 
@@ -112,7 +132,7 @@ export function useItemPresence(
       event: 'presence_snapshot',
       payload,
     });
-  }, [buildItems, color, displayName, userId]);
+  }, [activeLayerId, buildItems, buildSharedWindows, color, displayName, userId]);
 
   const pruneStaleUsers = useCallback(() => {
     const cutoff = Date.now() - 7000;
@@ -152,6 +172,8 @@ export function useItemPresence(
             name: snapshot.name,
             color: snapshot.color,
             items: snapshot.items || [],
+            windows: snapshot.windows || [],
+            activeLayerId: snapshot.activeLayerId || null,
             lastSeen: snapshot.lastSeen || Date.now(),
           },
         }));
@@ -199,13 +221,21 @@ export function useItemPresence(
   useEffect(() => {
     if (!workspaceId || !userId) return;
     sendSnapshot();
-  }, [workspaceId, userId, windows, sendSnapshot]);
+  }, [workspaceId, userId, windows, activeLayerId, sendSnapshot]);
 
-  const { documentPresence, chatPresence } = useMemo(() => {
+  const { documentPresence, chatPresence, remotePresenceUsers, sharedWindows } = useMemo(() => {
     const documents: Record<string, ItemPresenceUser[]> = {};
     const chats: Record<string, ItemPresenceUser[]> = {};
+    const users = Object.values(remotePresence);
+    const remoteWindows = users.flatMap(remoteUser =>
+      remoteUser.windows.map(win => ({
+        ...win,
+        id: `remote:${remoteUser.userId}:${win.id}`,
+        ownerUserId: remoteUser.userId,
+      }))
+    );
 
-    Object.values(remotePresence).forEach(user => {
+    users.forEach(user => {
       user.items.forEach(item => {
         const target = item.type === 'document' ? documents : chats;
         if (!target[item.itemId]) target[item.itemId] = [];
@@ -221,12 +251,16 @@ export function useItemPresence(
     return {
       documentPresence: documents,
       chatPresence: chats,
+      remotePresenceUsers: users,
+      sharedWindows: remoteWindows,
     };
   }, [remotePresence]);
 
   return {
     documentPresence,
     chatPresence,
+    remotePresenceUsers,
+    sharedWindows,
     setTyping,
   };
 }

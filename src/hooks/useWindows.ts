@@ -30,7 +30,7 @@ export function useWindows() {
 
   const openWindow = useCallback((
     type: FloatingWindowType,
-    opts?: { title?: string; sessionId?: string; documentId?: string; canvasId?: string }
+    opts?: { title?: string; sessionId?: string; documentId?: string; canvasId?: string; ownerUserId?: string | null }
   ) => {
     setWindows(prev => {
       if (opts?.sessionId) {
@@ -78,6 +78,10 @@ export function useWindows() {
         canvasId: opts?.canvasId,
         sessionId: opts?.sessionId,
         documentId: opts?.documentId,
+        ownerUserId: opts?.ownerUserId ?? null,
+        isPrivate: false,
+        locked: false,
+        shared: false,
       };
 
       return [...prev, win];

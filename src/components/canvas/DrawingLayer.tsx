@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Pencil, X, Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
-import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent } from '../../types';
+import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,8 @@ interface DrawingLayerProps {
   onCreateTask?: (input: { title: string; sourceId: string }) => void;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
+  getPresenceMode?: (id?: string | null) => PresenceVisibilityMode;
+  canEditObject?: (obj: CanvasObject) => boolean;
   onCreateAppletTask?: (input: CreateTaskInput) => void;
   onUpdateAppletTask?: (id: string, updates: Partial<Task>) => void;
 }
@@ -68,6 +70,8 @@ export function DrawingLayer({
   onCreateTask,
   tasks = [],
   agents = [],
+  getPresenceMode = () => 'visible',
+  canEditObject = () => true,
   onCreateAppletTask,
   onUpdateAppletTask,
 }: DrawingLayerProps) {
@@ -461,16 +465,18 @@ export function DrawingLayer({
 
   const handleObjectSelect = useCallback((id: string, e: React.MouseEvent) => {
     if (editingTextId) return;
+    const obj = objects.find(o => o.id === id);
+    const editable = obj ? canEditObject(obj) : false;
 
     if (activeTool === 'eraser') {
-      onDeleteObject(id);
+      if (editable) onDeleteObject(id);
       return;
     }
 
     if (attachMode && selectedIds.size === 1) {
       const stickyId = Array.from(selectedIds)[0];
       const sticky = objects.find(o => o.id === stickyId);
-      if (sticky && (sticky.type === 'sticky_note') && id !== stickyId) {
+      if (sticky && canEditObject(sticky) && (sticky.type === 'sticky_note') && id !== stickyId) {
         onUpdateObject(stickyId, { attached_to: id });
         onBringToFront(stickyId);
         setAttachMode(false);
@@ -479,7 +485,6 @@ export function DrawingLayer({
       }
     }
 
-    const obj = objects.find(o => o.id === id);
     if (e.shiftKey) {
       setSelectedIds(prev => {
         const next = new Set(prev);
@@ -498,8 +503,8 @@ export function DrawingLayer({
         setSelectedIds(new Set([id]));
       }
     }
-    onBringToFront(id);
-  }, [activeTool, objects, onDeleteObject, onBringToFront, attachMode, selectedIds, onUpdateObject, editingTextId]);
+    if (editable) onBringToFront(id);
+  }, [activeTool, objects, canEditObject, onDeleteObject, onBringToFront, attachMode, selectedIds, onUpdateObject, editingTextId]);
 
   const handleObjectDragStart = useCallback((id: string, e: React.MouseEvent) => {
     if (editingTextId) return;
@@ -508,13 +513,18 @@ export function DrawingLayer({
     const pos = toPercent(e.clientX, e.clientY);
     const obj = objects.find(o => o.id === id);
     if (!obj) return;
+    if (!canEditObject(obj)) return;
     const baseSelection = selectedIds.has(id) ? selectedIds : new Set([id]);
     const primaryIds = expandSelection(baseSelection);
     primaryIds.add(id);
+    const primaryObjects = Array.from(primaryIds)
+      .map(moveId => objects.find(o => o.id === moveId))
+      .filter(Boolean) as CanvasObject[];
+    if (primaryObjects.some(item => !canEditObject(item))) return;
 
     const moveIds = new Set(primaryIds);
     objects.forEach(item => {
-      if (item.attached_to && primaryIds.has(item.attached_to)) {
+      if (item.attached_to && primaryIds.has(item.attached_to) && canEditObject(item)) {
         moveIds.add(item.id);
       }
     });
@@ -543,40 +553,45 @@ export function DrawingLayer({
     };
     setHostInteractionLocked(true);
     setIsDragging(true);
-  }, [objects, selectedIds, expandSelection, toPercent, editingTextId, getObjectBounds, setHostInteractionLocked]);
+  }, [objects, selectedIds, expandSelection, toPercent, editingTextId, getObjectBounds, setHostInteractionLocked, canEditObject]);
 
   const handleDoubleClick = useCallback((id: string) => {
     const obj = objects.find(o => o.id === id);
     if (!obj) return;
+    if (!canEditObject(obj)) return;
     if (obj.type === 'text' || obj.type === 'sticky_note') {
       setEditingTextId(id);
       setSelectedIds(new Set([id]));
     }
-  }, [objects]);
+  }, [objects, canEditObject]);
 
   const handleGroup = useCallback(async () => {
     if (selectedIds.size < 2) return;
+    const selection = Array.from(selectedIds)
+      .map(id => objects.find(o => o.id === id))
+      .filter(Boolean) as CanvasObject[];
+    if (selection.some(obj => !canEditObject(obj))) return;
     const name = `Group ${groups.length + 1}`;
     const grp = await onCreateGroup(name, Array.from(selectedIds), color);
     if (grp) setSelectedIds(new Set());
-  }, [selectedIds, groups.length, color, onCreateGroup]);
+  }, [selectedIds, objects, canEditObject, groups.length, color, onCreateGroup]);
 
   const handleUngroup = useCallback(() => {
     const groupIds = new Set<string>();
     selectedIds.forEach(id => {
       const obj = objects.find(o => o.id === id);
-      if (obj?.group_id) groupIds.add(obj.group_id);
+      if (obj?.group_id && canEditObject(obj)) groupIds.add(obj.group_id);
     });
     groupIds.forEach(gid => onDeleteGroup(gid));
     setSelectedIds(new Set());
-  }, [selectedIds, objects, onDeleteGroup]);
+  }, [selectedIds, objects, canEditObject, onDeleteGroup]);
 
   const handleDetach = useCallback(() => {
     selectedIds.forEach(id => {
       const obj = objects.find(o => o.id === id);
-      if (obj?.attached_to) onUpdateObject(id, { attached_to: null });
+      if (obj?.attached_to && canEditObject(obj)) onUpdateObject(id, { attached_to: null });
     });
-  }, [selectedIds, objects, onUpdateObject]);
+  }, [selectedIds, objects, canEditObject, onUpdateObject]);
 
   const hasGroupInSelection = Array.from(selectedIds).some(id => {
     const obj = objects.find(o => o.id === id);
@@ -603,7 +618,10 @@ export function DrawingLayer({
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const el = document.activeElement;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).contentEditable === 'true')) return;
-        selectedIds.forEach(id => onDeleteObject(id));
+        selectedIds.forEach(id => {
+          const obj = objects.find(o => o.id === id);
+          if (obj && canEditObject(obj)) onDeleteObject(id);
+        });
         setSelectedIds(new Set());
       }
       if (e.key === 'Escape') {
@@ -615,12 +633,13 @@ export function DrawingLayer({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, onDeleteObject, editingTextId, endDrag, endResize]);
+  }, [selectedIds, objects, canEditObject, onDeleteObject, editingTextId, endDrag, endResize]);
 
   const handleResizeStart = useCallback((id: string, handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => {
     e.stopPropagation();
     const obj = objects.find(o => o.id === id);
     if (!obj || obj.type === 'pen' || editingTextId) return;
+    if (!canEditObject(obj)) return;
     const rect = layerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const pos = toPercent(e.clientX, e.clientY);
@@ -642,7 +661,7 @@ export function DrawingLayer({
       startMouse: pos,
       startRect: { x: obj.x, y: obj.y, width: obj.width, height: obj.height },
     });
-  }, [objects, editingTextId, toPercent, onBringToFront, setHostInteractionLocked]);
+  }, [objects, editingTextId, canEditObject, toPercent, onBringToFront, setHostInteractionLocked]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -744,13 +763,19 @@ export function DrawingLayer({
     : undefined;
   const taskFromObj = singleSelectedObj
     && (singleSelectedObj.type === 'sticky_note' || singleSelectedObj.type === 'text')
+    && canEditObject(singleSelectedObj)
     && (singleSelectedObj.text_content || '').trim()
     ? singleSelectedObj
     : undefined;
+  const canMutateSelection = Array.from(selectedIds).every(id => {
+    const obj = objects.find(o => o.id === id);
+    return !!obj && canEditObject(obj);
+  });
 
   const selectionBar = selectedIds.size > 0 && !editingTextId ? (
     <SelectionActionBar
       count={selectedIds.size}
+      canMutateSelection={canMutateSelection}
       hasGroup={hasGroupInSelection}
       hasAttached={hasAttachedInSelection}
       hasSticky={hasStickyInSelection}
@@ -767,7 +792,10 @@ export function DrawingLayer({
         }
       }}
       onDelete={() => {
-        selectedIds.forEach(id => onDeleteObject(id));
+        selectedIds.forEach(id => {
+          const obj = objects.find(o => o.id === id);
+          if (obj && canEditObject(obj)) onDeleteObject(id);
+        });
         setSelectedIds(new Set());
       }}
     />
@@ -807,14 +835,17 @@ export function DrawingLayer({
             onSelect={(e) => handleObjectSelect(obj.id, e)}
             onDragStart={(e) => handleObjectDragStart(obj.id, e)}
             onDoubleClick={() => handleDoubleClick(obj.id)}
-            onTextChange={(text) => onUpdateObject(obj.id, { text_content: text })}
+            onTextChange={(text) => {
+              if (canEditObject(obj)) onUpdateObject(obj.id, { text_content: text });
+            }}
             onStopEditing={() => setEditingTextId(null)}
             onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
-            showResizeHandles={selectedIds.size === 1 && selectedIds.has(obj.id) && tool === 'select'}
+            showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && tool === 'select'}
             tasks={tasks}
             agents={agents}
+            presenceMode={getPresenceMode(obj.user_id)}
             hostInteractionActive={anyInteraction}
-            onAppletStateChange={(stateText) => onUpdateObject(obj.id, { text_content: stateText })}
+            onAppletStateChange={canEditObject(obj) ? (stateText) => onUpdateObject(obj.id, { text_content: stateText }) : undefined}
             onAppletCreateTask={onCreateAppletTask}
             onAppletUpdateTask={onUpdateAppletTask}
           />
@@ -885,14 +916,17 @@ export function DrawingLayer({
           onSelect={(e) => handleObjectSelect(obj.id, e)}
           onDragStart={(e) => handleObjectDragStart(obj.id, e)}
           onDoubleClick={() => handleDoubleClick(obj.id)}
-          onTextChange={(text) => onUpdateObject(obj.id, { text_content: text })}
+          onTextChange={(text) => {
+            if (canEditObject(obj)) onUpdateObject(obj.id, { text_content: text });
+          }}
           onStopEditing={() => setEditingTextId(null)}
           onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
-          showResizeHandles={selectedIds.size === 1 && selectedIds.has(obj.id) && activeTool === 'select'}
+          showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && activeTool === 'select'}
           tasks={tasks}
           agents={agents}
+          presenceMode={getPresenceMode(obj.user_id)}
           hostInteractionActive={anyInteraction}
-          onAppletStateChange={(stateText) => onUpdateObject(obj.id, { text_content: stateText })}
+          onAppletStateChange={canEditObject(obj) ? (stateText) => onUpdateObject(obj.id, { text_content: stateText }) : undefined}
           onAppletCreateTask={onCreateAppletTask}
           onAppletUpdateTask={onUpdateAppletTask}
           interactive
@@ -1141,6 +1175,7 @@ function CanvasItemWrapper({
   showResizeHandles = false,
   tasks = [],
   agents = [],
+  presenceMode = 'visible',
   onAppletStateChange,
   onAppletCreateTask,
   onAppletUpdateTask,
@@ -1163,6 +1198,7 @@ function CanvasItemWrapper({
   showResizeHandles?: boolean;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
+  presenceMode?: PresenceVisibilityMode;
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
   onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
@@ -1175,6 +1211,13 @@ function CanvasItemWrapper({
   const py = (obj.y / 100) * canvasH;
   const pw = (obj.width / 100) * canvasW;
   const ph = (obj.height / 100) * canvasH;
+  const dimmedByPresence = (presenceMode === 'dimmed' || presenceMode === 'hidden') && !editing;
+  const presenceStyle = dimmedByPresence
+    ? {
+        opacity: presenceMode === 'hidden' ? 0.22 : 0.35,
+        filter: 'saturate(0.55)',
+      }
+    : undefined;
 
   let parentCenter: { x: number; y: number } | null = null;
   if (showAttachLine && parentObj) {
@@ -1224,6 +1267,8 @@ function CanvasItemWrapper({
             overflow: 'visible',
             zIndex: displayZIndex,
             pointerEvents: 'none',
+            opacity: presenceStyle?.opacity,
+            filter: presenceStyle?.filter,
           }}
         >
           <div style={{ pointerEvents: 'auto', position: 'relative' }}>
@@ -1295,6 +1340,7 @@ function CanvasItemWrapper({
           e.stopPropagation();
           onDoubleClick();
         }}
+        style={presenceStyle}
       >
         {(obj.type === 'sticky_note' && editing) ? (
           <StickyNoteEditor
@@ -1477,6 +1523,7 @@ function DrawFAB({ active, onClick }: { active: boolean; onClick: () => void }) 
 
 function SelectionActionBar({
   count,
+  canMutateSelection,
   hasGroup,
   hasAttached,
   hasSticky,
@@ -1491,6 +1538,7 @@ function SelectionActionBar({
   onDelete,
 }: {
   count: number;
+  canMutateSelection: boolean;
   hasGroup: boolean;
   hasAttached: boolean;
   hasSticky: boolean;
@@ -1519,27 +1567,35 @@ function SelectionActionBar({
         </Badge>
       )}
 
-      {count >= 2 && !hasGroup && (
+      {!canMutateSelection && (
+        <Badge variant="secondary" className="text-[10px]">
+          Read only
+        </Badge>
+      )}
+
+      {canMutateSelection && count >= 2 && !hasGroup && (
         <ActionButton icon={<Group data-icon="inline-start" className="size-3.5" />} label="Group" onClick={onGroup} />
       )}
-      {hasGroup && (
+      {canMutateSelection && hasGroup && (
         <ActionButton icon={<Ungroup data-icon="inline-start" className="size-3.5" />} label="Ungroup" onClick={onUngroup} />
       )}
-      {hasSticky && count === 1 && !attachMode && (
+      {canMutateSelection && hasSticky && count === 1 && !attachMode && (
         <ActionButton icon={<Link2 data-icon="inline-start" className="size-3.5" />} label="Stick to..." onClick={onAttach} />
       )}
-      {hasAttached && (
+      {canMutateSelection && hasAttached && (
         <ActionButton icon={<Unlink data-icon="inline-start" className="size-3.5" />} label="Detach" onClick={onDetach} />
       )}
-      {canCreateTask && (
+      {canMutateSelection && canCreateTask && (
         <ActionButton icon={<ListTodo data-icon="inline-start" className="size-3.5" />} label="Create task" onClick={onCreateTask} />
       )}
-      <ActionButton
-        icon={<Trash2 data-icon="inline-start" className="size-3.5" />}
-        label="Delete"
-        danger
-        onClick={onDelete}
-      />
+      {canMutateSelection && (
+        <ActionButton
+          icon={<Trash2 data-icon="inline-start" className="size-3.5" />}
+          label="Delete"
+          danger
+          onClick={onDelete}
+        />
+      )}
     </div>
   );
 }

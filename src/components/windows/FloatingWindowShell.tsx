@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Copy, Maximize2, Minus, MoreHorizontal, Share2, Trash2, X } from 'lucide-react';
-import type { FloatingWindow } from '../../types';
+import { Copy, Eye, EyeOff, Lock, Maximize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
+import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -10,6 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
 
 interface FloatingWindowShellProps {
   window: FloatingWindow;
@@ -18,6 +19,9 @@ interface FloatingWindowShellProps {
   onUpdate: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimize: (id: string) => void;
   onShare?: () => void;
+  presenceMode?: PresenceVisibilityMode;
+  currentUserId?: string;
+  canControl?: boolean;
   titleIcon?: React.ReactNode;
   breadcrumb?: string;
   children: React.ReactNode;
@@ -30,6 +34,9 @@ export function FloatingWindowShell({
   onUpdate,
   onMinimize,
   onShare,
+  presenceMode = 'visible',
+  currentUserId,
+  canControl = true,
   titleIcon,
   breadcrumb,
   children,
@@ -41,6 +48,7 @@ export function FloatingWindowShell({
   const [isResizing, setIsResizing] = useState(false);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (!canControl) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
@@ -94,9 +102,10 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, onFocus, onUpdate]);
+  }, [win.id, win.x, win.y, onFocus, onUpdate, canControl]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    if (!canControl) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
@@ -150,9 +159,10 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.width, win.height, onFocus, onUpdate]);
+  }, [win.id, win.width, win.height, onFocus, onUpdate, canControl]);
 
   const handleMaximize = useCallback(() => {
+    if (!canControl) return;
     onFocus(win.id);
     onUpdate(win.id, {
       x: 24,
@@ -160,9 +170,15 @@ export function FloatingWindowShell({
       width: Math.max(360, window.innerWidth - 72),
       height: Math.max(300, window.innerHeight - 96),
     });
-  }, [win.id, onFocus, onUpdate]);
+  }, [win.id, onFocus, onUpdate, canControl]);
 
   if (win.minimized) return null;
+
+  const isDimmed = presenceMode === 'dimmed' || presenceMode === 'hidden';
+  const dimmedOpacity = presenceMode === 'hidden' ? 0.22 : 0.35;
+  const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
+  const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
+  const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
 
   return (
     <div
@@ -176,13 +192,18 @@ export function FloatingWindowShell({
         width: win.width,
         height: win.height,
         zIndex: win.zIndex,
+        opacity: isDimmed ? dimmedOpacity : 1,
+        filter: isDimmed ? 'saturate(0.55)' : undefined,
         userSelect: isDragging || isResizing ? 'none' : 'auto',
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
       }}
     >
       <div
         onMouseDown={handleDragStart}
-        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-3"
+        className={cn(
+          'flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-3',
+          canControl ? 'cursor-grab' : 'cursor-default',
+        )}
       >
         {titleIcon && (
           <span className="flex shrink-0 items-center text-muted-foreground">
@@ -202,9 +223,38 @@ export function FloatingWindowShell({
         <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"
+            variant={win.isPrivate ? 'secondary' : 'ghost'}
+            size="icon-xs"
+            onClick={() => {
+              if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
+            }}
+            disabled={!canTogglePrivacy}
+            aria-label={win.isPrivate ? 'Window privacy on' : 'Window privacy off'}
+            title={win.isPrivate ? 'Privacy on' : 'Privacy off'}
+          >
+            {win.isPrivate ? <EyeOff /> : <Eye />}
+          </Button>
+
+          <Button
+            type="button"
+            variant={win.locked ? 'secondary' : 'ghost'}
+            size="icon-xs"
+            onClick={() => {
+              if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
+            }}
+            disabled={!canToggleLock}
+            aria-label={win.locked ? 'Window locked' : 'Window unlocked'}
+            title={win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
+          >
+            {win.locked ? <Lock /> : <Unlock />}
+          </Button>
+
+          <Button
+            type="button"
             variant="ghost"
             size="icon-xs"
             onClick={() => onMinimize(win.id)}
+            disabled={!canControl}
             aria-label="Minimize"
           >
             <Minus />
@@ -229,10 +279,17 @@ export function FloatingWindowShell({
                   <Copy />
                   Duplicate
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!canControl}
+                  onSelect={() => onUpdate(win.id, { shared: !win.shared })}
+                >
+                  <Share2 />
+                  {win.shared ? 'Stop sharing this window' : 'Share this window'}
+                </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem onSelect={handleMaximize}>
+                <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
                   <Maximize2 />
                   Maximize
                 </DropdownMenuItem>
@@ -241,6 +298,7 @@ export function FloatingWindowShell({
               <DropdownMenuGroup>
                 <DropdownMenuItem
                   variant="destructive"
+                  disabled={!canControl}
                   onSelect={() => onClose(win.id)}
                 >
                   <Trash2 />
@@ -255,6 +313,7 @@ export function FloatingWindowShell({
             variant="ghost"
             size="icon-xs"
             onClick={handleMaximize}
+            disabled={!canControl}
             aria-label="Maximize"
           >
             <Maximize2 />
@@ -264,6 +323,7 @@ export function FloatingWindowShell({
             variant="ghost"
             size="icon-xs"
             onClick={() => onClose(win.id)}
+            disabled={!canControl}
             aria-label="Close"
           >
             <X />
@@ -271,8 +331,16 @@ export function FloatingWindowShell({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        {children}
+      <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
+        {privacyBlanked ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
+            <EyeOff className="size-6 text-muted-foreground" />
+            <div className="text-sm font-medium">Private window</div>
+            <div className="max-w-64 text-xs text-muted-foreground">
+              This user has blanked the contents of this window.
+            </div>
+          </div>
+        ) : children}
       </div>
 
       <div

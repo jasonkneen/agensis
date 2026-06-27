@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_kind text DEFAULT '',
   git_root text DEFAULT '',
   git_remote text DEFAULT '',
+  background_opacity numeric DEFAULT 0.42,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -41,11 +43,14 @@ CREATE TABLE IF NOT EXISTS documents (
   title text NOT NULL DEFAULT 'Untitled',
   content text DEFAULT '',
   is_favorite boolean DEFAULT false,
+  folder text DEFAULT 'General',
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_workspace_id ON documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(workspace_id, folder);
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,6 +59,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   model text DEFAULT 'auto',
   folder text DEFAULT 'General',
   archived_at timestamptz,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -81,6 +87,7 @@ CREATE TABLE IF NOT EXISTS memory_facts (
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
   fact text NOT NULL DEFAULT '',
   category text DEFAULT 'general',
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -95,6 +102,7 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
   type text DEFAULT '',
   storage_path text DEFAULT '',
   content_sha256 text DEFAULT '',
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now()
 );
 
@@ -118,6 +126,7 @@ CREATE TABLE IF NOT EXISTS canvas_groups (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name text NOT NULL DEFAULT 'Untitled Group',
   color text NOT NULL DEFAULT '#3b82f6',
+  version integer NOT NULL DEFAULT 1,
   created_by uuid,
   created_at timestamptz DEFAULT now()
 );
@@ -148,6 +157,7 @@ CREATE TABLE IF NOT EXISTS canvas_objects (
   attached_to uuid REFERENCES canvas_objects(id) ON DELETE SET NULL,
   font_size integer DEFAULT 14,
   layer_id text DEFAULT 'base',
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -170,6 +180,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_type text CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai')),
   source_id text,
   completed_at timestamptz,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -192,6 +203,7 @@ CREATE TABLE IF NOT EXISTS document_comments (
   content text NOT NULL,
   anchor_text text DEFAULT '',
   resolved boolean DEFAULT false,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -212,6 +224,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   tools jsonb DEFAULT '[]'::jsonb,
   skills jsonb DEFAULT '[]'::jsonb,
   model text NOT NULL DEFAULT 'auto',
+  version integer NOT NULL DEFAULT 1,
   created_by uuid,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
@@ -227,6 +240,7 @@ CREATE TABLE IF NOT EXISTS agent_webhooks (
   token text NOT NULL UNIQUE,
   enabled boolean NOT NULL DEFAULT true,
   last_triggered_at timestamptz,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -256,6 +270,7 @@ CREATE TABLE IF NOT EXISTS task_comments (
   parent_id uuid REFERENCES task_comments(id) ON DELETE CASCADE,
   content text NOT NULL,
   resolved boolean DEFAULT false,
+  version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );

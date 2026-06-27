@@ -39,6 +39,11 @@ export interface HatchAppletInit {
   state: Record<string, unknown>;
   tasks: Task[];
   agents: WorkspaceAgent[];
+  theme?: {
+    family?: string;
+    scheme?: string;
+    tokens?: Record<string, string>;
+  } | null;
 }
 
 function buildTaskKanbanAppHtml() {
@@ -52,11 +57,13 @@ function buildTaskKanbanAppHtml() {
       color-scheme: light dark;
       --bg: #f7f4ec;
       --panel: #fffaf0;
+      --card: #fffaf0;
       --ink: #202024;
       --muted: #6d6760;
       --line: #2b2926;
       --soft: #ece3d1;
       --accent: #4b7fd7;
+      --accent-ink: #ffffff;
       --ok: #2f9b69;
       --warn: #d6942c;
       --shadow: 4px 4px 0 rgba(0,0,0,.18);
@@ -66,11 +73,13 @@ function buildTaskKanbanAppHtml() {
       :root {
         --bg: #161514;
         --panel: #24211d;
+        --card: #181614;
         --ink: #f4efe4;
         --muted: #b5aa99;
         --line: #f4efe4;
         --soft: #332e27;
         --accent: #78a8ff;
+        --accent-ink: #101010;
         --ok: #70d39e;
         --warn: #f0b85d;
         --shadow: 4px 4px 0 rgba(0,0,0,.55);
@@ -100,7 +109,7 @@ function buildTaskKanbanAppHtml() {
       border: 2px solid var(--line);
       border-radius: 6px;
       background: var(--accent);
-      color: #fff;
+      color: var(--accent-ink);
       padding: 8px 10px;
       font-weight: 750;
       cursor: pointer;
@@ -125,7 +134,7 @@ function buildTaskKanbanAppHtml() {
     .card {
       border: 2px solid var(--line);
       border-radius: 6px;
-      background: var(--bg);
+      background: var(--card);
       padding: 8px;
       box-shadow: 2px 2px 0 rgba(0,0,0,.14);
     }
@@ -135,6 +144,31 @@ function buildTaskKanbanAppHtml() {
     .mini { padding: 4px 7px; font-size: 11px; box-shadow: none; }
     .runs { border-top: 2px solid var(--line); background: var(--soft); max-height: 76px; overflow: auto; padding: 7px 8px; color: var(--muted); font-size: 12px; }
     .run { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+    body[data-family="neo"] {
+      font-weight: 650;
+    }
+    body[data-family="neo"] input,
+    body[data-family="neo"] select,
+    body[data-family="neo"] textarea,
+    body[data-family="neo"] button,
+    body[data-family="neo"] .lane,
+    body[data-family="neo"] .card {
+      border-radius: 4px;
+      box-shadow: var(--shadow);
+    }
+    body[data-family="neo"] .lane h2 {
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+    body[data-family="neo"] button.secondary,
+    body[data-family="neo"] .pill {
+      background: var(--panel);
+      color: var(--ink);
+    }
+    body[data-family="neo"] button:hover {
+      transform: translate(4px, 4px);
+      box-shadow: none;
+    }
     @media (max-width: 760px) {
       .toolbar, .agentbar { grid-template-columns: 1fr; }
       .board { grid-template-columns: repeat(4, minmax(150px, 72vw)); }
@@ -207,8 +241,28 @@ function buildTaskKanbanAppHtml() {
         tasks = Array.isArray(msg.payload.tasks) ? msg.payload.tasks : [];
         agents = Array.isArray(msg.payload.agents) ? msg.payload.agents : [];
         state = Object.assign({ agentRuns: [] }, msg.payload.state || {});
+        applyTheme(msg.payload.theme);
         render();
       });
+      function setVar(name, value) {
+        if (value) document.documentElement.style.setProperty(name, value);
+      }
+      function applyTheme(theme) {
+        if (!theme || !theme.tokens) return;
+        var tokens = theme.tokens || {};
+        document.body.dataset.family = theme.family || "classic";
+        document.body.dataset.scheme = theme.scheme || "light";
+        setVar("--bg", tokens.canvasBase || tokens.background);
+        setVar("--panel", tokens.card || tokens.canvasElevated);
+        setVar("--card", tokens.canvasOverlay || tokens.canvasRaised || tokens.card);
+        setVar("--ink", tokens.textPrimary || tokens.foreground || tokens.cardForeground);
+        setVar("--muted", tokens.textMuted || tokens.mutedForeground);
+        setVar("--line", tokens.border);
+        setVar("--soft", tokens.secondary || tokens.muted || tokens.canvasRaised);
+        setVar("--accent", tokens.primary || tokens.accent);
+        setVar("--accent-ink", tokens.primaryForeground || tokens.background);
+        setVar("--shadow", tokens.shadowSm || "4px 4px 0 var(--line)");
+      }
       function taskCount(status) {
         return tasks.filter(function (task) { return task.status === status && !task.parent_id; }).length;
       }

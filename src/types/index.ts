@@ -9,6 +9,8 @@ export interface Workspace {
   project_kind?: string;
   git_root?: string;
   git_remote?: string;
+  background_opacity?: number | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -19,6 +21,8 @@ export interface Document {
   title: string;
   content: string;
   is_favorite: boolean;
+  folder?: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -30,6 +34,7 @@ export interface ChatSession {
   model: string;
   folder?: string | null;
   archived_at?: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -48,6 +53,7 @@ export interface MemoryFact {
   workspace_id: string;
   fact: string;
   category: string;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -59,6 +65,7 @@ export interface UploadedFile {
   size: number;
   type: string;
   storage_path: string;
+  version?: number;
   created_at: string;
 }
 
@@ -88,6 +95,7 @@ export interface CanvasObject {
   attached_to: string | null;
   font_size: number;
   layer_id: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -97,6 +105,7 @@ export interface CanvasGroup {
   workspace_id: string;
   name: string;
   color: string;
+  version?: number;
   created_by: string | null;
   created_at: string;
 }
@@ -125,6 +134,7 @@ export interface Task {
   source_type: TaskSourceType | null;
   source_id: string | null;
   completed_at: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -137,6 +147,7 @@ export interface TaskComment {
   parent_id: string | null;
   content: string;
   resolved: boolean;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -150,6 +161,7 @@ export interface DocumentComment {
   content: string;
   anchor_text: string;
   resolved: boolean;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -192,7 +204,14 @@ export interface FloatingWindow {
   canvasId?: string;
   sessionId?: string;
   documentId?: string;
+  ownerUserId?: string | null;
+  isPrivate?: boolean;
+  locked?: boolean;
+  shared?: boolean;
 }
+
+export type PresenceVisibilityMode = 'visible' | 'dimmed' | 'hidden';
+export type WorkspaceInstanceShareMode = 'off' | 'all' | 'selected';
 
 export interface ItemPresenceUser {
   userId: string;
@@ -238,6 +257,7 @@ export interface WorkspaceAgent {
   tools?: string[];
   skills?: string[];
   model: string;
+  version?: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -251,6 +271,7 @@ export interface AgentWebhook {
   token: string;
   enabled: boolean;
   last_triggered_at: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }

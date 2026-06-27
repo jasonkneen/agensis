@@ -34,6 +34,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '
 import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Slider } from '@/components/ui/slider';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -105,7 +106,14 @@ export function SettingsDialog({
                   onUpdateWorkspace={onUpdateWorkspace}
                 />
               )}
-              {tab === 'appearance' && <AppearancePanel themeMode={themeMode} onThemeChange={onThemeChange} />}
+              {tab === 'appearance' && (
+                <AppearancePanel
+                  workspace={workspace}
+                  onUpdateWorkspace={onUpdateWorkspace}
+                  themeMode={themeMode}
+                  onThemeChange={onThemeChange}
+                />
+              )}
               {tab === 'ai' && <AIPanel />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
               {tab === 'secrets' && <SecretsPanel />}
@@ -207,7 +215,18 @@ function GeneralPanel({
   );
 }
 
-function AppearancePanel({ themeMode, onThemeChange }: { themeMode: ThemeMode; onThemeChange: (mode: ThemeMode) => void }) {
+function AppearancePanel({
+  workspace,
+  onUpdateWorkspace,
+  themeMode,
+  onThemeChange,
+}: {
+  workspace: Workspace | null;
+  onUpdateWorkspace: (id: string, updates: Partial<Workspace>) => void;
+  themeMode: ThemeMode;
+  onThemeChange: (mode: ThemeMode) => void;
+}) {
+  const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? 0.42) * 100));
   const modes: Array<{ id: ThemeMode; label: string }> = [
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
@@ -217,6 +236,10 @@ function AppearancePanel({ themeMode, onThemeChange }: { themeMode: ThemeMode; o
     { id: 'neo-light', label: 'Neo Light' },
     { id: 'neo-dark', label: 'Neo Dark' },
   ];
+
+  useEffect(() => {
+    setBackgroundOpacity(Math.round((workspace?.background_opacity ?? 0.42) * 100));
+  }, [workspace?.id, workspace?.background_opacity]);
 
   return (
     <FieldGroup>
@@ -238,6 +261,24 @@ function AppearancePanel({ themeMode, onThemeChange }: { themeMode: ThemeMode; o
           ))}
         </ToggleGroup>
         <FieldDescription>System follows your OS setting. TinyWorld and Neo provide separate light and dark control palettes.</FieldDescription>
+      </Field>
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Workspace background opacity</FieldLabel>
+          <Badge variant="secondary">{backgroundOpacity}%</Badge>
+        </div>
+        <Slider
+          value={[backgroundOpacity]}
+          min={10}
+          max={80}
+          step={1}
+          onValueChange={value => setBackgroundOpacity(value[0] ?? backgroundOpacity)}
+          onValueCommit={value => {
+            if (!workspace) return;
+            onUpdateWorkspace(workspace.id, { background_opacity: (value[0] ?? backgroundOpacity) / 100 });
+          }}
+        />
+        <FieldDescription>Stored on this workspace so every device opens it with the same background strength.</FieldDescription>
       </Field>
     </FieldGroup>
   );

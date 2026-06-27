@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { FileText, Mic, Plus, Send, X } from 'lucide-react';
 import { ModelSelector } from '../chat/ModelSelector';
 import { getSetting } from '../../lib/settings';
@@ -21,6 +21,7 @@ interface HomeCanvasProps {
   onOpenNewDocument: () => void;
   onOpenNewChat: () => void;
   workspaceName: string;
+  backgroundOpacity?: number;
 }
 
 const BACKGROUND_IMAGES = [bg1, bg2, bg3, bg4, bg5];
@@ -36,6 +37,8 @@ export function HomeCanvas({
   documents,
   memoryFacts,
   onSendMessage,
+  workspaceName,
+  backgroundOpacity = 0.42,
 }: HomeCanvasProps) {
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState(() => getSetting('ai_default_model'));
@@ -44,7 +47,13 @@ export function HomeCanvas({
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [backgroundImage] = useState(() => BACKGROUND_IMAGES[Math.floor(Math.random() * BACKGROUND_IMAGES.length)]);
+  const backgroundImage = useMemo(() => {
+    let hash = 0;
+    for (let index = 0; index < workspaceName.length; index++) {
+      hash = ((hash << 5) - hash + workspaceName.charCodeAt(index)) | 0;
+    }
+    return BACKGROUND_IMAGES[Math.abs(hash) % BACKGROUND_IMAGES.length];
+  }, [workspaceName]);
 
   const filteredDocs = documents.filter(d => d.title.toLowerCase().includes(docPickerQuery.toLowerCase()));
   const canSend = input.trim().length > 0;
@@ -118,7 +127,8 @@ export function HomeCanvas({
       <img
         src={backgroundImage}
         alt=""
-        className="pointer-events-none absolute inset-0 size-full object-cover opacity-[var(--home-bg-image-opacity)]"
+        className="pointer-events-none absolute inset-0 size-full object-cover"
+        style={{ opacity: backgroundOpacity }}
       />
       <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
 

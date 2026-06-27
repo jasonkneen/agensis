@@ -209,6 +209,8 @@
 }
 
 :root[data-ui-theme="neo"][data-theme="light"] {
+  --neo-shadow-x: 4px;
+  --neo-shadow-y: 4px;
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 10px;
@@ -230,9 +232,9 @@
   --success: #00c875;
   --warning: #f5d95f;
   --error: #ff3b30;
-  --shadow-sm: 2px 2px 0 #090909;
-  --shadow-md: 3px 3px 0 #090909;
-  --shadow-lg: 5px 5px 0 #090909;
+  --shadow-sm: var(--neo-shadow-x) var(--neo-shadow-y) 0 #090909;
+  --shadow-md: 5px 5px 0 #090909;
+  --shadow-lg: 7px 7px 0 #090909;
   --background: #fff9df;
   --foreground: #090909;
   --card: #ffffff;
@@ -253,47 +255,51 @@
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] {
+  --neo-shadow-x: 4px;
+  --neo-shadow-y: 4px;
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 12px;
-  --canvas-base: #0a0a0a;
-  --canvas-elevated: #141414;
-  --canvas-raised: #1f1f1f;
-  --canvas-overlay: #252525;
-  --border: #f6f1e7;
-  --border-subtle: #f6f1e7;
-  --border-strong: #f6f1e7;
-  --text-primary: #fffaf0;
-  --text-secondary: #e5ddcf;
-  --text-muted: #bfb4a4;
-  --accent: #f5d95f;
-  --accent-hover: #ffe981;
-  --accent-subtle: rgba(245, 217, 95, 0.18);
-  --accent-border: #f6f1e7;
+  --canvas-base: #3a1414;
+  --canvas-elevated: #1f1f1f;
+  --canvas-raised: #242424;
+  --canvas-overlay: #1b1b1b;
+  --border: #050505;
+  --border-subtle: #050505;
+  --border-strong: #050505;
+  --text-primary: #f7f1ec;
+  --text-secondary: #d2cbc4;
+  --text-muted: #9b938b;
+  --accent: #ff5f63;
+  --accent-hover: #ff7477;
+  --accent-subtle: rgba(255, 95, 99, 0.2);
+  --accent-border: #050505;
   --success: #00e38a;
-  --warning: #f5d95f;
-  --error: #ff5c7a;
-  --shadow-sm: 2px 2px 0 #f6f1e7;
-  --shadow-md: 3px 3px 0 #f6f1e7;
-  --shadow-lg: 5px 5px 0 #f6f1e7;
-  --background: #0a0a0a;
-  --foreground: #fffaf0;
-  --card: #141414;
-  --card-foreground: #fffaf0;
-  --popover: #141414;
-  --popover-foreground: #fffaf0;
-  --primary: #f5d95f;
-  --primary-foreground: #090909;
-  --secondary: #202020;
-  --secondary-foreground: #fffaf0;
-  --muted: #202020;
-  --muted-foreground: #e5ddcf;
-  --sh-accent: #00d1ff;
+  --warning: #ffd166;
+  --error: #ff5f63;
+  --shadow-sm: var(--neo-shadow-x) var(--neo-shadow-y) 0 #050505;
+  --shadow-md: 5px 5px 0 #050505;
+  --shadow-lg: 7px 7px 0 #050505;
+  --background: #3a1414;
+  --foreground: #f7f1ec;
+  --card: #1f1f1f;
+  --card-foreground: #f7f1ec;
+  --popover: #1f1f1f;
+  --popover-foreground: #f7f1ec;
+  --primary: #ff5f63;
+  --primary-foreground: #050505;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #f7f1ec;
+  --muted: #272727;
+  --muted-foreground: #d2cbc4;
+  --sh-accent: #ff5f63;
   --sh-accent-foreground: #090909;
-  --sh-border: #f6f1e7;
-  --input: #f6f1e7;
-  --ring: #f5d95f;
+  --sh-border: #050505;
+  --input: #050505;
+  --ring: #ff5f63;
+  --home-bg-image-opacity: 0.34;
+  --home-bg-overlay: linear-gradient(to bottom, rgba(58,20,20,0.1) 0%, rgba(58,20,20,0.32) 68%, var(--canvas-base) 100%);
 }
 
 :root[data-ui-theme="tinyworld"] body {
@@ -465,7 +471,7 @@
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="xs"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="sm"] {
   border-width: 2px;
-  box-shadow: 1px 1px 0 var(--border);
+  box-shadow: 3px 3px 0 var(--border);
   transform: none;
 }
 
@@ -494,9 +500,21 @@
   background: var(--card);
 }
 
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"]:hover,
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"]:hover,
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"]:hover,
+:root[data-ui-theme="neo"] [data-slot="select-trigger"]:hover,
+:root[data-ui-theme="neo"] [data-slot="toggle-group-item"]:hover,
+:root[data-ui-theme="neo"] .sidebar-action-row:hover,
+:root[data-ui-theme="neo"] .sidebar-search:hover,
+:root[data-ui-theme="neo"] .home-suggestion-pill:hover {
+  transform: translate(var(--neo-shadow-x), var(--neo-shadow-y));
+  box-shadow: none !important;
+}
+
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"][data-size="sm"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"][data-size="sm"] {
-  box-shadow: 1.5px 1.5px 0 var(--border);
+  box-shadow: 3px 3px 0 var(--border);
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group"],
@@ -505,12 +523,12 @@
   border-color: var(--border);
   border-width: 2px;
   background: var(--card);
-  box-shadow: 2px 2px 0 var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 :root[data-ui-theme="neo"] [data-slot="toggle-group-item"] {
   border-width: 2px;
-  box-shadow: 1.5px 1.5px 0 var(--border);
+  box-shadow: 3px 3px 0 var(--border);
   border-radius: 999px;
   background: var(--card);
 }
@@ -525,7 +543,7 @@
 :root[data-ui-theme="neo"] textarea:not([data-slot="input-group-control"]),
 :root[data-ui-theme="neo"] select {
   border-width: 2px;
-  box-shadow: 2px 2px 0 var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group-control"] {
@@ -534,8 +552,8 @@
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"]:active {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0 var(--border);
+  transform: translate(var(--neo-shadow-x), var(--neo-shadow-y));
+  box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="ghost"]:active {
@@ -546,7 +564,7 @@
 :root[data-ui-theme="neo"] .sidebar-action-row {
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 2px 2px 0 var(--border) !important;
+  box-shadow: 3px 3px 0 var(--border) !important;
   border-radius: 10px !important;
   margin-bottom: 2px;
 }
@@ -558,7 +576,7 @@
 :root[data-ui-theme="neo"] .sidebar-search {
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 1.5px 1.5px 0 var(--border) !important;
+  box-shadow: 3px 3px 0 var(--border) !important;
   border-radius: 10px !important;
 }
 
@@ -603,17 +621,17 @@
 :root[data-ui-theme="neo"] .settings-nav-row[data-variant="secondary"] {
   border-color: var(--border) !important;
   background: var(--secondary) !important;
-  box-shadow: 2px 2px 0 var(--border) !important;
+  box-shadow: 3px 3px 0 var(--border) !important;
   border-radius: 999px !important;
 }
 
 :root[data-ui-theme="neo"] .home-suggestion-pill {
-  box-shadow: 1.5px 1.5px 0 var(--border) !important;
+  box-shadow: 3px 3px 0 var(--border) !important;
 }
 
 :root[data-ui-theme="neo"] [data-floating-window] {
   border-width: 2px;
-  box-shadow: 7px 7px 0 var(--border);
+  box-shadow: var(--shadow-lg);
 }
 
 :root[data-ui-theme="tinyworld"] [data-floating-window] {

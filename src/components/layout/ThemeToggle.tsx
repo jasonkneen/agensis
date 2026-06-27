@@ -23,14 +23,14 @@ export function ThemeToggle({ mode, onModeChange }: ThemeToggleProps) {
       }}
       variant="outline"
       size="sm"
-      spacing={0}
+      spacing={2}
       aria-label="Theme"
     >
       {options.map(opt => {
         const Icon = opt.icon;
         return (
-          <ToggleGroupItem key={opt.value} value={opt.value} title={opt.label} aria-label={opt.label} className="min-w-7 px-0">
-            <Icon data-icon="inline-start" className="size-3.5" />
+          <ToggleGroupItem key={opt.value} value={opt.value} title={opt.label} aria-label={opt.label} className="min-w-9 px-0">
+            <Icon data-icon="inline-start" className="size-4" />
           </ToggleGroupItem>
         );
       })}

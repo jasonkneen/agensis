@@ -33,6 +33,21 @@ const ALLOWED_TABLES = new Set([
   'activity_events',
 ]);
 
+const VERSIONED_TABLES = new Set([
+  'workspaces',
+  'documents',
+  'chat_sessions',
+  'memory_facts',
+  'uploaded_files',
+  'canvas_groups',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'task_comments',
+  'workspace_agents',
+  'agent_webhooks',
+]);
+
 let envLoaded = false;
 let db;
 let websocketClients = new Set();
@@ -265,16 +280,24 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_remote text DEFAULT '';
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.42;
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
+
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(workspace_id, folder);
 
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     CREATE TABLE IF NOT EXISTS agent_webhooks (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -289,8 +312,16 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
+    ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE canvas_groups ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE canvas_objects ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
   `);
   await db.unsafe(`
     DO $$
@@ -683,6 +714,11 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
     if (workspaceContext.documents) wsBlocks.push(`# Key documents\n${workspaceContext.documents}`);
     if (workspaceContext.tasks) wsBlocks.push(`# Open tasks\n${workspaceContext.tasks}`);
     if (workspaceContext.canvas) wsBlocks.push(`# Canvas notes\n${workspaceContext.canvas}`);
+    if (workspaceContext.agents) wsBlocks.push(`# Workspace agents\n${workspaceContext.agents}`);
+    if (workspaceContext.skills) wsBlocks.push(`# Skill libraries\n${workspaceContext.skills}`);
+    if (workspaceContext.commands) wsBlocks.push(`# Commands and CLIs\n${workspaceContext.commands}`);
+    if (workspaceContext.tools) wsBlocks.push(`# Tools and SDKs\n${workspaceContext.tools}`);
+    if (workspaceContext.webhooks) wsBlocks.push(`# Agent webhooks\n${workspaceContext.webhooks}`);
     if (wsBlocks.length > 0) {
       sections.push('', '<workspace_context>', 'The following is a snapshot of the shared workspace you are assisting in. Use it to answer grounded questions, but do not dump it verbatim unless asked.', '', wsBlocks.join('\n\n'), '</workspace_context>');
     }
@@ -1059,10 +1095,14 @@ function createApp() {
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
 
       const params = [];
-      const setClause = Object.keys(values).map((column) => {
+      const setParts = Object.keys(values).map((column) => {
         params.push(values[column] ?? null);
         return `${quoteIdent(column)} = $${params.length}`;
-      }).join(', ');
+      });
+      if (VERSIONED_TABLES.has(table) && values.version == null) {
+        setParts.push('"version" = COALESCE("version", 0) + 1');
+      }
+      const setClause = setParts.join(', ');
       const where = buildWhereClause(filters, params);
       const result = await getDb().unsafe(
         `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,

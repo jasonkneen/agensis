@@ -5,6 +5,7 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  ChevronRight,
   FileText,
   Folder,
   FolderPlus,
@@ -21,9 +22,10 @@ import {
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
-import type { ChatSession, Document, FloatingWindow, Workspace } from '../../types';
+import type { ChatSession, Document, FloatingWindow, ItemPresenceUser, Workspace } from '../../types';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,6 +60,7 @@ interface SidebarProps {
   onUploadFile: () => void;
   onCreateWorkspace: () => void;
   onDocumentOpen: (doc: Document) => void;
+  onDocumentUpdate?: (id: string, updates: { title?: string; content?: string; folder?: string | null }) => void;
   onSessionOpen: (session: ChatSession) => void;
   onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
   onSessionArchive?: (id: string, archived?: boolean) => void;
@@ -70,6 +73,8 @@ interface SidebarProps {
   recents: Document[];
   sessions: ChatSession[];
   floatingWindows: FloatingWindow[];
+  documentPresence?: Record<string, ItemPresenceUser[]>;
+  chatPresence?: Record<string, ItemPresenceUser[]>;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
   userEmail: string;
@@ -87,6 +92,7 @@ export function Sidebar({
   onUploadFile,
   onCreateWorkspace,
   onDocumentOpen,
+  onDocumentUpdate,
   onSessionOpen,
   onSessionUpdate,
   onSessionArchive,
@@ -98,6 +104,8 @@ export function Sidebar({
   openTaskCount = 0,
   recents,
   sessions,
+  documentPresence = {},
+  chatPresence = {},
   themeMode,
   onThemeChange,
   onOpenSettings,
@@ -110,6 +118,7 @@ export function Sidebar({
     return Number.isFinite(saved) ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, saved)) : 280;
   });
   const resizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
+  const [closedSections, setClosedSections] = React.useState<Set<string>>(() => new Set());
   const userInitial = (userEmail[0] || 'U').toUpperCase();
   const activeSessions = sessions.filter(session => !session.archived_at);
   const archivedSessions = sessions.filter(session => session.archived_at);
@@ -118,6 +127,20 @@ export function Sidebar({
     folder,
     sessions: activeSessions.filter(session => (session.folder || 'General') === folder),
   }));
+  const documentFolderNames = Array.from(new Set(recents.map(doc => doc.folder || 'General')));
+  const groupedDocuments = documentFolderNames.map(folder => ({
+    folder,
+    documents: recents.filter(doc => (doc.folder || 'General') === folder),
+  }));
+
+  const toggleSection = (id: string, open: boolean) => {
+    setClosedSections(prev => {
+      const next = new Set(prev);
+      if (open) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   if (collapsed) {
     return (
@@ -208,8 +231,14 @@ export function Sidebar({
         ) : (
           <div className="flex flex-col gap-1 pb-2">
             {groupedSessions.map(group => (
-              <div key={group.folder}>
-                <SectionLabel label={group.folder === 'General' ? 'Chats' : group.folder} />
+              <SidebarSection
+                key={group.folder}
+                id={`chats:${group.folder}`}
+                label={group.folder === 'General' ? 'Chats' : group.folder}
+                count={group.sessions.length}
+                open={!closedSections.has(`chats:${group.folder}`)}
+                onOpenChange={open => toggleSection(`chats:${group.folder}`, open)}
+              >
                 {group.sessions.slice(0, 8).map(session => (
                   <SessionRow
                     key={session.id}
@@ -217,13 +246,19 @@ export function Sidebar({
                     onOpen={() => onSessionOpen(session)}
                     onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
                     onArchive={() => onSessionArchive?.(session.id, true)}
+                    presenceUsers={chatPresence[session.id] || []}
                   />
                 ))}
-              </div>
+              </SidebarSection>
             ))}
             {archivedSessions.length > 0 && (
-              <div>
-                <SectionLabel label="Archived" />
+              <SidebarSection
+                id="archived"
+                label="Archived"
+                count={archivedSessions.length}
+                open={!closedSections.has('archived')}
+                onOpenChange={open => toggleSection('archived', open)}
+              >
                 {archivedSessions.slice(0, 6).map(session => (
                   <SessionRow
                     key={session.id}
@@ -232,19 +267,30 @@ export function Sidebar({
                     onOpen={() => onSessionOpen(session)}
                     onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
                     onArchive={() => onSessionArchive?.(session.id, false)}
+                    presenceUsers={chatPresence[session.id] || []}
                   />
                 ))}
-              </div>
+              </SidebarSection>
             )}
-            {recents.length > 0 && <SectionLabel label="Documents" />}
-            {recents.slice(0, 6).map(doc => (
-                <ItemRow
-                  key={doc.id}
-                  icon={<FileText />}
-                  label={doc.title}
-                  onClick={() => onDocumentOpen(doc)}
-                  kind="document"
-                />
+            {groupedDocuments.map(group => (
+              <SidebarSection
+                key={`docs-${group.folder}`}
+                id={`docs:${group.folder}`}
+                label={group.folder === 'General' ? 'Documents' : `Documents / ${group.folder}`}
+                count={group.documents.length}
+                open={!closedSections.has(`docs:${group.folder}`)}
+                onOpenChange={open => toggleSection(`docs:${group.folder}`, open)}
+              >
+                {group.documents.map(doc => (
+                  <DocumentRow
+                    key={doc.id}
+                    doc={doc}
+                    onOpen={() => onDocumentOpen(doc)}
+                    onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
+                    presenceUsers={documentPresence[doc.id] || []}
+                  />
+                ))}
+              </SidebarSection>
             ))}
           </div>
         )}
@@ -260,11 +306,11 @@ export function Sidebar({
             <div className="truncate text-xs font-medium">{userEmail}</div>
             <div className="truncate text-xs text-muted-foreground">{workspace?.name || 'Personal'}</div>
           </div>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenSettings} aria-label="Settings">
-            <Settings />
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="Settings">
+            <Settings className="size-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onSignOut} aria-label="Sign out">
-            <LogOut />
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onSignOut} aria-label="Sign out">
+            <LogOut className="size-4" />
           </Button>
         </div>
       </div>
@@ -296,11 +342,40 @@ function ActionRow({ icon, label, onClick }: { icon: React.ReactNode; label: str
   );
 }
 
-function SectionLabel({ label }: { label: string }) {
+function SidebarSection({
+  id,
+  label,
+  count,
+  open,
+  onOpenChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  count: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">
-      {label}
-    </div>
+    <Collapsible open={open} onOpenChange={onOpenChange} className="pt-2">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="sidebar-section-trigger flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-controls={`${id}-content`}
+        >
+          <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+            {count}
+          </span>
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent id={`${id}-content`} className="pt-1">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -309,11 +384,13 @@ function ItemRow({
   label,
   onClick,
   kind = 'item',
+  presenceUsers = [],
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   kind?: 'item' | 'session' | 'document';
+  presenceUsers?: ItemPresenceUser[];
 }) {
   return (
     <Button
@@ -325,11 +402,26 @@ function ItemRow({
     >
       {icon}
       <span className="truncate">{label}</span>
+      {presenceUsers.length > 0 && (
+        <span className="ml-auto flex shrink-0 items-center gap-0.5">
+          {presenceUsers.slice(0, 3).map(person => (
+            <span
+              key={person.userId}
+              className="size-2 rounded-full ring-1 ring-background"
+              style={{ backgroundColor: person.color }}
+              title={`${person.name}${person.typing ? ' is typing' : ' is active'}`}
+            />
+          ))}
+          {presenceUsers.length > 3 && (
+            <span className="text-[10px] text-muted-foreground">+{presenceUsers.length - 3}</span>
+          )}
+        </span>
+      )}
     </Button>
   );
 }
 
-const CHAT_FOLDERS = ['General', 'Work', 'Research', 'Drafts', 'Ideas', 'Webhooks'];
+const ITEM_FOLDERS = ['General', 'Work', 'Research', 'Drafts', 'Ideas', 'Webhooks'];
 
 function SessionRow({
   session,
@@ -337,12 +429,14 @@ function SessionRow({
   onOpen,
   onMoveFolder,
   onArchive,
+  presenceUsers = [],
 }: {
   session: ChatSession;
   archived?: boolean;
   onOpen: () => void;
   onMoveFolder: (folder: string) => void;
   onArchive: () => void;
+  presenceUsers?: ItemPresenceUser[];
 }) {
   return (
     <ContextMenu>
@@ -353,6 +447,7 @@ function SessionRow({
             label={session.title}
             onClick={onOpen}
             kind="session"
+            presenceUsers={presenceUsers}
           />
         </div>
       </ContextMenuTrigger>
@@ -365,7 +460,7 @@ function SessionRow({
             Move to folder
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {CHAT_FOLDERS.map(folder => (
+            {ITEM_FOLDERS.map(folder => (
               <ContextMenuItem key={folder} onSelect={() => onMoveFolder(folder)}>
                 {folder}
               </ContextMenuItem>
@@ -376,6 +471,51 @@ function SessionRow({
           {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
           {archived ? 'Unarchive chat' : 'Archive chat'}
         </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function DocumentRow({
+  doc,
+  onOpen,
+  onMoveFolder,
+  presenceUsers = [],
+}: {
+  doc: Document;
+  onOpen: () => void;
+  onMoveFolder: (folder: string) => void;
+  presenceUsers?: ItemPresenceUser[];
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div>
+          <ItemRow
+            icon={<FileText />}
+            label={doc.title}
+            onClick={onOpen}
+            kind="document"
+            presenceUsers={presenceUsers}
+          />
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel>{doc.title}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Folder data-icon="inline-start" />
+            Move to folder
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {ITEM_FOLDERS.map(folder => (
+              <ContextMenuItem key={folder} onSelect={() => onMoveFolder(folder)}>
+                {folder}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
       </ContextMenuContent>
     </ContextMenu>
   );

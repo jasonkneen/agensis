@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -19,6 +19,7 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
 import {
   AlertDialog,
@@ -49,6 +50,7 @@ import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { useWindows } from './hooks/useWindows';
+import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
 import { useSharing } from './hooks/useSharing';
 import { useCanvasObjects } from './hooks/useCanvasObjects';
@@ -58,12 +60,11 @@ import { useActivity } from './hooks/useActivity';
 import { useWorkspaceContext } from './hooks/useWorkspaceContext';
 import { useAgents } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
-import type { CanvasTemplate } from './lib/canvasTemplates';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState } from './lib/canvasApps';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook } from './types';
+import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 import bg1 from '../images/download-21.jpg';
@@ -74,13 +75,153 @@ import bg5 from '../images/download-26.jpg';
 
 const TOUR_KEY = 'hatch_tour_complete';
 const SIDEBAR_KEY = 'hatch_sidebar_collapsed';
+const PRESENCE_VISIBILITY_KEY = 'hatch_presence_visibility';
+const PRESENCE_FAVORITES_KEY = 'hatch_presence_favorites';
 const CANVAS_BACKGROUNDS = [bg1, bg2, bg3, bg4, bg5];
+
+type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
+type WorkspaceContextCounts = {
+  docs: number;
+  facts: number;
+  tasks: number;
+  agents: number;
+  skills: number;
+  commands: number;
+  tools: number;
+  webhooks: number;
+};
+type WorkspacePresenceUser = {
+  id: string;
+  name: string;
+  color: string;
+  isCurrentUser?: boolean;
+  activityItems?: string[];
+  windows?: FloatingWindow[];
+};
+
+function loadPresenceVisibility(): PresenceVisibilityMap {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PRESENCE_VISIBILITY_KEY) || '{}') as PresenceVisibilityMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadPresenceFavorites(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PRESENCE_FAVORITES_KEY) || '[]') as string[];
+    return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function countLabel(value: number, singular: string, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function uniqueTokens(values: Array<string | null | undefined>) {
+  return new Set(values.map(value => value?.trim()).filter(Boolean) as string[]);
+}
+
+function buildContextCounts(
+  documents: Document[],
+  facts: MemoryFact[],
+  tasks: Task[],
+  agents: WorkspaceAgent[],
+  agentWebhooks: AgentWebhook[],
+  capabilities: SystemCapabilities | null,
+): WorkspaceContextCounts {
+  const openTaskCount = tasks.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+  const availableLibraries = capabilities?.skills.filter(skill => skill.available) || [];
+  const detectedSkillCount = availableLibraries
+    .filter(skill => skill.type === 'skills' || skill.type === 'agents')
+    .reduce((total, skill) => total + skill.count, 0);
+  const commandLibraryCount = availableLibraries
+    .filter(skill => skill.type === 'commands')
+    .reduce((total, skill) => total + skill.count, 0);
+  const selectedAgentSkills = uniqueTokens(agents.flatMap(agent => agent.skills || []));
+  const selectedAgentTools = uniqueTokens(agents.flatMap(agent => agent.tools || []));
+  const availableCommandCount = capabilities?.clis.filter(cli => cli.available).length || 0;
+  const availablePackageCount = capabilities?.packages.filter(pkg => pkg.available).length || 0;
+  const codexAppServerCount = capabilities?.codexAppServer.available ? 1 : 0;
+
+  return {
+    docs: documents.length,
+    facts: facts.length,
+    tasks: openTaskCount,
+    agents: agents.length,
+    skills: detectedSkillCount + selectedAgentSkills.size,
+    commands: availableCommandCount + commandLibraryCount,
+    tools: availablePackageCount + codexAppServerCount + selectedAgentTools.size,
+    webhooks: agentWebhooks.filter(webhook => webhook.enabled).length,
+  };
+}
+
+function formatContextCounts(counts: WorkspaceContextCounts) {
+  return [
+    countLabel(counts.docs, 'doc'),
+    countLabel(counts.facts, 'fact'),
+    countLabel(counts.tasks, 'task'),
+    countLabel(counts.agents, 'agent'),
+    countLabel(counts.skills, 'skill'),
+    countLabel(counts.commands, 'cmd', 'cmds'),
+    countLabel(counts.tools, 'tool'),
+  ].join(' / ');
+}
+
+function formatContextTitle(counts: WorkspaceContextCounts) {
+  return [
+    countLabel(counts.docs, 'document'),
+    countLabel(counts.facts, 'memory fact'),
+    countLabel(counts.tasks, 'open task'),
+    countLabel(counts.agents, 'agent'),
+    countLabel(counts.skills, 'skill'),
+    countLabel(counts.commands, 'command'),
+    countLabel(counts.tools, 'tool'),
+    countLabel(counts.webhooks, 'enabled webhook'),
+  ].join(', ');
+}
+
+function buildCanvasAppletCreationBrief(workspaceName: string) {
+  return `Create a new Hatch Canvas Applet for the "${workspaceName}" workspace.
+
+Use this skill:
+Hatch Canvas Applet Builder
+- Build production-quality self-contained HTML applets for Hatch canvas.
+- Treat the applet as a durable, editable artifact, not a throwaway snippet.
+- Keep the implementation isolated, resilient, accessible, responsive, and easy to revise in later chat turns.
+- Use the Hatch iframe SDK contract below for state, tasks, agents, theme, and crash reporting.
+
+The applet must be a self-contained single-file HTML artifact:
+- One complete HTML document in a single fenced \`\`\`html block.
+- Inline CSS and inline JavaScript only.
+- No build step, no framework runtime, no external dependencies unless I explicitly ask.
+- Responsive layout that works inside a resizable canvas iframe.
+- Easy to update later: keep constants, state helpers, render functions, and event handlers clearly separated.
+- Accessible controls, stable dimensions, no flashing layout shifts, and no uncaught errors.
+
+Use this Hatch iframe SDK contract:
+- Listen for parent messages with type "hatch:init". The payload can include { state, tasks, agents, theme }.
+- Post { source: "hatch-applet", type: "hatch:ready" } after the app is ready.
+- Persist applet state by posting { source: "hatch-applet", type: "hatch:setState", payload: { state } }.
+- Create tasks by posting { source: "hatch-applet", type: "hatch:createTask", payload: { title, priority, source_type } }.
+- Update tasks by posting { source: "hatch-applet", type: "hatch:updateTask", payload: { id, updates } }.
+- Report runtime failures by posting { source: "hatch-applet", type: "hatch:crash", payload: { message } }.
+- Use payload.theme tokens when present so the applet matches the current Hatch theme.
+
+First ask one concise question if the applet idea is missing. If I provide a specific applet idea, build the first version directly.`;
+}
 
 export default function App() {
   const { user, loading: authLoading, signIn, signUp, signOut } = useAuth();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1');
+  const [presenceVisibility, setPresenceVisibility] = useState<PresenceVisibilityMap>(() => loadPresenceVisibility());
+  const [presenceFavorites, setPresenceFavorites] = useState<string[]>(() => loadPresenceFavorites());
+  const [focusedPresenceUserId, setFocusedPresenceUserId] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [shareDialogTitle, setShareDialogTitle] = useState('');
@@ -90,7 +231,7 @@ export default function App() {
   const [canvasGridBackground] = useState(() => CANVAS_BACKGROUNDS[Math.floor(Math.random() * CANVAS_BACKGROUNDS.length)]);
   const activeSceneRef = useRef<HTMLDivElement>(null);
 
-  const { workspaces, loading: wsLoading, createWorkspace, updateWorkspace } = useWorkspaces(user?.id);
+  const { workspaces, loading: wsLoading, createWorkspace } = useWorkspaces(user?.id);
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
 
   useEffect(() => {
@@ -101,7 +242,7 @@ export default function App() {
 
   const {
     documents, recents,
-    createDocument, autoSave, deleteDocument, toggleFavorite
+    createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite
   } = useDocuments(activeWorkspaceId);
 
   const {
@@ -115,7 +256,7 @@ export default function App() {
   const { uploadFiles } = useFiles(activeWorkspaceId);
   const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
   const { mode: themeMode, setTheme } = useTheme();
-  const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
+  const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
   const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindows();
   const canvasRef = useRef<HTMLElement>(null);
   const { cursors } = useMultiplayerCursors(
@@ -124,21 +265,82 @@ export default function App() {
     user?.id,
     user?.email || undefined
   );
-
-  const workspacePresenceUsers = [
-    ...(user ? [{
-      id: user.id,
-      name: user.email?.split('@')[0] || 'You',
-      color: colorFromSeed(user.id),
-      isCurrentUser: true,
-    }] : []),
-    ...cursors.map(cursor => ({
-      id: cursor.id,
-      name: cursor.name,
-      color: cursor.color,
-      isCurrentUser: false,
-    })),
-  ];
+  const itemPresence = useItemPresence(
+    activeWorkspaceId || null,
+    windows,
+    activeLayerId,
+    user?.id,
+    user?.email || undefined,
+    'all',
+  );
+  const workspacePresenceUsers = useMemo<WorkspacePresenceUser[]>(() => {
+    const byId = new Map<string, WorkspacePresenceUser>();
+    if (user) {
+      byId.set(user.id, {
+        id: user.id,
+        name: user.email?.split('@')[0] || 'You',
+        color: colorFromSeed(user.id),
+        isCurrentUser: true,
+      });
+    }
+    cursors.forEach(cursor => {
+      if (!byId.has(cursor.id)) {
+        byId.set(cursor.id, {
+          id: cursor.id,
+          name: cursor.name,
+          color: cursor.color,
+          isCurrentUser: false,
+        });
+      }
+    });
+    itemPresence.remotePresenceUsers.forEach(remote => {
+      const existing = byId.get(remote.userId);
+      const visibleWindows = remote.windows.filter(win => !win.isPrivate);
+      const activityItems = remote.items
+        .map(item => {
+          if (item.type === 'document') {
+            const doc = documents.find(d => d.id === item.itemId);
+            return doc ? `Doc: ${doc.title}` : 'Document';
+          }
+          const session = sessions.find(s => s.id === item.itemId);
+          return session ? `Chat: ${session.title}` : 'Chat';
+        })
+        .slice(0, 4);
+      byId.set(remote.userId, {
+        id: remote.userId,
+        name: existing?.name || remote.name,
+        color: existing?.color || remote.color,
+        isCurrentUser: existing?.isCurrentUser,
+        activityItems: activityItems.length > 0 ? activityItems : visibleWindows.slice(0, 4).map(win => windowLabel(win)),
+        windows: visibleWindows,
+      });
+    });
+    return Array.from(byId.values());
+  }, [cursors, documents, itemPresence.remotePresenceUsers, sessions, user]);
+  const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
+    if (!id) return 'visible';
+    const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';
+    if (focusedPresenceUserId && id !== focusedPresenceUserId) {
+      return baseMode === 'hidden' ? 'hidden' : 'dimmed';
+    }
+    return baseMode;
+  }, [focusedPresenceUserId, presenceVisibility, user?.id]);
+  const setPresenceMode = useCallback((id: string, mode: PresenceVisibilityMode) => {
+    setPresenceVisibility(prev => {
+      const next = { ...prev };
+      if (mode === 'visible') delete next[id];
+      else next[id] = mode;
+      localStorage.setItem(PRESENCE_VISIBILITY_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const togglePresenceFavorite = useCallback((id: string) => {
+    setPresenceFavorites(prev => {
+      const next = prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id];
+      localStorage.setItem(PRESENCE_FAVORITES_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
   const {
     members,
     autoShare,
@@ -186,8 +388,10 @@ export default function App() {
   } = useAgentWebhooks(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
+  const [systemCapabilities, setSystemCapabilities] = useState<SystemCapabilities | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLayerId, setSettingsLayerId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     description: string;
@@ -195,21 +399,91 @@ export default function App() {
     onConfirm: () => void | Promise<void>;
   } | null>(null);
 
+  const capabilityWorkspacePath = activeLayer?.local_path || activeLayer?.git_root || activeWorkspace?.local_path || activeWorkspace?.git_root || '';
+  useEffect(() => {
+    let cancelled = false;
+    getSystemCapabilities(capabilityWorkspacePath)
+      .then(capabilities => {
+        if (!cancelled) setSystemCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (!cancelled) setSystemCapabilities(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [capabilityWorkspacePath]);
+
+  const contextCounts = useMemo(
+    () => buildContextCounts(documents, facts, tasks, agents, agentWebhooks, systemCapabilities),
+    [documents, facts, tasks, agents, agentWebhooks, systemCapabilities],
+  );
+  const contextCountsLabel = useMemo(() => formatContextCounts(contextCounts), [contextCounts]);
+  const contextCountsTitle = useMemo(() => formatContextTitle(contextCounts), [contextCounts]);
+
   const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
     workspaceName: activeWorkspace?.name || 'Workspace',
     documents,
     memoryFacts: facts,
     tasks,
     canvasObjects,
+    agents,
+    agentWebhooks,
+    capabilities: systemCapabilities,
   });
 
+  const focusedRemotePresence = itemPresence.remotePresenceUsers.find(remote => remote.userId === focusedPresenceUserId);
+  const viewedLayerId = focusedRemotePresence?.activeLayerId || activeLayerId;
+  const viewedLayer = layers.find(layer => layer.id === viewedLayerId) || activeLayer;
   const visibleCanvasObjects = canvasObjects.filter(
-    obj => (obj.layer_id || 'base') === activeLayerId,
+    obj => (obj.layer_id || 'base') === viewedLayerId,
   );
   const visibleGroupIds = new Set(visibleCanvasObjects.map(obj => obj.group_id).filter(Boolean));
   const visibleCanvasGroups = canvasGroups.filter(group => visibleGroupIds.has(group.id));
-  const activeWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
-  const minimizedActiveWindows = activeWindows.filter(win => win.minimized);
+  const exactWorkspaceWindows = focusedRemotePresence
+    ? focusedRemotePresence.windows.map(win => ({
+        ...win,
+        id: `remote:${focusedRemotePresence.userId}:${win.id}`,
+        ownerUserId: focusedRemotePresence.userId,
+      }))
+    : windows;
+  const activeWindows = exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
+  const minimizedActiveWindows = focusedRemotePresence
+    ? activeWindows.filter(win => win.minimized)
+    : windows.filter(win => (win.canvasId || 'base') === activeLayerId && win.minimized);
+  const canEditCanvasObject = useCallback((obj: CanvasObject) => !obj.user_id || obj.user_id === user?.id, [user?.id]);
+  const settingsLayer = layers.find(layer => layer.id === (settingsLayerId || activeLayerId)) || activeLayer;
+  const settingsWorkspace = useMemo<Workspace | null>(() => {
+    if (!activeWorkspace || !settingsLayer) return activeWorkspace;
+    return {
+      ...activeWorkspace,
+      id: settingsLayer.id,
+      name: settingsLayer.name,
+      description: settingsLayer.description ?? activeWorkspace.description ?? '',
+      icon: settingsLayer.icon ?? activeWorkspace.icon ?? '',
+      local_path: settingsLayer.local_path ?? '',
+      project_kind: settingsLayer.project_kind ?? '',
+      git_root: settingsLayer.git_root ?? '',
+      git_remote: settingsLayer.git_remote ?? '',
+      background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? 0.42,
+    };
+  }, [activeWorkspace, settingsLayer]);
+  const openLayerSettings = useCallback((layerId = activeLayerId) => {
+    setSettingsLayerId(layerId);
+    setSettingsOpen(true);
+  }, [activeLayerId]);
+  const handleUpdateSettingsWorkspace = useCallback((id: string, updates: Partial<Workspace>) => {
+    const layerUpdates: Partial<CanvasLayer> = {};
+    if (updates.name !== undefined) layerUpdates.name = updates.name;
+    if (updates.description !== undefined) layerUpdates.description = updates.description;
+    if (updates.icon !== undefined) layerUpdates.icon = updates.icon;
+    if (updates.local_path !== undefined) layerUpdates.local_path = updates.local_path;
+    if (updates.project_kind !== undefined) layerUpdates.project_kind = updates.project_kind;
+    if (updates.git_root !== undefined) layerUpdates.git_root = updates.git_root;
+    if (updates.git_remote !== undefined) layerUpdates.git_remote = updates.git_remote;
+    if (updates.background_opacity !== undefined) layerUpdates.background_opacity = updates.background_opacity;
+    updateLayer(id, layerUpdates);
+  }, [updateLayer]);
 
   useEffect(() => {
     const done = localStorage.getItem(TOUR_KEY);
@@ -246,7 +520,7 @@ export default function App() {
   const handleNewChat = useCallback(async () => {
     const session = await createSession();
     if (session) {
-      openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId });
+      openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
       logEvent({
         event_type: 'chat_created',
         entity_type: 'chat',
@@ -254,12 +528,12 @@ export default function App() {
         title: `New chat: ${session.title || 'Untitled'}`,
       });
     }
-  }, [createSession, openWindow, activeLayerId, logEvent]);
+  }, [createSession, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
     const doc = await createDocument();
     if (doc) {
-      openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId });
+      openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
       logEvent({
         event_type: 'document_created',
         entity_type: 'document',
@@ -267,7 +541,7 @@ export default function App() {
         title: `New document: ${doc.title || 'Untitled'}`,
       });
     }
-  }, [createDocument, openWindow, activeLayerId, logEvent]);
+  }, [createDocument, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleOpenMemory = useCallback(() => {
     const existing = windows.find(w => w.type === 'memory');
@@ -276,8 +550,8 @@ export default function App() {
       if (existing.minimized) minimizeWindow(existing.id);
       return;
     }
-    openWindow('memory', { title: 'Memory', canvasId: activeLayerId });
-  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
+    openWindow('memory', { title: 'Memory', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenTasks = useCallback(() => {
     const existing = windows.find(w => w.type === 'tasks');
@@ -286,8 +560,8 @@ export default function App() {
       if (existing.minimized) minimizeWindow(existing.id);
       return;
     }
-    openWindow('tasks', { title: 'Tasks', canvasId: activeLayerId });
-  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
+    openWindow('tasks', { title: 'Tasks', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenActivity = useCallback(() => {
     const existing = windows.find(w => w.type === 'activity');
@@ -296,8 +570,8 @@ export default function App() {
       if (existing.minimized) minimizeWindow(existing.id);
       return;
     }
-    openWindow('activity', { title: 'Activity', canvasId: activeLayerId });
-  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
+    openWindow('activity', { title: 'Activity', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenAgents = useCallback(() => {
     const existing = windows.find(w => w.type === 'agents');
@@ -306,19 +580,8 @@ export default function App() {
       if (existing.minimized) minimizeWindow(existing.id);
       return;
     }
-    openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId });
-  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId]);
-
-  const handleApplyTemplate = useCallback(async (template: CanvasTemplate) => {
-    // Each template becomes its own self-contained board (canvas layer).
-    const layerId = createLayer(template.name);
-    for (const obj of template.objects) {
-      await addCanvasObject(
-        obj.type as import('./types').CanvasObjectType,
-        { ...obj.overrides, layer_id: layerId } as Partial<import('./types').CanvasObject>,
-      );
-    }
-  }, [createLayer, addCanvasObject]);
+    openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleCreateCanvasApp = useCallback(async (app: CanvasAppDefinition) => {
     await addCanvasObject('applet', {
@@ -384,13 +647,31 @@ export default function App() {
   }, [deleteTask]);
 
   const handleDocumentOpen = useCallback((doc: Document) => {
-    openWindow('document', { title: doc.title, documentId: doc.id, canvasId: activeLayerId });
-  }, [openWindow, activeLayerId]);
+    openWindow('document', { title: doc.title, documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [openWindow, activeLayerId, user?.id]);
 
   const handleSessionOpen = useCallback((session: ChatSession) => {
     setActiveSession(session);
-    openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId });
-  }, [setActiveSession, openWindow, activeLayerId]);
+    openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [setActiveSession, openWindow, activeLayerId, user?.id]);
+
+  const handleOpenPresenceWindow = useCallback((win: FloatingWindow) => {
+    if (win.isPrivate) return;
+    if (win.type === 'document' && win.documentId) {
+      const doc = documents.find(item => item.id === win.documentId);
+      if (doc) handleDocumentOpen(doc);
+      return;
+    }
+    if (win.type === 'chat' && win.sessionId) {
+      const session = sessions.find(item => item.id === win.sessionId);
+      if (session) handleSessionOpen(session);
+      return;
+    }
+    if (win.type === 'memory') handleOpenMemory();
+    else if (win.type === 'tasks') handleOpenTasks();
+    else if (win.type === 'activity') handleOpenActivity();
+    else if (win.type === 'agents') handleOpenAgents();
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenMemory, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -433,10 +714,34 @@ export default function App() {
     memFacts?: MemoryFact[],
     docs?: Document[],
     threadParentId?: string | null,
+    targetSession?: ChatSession | null,
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId);
+    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
+
+  const handleCreateCustomApplet = useCallback(async () => {
+    const session = await createSession();
+    if (!session) return;
+
+    const title = 'Create a canvas applet';
+    await updateSession(session.id, { title });
+    openWindow('chat', { title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+
+    const brief = buildCanvasAppletCreationBrief(viewedLayer.name || activeWorkspace?.name || 'Workspace');
+    setTimeout(() => {
+      wrappedSendMessage(brief, 'auto', undefined, undefined, null, session);
+    }, 100);
+  }, [
+    createSession,
+    updateSession,
+    openWindow,
+    activeLayerId,
+    user?.id,
+    viewedLayer.name,
+    activeWorkspace?.name,
+    wrappedSendMessage,
+  ]);
 
   const handleHomeSendMessage = useCallback(async (
     content: string,
@@ -446,12 +751,12 @@ export default function App() {
   ) => {
     const session = await createSession();
     if (session) {
-      openWindow('chat', { title: content.slice(0, 30) || 'New Chat', sessionId: session.id, canvasId: activeLayerId });
+      openWindow('chat', { title: content.slice(0, 30) || 'New Chat', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
       setTimeout(() => {
-        wrappedSendMessage(content, model, memFacts, docs);
+        wrappedSendMessage(content, model, memFacts, docs, null, session);
       }, 100);
     }
-  }, [createSession, openWindow, wrappedSendMessage, activeLayerId]);
+  }, [createSession, openWindow, wrappedSendMessage, activeLayerId, user?.id]);
 
   const handleCreateWorkspace = useCallback(() => {
     setCreateWorkspaceDialogOpen(true);
@@ -543,6 +848,7 @@ export default function App() {
         onUploadFile={() => {}}
         onCreateWorkspace={handleCreateWorkspace}
         onDocumentOpen={handleDocumentOpen}
+        onDocumentUpdate={saveDocument}
         onSessionOpen={handleSessionOpen}
         onSessionUpdate={updateSession}
         onSessionArchive={archiveSession}
@@ -555,11 +861,13 @@ export default function App() {
         recents={recents}
         sessions={sessions}
         floatingWindows={windows}
+        documentPresence={itemPresence.documentPresence}
+        chatPresence={itemPresence.chatPresence}
         themeMode={themeMode}
         onThemeChange={setTheme}
         userEmail={user.email || ''}
         onSignOut={signOut}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -578,13 +886,30 @@ export default function App() {
             onUploadFiles={uploadFiles}
           >
             <CanvasGridButton
-              activeLayerName={activeLayer.name}
+              activeLayerName={viewedLayer.name}
               onClick={handleOpenCanvasGrid}
+              onOpenSettings={() => openLayerSettings(viewedLayerId)}
             />
 
-            <WorkspacePresenceAvatars users={workspacePresenceUsers} />
+            <WorkspacePresenceAvatars
+              users={workspacePresenceUsers}
+              getMode={getPresenceMode}
+              onModeChange={setPresenceMode}
+              favoriteIds={presenceFavorites}
+              focusedUserId={focusedPresenceUserId}
+              onToggleFavorite={togglePresenceFavorite}
+              onFocusUser={setFocusedPresenceUserId}
+              onOpenRemoteWindow={handleOpenPresenceWindow}
+            />
+            <PresenceFocusChips
+              users={workspacePresenceUsers}
+              favoriteIds={presenceFavorites}
+              focusedUserId={focusedPresenceUserId}
+              onFocusUser={setFocusedPresenceUserId}
+              onToggleFavorite={togglePresenceFavorite}
+            />
 
-            <CursorOverlay cursors={cursors} />
+            <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
 
             <div
               ref={activeSceneRef}
@@ -598,7 +923,7 @@ export default function App() {
                 activeSession={activeSession}
                 messages={messages}
                 streaming={streaming}
-                workspaceName={activeWorkspace?.name || 'Personal'}
+                workspaceName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
                 workspaceId={activeWorkspaceId || ''}
                 userId={user.id}
                 userEmail={user.email || ''}
@@ -612,6 +937,10 @@ export default function App() {
                 agents={agents}
                 agentWebhooks={agentWebhooks}
                 selectedAgent={selectedAgent}
+                getPresenceMode={getPresenceMode}
+                backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
+                contextCountsLabel={contextCountsLabel}
+                contextCountsTitle={contextCountsTitle}
                 onSelectAgent={setSelectedAgent}
                 onCreateAgent={createAgent}
                 onUpdateAgent={updateAgent}
@@ -688,6 +1017,8 @@ export default function App() {
               onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
               tasks={tasks}
               agents={agents}
+              getPresenceMode={getPresenceMode}
+              canEditObject={canEditCanvasObject}
               onCreateAppletTask={handleCreateTask}
               onUpdateAppletTask={handleUpdateTask}
             />
@@ -703,6 +1034,7 @@ export default function App() {
                 onSelectLayer={handleSelectCanvasFromGrid}
                 onCreateLayer={handleCreateCanvasFromGrid}
                 onDeleteLayer={handleDeleteCanvasFromGrid}
+                onOpenSettings={(layerId) => openLayerSettings(layerId)}
                 baseLayerId={baseLayerId}
               />
             )}
@@ -710,8 +1042,8 @@ export default function App() {
             <CanvasTemplatePicker
               open={templatePickerOpen}
               onClose={() => setTemplatePickerOpen(false)}
-              onApply={handleApplyTemplate}
               onCreateApp={handleCreateCanvasApp}
+              onCreateCustomApp={handleCreateCustomApplet}
             />
 
             {minimizedActiveWindows.length > 0 && (
@@ -787,9 +1119,9 @@ export default function App() {
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        workspace={activeWorkspace}
-        onUpdateWorkspace={updateWorkspace}
-        workspaceName={activeWorkspace?.name || 'Personal'}
+        workspace={settingsWorkspace}
+        onUpdateWorkspace={handleUpdateSettingsWorkspace}
+        workspaceName={settingsWorkspace?.name || 'Personal'}
         userEmail={user.email || ''}
         themeMode={themeMode}
         onThemeChange={setTheme}
@@ -845,6 +1177,10 @@ function CanvasLayerScene({
   agents,
   agentWebhooks,
   selectedAgent,
+  getPresenceMode,
+  backgroundOpacity,
+  contextCountsLabel,
+  contextCountsTitle,
   onSelectAgent,
   onCreateAgent,
   onUpdateAgent,
@@ -903,6 +1239,10 @@ function CanvasLayerScene({
   agents: WorkspaceAgent[];
   agentWebhooks: AgentWebhook[];
   selectedAgent: WorkspaceAgent | null;
+  getPresenceMode: (id?: string | null) => PresenceVisibilityMode;
+  backgroundOpacity: number;
+  contextCountsLabel: string;
+  contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
   onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
@@ -925,7 +1265,7 @@ function CanvasLayerScene({
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimizeWindow: (id: string) => void;
   onShareWindow: (title: string) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null) => void;
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
   onSetActiveSession: (session: ChatSession) => void;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
@@ -954,9 +1294,14 @@ function CanvasLayerScene({
         onOpenNewDocument={onNewDocument}
         onOpenNewChat={onNewChat}
         workspaceName={workspaceName}
+        backgroundOpacity={backgroundOpacity}
       />
 
       {windows.filter(win => !win.minimized).map(win => {
+        const presenceMode = getPresenceMode(win.ownerUserId);
+        const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
+        const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
+
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
           return (
@@ -968,6 +1313,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<MessageSquare size={13} />}
               breadcrumb={workspaceName}
             >
@@ -983,38 +1331,48 @@ function CanvasLayerScene({
                   </Label>
                   <Badge
                     variant="secondary"
-                    title="The AI can see open tasks, recent documents, memory, and canvas notes"
-                    className="ml-auto max-w-[45%] truncate text-xs"
+                    title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}
+                    className="ml-auto max-w-[70%] truncate text-xs"
                   >
-                    {useWorkspaceCtx ? `${documents.length} docs / ${facts.length} facts / ${tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length} tasks` : 'Context off'}
+                    {useWorkspaceCtx ? contextCountsLabel : 'Context off'}
                   </Badge>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <ChatWindowContent
-                    messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
-                    topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
-                    threadMessages={threadMessages}
-                    threadReplyCounts={threadReplyCounts}
-                    activeThreadId={activeThreadId}
-                    streaming={activeSession?.id === win.sessionId ? streaming : false}
-                    memoryFacts={facts}
-                    documents={documents}
-                    agents={agents}
-                    selectedAgent={selectedAgent}
-                    onSelectAgent={onSelectAgent}
-                    canvasGroups={canvasGroups}
-                    canvasObjects={canvasObjects}
-                    onSendMessage={(content, model, mf, docs) => {
-                      if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                      onSendMessage(content, model, mf, docs);
-                    }}
-                    onOpenThread={onOpenThread}
-                    onCloseThread={onCloseThread}
-                    onSendThreadReply={(content, model) => {
-                      if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                      onSendMessage(content, model, facts, undefined, activeThreadId);
-                    }}
-                  />
+                  {canControlWindow ? (
+                    <ChatWindowContent
+                      messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
+                      topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
+                      threadMessages={threadMessages}
+                      threadReplyCounts={threadReplyCounts}
+                      activeThreadId={activeThreadId}
+                      streaming={activeSession?.id === win.sessionId ? streaming : false}
+                      memoryFacts={facts}
+                      documents={documents}
+                      agents={agents}
+                      selectedAgent={selectedAgent}
+                      onSelectAgent={onSelectAgent}
+                      canvasGroups={canvasGroups}
+                      canvasObjects={canvasObjects}
+                      onSendMessage={(content, model, mf, docs) => {
+                        if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
+                        onSendMessage(content, model, mf, docs, null, winSession || null);
+                      }}
+                      onOpenThread={onOpenThread}
+                      onCloseThread={onCloseThread}
+                      onSendThreadReply={(content, model) => {
+                        if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
+                        onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
+                      }}
+                    />
+                  ) : (
+                    <ReadOnlyChatWindowContent
+                      sessionId={win.sessionId || null}
+                      memoryFacts={facts}
+                      documents={documents}
+                      canvasGroups={canvasGroups}
+                      canvasObjects={canvasObjects}
+                    />
+                  )}
                 </div>
               </div>
             </FloatingWindowShell>
@@ -1033,6 +1391,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<FileText size={13} />}
               breadcrumb={workspaceName}
             >
@@ -1073,6 +1434,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<Brain size={13} />}
               breadcrumb={workspaceName}
             >
@@ -1097,6 +1461,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<CheckCircle2 size={13} />}
               breadcrumb={workspaceName}
             >
@@ -1125,6 +1492,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<Activity size={13} />}
               breadcrumb={workspaceName}
             >
@@ -1146,6 +1516,9 @@ function CanvasLayerScene({
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
               titleIcon={<Bot size={13} />}
               breadcrumb={workspaceName}
             >
@@ -1168,6 +1541,57 @@ function CanvasLayerScene({
   );
 }
 
+function ReadOnlyChatWindowContent({
+  sessionId,
+  memoryFacts,
+  documents,
+  canvasGroups,
+  canvasObjects,
+}: {
+  sessionId: string | null;
+  memoryFacts: MemoryFact[];
+  documents: Document[];
+  canvasGroups: CanvasGroup[];
+  canvasObjects: CanvasObject[];
+}) {
+  const [remoteMessages, setRemoteMessages] = useState<ChatMessage[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!sessionId) {
+      setRemoteMessages([]);
+      return;
+    }
+
+    backendClient
+      .from('messages')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: true })
+      .then((result: { data: ChatMessage[] | null }) => {
+        const { data } = result;
+        if (!cancelled && data) setRemoteMessages(data as ChatMessage[]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  return (
+    <ChatWindowContent
+      messages={remoteMessages}
+      streaming={false}
+      memoryFacts={memoryFacts}
+      documents={documents}
+      canvasGroups={canvasGroups}
+      canvasObjects={canvasObjects}
+      onSendMessage={() => {}}
+      readOnly
+    />
+  );
+}
+
 function colorFromSeed(seed: string): string {
   const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
   let hash = 0;
@@ -1177,46 +1601,258 @@ function colorFromSeed(seed: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function windowLabel(win: FloatingWindow): string {
+  if (win.type === 'chat') return `Chat: ${win.title}`;
+  if (win.type === 'document') return `Doc: ${win.title}`;
+  if (win.type === 'memory') return 'Memory';
+  if (win.type === 'tasks') return 'Tasks';
+  if (win.type === 'activity') return 'Activity';
+  if (win.type === 'agents') return 'AI Agents';
+  return win.title;
+}
+
 function WorkspacePresenceAvatars({
   users,
+  getMode,
+  onModeChange,
+  favoriteIds,
+  focusedUserId,
+  onToggleFavorite,
+  onFocusUser,
+  onOpenRemoteWindow,
 }: {
-  users: Array<{ id: string; name: string; color: string; isCurrentUser?: boolean }>;
+  users: WorkspacePresenceUser[];
+  getMode: (id?: string | null) => PresenceVisibilityMode;
+  onModeChange: (id: string, mode: PresenceVisibilityMode) => void;
+  favoriteIds: string[];
+  focusedUserId: string | null;
+  onToggleFavorite: (id: string) => void;
+  onFocusUser: (id: string | null) => void;
+  onOpenRemoteWindow: (win: FloatingWindow) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   if (users.length === 0) return null;
 
   const visibleUsers = users.slice(0, 5);
   const overflow = users.length - visibleUsers.length;
+  const modeOptions: Array<{ value: PresenceVisibilityMode; label: string }> = [
+    { value: 'visible', label: 'Visible' },
+    { value: 'dimmed', label: 'Dim' },
+    { value: 'hidden', label: 'Muted' },
+  ];
+  return (
+    <div data-presence-panel className="absolute top-3.5 right-3.5 z-[85] flex items-start gap-2">
+      {expanded && (
+        <div className="w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between border-b px-3 py-2">
+            <div>
+              <div className="text-sm font-semibold">Shared users</div>
+              <div className="text-[11px] text-muted-foreground">View activity, focus a user, or share your windows</div>
+            </div>
+            <Badge variant="secondary">{users.length}</Badge>
+          </div>
+          <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
+            Non-private open windows appear here as local-open references. Moving, closing, or resizing your copy does not affect theirs.
+          </div>
+          <div className="max-h-80 overflow-auto p-2">
+            {users.map(person => {
+              const mode = getMode(person.id);
+              const isFavorite = favoriteIds.includes(person.id);
+              return (
+                <div
+                  key={person.id}
+                  className={cn(
+                    'flex items-start gap-2 rounded-md px-2 py-2',
+                    focusedUserId === person.id && 'bg-accent/35',
+                  )}
+                >
+                  <Avatar
+                    size="sm"
+                    className={cn(
+                      mode === 'dimmed' && 'opacity-45 saturate-50',
+                      mode === 'hidden' && 'opacity-25 saturate-0',
+                    )}
+                  >
+                    <AvatarFallback className="text-[10px] font-bold">
+                      {(person.name || '?').slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                    {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium">{person.name}</span>
+                      {person.isCurrentUser && <Badge variant="outline">You</Badge>}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
+                    </div>
+                    {person.activityItems && person.activityItems.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {person.activityItems.map(item => (
+                          <Badge key={item} variant="secondary" className="max-w-[9rem] truncate text-[10px]">
+                            {item}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {!person.isCurrentUser && person.windows && person.windows.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {person.windows.slice(0, 6).map(win => (
+                          <Button
+                            key={win.id}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-6 max-w-[10rem] px-2 text-[10px]"
+                            onClick={() => onOpenRemoteWindow(win)}
+                            title={`Open locally: ${win.title}`}
+                          >
+                            <span className="truncate">{windowLabel(win)}</span>
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant={isFavorite ? 'secondary' : 'outline'}
+                        size="icon-xs"
+                        title={isFavorite ? 'Remove favorite' : 'Favorite user'}
+                        onClick={() => onToggleFavorite(person.id)}
+                      >
+                        <Star fill={isFavorite ? 'currentColor' : 'none'} />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={focusedUserId === person.id ? 'default' : 'outline'}
+                        size="sm"
+                        className="h-7 px-2 text-[11px]"
+                        onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
+                      >
+                        {focusedUserId === person.id ? 'Viewing' : 'View'}
+                      </Button>
+                    </div>
+                    {!person.isCurrentUser && (
+                      <div className="flex items-center gap-1">
+                        {modeOptions.map(option => (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            variant={mode === option.value ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={() => onModeChange(person.id, option.value)}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => setExpanded(prev => !prev)}
+        className="flex items-center gap-2 rounded-full border bg-popover/90 px-2.5 py-2 text-left shadow-md backdrop-blur transition-colors hover:bg-popover"
+        aria-expanded={expanded}
+        aria-label="Shared users"
+      >
+        <AvatarGroup>
+          {visibleUsers.map((person, index) => {
+            const mode = getMode(person.id);
+            return (
+              <Avatar
+                key={person.id}
+                size="sm"
+                title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
+                className={cn(
+                  index > 0 && '-ml-2',
+                  mode === 'dimmed' && 'opacity-45 saturate-50',
+                  mode === 'hidden' && 'opacity-25 saturate-0',
+                )}
+              >
+                <AvatarFallback className="text-[10px] font-bold">
+                  {(person.name || '?').slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+                {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
+              </Avatar>
+            );
+          })}
+          {overflow > 0 && (
+            <AvatarGroupCount title={`${overflow} more users`} className="-ml-2 size-6 text-[10px]">
+              +{overflow}
+            </AvatarGroupCount>
+          )}
+        </AvatarGroup>
+        <div className="flex min-w-0 flex-col">
+          <span className="text-[11px] font-semibold leading-tight text-foreground">
+            {users.length === 1 ? 'Just you' : `${users.length} here now`}
+          </span>
+          <span className="text-[10px] leading-tight text-muted-foreground">
+            Shared users
+          </span>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+function PresenceFocusChips({
+  users,
+  favoriteIds,
+  focusedUserId,
+  onFocusUser,
+  onToggleFavorite,
+}: {
+  users: WorkspacePresenceUser[];
+  favoriteIds: string[];
+  focusedUserId: string | null;
+  onFocusUser: (id: string | null) => void;
+  onToggleFavorite: (id: string) => void;
+}) {
+  const favorites = users.filter(user => favoriteIds.includes(user.id));
+  const focused = users.find(user => user.id === focusedUserId);
+  const chipUsers = focused && !favorites.find(user => user.id === focused.id) ? [focused, ...favorites] : favorites;
+  if (chipUsers.length === 0) return null;
 
   return (
-    <div className="absolute top-3.5 right-3.5 z-[85] flex items-center gap-2 rounded-full border bg-popover/85 px-2.5 py-2 shadow-md backdrop-blur">
-      <AvatarGroup>
-        {visibleUsers.map((person, index) => (
-          <Avatar
-            key={person.id}
-            size="sm"
-            title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
-            className={cn(index > 0 && '-ml-2')}
-          >
-            <AvatarFallback className="text-[10px] font-bold">
-              {(person.name || '?').slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-            {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
-          </Avatar>
-        ))}
-        {overflow > 0 && (
-          <AvatarGroupCount title={`${overflow} more users`} className="-ml-2 size-6 text-[10px]">
-            +{overflow}
-          </AvatarGroupCount>
-        )}
-      </AvatarGroup>
-      <div className="flex min-w-0 flex-col">
-        <span className="text-[11px] font-semibold leading-tight text-foreground">
-          {users.length === 1 ? 'Just you' : `${users.length} here now`}
-        </span>
-        <span className="text-[10px] leading-tight text-muted-foreground">
-          Live workspace presence
-        </span>
-      </div>
+    <div className="absolute top-3.5 left-1/2 z-[84] flex -translate-x-1/2 items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
+      <Button
+        type="button"
+        variant={focusedUserId ? 'outline' : 'default'}
+        size="sm"
+        className="h-7 rounded-full px-3 text-xs"
+        onClick={() => onFocusUser(null)}
+      >
+        All
+      </Button>
+      {chipUsers.map(person => (
+        <Button
+          key={person.id}
+          type="button"
+          variant={focusedUserId === person.id ? 'default' : 'outline'}
+          size="sm"
+          className="h-7 max-w-40 rounded-full px-2 text-xs"
+          onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
+          onDoubleClick={() => onToggleFavorite(person.id)}
+          title="Double-click to remove from favorites"
+        >
+          <span
+            aria-hidden
+            className="size-2 rounded-full"
+            style={{ backgroundColor: person.color }}
+          />
+          <span className="truncate">{person.name}</span>
+        </Button>
+      ))}
     </div>
   );
 }
@@ -1224,22 +1860,36 @@ function WorkspacePresenceAvatars({
 function CanvasGridButton({
   activeLayerName,
   onClick,
+  onOpenSettings,
 }: {
   activeLayerName: string;
   onClick: () => void;
+  onOpenSettings: () => void;
 }) {
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={onClick}
-      title="Show all canvases"
-      className="absolute top-3.5 left-3.5 z-[80] bg-popover/95 shadow-md backdrop-blur"
-    >
-      <Layers3 data-icon="inline-start" className="size-4" />
-      <span>{activeLayerName}</span>
-    </Button>
+    <div className="absolute top-3.5 left-3.5 z-[80] flex items-center gap-1 rounded-md border bg-popover/95 p-1 shadow-md backdrop-blur">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={onClick}
+        title="Show all canvases"
+        className="h-8 px-2"
+      >
+        <Layers3 data-icon="inline-start" className="size-4" />
+        <span>{activeLayerName}</span>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        onClick={onOpenSettings}
+        title="Workspace settings"
+        aria-label="Workspace settings"
+      >
+        <Settings />
+      </Button>
+    </div>
   );
 }
 
@@ -1253,6 +1903,7 @@ function CanvasGridOverlay({
   onSelectLayer,
   onCreateLayer,
   onDeleteLayer,
+  onOpenSettings,
   baseLayerId,
 }: {
   layers: CanvasLayer[];
@@ -1264,6 +1915,7 @@ function CanvasGridOverlay({
   onSelectLayer: (id: string) => void;
   onCreateLayer: () => void;
   onDeleteLayer: (id: string) => void;
+  onOpenSettings: (id: string) => void;
   baseLayerId: string;
 }) {
   return (
@@ -1283,10 +1935,16 @@ function CanvasGridOverlay({
             <h2 className="text-2xl font-bold text-foreground">All workspaces</h2>
             <p className="text-sm text-muted-foreground">Choose a workspace or create a new one</p>
           </div>
-          <Button type="button" onClick={onCreateLayer}>
-            <Layers3 data-icon="inline-start" className="size-4" />
-            New workspace
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenSettings(activeLayerId)}>
+              <Settings data-icon="inline-start" className="size-4" />
+              Workspace settings
+            </Button>
+            <Button type="button" onClick={onCreateLayer}>
+              <Layers3 data-icon="inline-start" className="size-4" />
+              New workspace
+            </Button>
+          </div>
         </header>
 
         <ScrollArea className="min-h-0">
@@ -1312,6 +1970,20 @@ function CanvasGridOverlay({
                 >
                   <CardContent className="flex flex-col gap-3 p-3">
                     <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="icon-xs"
+                        className="absolute top-2 right-2 z-10 bg-popover/90"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onOpenSettings(layer.id);
+                        }}
+                        title="Workspace settings"
+                        aria-label="Workspace settings"
+                      >
+                        <Settings />
+                      </Button>
                       <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
                       <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
                         {Array.from({ length: previewCount }).map((_, index) => (

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { parseAppletState } from '../../lib/canvasApps';
+import { CANVAS_APPS, parseAppletState } from '../../lib/canvasApps';
 
 interface CanvasObjectRendererProps {
   obj: CanvasObject;
@@ -164,6 +164,8 @@ function AppletObject({
   const [reloadKey, setReloadKey] = useState(0);
   const parsed = parseAppletState(obj.text_content);
   const appId = parsed.appId || obj.file_name || 'applet';
+  const appDefinition = CANVAS_APPS.find(app => app.id === appId);
+  const appletHtml = appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
 
   const sendInit = () => {
     iframeRef.current?.contentWindow?.postMessage({
@@ -172,12 +174,23 @@ function AppletObject({
         state: parsed.state,
         tasks,
         agents,
+        theme: readAppletTheme(),
       },
     }, '*');
   };
 
   useEffect(() => {
     sendInit();
+  }, [obj.text_content, tasks, agents, reloadKey]);
+
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') return;
+    const observer = new MutationObserver(() => sendInit());
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-ui-theme', 'style'],
+    });
+    return () => observer.disconnect();
   }, [obj.text_content, tasks, agents, reloadKey]);
 
   useEffect(() => {
@@ -251,7 +264,7 @@ function AppletObject({
         ref={iframeRef}
         data-canvas-applet-frame
         title={obj.file_name || 'Canvas applet'}
-        srcDoc={obj.src || '<!doctype html><html><body>Empty applet</body></html>'}
+        srcDoc={appletHtml}
         sandbox="allow-forms allow-modals allow-popups allow-scripts"
         style={{
           width: '100%',
@@ -306,6 +319,42 @@ function AppletObject({
       )}
     </div>
   );
+}
+
+function readAppletTheme() {
+  if (typeof document === 'undefined') return null;
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  const token = (name: string) => style.getPropertyValue(name).trim();
+  return {
+    family: root.getAttribute('data-ui-theme') || 'classic',
+    scheme: root.getAttribute('data-theme') || 'light',
+    tokens: {
+      background: token('--background'),
+      foreground: token('--foreground'),
+      card: token('--card'),
+      cardForeground: token('--card-foreground'),
+      popover: token('--popover'),
+      primary: token('--primary'),
+      primaryForeground: token('--primary-foreground'),
+      secondary: token('--secondary'),
+      muted: token('--muted'),
+      mutedForeground: token('--muted-foreground'),
+      border: token('--border'),
+      canvasBase: token('--canvas-base'),
+      canvasElevated: token('--canvas-elevated'),
+      canvasRaised: token('--canvas-raised'),
+      canvasOverlay: token('--canvas-overlay'),
+      textPrimary: token('--text-primary'),
+      textSecondary: token('--text-secondary'),
+      textMuted: token('--text-muted'),
+      accent: token('--accent'),
+      accentHover: token('--accent-hover'),
+      shadowSm: token('--shadow-sm'),
+      shadowMd: token('--shadow-md'),
+      shadowLg: token('--shadow-lg'),
+    },
+  };
 }
 
 function StickyNoteObject({

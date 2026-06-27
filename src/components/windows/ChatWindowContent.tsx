@@ -99,6 +99,7 @@ interface ChatWindowContentProps {
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
   onSendThreadReply?: (content: string, model: string) => void;
+  readOnly?: boolean;
 }
 
 export function ChatWindowContent({
@@ -119,6 +120,7 @@ export function ChatWindowContent({
   onOpenThread,
   onCloseThread,
   onSendThreadReply,
+  readOnly = false,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState('auto');
@@ -315,6 +317,11 @@ export function ChatWindowContent({
           </MessageScroller>
         </MessageScrollerProvider>
 
+        {readOnly ? (
+          <div className="border-t border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+            Read-only workspace instance
+          </div>
+        ) : (
         <div className="border-t border-border bg-card p-2">
           {(linkedDocs.length > 0 || linkedGroups.length > 0) && (
             <AttachmentGroup className="mb-2">
@@ -475,9 +482,10 @@ export function ChatWindowContent({
             </InputGroup>
           </div>
         </div>
+        )}
       </div>
 
-      {activeThreadId && parentMessage && onCloseThread && onSendThreadReply && (
+      {!readOnly && activeThreadId && parentMessage && onCloseThread && onSendThreadReply && (
         <ChatThreadPanel
           parentMessage={parentMessage}
           threadMessages={threadMessages}

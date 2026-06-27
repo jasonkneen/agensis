@@ -119,12 +119,14 @@ export function useChat(workspaceId: string | null) {
     workspaceContext?: WorkspaceContextSnapshot | null,
     agent?: WorkspaceAgent | null,
     threadParentId?: string | null,
+    targetSession?: ChatSession | null,
   ) => {
-    if (!activeSession) return;
+    const session = targetSession ?? activeSession;
+    if (!session) return;
 
     const userMsg: Message = {
       id: crypto.randomUUID(),
-      session_id: activeSession.id,
+      session_id: session.id,
       role: 'user',
       content,
       thread_parent_id: threadParentId ?? null,
@@ -136,7 +138,7 @@ export function useChat(workspaceId: string | null) {
     if (!navigator.onLine) {
       const offlineReply: Message = {
         id: crypto.randomUUID(),
-        session_id: activeSession.id,
+        session_id: session.id,
         role: 'assistant',
         content: 'You are currently offline. Your message will be sent when you reconnect.',
         thread_parent_id: threadParentId ?? null,
@@ -148,22 +150,23 @@ export function useChat(workspaceId: string | null) {
 
     const insertPayload: Record<string, unknown> = {
       id: userMsg.id,
-      session_id: activeSession.id,
+      session_id: session.id,
       role: 'user',
       content,
     };
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
     await backendClient.from('messages').insert(insertPayload);
 
-    if (activeSession.title === 'New Chat' && !threadParentId) {
+    if (session.title === 'New Chat' && !threadParentId) {
       const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
       await backendClient
         .from('chat_sessions')
         .update({ title, updated_at: new Date().toISOString() })
-        .eq('id', activeSession.id);
+        .eq('id', session.id);
       setSessions(prev => prev.map(s =>
-        s.id === activeSession.id ? { ...s, title } : s
+        s.id === session.id ? { ...s, title } : s
       ));
+      setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
     }
 
     setStreaming(true);
@@ -171,7 +174,7 @@ export function useChat(workspaceId: string | null) {
     const assistantMsgId = crypto.randomUUID();
     const placeholderMsg: Message = {
       id: assistantMsgId,
-      session_id: activeSession.id,
+      session_id: session.id,
       role: 'assistant',
       content: '',
       thread_parent_id: threadParentId ?? null,
@@ -193,7 +196,7 @@ export function useChat(workspaceId: string | null) {
       // For thread replies, only send thread context
       const contextMessages = threadParentId
         ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
-        : messages;
+        : activeSession?.id === session.id ? messages : [];
 
       const agentContext = agent ? {
         name: agent.name,
@@ -229,7 +232,7 @@ export function useChat(workspaceId: string | null) {
         ));
         const errInsert: Record<string, unknown> = {
           id: assistantMsgId,
-          session_id: activeSession.id,
+          session_id: session.id,
           role: 'assistant',
           content: errMsg,
         };
@@ -270,7 +273,7 @@ export function useChat(workspaceId: string | null) {
       if (fullContent) {
         const assistantInsert: Record<string, unknown> = {
           id: assistantMsgId,
-          session_id: activeSession.id,
+          session_id: session.id,
           role: 'assistant',
           content: fullContent,
         };
