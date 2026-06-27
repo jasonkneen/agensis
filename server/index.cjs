@@ -480,12 +480,11 @@ function createApp() {
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
 
-  // Authentication gate for all data, AI, settings and rpc endpoints. Public
-  // routes (/backend/auth/*, /backend/health) are mounted without it.
-  app.use('/backend/db', requireAuth);
-  app.use('/backend/ai-chat', requireAuth);
-  app.use('/backend/settings', requireAuth);
-  app.use('/backend/rpc', requireAuth);
+  // NOTE: Auth enforcement (requireAuth gate + workspace membership checks) was
+  // reverted — it denied legitimate access for existing users/data and broke
+  // the app. Tokens are still issued on signin/signup and sent by the client,
+  // but endpoints do not yet enforce them. Re-introduce enforcement carefully
+  // with a logged-in test pass before re-enabling. See enforceWorkspaceAccess.
 
   app.get('/backend/health', async (_req, res) => {
     try {
@@ -554,7 +553,6 @@ function createApp() {
     try {
       const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = req.body || {};
       const tableSql = ensureTable(table);
-      await enforceWorkspaceAccess(req.userId, table, { filters });
       const { clause, params } = buildWhereClause(filters, []);
       const rows = await getDb().unsafe(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
       res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
@@ -569,9 +567,6 @@ function createApp() {
       const tableSql = ensureTable(table);
       const rows = Array.isArray(values) ? values : [values];
       if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
-      for (const row of rows) {
-        await enforceWorkspaceAccess(req.userId, table, { values: row });
-      }
 
       const columns = Object.keys(rows[0]);
       const params = [];
@@ -597,7 +592,6 @@ function createApp() {
       const { table, values, filters = [], returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
-      await enforceWorkspaceAccess(req.userId, table, { filters });
 
       const params = [];
       const setClause = Object.keys(values).map((column) => {
@@ -625,7 +619,6 @@ function createApp() {
       if (!Array.isArray(filters) || filters.length === 0) {
         return jsonError(res, 400, new Error('Delete requires at least one filter'));
       }
-      await enforceWorkspaceAccess(req.userId, table, { filters });
       const where = buildWhereClause(filters, []);
       if (!where.clause) {
         return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));

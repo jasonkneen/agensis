@@ -7,10 +7,7 @@ const BACKEND_BASE = (() => {
   return '';
 })();
 
-// v2: real signed tokens replaced the old constant 'local-session' token, so
-// pre-auth sessions are intentionally ignored — users sign in once to get a
-// valid token.
-const AUTH_STORAGE_KEY = 'hatch_local_session_v2';
+const AUTH_STORAGE_KEY = 'hatch_local_session';
 const authListeners = new Set<(event: string, session: SessionLike | null) => void>();
 
 type SessionLike = {
