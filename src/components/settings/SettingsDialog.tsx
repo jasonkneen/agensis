@@ -1,199 +1,245 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  X, Settings as SettingsIcon, Palette, Sparkles, KeyRound, Info,
-  Check, Eye, EyeOff, Loader2,
+  Check,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  Info,
+  KeyRound,
+  Palette,
+  Settings as SettingsIcon,
+  Sparkles,
+  Wrench,
 } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
-import { AI_MODELS } from '../../types';
+import { AI_MODELS, type Workspace } from '../../types';
 import { getSettings, setSetting } from '../../lib/settings';
-import { apiUrl, apiAuthHeaders } from '../../lib/backendClient';
+import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
+import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 interface SettingsDialogProps {
   open: boolean;
   onClose: () => void;
   workspaceName: string;
   userEmail: string;
+  workspace: Workspace | null;
+  onUpdateWorkspace: (id: string, updates: Partial<Workspace>) => void;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
 }
 
-type TabId = 'general' | 'appearance' | 'ai' | 'secrets' | 'about';
+type TabId = 'general' | 'appearance' | 'ai' | 'tools' | 'secrets' | 'about';
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
-  { id: 'general', label: 'General', icon: <SettingsIcon size={15} /> },
-  { id: 'appearance', label: 'Appearance', icon: <Palette size={15} /> },
-  { id: 'ai', label: 'AI', icon: <Sparkles size={15} /> },
-  { id: 'secrets', label: 'Secret keys', icon: <KeyRound size={15} /> },
-  { id: 'about', label: 'About', icon: <Info size={15} /> },
+  { id: 'general', label: 'General', icon: <SettingsIcon /> },
+  { id: 'appearance', label: 'Appearance', icon: <Palette /> },
+  { id: 'ai', label: 'AI', icon: <Sparkles /> },
+  { id: 'tools', label: 'Tools', icon: <Wrench /> },
+  { id: 'secrets', label: 'Secret keys', icon: <KeyRound /> },
+  { id: 'about', label: 'About', icon: <Info /> },
 ];
 
 export function SettingsDialog({
   open,
   onClose,
+  workspace,
+  onUpdateWorkspace,
   workspaceName,
   userEmail,
   themeMode,
   onThemeChange,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<TabId>('general');
+  const activeTab = TABS.find(item => item.id === tab);
+
+  return (
+    <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
+      <DialogContent className="grid max-h-[calc(100svh-2rem)] overflow-hidden p-0 sm:max-w-3xl">
+        <DialogHeader className="border-b border-border p-4 pr-12">
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>{activeTab?.label}</DialogDescription>
+        </DialogHeader>
+        <div className="grid min-h-0 grid-cols-[12rem_1fr]">
+          <nav className="flex flex-col gap-1 border-r border-border bg-muted/40 p-3">
+            {TABS.map(item => (
+              <Button
+                key={item.id}
+                type="button"
+                variant={tab === item.id ? 'secondary' : 'ghost'}
+                className="settings-nav-row justify-start"
+                onClick={() => setTab(item.id)}
+              >
+                {item.icon}
+                {item.label}
+              </Button>
+            ))}
+          </nav>
+          <ScrollArea className="h-[28rem] min-w-0">
+            <div className="p-4">
+              {tab === 'general' && (
+                <GeneralPanel
+                  workspace={workspace}
+                  workspaceName={workspaceName}
+                  userEmail={userEmail}
+                  onUpdateWorkspace={onUpdateWorkspace}
+                />
+              )}
+              {tab === 'appearance' && <AppearancePanel themeMode={themeMode} onThemeChange={onThemeChange} />}
+              {tab === 'ai' && <AIPanel />}
+              {tab === 'tools' && <ToolsPanel workspace={workspace} />}
+              {tab === 'secrets' && <SecretsPanel />}
+              {tab === 'about' && <AboutPanel />}
+            </div>
+          </ScrollArea>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReadOnlyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <Item variant="outline">
+      <ItemContent>
+        <ItemTitle>{label}</ItemTitle>
+        <ItemDescription>{value}</ItemDescription>
+      </ItemContent>
+    </Item>
+  );
+}
+
+function GeneralPanel({
+  workspace,
+  workspaceName,
+  userEmail,
+  onUpdateWorkspace,
+}: {
+  workspace: Workspace | null;
+  workspaceName: string;
+  userEmail: string;
+  onUpdateWorkspace: (id: string, updates: Partial<Workspace>) => void;
+}) {
+  const [pathDraft, setPathDraft] = useState(workspace?.local_path || '');
+  const [inspecting, setInspecting] = useState(false);
+  const [pathStatus, setPathStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+    setPathDraft(workspace?.local_path || '');
+    setPathStatus(null);
+  }, [workspace?.id, workspace?.local_path]);
 
-  if (!open) return null;
+  const inspectAndSave = async () => {
+    if (!workspace || !pathDraft.trim()) return;
+    setInspecting(true);
+    setPathStatus(null);
+    try {
+      const response = await fetch(apiUrl('/backend/system/inspect-path'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ path: pathDraft.trim() }),
+      });
+      const payload = await response.json();
+      if (payload.error) throw new Error(payload.error.message);
+      const inspected = payload.data || {};
+      onUpdateWorkspace(workspace.id, {
+        local_path: inspected.path || pathDraft.trim(),
+        project_kind: inspected.projectKind || '',
+        git_root: inspected.gitRoot || '',
+        git_remote: inspected.gitRemote || '',
+      });
+      setPathStatus(inspected.exists ? (inspected.gitRoot ? 'Git repository linked' : 'Folder linked') : 'Path saved but not found');
+    } catch (error) {
+      setPathStatus(error instanceof Error ? error.message : 'Failed to inspect path');
+    } finally {
+      setInspecting(false);
+    }
+  };
 
   return (
-    <div
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-      }}
-    >
-      <div style={{
-        width: '100%', maxWidth: 720, height: 520, margin: '0 16px',
-        display: 'flex',
-        backgroundColor: 'var(--canvas-elevated)',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--border)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
-      }}>
-        {/* Side tabs */}
-        <div style={{
-          width: 184, flexShrink: 0,
-          borderRight: '1px solid var(--border-subtle)',
-          background: 'var(--canvas-raised)',
-          display: 'flex', flexDirection: 'column', padding: '14px 10px',
-        }}>
-          <div style={{
-            fontSize: 13, fontWeight: 700, color: 'var(--text-primary)',
-            padding: '4px 8px 12px',
-          }}>
-            Settings
-          </div>
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 9,
-                padding: '8px 10px', marginBottom: 2,
-                borderRadius: 'var(--radius-md)',
-                border: 'none', cursor: 'pointer', textAlign: 'left',
-                background: tab === t.id ? 'var(--accent-subtle)' : 'transparent',
-                color: tab === t.id ? 'var(--accent)' : 'var(--text-secondary)',
-                fontSize: 13, fontWeight: 500, fontFamily: 'inherit',
-                transition: 'background var(--transition-fast)',
-              }}
-              onMouseEnter={e => { if (tab !== t.id) e.currentTarget.style.background = 'var(--canvas-overlay)'; }}
-              onMouseLeave={e => { if (tab !== t.id) e.currentTarget.style.background = 'transparent'; }}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Panel */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '14px 18px', borderBottom: '1px solid var(--border-subtle)',
-          }}>
-            <span style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {TABS.find(t => t.id === tab)?.label}
-            </span>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 28, height: 28, border: 'none', borderRadius: 'var(--radius-sm)',
-                background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-              }}
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto', padding: '18px' }}>
-            {tab === 'general' && <GeneralPanel workspaceName={workspaceName} userEmail={userEmail} />}
-            {tab === 'appearance' && <AppearancePanel themeMode={themeMode} onThemeChange={onThemeChange} />}
-            {tab === 'ai' && <AIPanel />}
-            {tab === 'secrets' && <SecretsPanel />}
-            {tab === 'about' && <AboutPanel />}
-          </div>
-        </div>
-      </div>
-    </div>
+    <FieldGroup>
+      <ReadOnlyValue label="Account" value={userEmail || 'Not signed in'} />
+      <ReadOnlyValue label="Active workspace" value={workspaceName || 'None'} />
+      <Field>
+        <FieldLabel htmlFor="workspace-local-path">Project folder</FieldLabel>
+        <InputGroup>
+          <InputGroupAddon align="inline-start">
+            <FolderOpen data-icon="inline-start" className="size-4" />
+          </InputGroupAddon>
+          <InputGroupInput
+            id="workspace-local-path"
+            value={pathDraft}
+            onChange={event => setPathDraft(event.target.value)}
+            placeholder="/Users/name/Documents/GitHub/project"
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton size="xs" onClick={inspectAndSave} disabled={!workspace || !pathDraft.trim() || inspecting}>
+              {inspecting ? <Spinner data-icon="inline-start" /> : <Check data-icon="inline-start" />}
+              Link
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+        <FieldDescription>
+          {pathStatus || workspace?.git_root || workspace?.local_path || 'Associate this workspace with a local folder or Git repository.'}
+        </FieldDescription>
+      </Field>
+    </FieldGroup>
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>{label}</div>
-      {children}
-      {hint && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, lineHeight: 1.4 }}>{hint}</div>}
-    </div>
-  );
-}
-
-function ReadOnlyValue({ value }: { value: string }) {
-  return (
-    <div style={{
-      padding: '8px 10px', borderRadius: 'var(--radius-sm)',
-      background: 'var(--canvas-raised)', border: '1px solid var(--border)',
-      color: 'var(--text-secondary)', fontSize: 13,
-    }}>
-      {value}
-    </div>
-  );
-}
-
-function GeneralPanel({ workspaceName, userEmail }: { workspaceName: string; userEmail: string }) {
-  return (
-    <div>
-      <Field label="Account"><ReadOnlyValue value={userEmail || 'Not signed in'} /></Field>
-      <Field label="Active workspace"><ReadOnlyValue value={workspaceName || '—'} /></Field>
-    </div>
-  );
-}
-
-function AppearancePanel({ themeMode, onThemeChange }: { themeMode: ThemeMode; onThemeChange: (m: ThemeMode) => void }) {
+function AppearancePanel({ themeMode, onThemeChange }: { themeMode: ThemeMode; onThemeChange: (mode: ThemeMode) => void }) {
   const modes: Array<{ id: ThemeMode; label: string }> = [
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
     { id: 'system', label: 'System' },
+    { id: 'tinyworld-light', label: 'TinyWorld Light' },
+    { id: 'tinyworld-dark', label: 'TinyWorld Dark' },
+    { id: 'neo-light', label: 'Neo Light' },
+    { id: 'neo-dark', label: 'Neo Dark' },
   ];
+
   return (
-    <Field label="Theme" hint="Choose how Hatch looks. System follows your OS setting.">
-      <div style={{ display: 'flex', gap: 8 }}>
-        {modes.map(m => (
-          <button
-            key={m.id}
-            onClick={() => onThemeChange(m.id)}
-            style={{
-              flex: 1, padding: '10px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
-              border: themeMode === m.id ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-              background: themeMode === m.id ? 'var(--accent-subtle)' : 'var(--canvas-raised)',
-              color: themeMode === m.id ? 'var(--accent)' : 'var(--text-secondary)',
-              fontSize: 13, fontWeight: 500, fontFamily: 'inherit',
-            }}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-    </Field>
+    <FieldGroup>
+      <Field>
+        <FieldLabel>Theme</FieldLabel>
+        <ToggleGroup
+          type="single"
+          value={themeMode}
+          onValueChange={value => {
+            if (value) onThemeChange(value as ThemeMode);
+          }}
+          variant="outline"
+          className="grid w-full grid-cols-2 sm:grid-cols-3"
+        >
+          {modes.map(mode => (
+            <ToggleGroupItem key={mode.id} value={mode.id}>
+              {mode.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <FieldDescription>System follows your OS setting. TinyWorld and Neo provide separate light and dark control palettes.</FieldDescription>
+      </Field>
+    </FieldGroup>
   );
 }
 
@@ -202,38 +248,146 @@ function AIPanel() {
   const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
 
   return (
-    <div>
-      <Field label="Default model" hint="The model new chats start with. You can still switch per chat.">
-        <select
+    <FieldGroup>
+      <Field>
+        <FieldLabel htmlFor="default-ai-model">Default model</FieldLabel>
+        <NativeSelect
+          id="default-ai-model"
           value={model}
-          onChange={e => { setModel(e.target.value); setSetting('ai_default_model', e.target.value); }}
-          style={{
-            width: '100%', padding: '8px 10px', borderRadius: 'var(--radius-sm)',
-            background: 'var(--canvas-raised)', border: '1px solid var(--border)',
-            color: 'var(--text-primary)', fontSize: 13, cursor: 'pointer',
+          onChange={e => {
+            setModel(e.target.value);
+            setSetting('ai_default_model', e.target.value);
           }}
+          className="w-full"
         >
-          {AI_MODELS.map(m => (
-            <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+          {AI_MODELS.map(item => (
+            <NativeSelectOption key={item.id} value={item.id}>
+              {item.label} - {item.description}
+            </NativeSelectOption>
           ))}
-        </select>
+        </NativeSelect>
+        <FieldDescription>The model new chats start with. You can still switch per chat.</FieldDescription>
       </Field>
-      <Field label="Workspace knowledge" hint="When on, new chats can see your documents, tasks, memory and canvas notes by default.">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)' }}>
-          <input
-            type="checkbox"
-            checked={useCtx}
-            onChange={e => { setUseCtx(e.target.checked); setSetting('ai_use_workspace_context', e.target.checked); }}
-            style={{ cursor: 'pointer' }}
-          />
-          Use workspace knowledge by default
-        </label>
+
+      <Field orientation="horizontal">
+        <Switch
+          checked={useCtx}
+          onCheckedChange={checked => {
+            const next = Boolean(checked);
+            setUseCtx(next);
+            setSetting('ai_use_workspace_context', next);
+          }}
+        />
+        <div>
+          <FieldLabel>Workspace knowledge</FieldLabel>
+          <FieldDescription>
+            New chats can see your documents, tasks, memory, and canvas notes by default.
+          </FieldDescription>
+        </div>
       </Field>
-    </div>
+    </FieldGroup>
   );
 }
 
-interface SecretKeyInfo { key: string; configured: boolean; preview: string }
+function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
+  const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const next = await getSystemCapabilities(workspace?.local_path || workspace?.git_root || '');
+    setCapabilities(next);
+    setLoading(false);
+  }, [workspace?.local_path, workspace?.git_root]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        Scanning tools
+      </div>
+    );
+  }
+
+  if (!capabilities) {
+    return <FieldDescription>Tool detection is unavailable.</FieldDescription>;
+  }
+
+  return (
+    <FieldGroup>
+      <FieldDescription>
+        Detected from PATH, local packages, and known agent config/skill folders.
+      </FieldDescription>
+      <Item variant="outline">
+        <ItemContent>
+          <ItemTitle>Codex app-server</ItemTitle>
+          <ItemDescription>{capabilities.codexAppServer.available ? capabilities.codexAppServer.command : 'Codex CLI not found'}</ItemDescription>
+        </ItemContent>
+        <Badge variant={capabilities.codexAppServer.available ? 'default' : 'secondary'}>
+          {capabilities.codexAppServer.available ? 'Available' : 'Missing'}
+        </Badge>
+      </Item>
+
+      <Field>
+        <FieldLabel>CLIs</FieldLabel>
+        <div className="grid gap-1">
+          {capabilities.clis.map(cli => (
+            <Item key={cli.id} variant="outline" size="sm">
+              <ItemContent>
+                <ItemTitle>{cli.label}</ItemTitle>
+                <ItemDescription>{cli.available ? `${cli.command}${cli.version ? ` - ${cli.version}` : ''}` : cli.command}</ItemDescription>
+              </ItemContent>
+              <Badge variant={cli.available ? 'default' : 'secondary'}>{cli.available ? 'Found' : 'Missing'}</Badge>
+            </Item>
+          ))}
+        </div>
+      </Field>
+
+      <Field>
+        <FieldLabel>SDK packages</FieldLabel>
+        <div className="grid gap-1">
+          {capabilities.packages.map(pkg => (
+            <Item key={pkg.name} variant="outline" size="sm">
+              <ItemContent>
+                <ItemTitle>{pkg.name}</ItemTitle>
+                <ItemDescription>{pkg.version || pkg.path || 'Not installed in this app'}</ItemDescription>
+              </ItemContent>
+              <Badge variant={pkg.available ? 'default' : 'secondary'}>{pkg.available ? 'Installed' : 'Missing'}</Badge>
+            </Item>
+          ))}
+        </div>
+      </Field>
+
+      <Field>
+        <FieldLabel>Skill and config libraries</FieldLabel>
+        <div className="grid gap-1">
+          {capabilities.skills.map(skill => (
+            <Item key={skill.id} variant="outline" size="sm">
+              <ItemContent>
+                <ItemTitle>{skill.label}</ItemTitle>
+                <ItemDescription>{skill.path}</ItemDescription>
+              </ItemContent>
+              <Badge variant={skill.available ? 'default' : 'secondary'}>{skill.count}</Badge>
+            </Item>
+          ))}
+        </div>
+      </Field>
+
+      <Button type="button" variant="outline" size="sm" onClick={load}>
+        <Wrench data-icon="inline-start" />
+        Rescan
+      </Button>
+    </FieldGroup>
+  );
+}
+
+interface SecretKeyInfo {
+  key: string;
+  configured: boolean;
+  preview: string;
+}
 
 function SecretsPanel() {
   const [keys, setKeys] = useState<SecretKeyInfo[]>([]);
@@ -263,7 +417,9 @@ function SecretsPanel() {
 
   const save = async () => {
     const payload: Record<string, string> = {};
-    Object.entries(drafts).forEach(([k, v]) => { if (v !== undefined && v !== '') payload[k] = v; });
+    Object.entries(drafts).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') payload[key] = value;
+    });
     if (Object.keys(payload).length === 0) return;
     setSaving(true);
     setError(null);
@@ -286,95 +442,75 @@ function SecretsPanel() {
     }
   };
 
-  const labelFor = (key: string) =>
-    key === 'ANTHROPIC_API_KEY' ? 'Anthropic API key' : key;
-
-  const hasDrafts = Object.values(drafts).some(v => v && v.length > 0);
+  const labelFor = (key: string) => key === 'ANTHROPIC_API_KEY' ? 'Anthropic API key' : key;
+  const hasDrafts = Object.values(drafts).some(value => value && value.length > 0);
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)', fontSize: 13 }}>
-        <Loader2 size={14} className="spin" /> Loading…
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        Loading
       </div>
     );
   }
 
   return (
-    <div>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px', lineHeight: 1.5 }}>
-        Keys are stored securely in the workspace database (never in the browser), so they work across devices and on serverless deploys. Leave a field blank to keep the current value.
-      </p>
-      {keys.map(k => (
-        <Field
-          key={k.key}
-          label={labelFor(k.key)}
-          hint={k.configured ? `Currently set · ${k.preview}` : 'Not configured'}
-        >
-          <div style={{ display: 'flex', gap: 6 }}>
-            <input
-              type={reveal[k.key] ? 'text' : 'password'}
-              value={drafts[k.key] ?? ''}
-              onChange={e => setDrafts(d => ({ ...d, [k.key]: e.target.value }))}
-              placeholder={k.configured ? 'Enter a new key to replace' : 'Paste your key'}
+    <FieldGroup>
+      <FieldDescription>
+        Keys are stored in the workspace database and never in the browser. Leave a field blank to keep the current value.
+      </FieldDescription>
+
+      {keys.map(item => (
+        <Field key={item.key}>
+          <FieldLabel htmlFor={`secret-${item.key}`}>{labelFor(item.key)}</FieldLabel>
+          <InputGroup>
+            <InputGroupInput
+              id={`secret-${item.key}`}
+              type={reveal[item.key] ? 'text' : 'password'}
+              value={drafts[item.key] ?? ''}
+              onChange={e => setDrafts(draft => ({ ...draft, [item.key]: e.target.value }))}
+              placeholder={item.configured ? 'Enter a new key to replace' : 'Paste your key'}
               autoComplete="off"
-              style={{
-                flex: 1, padding: '8px 10px', borderRadius: 'var(--radius-sm)',
-                background: 'var(--canvas-raised)', border: '1px solid var(--border)',
-                color: 'var(--text-primary)', fontSize: 13, outline: 'none',
-                fontFamily: 'inherit',
-              }}
             />
-            <button
-              onClick={() => setReveal(r => ({ ...r, [k.key]: !r[k.key] }))}
-              title={reveal[k.key] ? 'Hide' : 'Show'}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 34, borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                background: 'var(--canvas-raised)', border: '1px solid var(--border)',
-                color: 'var(--text-muted)',
-              }}
-            >
-              {reveal[k.key] ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-xs"
+                onClick={() => setReveal(current => ({ ...current, [item.key]: !current[item.key] }))}
+                aria-label={reveal[item.key] ? 'Hide key' : 'Show key'}
+              >
+                {reveal[item.key] ? <EyeOff /> : <Eye />}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+          <FieldDescription>
+            {item.configured ? `Currently set - ${item.preview}` : 'Not configured'}
+          </FieldDescription>
         </Field>
       ))}
 
-      {error && (
-        <div style={{ fontSize: 12, color: 'var(--error)', marginBottom: 12 }}>{error}</div>
-      )}
+      {error && <FieldDescription className="text-destructive">{error}</FieldDescription>}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button
-          onClick={save}
-          disabled={!hasDrafts || saving}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '8px 16px', borderRadius: 'var(--radius-md)', border: 'none',
-            background: hasDrafts && !saving ? 'var(--accent)' : 'var(--canvas-overlay)',
-            color: hasDrafts && !saving ? '#fff' : 'var(--text-muted)',
-            fontSize: 13, fontWeight: 500, fontFamily: 'inherit',
-            cursor: hasDrafts && !saving ? 'pointer' : 'not-allowed',
-          }}
-        >
-          {saving ? <Loader2 size={14} className="spin" /> : null}
+      <div className="flex items-center gap-3">
+        <Button type="button" onClick={save} disabled={!hasDrafts || saving}>
+          {saving ? <Spinner data-icon="inline-start" /> : null}
           Save keys
-        </button>
+        </Button>
         {savedAt > 0 && !hasDrafts && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--accent)' }}>
-            <Check size={13} /> Saved
-          </span>
+          <Badge variant="secondary">
+            <Check />
+            Saved
+          </Badge>
         )}
       </div>
-    </div>
+    </FieldGroup>
   );
 }
 
 function AboutPanel() {
   return (
-    <div>
-      <Field label="Hatch"><ReadOnlyValue value="AI-powered workspace for documents, chat, and memory" /></Field>
-      <Field label="Backend"><ReadOnlyValue value="Neon Postgres · local server on :3142" /></Field>
-    </div>
+    <FieldGroup>
+      <ReadOnlyValue label="Hatch" value="AI-powered workspace for documents, chat, and memory" />
+      <ReadOnlyValue label="Backend" value="Neon Postgres, local server on :3142" />
+    </FieldGroup>
   );
 }

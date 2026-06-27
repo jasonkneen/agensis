@@ -1,9 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle, History } from 'lucide-react';
-import type { Document, DocumentVersion } from '../../types';
+import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle, History, Sparkles, ListChecks, PanelsTopLeft } from 'lucide-react';
+import type { Document, DocumentVersion, Task } from '../../types';
 import { DocumentCommentsPanel } from '../editor/DocumentCommentsPanel';
 import { DocumentVersionHistoryPanel } from '../editor/DocumentVersionHistoryPanel';
 import { useDocumentVersions } from '../../hooks/useDocumentVersions';
+import { apiAuthHeaders, apiUrl } from '../../lib/backendClient';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 
 interface DocWindowContentProps {
   document: Document;
@@ -15,6 +20,8 @@ interface DocWindowContentProps {
   onDelete: (id: string) => void;
   onTitleChange: (title: string) => void;
   onCommentCreated?: (docTitle?: string) => void;
+  tasks?: Task[];
+  onUpdateTask?: (id: string, updates: Partial<Task>) => void;
 }
 
 type FormatAction = 'bold' | 'italic' | 'h1' | 'h2' | 'ul' | 'ol' | 'code' | 'quote';
@@ -38,7 +45,39 @@ function insertImage(url: string) {
 }
 
 function insertSketchCanvas() {
-  const html = `<div class="doc-sketch-wrap" contenteditable="false"><canvas class="doc-sketch-canvas" data-sketch=""></canvas><div class="doc-sketch-toolbar"><button type="button" class="doc-sketch-clear">Clear</button></div><div class="doc-image-resize-handle"></div></div><p><br></p>`;
+  const html = `<div class="doc-sketch-wrap" contenteditable="false"><canvas class="doc-sketch-canvas" data-sketch=""></canvas><div class="doc-sketch-toolbar"><span role="button" tabindex="0" class="doc-sketch-clear">Clear</span></div><div class="doc-image-resize-handle"></div></div><p><br></p>`;
+  document.execCommand('insertHTML', false, html);
+}
+
+function insertAIResponseBlock() {
+  const html = `<section class="doc-ai-block" contenteditable="false">
+    <div class="doc-block-header"><strong>AI response</strong><span>Ask a question against this document</span></div>
+    <textarea class="doc-ai-prompt" placeholder="Ask a question..."></textarea>
+    <div class="doc-block-actions"><button type="button" class="doc-ai-run">Ask</button></div>
+    <div class="doc-ai-answer" aria-live="polite"></div>
+  </section><p><br></p>`;
+  document.execCommand('insertHTML', false, html);
+}
+
+function insertTaskListBlock(tasks: Task[]) {
+  const rows = tasks.slice(0, 30).map(task => {
+    const checked = task.status === 'done' ? ' checked' : '';
+    return `<label class="doc-task-row"><input type="checkbox" class="doc-task-checkbox" data-task-id="${escapeHtml(task.id)}"${checked} /> <span>${escapeHtml(task.title)}</span><small>${escapeHtml(task.status.replace('_', ' '))}</small></label>`;
+  }).join('');
+  const html = `<section class="doc-task-block" contenteditable="false">
+    <div class="doc-block-header"><strong>Task list</strong><span>${tasks.length} workspace tasks</span></div>
+    <div class="doc-task-list">${rows || '<p class="doc-block-muted">No tasks yet.</p>'}</div>
+  </section><p><br></p>`;
+  document.execCommand('insertHTML', false, html);
+}
+
+function insertGenerativeUiBlock() {
+  const spec = defaultGenerativeUiSpec();
+  const encodedSpec = encodeURIComponent(JSON.stringify(spec));
+  const html = `<section class="doc-generative-ui" contenteditable="false" data-spec="${encodedSpec}">
+    <div class="doc-block-header"><strong>Generative UI</strong><span>Safe structured interface block</span></div>
+    <div class="doc-generative-ui-render"></div>
+  </section><p><br></p>`;
   document.execCommand('insertHTML', false, html);
 }
 
@@ -80,6 +119,21 @@ function hydrateSketchCanvases(root: HTMLElement | null) {
   root.querySelectorAll('.doc-sketch-canvas').forEach(node => {
     requestAnimationFrame(() => sizeSketchCanvas(node as HTMLCanvasElement));
   });
+  root.querySelectorAll('.doc-generative-ui').forEach(node => {
+    const block = node as HTMLElement;
+    const specNode = block.querySelector('.doc-generative-ui-spec');
+    const renderNode = block.querySelector('.doc-generative-ui-render') as HTMLElement | null;
+    if (!renderNode) return;
+    try {
+      const rawSpec = block.dataset.spec
+        ? decodeURIComponent(block.dataset.spec)
+        : specNode?.textContent || JSON.stringify(defaultGenerativeUiSpec());
+      const spec = JSON.parse(rawSpec);
+      renderNode.innerHTML = renderGenerativeUiSpec(spec);
+    } catch {
+      renderNode.innerHTML = renderGenerativeUiSpec(defaultGenerativeUiSpec());
+    }
+  });
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -90,20 +144,126 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+function escapeHtml(value: string) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function stripHtml(value: string) {
+  const tmp = window.document.createElement('div');
+  tmp.innerHTML = value;
+  return tmp.textContent || tmp.innerText || '';
+}
+
+async function runDocAI(prompt: string, title: string, docHtml: string) {
+  const response = await fetch(apiUrl('/backend/ai-chat'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+    body: JSON.stringify({
+      model: 'auto',
+      messages: [{ role: 'user', content: prompt }],
+      documents: `--- Document: ${title} ---\n${stripHtml(docHtml).slice(0, 12000)}`,
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error?.message || payload?.error || 'AI request failed.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullContent = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const lines = decoder.decode(value).split('\n');
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(data);
+        fullContent += parsed.delta?.text || parsed.choices?.[0]?.delta?.content || '';
+      } catch {
+        // Ignore malformed stream chunks.
+      }
+    }
+  }
+  return fullContent || 'No response.';
+}
+
+function renderGenerativeUiSpec(spec: any) {
+  if (spec?.type === 'issue-list') {
+    const items = Array.isArray(spec.items) ? spec.items : [];
+    return `<div class="doc-gen-panel">
+      <div class="doc-gen-heading">
+        <strong>${escapeHtml(spec.title || 'Generated interface')}</strong>
+        <span>${escapeHtml(spec.description || 'Structured output')}</span>
+      </div>
+      <div class="doc-gen-list">
+        ${items.map((item: any) => `<div class="doc-gen-item">
+          <span>${escapeHtml(item.title || 'Untitled')}</span>
+          <small>${escapeHtml(item.status || 'open')} / ${escapeHtml(item.priority || 'normal')}</small>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (spec?.type === 'metric-grid') {
+    const metrics = Array.isArray(spec.metrics) ? spec.metrics : [];
+    return `<div class="doc-gen-metrics">
+      ${metrics.map((metric: any) => `<div class="doc-gen-metric">
+        <strong>${escapeHtml(metric.value || '')}</strong>
+        <span>${escapeHtml(metric.label || '')}</span>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  if (spec?.type === 'callout') {
+    return `<div class="doc-gen-callout">
+      <strong>${escapeHtml(spec.title || 'Note')}</strong>
+      <p>${escapeHtml(spec.body || '')}</p>
+    </div>`;
+  }
+
+  return '<div class="doc-block-muted">Unsupported generative UI type.</div>';
+}
+
+function defaultGenerativeUiSpec() {
+  return {
+    type: 'issue-list',
+    title: 'Generated interface',
+    description: 'Structured JSON rendered through the local component catalog',
+    items: [
+      { title: 'Define the interface schema', status: 'open', priority: 'high' },
+      { title: 'Connect to workspace data', status: 'planned', priority: 'normal' },
+    ],
+  };
+}
+
 const TOOLBAR: Array<{ action?: FormatAction; icon?: React.ReactNode; label?: string; divider?: boolean; custom?: string }> = [
-  { action: 'h1', icon: <Heading1 size={13} />, label: 'H1' },
-  { action: 'h2', icon: <Heading2 size={13} />, label: 'H2' },
+  { action: 'h1', icon: <Heading1 />, label: 'H1' },
+  { action: 'h2', icon: <Heading2 />, label: 'H2' },
   { divider: true },
-  { action: 'bold', icon: <Bold size={13} />, label: 'Bold' },
-  { action: 'italic', icon: <Italic size={13} />, label: 'Italic' },
-  { action: 'code', icon: <Code size={13} />, label: 'Code' },
-  { action: 'quote', icon: <Quote size={13} />, label: 'Quote' },
+  { action: 'bold', icon: <Bold />, label: 'Bold' },
+  { action: 'italic', icon: <Italic />, label: 'Italic' },
+  { action: 'code', icon: <Code />, label: 'Code' },
+  { action: 'quote', icon: <Quote />, label: 'Quote' },
   { divider: true },
-  { action: 'ul', icon: <List size={13} />, label: 'Bullets' },
-  { action: 'ol', icon: <ListOrdered size={13} />, label: 'Numbers' },
+  { action: 'ul', icon: <List />, label: 'Bullets' },
+  { action: 'ol', icon: <ListOrdered />, label: 'Numbers' },
   { divider: true },
-  { custom: 'sketch', icon: <Pencil size={13} />, label: 'Sketch' },
-  { custom: 'image', icon: <ImageIcon size={13} />, label: 'Insert Image' },
+  { custom: 'sketch', icon: <Pencil />, label: 'Sketch' },
+  { custom: 'image', icon: <ImageIcon />, label: 'Insert Image' },
+  { divider: true },
+  { custom: 'ai-response', icon: <Sparkles />, label: 'AI Response' },
+  { custom: 'task-list', icon: <ListChecks />, label: 'Task List' },
+  { custom: 'generative-ui', icon: <PanelsTopLeft />, label: 'Generative UI' },
 ];
 
 export function DocWindowContent({
@@ -116,6 +276,8 @@ export function DocWindowContent({
   onDelete,
   onTitleChange,
   onCommentCreated,
+  tasks = [],
+  onUpdateTask,
 }: DocWindowContentProps) {
   const [title, setTitle] = useState(doc.title);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -266,7 +428,7 @@ export function DocWindowContent({
 
     const handleSketchClear = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      const clearButton = target.closest('.doc-sketch-clear') as HTMLButtonElement | null;
+      const clearButton = target.closest('.doc-sketch-clear') as HTMLElement | null;
       if (!clearButton) return;
       e.preventDefault();
       e.stopPropagation();
@@ -280,20 +442,56 @@ export function DocWindowContent({
       triggerAutoSave(undefined, el.innerHTML);
     };
 
+    const handleDocBlockClick = async (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const runButton = target.closest('.doc-ai-run') as HTMLButtonElement | null;
+      if (runButton) {
+        e.preventDefault();
+        const block = runButton.closest('.doc-ai-block') as HTMLElement | null;
+        const prompt = (block?.querySelector('.doc-ai-prompt') as HTMLTextAreaElement | null)?.value.trim() || '';
+        const answer = block?.querySelector('.doc-ai-answer') as HTMLElement | null;
+        if (!prompt || !answer) return;
+        runButton.disabled = true;
+        answer.textContent = 'Thinking...';
+        try {
+          answer.textContent = await runDocAI(prompt, title, el.innerHTML);
+        } catch (error) {
+          answer.textContent = error instanceof Error ? error.message : 'AI request failed.';
+        } finally {
+          runButton.disabled = false;
+          triggerAutoSave(undefined, el.innerHTML);
+        }
+        return;
+      }
+
+      const checkbox = target.closest('.doc-task-checkbox') as HTMLInputElement | null;
+      if (checkbox) {
+        const taskId = checkbox.dataset.taskId;
+        if (taskId) {
+          onUpdateTask?.(taskId, { status: checkbox.checked ? 'done' : 'todo' });
+          const row = checkbox.closest('.doc-task-row');
+          row?.querySelector('small')?.replaceChildren(checkbox.checked ? 'done' : 'todo');
+          triggerAutoSave(undefined, el.innerHTML);
+        }
+      }
+    };
+
     el.addEventListener('mousedown', handleResize);
     el.addEventListener('mousedown', handleSketchDrawStart);
     el.addEventListener('click', handleSketchClear);
+    el.addEventListener('click', handleDocBlockClick);
     return () => {
       el.removeEventListener('mousedown', handleResize);
       el.removeEventListener('mousedown', handleSketchDrawStart);
       el.removeEventListener('click', handleSketchClear);
+      el.removeEventListener('click', handleDocBlockClick);
       if (sketchDrawRef.current) {
         document.removeEventListener('mousemove', sketchDrawRef.current.move);
         document.removeEventListener('mouseup', sketchDrawRef.current.up);
         sketchDrawRef.current = null;
       }
     };
-  }, [triggerAutoSave]);
+  }, [triggerAutoSave, onUpdateTask, title]);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
@@ -350,6 +548,25 @@ export function DocWindowContent({
     handleContentInput();
   };
 
+  const handleAIBlockInsert = () => {
+    contentRef.current?.focus();
+    insertAIResponseBlock();
+    handleContentInput();
+  };
+
+  const handleTaskBlockInsert = () => {
+    contentRef.current?.focus();
+    insertTaskListBlock(tasks);
+    handleContentInput();
+  };
+
+  const handleGenerativeUIInsert = () => {
+    contentRef.current?.focus();
+    insertGenerativeUiBlock();
+    hydrateSketchCanvases(contentRef.current);
+    handleContentInput();
+  };
+
   const handleImageFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       await handleImageInsert(e.target.files);
@@ -360,60 +577,53 @@ export function DocWindowContent({
   const canShowComments = Boolean(workspaceId && currentUserEmail);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '2px',
-        padding: '4px 8px', borderBottom: '1px solid var(--border-subtle)',
-        background: 'var(--canvas-elevated)', overflowX: 'auto', flexShrink: 0,
-      }}>
+    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-2">
         {TOOLBAR.map((item, idx) => (
           item.divider ? (
-            <div key={idx} style={{ width: '1px', height: '16px', background: 'var(--border-strong)', margin: '0 3px', flexShrink: 0 }} />
-          ) : item.custom === 'image' || item.custom === 'sketch' ? (
-            <button
+            <Separator key={idx} orientation="vertical" className="mx-1 h-5" />
+          ) : item.custom === 'image' || item.custom === 'sketch' || item.custom === 'ai-response' || item.custom === 'task-list' || item.custom === 'generative-ui' ? (
+            <Button
+              type="button"
               key={item.custom}
               title={item.label}
-              onClick={item.custom === 'image' ? handleImageButtonClick : handleSketchInsert}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: '26px', height: '26px',
-                background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer', color: 'var(--text-secondary)', transition: 'all var(--transition-fast)',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--canvas-raised)'; e.currentTarget.style.color = 'var(--accent)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+              onClick={
+                item.custom === 'image' ? handleImageButtonClick
+                  : item.custom === 'sketch' ? handleSketchInsert
+                    : item.custom === 'ai-response' ? handleAIBlockInsert
+                      : item.custom === 'task-list' ? handleTaskBlockInsert
+                        : handleGenerativeUIInsert
+              }
+              variant="ghost"
+              size="icon-xs"
             >
               {item.icon}
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
+              type="button"
               key={item.action}
               title={item.label}
               onMouseDown={e => { e.preventDefault(); execFormat(item.action!); handleContentInput(); }}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: '26px', height: '26px',
-                background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer', color: 'var(--text-secondary)', transition: 'all var(--transition-fast)',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--canvas-raised)'; e.currentTarget.style.color = 'var(--accent)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+              variant="ghost"
+              size="icon-xs"
             >
               {item.icon}
-            </button>
+            </Button>
           )
         ))}
-        <input
+        <Input
           ref={imageInputRef}
           type="file"
           accept="image/*"
           multiple
           onChange={handleImageFileInput}
-          style={{ display: 'none' }}
+          className="hidden"
         />
-        <div style={{ flex: 1 }} />
+        <div className="flex-1" />
         {canShowComments && (
-          <button
+          <Button
+            type="button"
             onClick={() => {
               if (!commentsOpen) {
                 const sel = window.getSelection();
@@ -424,96 +634,68 @@ export function DocWindowContent({
               if (!commentsOpen) setHistoryOpen(false);
             }}
             title={commentsOpen ? 'Hide comments' : 'Comment (select text first to anchor)'}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: '26px', height: '26px',
-              background: commentsOpen ? 'var(--accent-subtle)' : 'transparent',
-              border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-              color: commentsOpen ? 'var(--accent)' : 'var(--text-muted)',
-            }}
-            onMouseEnter={e => { if (!commentsOpen) e.currentTarget.style.color = 'var(--accent)'; }}
-            onMouseLeave={e => { if (!commentsOpen) e.currentTarget.style.color = 'var(--text-muted)'; }}
+            variant={commentsOpen ? 'secondary' : 'ghost'}
+            size="icon-xs"
           >
-            <MessageCircle size={12} />
-          </button>
+            <MessageCircle />
+          </Button>
         )}
         {workspaceId && (
-          <button
+          <Button
+            type="button"
             onClick={() => {
               setHistoryOpen(v => !v);
               if (!historyOpen) setCommentsOpen(false);
             }}
             title={historyOpen ? 'Hide version history' : 'Version history'}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: '26px', height: '26px',
-              background: historyOpen ? 'var(--accent-subtle)' : 'transparent',
-              border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-              color: historyOpen ? 'var(--accent)' : 'var(--text-muted)',
-            }}
-            onMouseEnter={e => { if (!historyOpen) e.currentTarget.style.color = 'var(--accent)'; }}
-            onMouseLeave={e => { if (!historyOpen) e.currentTarget.style.color = 'var(--text-muted)'; }}
+            variant={historyOpen ? 'secondary' : 'ghost'}
+            size="icon-xs"
           >
-            <History size={12} />
-          </button>
+            <History />
+          </Button>
         )}
-        <button
+        <Button
+          type="button"
           onClick={() => onToggleFavorite(doc.id, doc.is_favorite)}
           title={doc.is_favorite ? 'Unfavorite' : 'Favorite'}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '26px', height: '26px', background: 'transparent',
-            border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-            color: doc.is_favorite ? 'var(--warning)' : 'var(--text-muted)',
-          }}
+          variant={doc.is_favorite ? 'secondary' : 'ghost'}
+          size="icon-xs"
         >
-          <Star size={12} fill={doc.is_favorite ? 'var(--warning)' : 'none'} />
-        </button>
-        <button
+          <Star fill={doc.is_favorite ? 'currentColor' : 'none'} />
+        </Button>
+        <Button
+          type="button"
           onClick={() => onDelete(doc.id)}
           title="Delete"
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '26px', height: '26px', background: 'transparent',
-            border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-            color: 'var(--text-muted)',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.color = 'var(--error)')}
-          onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+          variant="ghost"
+          size="icon-xs"
         >
-          <Trash2 size={12} />
-        </button>
+          <Trash2 />
+        </Button>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', minWidth: 0 }}>
-          <input
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="min-w-0 flex-1">
+          <div className="px-6 py-5">
+          <Input
             type="text"
             value={title}
             onChange={handleTitleChange}
             placeholder="Untitled"
-            style={{
-              background: 'none', border: 'none', outline: 'none',
-              fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-primary)',
-              width: '100%', marginBottom: '12px', letterSpacing: '-0.02em',
-              lineHeight: 1.2, fontFamily: 'inherit',
-            }}
+            className="mb-3 h-auto border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
           />
           <div
             ref={contentRef}
             contentEditable
             suppressContentEditableWarning
-            className="doc-editor"
             onInput={handleContentInput}
             onPaste={handlePaste}
             onDrop={handleDrop}
             data-placeholder="Start writing..."
-            style={{
-              minHeight: '200px', outline: 'none', fontSize: '13px',
-              lineHeight: '1.7', color: 'var(--text-primary)',
-            }}
+            className="doc-editor min-h-[200px] text-[13px] leading-[1.7] text-foreground outline-none"
           />
-        </div>
+          </div>
+        </ScrollArea>
         {commentsOpen && canShowComments && workspaceId && currentUserEmail && (
           <DocumentCommentsPanel
             documentId={doc.id}

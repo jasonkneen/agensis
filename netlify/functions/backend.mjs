@@ -15,6 +15,9 @@ const ALLOWED_TABLES = new Set([
   'tasks',
   'document_comments',
   'task_comments',
+  'document_versions',
+  'workspace_agents',
+  'agent_webhooks',
   'activity_events',
 ]);
 

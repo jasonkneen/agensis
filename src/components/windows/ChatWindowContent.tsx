@@ -1,15 +1,90 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  Send, Plus, Mic, Sparkles, FileText, X, Layers, CornerDownRight
+  Bot,
+  CornerDownRight,
+  FileText,
+  Layers,
+  Mic,
+  Plus,
+  Send,
+  Sparkles,
+  User,
+  X,
 } from 'lucide-react';
 import { ModelSelector } from '../chat/ModelSelector';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
-import type { Message, MemoryFact, Document, CanvasGroup, CanvasObject, WorkspaceAgent } from '../../types';
+import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
+import { MarkdownContent } from '../chat/MarkdownContent';
+import type {
+  CanvasGroup,
+  CanvasObject,
+  Document,
+  MemoryFact,
+  Message as ChatMessage,
+  WorkspaceAgent,
+} from '../../types';
+import { Button } from '@/components/ui/button';
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentGroup,
+  AttachmentMedia,
+  AttachmentTitle,
+} from '@/components/ui/attachment';
+import {
+  Bubble,
+  BubbleContent,
+} from '@/components/ui/bubble';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from '@/components/ui/input-group';
+import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
+import {
+  Message,
+  MessageAvatar,
+  MessageContent,
+  MessageFooter,
+  MessageGroup,
+  MessageHeader,
+} from '@/components/ui/message';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
+import { Spinner } from '@/components/ui/spinner';
 
 interface ChatWindowContentProps {
-  messages: Message[];
-  topLevelMessages?: Message[];
-  threadMessages?: Message[];
+  messages: ChatMessage[];
+  topLevelMessages?: ChatMessage[];
+  threadMessages?: ChatMessage[];
   threadReplyCounts?: Record<string, number>;
   activeThreadId?: string | null;
   streaming: boolean;
@@ -55,7 +130,7 @@ export function ChatWindowContent({
   const [groupPickerQuery, setGroupPickerQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
   const [hashStartPos, setHashStartPos] = useState(-1);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const filteredDocs = useMemo(() => {
@@ -68,19 +143,15 @@ export function ChatWindowContent({
     return canvasGroups.filter(g => g.name.toLowerCase().includes(q));
   }, [canvasGroups, groupPickerQuery]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
   const buildGroupContext = (groups: CanvasGroup[]): string => {
-    return groups.map(g => {
-      const groupObjs = canvasObjects.filter(o => o.group_id === g.id);
-      const desc = groupObjs.map(o => {
-        if (o.type === 'text') return `Text: "${o.text_content}"`;
-        if (o.type === 'image') return `Image: ${o.file_name || o.src || 'unnamed'}`;
-        return `${o.type} shape`;
+    return groups.map(group => {
+      const groupObjects = canvasObjects.filter(object => object.group_id === group.id);
+      const description = groupObjects.map(object => {
+        if (object.type === 'text') return `Text: "${object.text_content}"`;
+        if (object.type === 'image') return `Image: ${object.file_name || object.src || 'unnamed'}`;
+        return `${object.type} shape`;
       }).join(', ');
-      return `[Canvas Group "${g.name}": ${desc || 'empty'}]`;
+      return `[Canvas Group "${group.name}": ${description || 'empty'}]`;
     }).join('\n');
   };
 
@@ -88,9 +159,9 @@ export function ChatWindowContent({
     if (!input.trim() || streaming) return;
     let content = input.trim();
     if (linkedGroups.length > 0) {
-      content = buildGroupContext(linkedGroups) + '\n\n' + content;
+      content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
-    onSendMessage(content, selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    onSendMessage(content, selectedAgent?.model || selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
@@ -123,39 +194,75 @@ export function ChatWindowContent({
     inputRef.current?.focus();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showDocPicker) {
-      if (e.key === 'Escape') { e.preventDefault(); setShowDocPicker(false); return; }
-      if (e.key === 'Enter' && filteredDocs.length > 0) { e.preventDefault(); handleDocSelect(filteredDocs[0]); return; }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowDocPicker(false);
+        return;
+      }
+      if (e.key === 'Enter' && filteredDocs.length > 0) {
+        e.preventDefault();
+        handleDocSelect(filteredDocs[0]);
+        return;
+      }
     }
+
     if (showGroupPicker) {
-      if (e.key === 'Escape') { e.preventDefault(); setShowGroupPicker(false); return; }
-      if (e.key === 'Enter' && filteredGroups.length > 0) { e.preventDefault(); handleGroupSelect(filteredGroups[0]); return; }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowGroupPicker(false);
+        return;
+      }
+      if (e.key === 'Enter' && filteredGroups.length > 0) {
+        e.preventDefault();
+        handleGroupSelect(filteredGroups[0]);
+        return;
+      }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setInput(val);
+    const value = e.target.value;
+    setInput(value);
+
     if (showDocPicker && atStartPos >= 0) {
-      const afterAt = val.slice(atStartPos + 1);
-      if (afterAt.indexOf(' ') === -1) { setDocPickerQuery(afterAt); }
-      else { setShowDocPicker(false); setDocPickerQuery(''); setAtStartPos(-1); }
+      const afterAt = value.slice(atStartPos + 1);
+      if (afterAt.indexOf(' ') === -1) {
+        setDocPickerQuery(afterAt);
+      } else {
+        setShowDocPicker(false);
+        setDocPickerQuery('');
+        setAtStartPos(-1);
+      }
     }
+
     if (showGroupPicker && hashStartPos >= 0) {
-      const afterHash = val.slice(hashStartPos + 1);
-      if (afterHash.indexOf(' ') === -1) { setGroupPickerQuery(afterHash); }
-      else { setShowGroupPicker(false); setGroupPickerQuery(''); setHashStartPos(-1); }
+      const afterHash = value.slice(hashStartPos + 1);
+      if (afterHash.indexOf(' ') === -1) {
+        setGroupPickerQuery(afterHash);
+      } else {
+        setShowGroupPicker(false);
+        setGroupPickerQuery('');
+        setHashStartPos(-1);
+      }
     }
+
     const cursor = e.target.selectionStart || 0;
-    if (val[cursor - 1] === '@' && !showDocPicker) {
+    if (value[cursor - 1] === '@' && !showDocPicker) {
       setShowDocPicker(true);
+      setShowGroupPicker(false);
       setDocPickerQuery('');
       setAtStartPos(cursor - 1);
     }
-    if (val[cursor - 1] === '#' && !showGroupPicker) {
+    if (value[cursor - 1] === '#' && !showGroupPicker) {
       setShowGroupPicker(true);
+      setShowDocPicker(false);
       setGroupPickerQuery('');
       setHashStartPos(cursor - 1);
     }
@@ -163,220 +270,213 @@ export function ChatWindowContent({
 
   const displayMessages = topLevelMessages ?? messages;
   const parentMessage = activeThreadId ? messages.find(m => m.id === activeThreadId) : null;
+  const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
+    setAutoScroll(distanceFromEnd < 32);
+  };
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 14px' }}>
-        {displayMessages.length === 0 ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '100%',
-            gap: '8px',
-          }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              background: 'var(--canvas-raised)',
-              border: '1px solid var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <Sparkles size={18} style={{ color: 'var(--text-muted)' }} />
-            </div>
-            <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', margin: 0 }}>Ready to chat</p>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>Type a message below to begin</p>
-          </div>
-        ) : (
-          <>
-            {displayMessages.map((msg, idx) => (
-              <MessageBubble
-                key={msg.id}
-                msg={msg}
-                isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
-                replyCount={threadReplyCounts[msg.id]}
-                onOpenThread={onOpenThread ? () => onOpenThread(msg.id) : undefined}
-              />
-            ))}
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
-
-      <div style={{ padding: '8px 10px 10px', borderTop: '1px solid var(--border-subtle)' }}>
-        {(linkedDocs.length > 0 || linkedGroups.length > 0) && (
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            {linkedDocs.map(doc => (
-              <span key={doc.id} style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                padding: '2px 6px', background: 'var(--accent-subtle)',
-                border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-sm)',
-                fontSize: '10px', color: 'var(--accent)', fontWeight: 500,
-              }}>
-                <FileText size={9} />{doc.title}
-                <button onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, display: 'flex' }}>
-                  <X size={9} />
-                </button>
-              </span>
-            ))}
-            {linkedGroups.map(group => (
-              <span key={group.id} style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                padding: '2px 6px', background: `${group.color}15`,
-                border: `1px solid ${group.color}40`, borderRadius: 'var(--radius-sm)',
-                fontSize: '10px', color: group.color, fontWeight: 500,
-              }}>
-                <Layers size={9} />{group.name}
-                <button onClick={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: group.color, padding: 0, display: 'flex' }}>
-                  <X size={9} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div style={{ position: 'relative' }}>
-          {showDocPicker && filteredDocs.length > 0 && (
-            <div style={{
-              position: 'absolute', bottom: '100%', left: 0, right: 0,
-              marginBottom: '4px', background: 'var(--canvas-overlay)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
-              boxShadow: 'var(--shadow-lg)', maxHeight: '160px', overflowY: 'auto', zIndex: 50,
-            }}>
-              {filteredDocs.map(doc => (
-                <button key={doc.id} onClick={() => handleDocSelect(doc)}
-                  style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: '6px',
-                    padding: '6px 10px', background: 'transparent', border: 'none',
-                    cursor: 'pointer', color: 'var(--text-primary)', fontSize: '12px', textAlign: 'left',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-subtle)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <FileText size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                  {doc.title}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {showGroupPicker && filteredGroups.length > 0 && (
-            <div style={{
-              position: 'absolute', bottom: '100%', left: 0, right: 0,
-              marginBottom: '4px', background: 'var(--canvas-overlay)',
-              border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
-              boxShadow: 'var(--shadow-lg)', maxHeight: '160px', overflowY: 'auto', zIndex: 50,
-            }}>
-              {filteredGroups.map(group => {
-                const objCount = canvasObjects.filter(o => o.group_id === group.id).length;
-                return (
-                  <button key={group.id} onClick={() => handleGroupSelect(group)}
-                    style={{
-                      width: '100%', display: 'flex', alignItems: 'center', gap: '6px',
-                      padding: '6px 10px', background: 'transparent', border: 'none',
-                      cursor: 'pointer', color: 'var(--text-primary)', fontSize: '12px', textAlign: 'left',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = `${group.color}10`)}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <Layers size={12} style={{ color: group.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1 }}>{group.name}</span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{objCount} object{objCount !== 1 ? 's' : ''}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div style={{
-            background: 'var(--canvas-raised)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            overflow: 'hidden',
-          }}>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder="Chat with AI... @ docs, # groups"
-              disabled={streaming}
-              rows={1}
-              style={{
-                width: '100%', background: 'transparent', border: 'none', outline: 'none',
-                color: 'var(--text-primary)', fontSize: '12px', padding: '8px 10px 4px',
-                resize: 'none', fontFamily: 'inherit', lineHeight: '1.5',
-                maxHeight: '80px', overflowY: 'auto',
-              }}
-              onInput={e => {
-                const el = e.currentTarget;
-                el.style.height = 'auto';
-                el.style.height = `${Math.min(el.scrollHeight, 80)}px`;
-              }}
-            />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                <button style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '24px', height: '24px', background: 'none', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', color: 'var(--text-muted)' }} title="Attach">
-                  <Plus size={13} />
-                </button>
-                <button style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '24px', height: '24px', background: 'none', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', color: 'var(--text-muted)' }} title="Voice">
-                  <Mic size={13} />
-                </button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                {agents.length > 0 && onSelectAgent && (
-                  <select
-                    value={selectedAgent?.id || ''}
-                    onChange={e => {
-                      const agent = agents.find(a => a.id === e.target.value) || null;
-                      onSelectAgent(agent);
-                    }}
-                    title="Select AI agent"
-                    style={{
-                      background: 'var(--canvas-raised)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-sm)',
-                      color: selectedAgent ? 'var(--accent)' : 'var(--text-muted)',
-                      fontSize: '10px',
-                      padding: '2px 4px',
-                      cursor: 'pointer',
-                      maxWidth: '80px',
-                    }}
-                  >
-                    <option value="">Hatch AI</option>
-                    {agents.map(a => (
-                      <option key={a.id} value={a.id}>{a.avatar} {a.name}</option>
+    <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <MessageScrollerProvider autoScroll={autoScroll}>
+          <MessageScroller className="flex-1">
+            <MessageScrollerViewport onScroll={handleScrollerScroll}>
+              <MessageScrollerContent className="min-h-full gap-3 p-3">
+                {displayMessages.length === 0 ? (
+                  <Empty className="min-h-full border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Sparkles />
+                      </EmptyMedia>
+                      <EmptyTitle>Ready to chat</EmptyTitle>
+                      <EmptyDescription>
+                        Type a message below to start the conversation.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <MessageGroup className="gap-3">
+                    {displayMessages.map((msg, idx) => (
+                      <MessageScrollerItem key={msg.id} scrollAnchor={idx === displayMessages.length - 1}>
+                        <ChatMessageBubble
+                          msg={msg}
+                          isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
+                          replyCount={threadReplyCounts[msg.id]}
+                          onOpenThread={onOpenThread ? () => onOpenThread(msg.id) : undefined}
+                        />
+                      </MessageScrollerItem>
                     ))}
-                  </select>
+                  </MessageGroup>
                 )}
-                <ModelSelector value={selectedAgent?.model || selectedModel} onChange={setSelectedModel} />
-                <button
-                  onClick={handleSend}
-                  disabled={!input.trim() || streaming}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: '26px', height: '26px', borderRadius: '50%',
-                    background: input.trim() && !streaming ? 'var(--accent)' : 'var(--canvas-overlay)',
-                    border: 'none', cursor: input.trim() && !streaming ? 'pointer' : 'not-allowed',
-                    color: input.trim() && !streaming ? 'white' : 'var(--text-muted)',
-                    transition: 'all var(--transition-fast)', flexShrink: 0,
-                  }}
-                >
-                  <Send size={11} />
-                </button>
-              </div>
-            </div>
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton direction="end" behavior="auto" onClick={() => setAutoScroll(true)} />
+          </MessageScroller>
+        </MessageScrollerProvider>
+
+        <div className="border-t border-border bg-card p-2">
+          {(linkedDocs.length > 0 || linkedGroups.length > 0) && (
+            <AttachmentGroup className="mb-2">
+              {linkedDocs.map(doc => (
+                <Attachment key={doc.id} state="done" size="xs">
+                  <AttachmentMedia variant="icon">
+                    <FileText />
+                  </AttachmentMedia>
+                  <AttachmentContent>
+                    <AttachmentTitle>{doc.title}</AttachmentTitle>
+                    <AttachmentDescription>Document context</AttachmentDescription>
+                  </AttachmentContent>
+                  <AttachmentActions>
+                    <AttachmentAction
+                      aria-label={`Remove ${doc.title}`}
+                      onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
+                    >
+                      <X />
+                    </AttachmentAction>
+                  </AttachmentActions>
+                </Attachment>
+              ))}
+              {linkedGroups.map(group => (
+                <Attachment key={group.id} state="done" size="xs">
+                  <AttachmentMedia variant="icon">
+                    <Layers />
+                  </AttachmentMedia>
+                  <AttachmentContent>
+                    <AttachmentTitle>{group.name}</AttachmentTitle>
+                    <AttachmentDescription>Canvas group context</AttachmentDescription>
+                  </AttachmentContent>
+                  <AttachmentActions>
+                    <AttachmentAction
+                      aria-label={`Remove ${group.name}`}
+                      onClick={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
+                    >
+                      <X />
+                    </AttachmentAction>
+                  </AttachmentActions>
+                </Attachment>
+              ))}
+            </AttachmentGroup>
+          )}
+
+          <div className="relative">
+            {showDocPicker && (
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-56 rounded-xl border border-border shadow-lg">
+                <CommandList>
+                  <CommandEmpty>No documents found.</CommandEmpty>
+                  <CommandGroup heading="Documents">
+                    {filteredDocs.map(doc => (
+                      <CommandItem
+                        key={doc.id}
+                        value={doc.title}
+                        onSelect={() => handleDocSelect(doc)}
+                      >
+                        <FileText />
+                        <span className="truncate">{doc.title}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            )}
+
+            {showGroupPicker && (
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-56 rounded-xl border border-border shadow-lg">
+                <CommandList>
+                  <CommandEmpty>No groups found.</CommandEmpty>
+                  <CommandGroup heading="Canvas groups">
+                    {filteredGroups.map(group => {
+                      const objectCount = canvasObjects.filter(object => object.group_id === group.id).length;
+                      return (
+                        <CommandItem
+                          key={group.id}
+                          value={group.name}
+                          onSelect={() => handleGroupSelect(group)}
+                        >
+                          <Layers />
+                          <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {objectCount} item{objectCount === 1 ? '' : 's'}
+                          </span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            )}
+
+            <InputGroup className="h-auto flex-col items-stretch">
+              <InputGroupTextarea
+                ref={inputRef}
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Chat with AI... @ documents, # canvas groups"
+                disabled={streaming}
+                rows={1}
+                className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
+                onInput={e => {
+                  const el = e.currentTarget;
+                  el.style.height = 'auto';
+                  el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
+                }}
+              />
+              <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+                <div className="flex items-center gap-1">
+                  <InputGroupButton size="icon-xs" aria-label="Attach file">
+                    <Plus />
+                  </InputGroupButton>
+                  <InputGroupButton size="icon-xs" aria-label="Voice input">
+                    <Mic />
+                  </InputGroupButton>
+                  <Marker className="ml-1 hidden max-w-28 sm:flex">
+                    <MarkerIcon>
+                      <Sparkles />
+                    </MarkerIcon>
+                    <MarkerContent>
+                      {selectedAgent ? selectedAgent.name : 'Hatch AI'}
+                    </MarkerContent>
+                  </Marker>
+                </div>
+
+                <div className="flex min-w-0 items-center gap-2">
+                  {agents.length > 0 && onSelectAgent && (
+                    <NativeSelect
+                      value={selectedAgent?.id || ''}
+                      onChange={e => {
+                        const agent = agents.find(a => a.id === e.target.value) || null;
+                        onSelectAgent(agent);
+                      }}
+                      title="Select AI agent"
+                      size="sm"
+                      className="max-w-32"
+                    >
+                      <NativeSelectOption value="">Hatch AI</NativeSelectOption>
+                      {agents.map(agent => (
+                        <NativeSelectOption key={agent.id} value={agent.id}>
+                          {agent.name}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                  )}
+                  <ModelSelector value={selectedAgent?.model || selectedModel} onChange={setSelectedModel} />
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    onClick={handleSend}
+                    disabled={!input.trim() || streaming}
+                    aria-label="Send message"
+                  >
+                    {streaming ? <Spinner /> : <Send />}
+                  </Button>
+                </div>
+              </InputGroupAddon>
+            </InputGroup>
           </div>
         </div>
       </div>
-      </div>
+
       {activeThreadId && parentMessage && onCloseThread && onSendThreadReply && (
         <ChatThreadPanel
           parentMessage={parentMessage}
@@ -390,65 +490,61 @@ export function ChatWindowContent({
   );
 }
 
-function MessageBubble({ msg, isStreaming, replyCount, onOpenThread }: { msg: Message; isStreaming?: boolean; replyCount?: number; onOpenThread?: () => void }) {
+function ChatMessageBubble({
+  msg,
+  isStreaming,
+  replyCount,
+  onOpenThread,
+}: {
+  msg: ChatMessage;
+  isStreaming?: boolean;
+  replyCount?: number;
+  onOpenThread?: () => void;
+}) {
   const isUser = msg.role === 'user';
+  const artifact = msg.content ? extractHtmlArtifact(msg.content) : null;
+  const displayContent = artifact ? artifact.remainingText : msg.content;
+
   return (
-    <div className="msg-animate" style={{
-      display: 'flex', flexDirection: 'column',
-      alignItems: isUser ? 'flex-end' : 'flex-start',
-      marginBottom: '12px', gap: '3px',
-    }}>
-      {!isUser && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '2px' }}>
-          <div style={{
-            width: '16px', height: '16px', borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--accent), #60a5fa)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Sparkles size={8} color="white" />
-          </div>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500 }}>Hatch AI</span>
-        </div>
-      )}
-      <div style={{
-        maxWidth: '90%', padding: isUser ? '6px 10px' : '8px 10px',
-        borderRadius: isUser ? '12px 12px 4px 12px' : '4px 12px 12px 12px',
-        background: isUser ? 'var(--accent)' : 'var(--canvas-raised)',
-        border: isUser ? 'none' : '1px solid var(--border)',
-        color: isUser ? 'white' : 'var(--text-primary)',
-        fontSize: '12px', lineHeight: '1.6', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-      }}>
-        {msg.content || (isStreaming && (
-          <div style={{ display: 'flex', gap: '3px', alignItems: 'center', padding: '2px 0' }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} className="pulse-dot" style={{
-                width: '4px', height: '4px', borderRadius: '50%',
-                background: 'var(--accent)', animationDelay: `${i * 0.2}s`,
-              }} />
-            ))}
-          </div>
-        ))}
-        {isStreaming && msg.content && <span className="typing-cursor" />}
-      </div>
-      {onOpenThread && msg.content && !isStreaming && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-          <button
-            onClick={onOpenThread}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '3px',
-              color: 'var(--text-muted)', fontSize: '10px', padding: '2px 4px',
-              borderRadius: 'var(--radius-sm)',
-              transition: 'color var(--transition-fast)',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.color = 'var(--accent)')}
-            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
-          >
-            <CornerDownRight size={10} />
-            {replyCount ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : 'Reply'}
-          </button>
-        </div>
-      )}
-    </div>
+    <Message align={isUser ? 'end' : 'start'}>
+      <MessageAvatar className="size-8">
+        {isUser ? <User className="size-4" /> : <Bot className="size-4" />}
+      </MessageAvatar>
+      <MessageContent>
+        {!isUser && <MessageHeader>Hatch AI</MessageHeader>}
+        <Bubble variant={isUser ? 'default' : 'muted'} align={isUser ? 'end' : 'start'}>
+          <BubbleContent>
+            {displayContent ? (
+              <MarkdownContent content={displayContent} />
+            ) : isStreaming ? (
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <Spinner />
+                Thinking
+              </span>
+            ) : null}
+            {artifact && <ChatArtifact artifact={artifact} />}
+          </BubbleContent>
+        </Bubble>
+        {isStreaming && msg.content && (
+          <MessageFooter>
+            <Spinner className="size-3" />
+            Streaming
+          </MessageFooter>
+        )}
+        {onOpenThread && msg.content && !isStreaming && (
+          <MessageFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={onOpenThread}
+            >
+              <CornerDownRight data-icon="inline-start" />
+              {replyCount ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : 'Reply'}
+            </Button>
+          </MessageFooter>
+        )}
+      </MessageContent>
+    </Message>
   );
 }

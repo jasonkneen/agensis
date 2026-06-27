@@ -11,7 +11,7 @@ function CursorSvg({ color }: { color: string }) {
       height="20"
       viewBox="0 0 16 20"
       fill="none"
-      style={{ display: 'block' }}
+      className="block"
     >
       <path
         d="M1 1L1 15.5L5.5 11.5L9.5 19L12.5 17.5L8.5 10L14 9.5L1 1Z"
@@ -28,15 +28,7 @@ export function CursorOverlay({ cursors }: CursorOverlayProps) {
   if (cursors.length === 0) return null;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        pointerEvents: 'none',
-        zIndex: 9999,
-        overflow: 'hidden',
-      }}
-    >
+    <div className="pointer-events-none absolute inset-0 z-[9999] overflow-hidden">
       {cursors.map(cursor => (
         <div
           key={cursor.id}
@@ -50,20 +42,9 @@ export function CursorOverlay({ cursors }: CursorOverlayProps) {
         >
           <CursorSvg color={cursor.color} />
           <div
+            className="absolute top-3.5 left-3.5 whitespace-nowrap rounded px-2 py-0.5 text-[11px] font-medium leading-snug text-white shadow"
             style={{
-              position: 'absolute',
-              left: '14px',
-              top: '14px',
               background: cursor.color,
-              color: 'white',
-              fontSize: '11px',
-              fontWeight: 500,
-              padding: '2px 8px',
-              borderRadius: '4px',
-              whiteSpace: 'nowrap',
-              lineHeight: '1.4',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-              letterSpacing: '-0.01em',
             }}
           >
             {cursor.name}

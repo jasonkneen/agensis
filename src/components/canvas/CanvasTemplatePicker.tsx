@@ -1,211 +1,123 @@
-import { useEffect, useCallback } from 'react';
-import { X, LayoutTemplate } from 'lucide-react';
+import { LayoutTemplate } from 'lucide-react';
 import type { CanvasTemplate } from '../../lib/canvasTemplates';
 import { CANVAS_TEMPLATES } from '../../lib/canvasTemplates';
+import type { CanvasAppDefinition } from '../../lib/canvasApps';
+import { CANVAS_APPS } from '../../lib/canvasApps';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Marker, MarkerContent } from '@/components/ui/marker';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/utils';
 
 interface CanvasTemplatePickerProps {
   open: boolean;
   onClose: () => void;
   onApply: (template: CanvasTemplate) => void;
+  onCreateApp: (app: CanvasAppDefinition) => void;
 }
 
-const CanvasTemplatePicker = ({ open, onClose, onApply }: CanvasTemplatePickerProps) => {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    },
-    [onClose],
-  );
-
-  useEffect(() => {
-    if (open) {
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [open, handleKeyDown]);
-
-  if (!open) return null;
-
+const CanvasTemplatePicker = ({ open, onClose, onApply, onCreateApp }: CanvasTemplatePickerProps) => {
   const handleApply = (template: CanvasTemplate) => {
     onApply(template);
     onClose();
   };
 
+  const handleCreateApp = (app: CanvasAppDefinition) => {
+    onCreateApp(app);
+    onClose();
+  };
+
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose();
       }}
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 640,
-          margin: '0 16px',
-          backgroundColor: 'var(--canvas-elevated)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border)',
-          boxShadow: 'var(--shadow-xl)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 20px',
-            borderBottom: '1px solid var(--border-subtle)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <LayoutTemplate
-              size={20}
-              style={{ color: 'var(--accent)', flexShrink: 0 }}
-            />
-            <span
-              style={{
-                fontSize: 16,
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-              }}
-            >
-              Start from a template
-            </span>
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-3xl p-0">
+        <DialogHeader className="border-b px-5 py-4">
+          <DialogTitle className="flex items-center gap-2">
+            <LayoutTemplate data-icon="inline-start" />
+            Canvas Apps
+          </DialogTitle>
+          <DialogDescription className="max-w-xl">
+            Add applets or structured layouts to the current canvas.
+          </DialogDescription>
+        </DialogHeader>
+
+        <ScrollArea className="max-h-[min(62vh,520px)]">
+          <div className="flex flex-col gap-5 p-5">
+            <section className="flex flex-col gap-3">
+              <Marker variant="separator">
+                <MarkerContent>Applets</MarkerContent>
+              </Marker>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {CANVAS_APPS.map(app => (
+                  <Card
+                    key={app.id}
+                    role="button"
+                    tabIndex={0}
+                    size="sm"
+                    className="min-h-40 cursor-pointer rounded-lg transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                    onClick={() => handleCreateApp(app)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleCreateApp(app);
+                      }
+                    }}
+                  >
+                    <CardContent className="flex h-full min-h-40 flex-col gap-3 p-4">
+                      <span className="text-base font-semibold leading-snug text-foreground">{app.name}</span>
+                      <span className="text-sm leading-relaxed text-muted-foreground">{app.description}</span>
+                      <Badge variant="secondary" className="mt-auto w-fit text-xs">
+                        HTML applet
+                      </Badge>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+
+            <section className="flex flex-col gap-3">
+              <Marker variant="separator">
+                <MarkerContent>Layouts</MarkerContent>
+              </Marker>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {CANVAS_TEMPLATES.map(template => (
+                  <Card
+                    key={template.id}
+                    role="button"
+                    tabIndex={0}
+                    size="sm"
+                    className={cn(
+                      'min-h-44 cursor-pointer rounded-lg transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50',
+                    )}
+                    onClick={() => handleApply(template)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleApply(template);
+                      }
+                    }}
+                  >
+                    <CardContent className="flex h-full min-h-44 flex-col gap-3 p-4">
+                      <span className="text-2xl leading-none">{template.icon}</span>
+                      <span className="text-base font-semibold leading-snug text-foreground">{template.name}</span>
+                      <span className="text-sm leading-relaxed text-muted-foreground">{template.description}</span>
+                      <Badge variant="outline" className="mt-auto w-fit text-xs">
+                        {template.objects.length} objects
+                      </Badge>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 28,
-              height: 28,
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'transparent',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-            }}
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        {/* Template grid */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-            gap: 12,
-            padding: 20,
-            maxHeight: 420,
-            overflowY: 'auto',
-          }}
-        >
-          {CANVAS_TEMPLATES.map((template) => (
-            <div
-              key={template.id}
-              onClick={() => handleApply(template)}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                padding: 16,
-                borderRadius: 'var(--radius-md, 8px)',
-                border: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--canvas-raised)',
-                cursor: 'pointer',
-                transition: 'border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease',
-              }}
-              onMouseEnter={(e) => {
-                const el = e.currentTarget;
-                el.style.borderColor = 'var(--accent)';
-                el.style.boxShadow = '0 0 0 1px var(--accent)';
-                el.style.transform = 'translateY(-2px)';
-              }}
-              onMouseLeave={(e) => {
-                const el = e.currentTarget;
-                el.style.borderColor = 'var(--border-subtle)';
-                el.style.boxShadow = 'none';
-                el.style.transform = 'translateY(0)';
-              }}
-            >
-              <span style={{ fontSize: 28, lineHeight: 1 }}>{template.icon}</span>
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
-                }}
-              >
-                {template.name}
-              </span>
-              <span
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted)',
-                  lineHeight: 1.4,
-                }}
-              >
-                {template.description}
-              </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--text-muted)',
-                  marginTop: 'auto',
-                  paddingTop: 4,
-                }}
-              >
-                {template.objects.length} objects
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Footer */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '10px 20px',
-            borderTop: '1px solid var(--border-subtle)',
-            fontSize: 11,
-            color: 'var(--text-muted)',
-          }}
-        >
-          <span>Click a template to add it to your canvas</span>
-          <kbd
-            style={{
-              padding: '2px 6px',
-              fontSize: 11,
-              fontFamily: 'inherit',
-              backgroundColor: 'var(--canvas-raised)',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-            }}
-          >
-            ESC
-          </kbd>
-        </div>
-      </div>
-    </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -215,7 +215,11 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       updated_at: new Date().toISOString(),
     } as CanvasObject;
 
-    setObjects(prev => prev.map(o => o.id === id ? nextObject : o));
+    setObjects(prev => {
+      const next = prev.map(o => o.id === id ? nextObject : o);
+      objectsRef.current = next;
+      return next;
+    });
 
     channelRef.current?.send({
       type: 'broadcast',
@@ -236,7 +240,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         .update({ ...updates, updated_at: new Date().toISOString() })
         .eq('id', id);
       delete pendingSaveTimersRef.current[id];
-    }, 60);
+    }, 180);
   }, [userId]);
 
   const deleteObject = useCallback(async (id: string) => {

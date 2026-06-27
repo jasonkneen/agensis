@@ -3,11 +3,19 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { WorkspaceAgent } from '../types';
 
+type AgentRealtimePayload =
+  | { eventType: 'INSERT' | 'UPDATE'; new: WorkspaceAgent; old?: Partial<WorkspaceAgent> }
+  | { eventType: 'DELETE'; old: WorkspaceAgent; new?: Partial<WorkspaceAgent> };
+
 export interface CreateAgentInput {
   name: string;
   avatar?: string;
   description?: string;
   system_prompt: string;
+  soul?: string;
+  instructions?: string;
+  tools?: string[];
+  skills?: string[];
   model?: string;
 }
 
@@ -45,7 +53,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workspace_agents', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: AgentRealtimePayload) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new as WorkspaceAgent;
             setAgents(prev => prev.some(a => a.id === row.id) ? prev : [...prev, row]);
@@ -73,6 +81,10 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       avatar: input.avatar ?? '🤖',
       description: input.description ?? '',
       system_prompt: input.system_prompt,
+      soul: input.soul ?? '',
+      instructions: input.instructions ?? '',
+      tools: input.tools ?? [],
+      skills: input.skills ?? [],
       model: input.model ?? 'auto',
     });
     if (data) {

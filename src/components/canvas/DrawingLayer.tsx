@@ -1,8 +1,13 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Pencil, X, Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
-import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup } from '../../types';
+import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent } from '../../types';
+import type { CreateTaskInput } from '../../hooks/useTasks';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 interface DrawingLayerProps {
   objects: CanvasObject[];
@@ -16,9 +21,38 @@ interface DrawingLayerProps {
   onCreateGroup: (name: string, objectIds: string[], color?: string) => Promise<CanvasGroup | null>;
   onDeleteGroup: (groupId: string) => void;
   onCreateTask?: (input: { title: string; sourceId: string }) => void;
+  tasks?: Task[];
+  agents?: WorkspaceAgent[];
+  onCreateAppletTask?: (input: CreateTaskInput) => void;
+  onUpdateAppletTask?: (id: string, updates: Partial<Task>) => void;
 }
 
 const STICKY_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff', '#fed7aa'];
+
+type DragSnapshotObject = {
+  x: number;
+  y: number;
+  type: CanvasObjectType;
+  points?: Array<{ x: number; y: number }>;
+};
+
+type DragSnapshot = {
+  anchorBounds: { x: number; y: number; width: number; height: number };
+  offset: { x: number; y: number };
+  moveIds: Set<string>;
+  objects: Map<string, DragSnapshotObject>;
+  canvasRect: { left: number; top: number; width: number; height: number };
+  latestDelta: { x: number; y: number };
+};
+
+type ResizeSnapshot = {
+  id: string;
+  handle: 'nw' | 'ne' | 'sw' | 'se';
+  startMouse: { x: number; y: number };
+  startRect: { x: number; y: number; width: number; height: number };
+  canvasRect: { left: number; top: number; width: number; height: number };
+  latestRect: { x: number; y: number; width: number; height: number };
+};
 
 export function DrawingLayer({
   objects,
@@ -32,6 +66,10 @@ export function DrawingLayer({
   onCreateGroup,
   onDeleteGroup,
   onCreateTask,
+  tasks = [],
+  agents = [],
+  onCreateAppletTask,
+  onUpdateAppletTask,
 }: DrawingLayerProps) {
   const [tool, setTool] = useState<CanvasTool>('select');
   const [color, setColor] = useState('#3b82f6');
@@ -41,8 +79,6 @@ export function DrawingLayer({
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [lastMousePos, setLastMousePos] = useState<{ x: number; y: number } | null>(null);
   const [activeStrokeId, setActiveStrokeId] = useState<string | null>(null);
-  const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
-  const [dragAnchorId, setDragAnchorId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [resizeState, setResizeState] = useState<{
     id: string;
@@ -56,8 +92,153 @@ export function DrawingLayer({
   const [attachMode, setAttachMode] = useState(false);
   const layerRef = useRef<HTMLDivElement>(null);
   const penPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const dragSnapshotRef = useRef<DragSnapshot | null>(null);
+  const resizeSnapshotRef = useRef<ResizeSnapshot | null>(null);
 
   const activeTool = drawingActive ? tool : 'select';
+
+  const setHostInteractionLocked = useCallback((locked: boolean) => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.toggleAttribute('data-canvas-host-interaction', locked);
+  }, []);
+
+  const getCanvasItemElements = useCallback((id: string) => {
+    const root = layerRef.current?.parentElement;
+    if (!root) return [];
+    return Array.from(root.querySelectorAll<HTMLElement>(`[data-canvas-item-id="${id}"]`));
+  }, []);
+
+  const setCanvasItemTransform = useCallback((id: string, transform: string) => {
+    getCanvasItemElements(id).forEach(element => {
+      if (element.dataset.baseTransform === undefined) {
+        element.dataset.baseTransform = element.style.transform || 'none';
+      }
+      const baseTransform = element.dataset.baseTransform === 'none' ? '' : element.dataset.baseTransform;
+      element.dataset.transforming = 'true';
+      element.style.transform = `${transform} ${baseTransform}`.trim();
+    });
+  }, [getCanvasItemElements]);
+
+  const clearCanvasItemTransform = useCallback((id: string) => {
+    getCanvasItemElements(id).forEach(element => {
+      const baseTransform = element.dataset.baseTransform;
+      delete element.dataset.transforming;
+      delete element.dataset.baseTransform;
+      element.style.transform = baseTransform && baseTransform !== 'none' ? baseTransform : '';
+      element.style.transformOrigin = '';
+    });
+  }, [getCanvasItemElements]);
+
+  const clearCanvasItemTransforms = useCallback((ids: Iterable<string>) => {
+    Array.from(ids).forEach(clearCanvasItemTransform);
+  }, [clearCanvasItemTransform]);
+
+  const previewDragToPosition = useCallback((pos: { x: number; y: number }) => {
+    const snapshot = dragSnapshotRef.current;
+    if (!snapshot) return;
+
+    const dx = pos.x - snapshot.offset.x - snapshot.anchorBounds.x;
+    const dy = pos.y - snapshot.offset.y - snapshot.anchorBounds.y;
+    snapshot.latestDelta = { x: dx, y: dy };
+
+    const tx = (dx / 100) * snapshot.canvasRect.width;
+    const ty = (dy / 100) * snapshot.canvasRect.height;
+    snapshot.moveIds.forEach(id => setCanvasItemTransform(id, `translate3d(${tx}px, ${ty}px, 0)`));
+  }, [setCanvasItemTransform]);
+
+  const commitDrag = useCallback(() => {
+    const snapshot = dragSnapshotRef.current;
+    if (!snapshot) return;
+
+    const { x: dx, y: dy } = snapshot.latestDelta;
+    snapshot.moveIds.forEach(id => {
+      const start = snapshot.objects.get(id);
+      if (!start) return;
+      const pointUpdates = start.points && start.points.length >= 2 && (start.type === 'pen' || start.type === 'line' || start.type === 'arrow')
+        ? { points: start.points.map(point => ({ x: point.x + dx, y: point.y + dy })) }
+        : {};
+      onUpdateObject(id, { x: start.x + dx, y: start.y + dy, ...pointUpdates });
+    });
+    clearCanvasItemTransforms(snapshot.moveIds);
+    dragSnapshotRef.current = null;
+  }, [clearCanvasItemTransforms, onUpdateObject]);
+
+  const endDrag = useCallback((commit = true) => {
+    const snapshot = dragSnapshotRef.current;
+    if (snapshot) {
+      if (commit) commitDrag();
+      else {
+        clearCanvasItemTransforms(snapshot.moveIds);
+        dragSnapshotRef.current = null;
+      }
+    }
+    setIsDragging(false);
+    setHostInteractionLocked(false);
+  }, [clearCanvasItemTransforms, commitDrag, setHostInteractionLocked]);
+
+  const computeResizeRect = useCallback((snapshot: ResizeSnapshot, pos: { x: number; y: number }) => {
+    const { startMouse, startRect, handle } = snapshot;
+    const minWidth = 4;
+    const minHeight = 4;
+    const dx = pos.x - startMouse.x;
+    const dy = pos.y - startMouse.y;
+
+    let nextX = startRect.x;
+    let nextY = startRect.y;
+    let nextWidth = startRect.width;
+    let nextHeight = startRect.height;
+
+    if (handle.includes('e')) {
+      nextWidth = Math.max(minWidth, Math.min(100 - startRect.x, startRect.width + dx));
+    }
+    if (handle.includes('s')) {
+      nextHeight = Math.max(minHeight, Math.min(100 - startRect.y, startRect.height + dy));
+    }
+    if (handle.includes('w')) {
+      nextX = Math.max(0, Math.min(startRect.x + dx, startRect.x + startRect.width - minWidth));
+      nextWidth = startRect.width + (startRect.x - nextX);
+    }
+    if (handle.includes('n')) {
+      nextY = Math.max(0, Math.min(startRect.y + dy, startRect.y + startRect.height - minHeight));
+      nextHeight = startRect.height + (startRect.y - nextY);
+    }
+
+    return { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+  }, []);
+
+  const previewResizeToPosition = useCallback((pos: { x: number; y: number }) => {
+    const snapshot = resizeSnapshotRef.current;
+    if (!snapshot) return;
+    const next = computeResizeRect(snapshot, pos);
+    snapshot.latestRect = next;
+
+    const tx = ((next.x - snapshot.startRect.x) / 100) * snapshot.canvasRect.width;
+    const ty = ((next.y - snapshot.startRect.y) / 100) * snapshot.canvasRect.height;
+    const scaleX = next.width / snapshot.startRect.width;
+    const scaleY = next.height / snapshot.startRect.height;
+    getCanvasItemElements(snapshot.id).forEach(element => {
+      if (element.dataset.baseTransform === undefined) {
+        element.dataset.baseTransform = element.style.transform || 'none';
+      }
+      const baseTransform = element.dataset.baseTransform === 'none' ? '' : element.dataset.baseTransform;
+      element.dataset.transforming = 'true';
+      element.style.transformOrigin = 'top left';
+      element.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scaleX}, ${scaleY}) ${baseTransform}`.trim();
+    });
+  }, [computeResizeRect, getCanvasItemElements]);
+
+  const endResize = useCallback((commit = true) => {
+    const snapshot = resizeSnapshotRef.current;
+    if (snapshot) {
+      if (commit) {
+        onUpdateObject(snapshot.id, snapshot.latestRect);
+      }
+      clearCanvasItemTransform(snapshot.id);
+      resizeSnapshotRef.current = null;
+    }
+    setResizeState(null);
+    setHostInteractionLocked(false);
+  }, [clearCanvasItemTransform, onUpdateObject, setHostInteractionLocked]);
 
   const toPercent = useCallback((clientX: number, clientY: number) => {
     if (!layerRef.current) return { x: 0, y: 0 };
@@ -114,6 +295,20 @@ export function DrawingLayer({
     }
     return null;
   }, [objects, getObjectBounds]);
+
+  const expandSelection = useCallback((seedIds: Iterable<string>) => {
+    const next = new Set<string>();
+    for (const seedId of seedIds) {
+      const obj = objects.find(o => o.id === seedId);
+      if (!obj) continue;
+      if (obj.group_id) {
+        objects.filter(item => item.group_id === obj.group_id).forEach(item => next.add(item.id));
+      } else {
+        next.add(seedId);
+      }
+    }
+    return next;
+  }, [objects]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -184,26 +379,7 @@ export function DrawingLayer({
     }
 
     if (!isDrawing) {
-      if (isDragging && selectedIds.size > 0 && dragOffset && dragAnchorId) {
-        const primaryObj = objects.find(o => o.id === dragAnchorId);
-        if (!primaryObj) return;
-        const primaryBounds = getObjectBounds(primaryObj);
-        const dx = pos.x - dragOffset.x - primaryBounds.x;
-        const dy = pos.y - dragOffset.y - primaryBounds.y;
-        selectedIds.forEach(id => {
-          const obj = objects.find(o => o.id === id);
-          if (obj) {
-            const pointUpdates = obj.points && obj.points.length >= 2 && (obj.type === 'pen' || obj.type === 'line' || obj.type === 'arrow')
-              ? { points: obj.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
-              : {};
-            onUpdateObject(id, { x: obj.x + dx, y: obj.y + dy, ...pointUpdates });
-            const attached = objects.filter(o => o.attached_to === id);
-            attached.forEach(a => {
-              onUpdateObject(a.id, { x: a.x + dx, y: a.y + dy });
-            });
-          }
-        });
-      }
+      if (isDragging) previewDragToPosition(pos);
       return;
     }
 
@@ -221,8 +397,8 @@ export function DrawingLayer({
         onUpdateObject(activeStrokeId, { points: [...penPointsRef.current] });
       }
     }
-  }, [isDrawing, isDragging, selectedIds, dragOffset, dragAnchorId, activeTool, color, strokeWidth,
-      activeStrokeId, objects, toPercent, onAddObject, onUpdateObject, boxSelectStart, getObjectBounds]);
+  }, [isDrawing, isDragging, activeTool, color, strokeWidth,
+      activeStrokeId, toPercent, onAddObject, onUpdateObject, boxSelectStart, previewDragToPosition]);
 
   const handleMouseUp = useCallback(() => {
     if (boxSelectStart && boxSelect) {
@@ -248,9 +424,7 @@ export function DrawingLayer({
     setBoxSelect(null);
 
     if (isDragging) {
-      setIsDragging(false);
-      setDragOffset(null);
-      setDragAnchorId(null);
+      endDrag();
       return;
     }
 
@@ -283,7 +457,7 @@ export function DrawingLayer({
       setTool('select');
     }
   }, [isDrawing, isDragging, activeTool, drawStart, lastMousePos, activeStrokeId,
-      color, strokeWidth, onAddObject, onUpdateObject, boxSelect, boxSelectStart, objects]);
+      color, strokeWidth, onAddObject, onUpdateObject, boxSelect, boxSelectStart, objects, endDrag]);
 
   const handleObjectSelect = useCallback((id: string, e: React.MouseEvent) => {
     if (editingTextId) return;
@@ -298,6 +472,7 @@ export function DrawingLayer({
       const sticky = objects.find(o => o.id === stickyId);
       if (sticky && (sticky.type === 'sticky_note') && id !== stickyId) {
         onUpdateObject(stickyId, { attached_to: id });
+        onBringToFront(stickyId);
         setAttachMode(false);
         setSelectedIds(new Set([stickyId]));
         return;
@@ -328,14 +503,47 @@ export function DrawingLayer({
 
   const handleObjectDragStart = useCallback((id: string, e: React.MouseEvent) => {
     if (editingTextId) return;
+    const rect = layerRef.current?.getBoundingClientRect();
+    if (!rect) return;
     const pos = toPercent(e.clientX, e.clientY);
     const obj = objects.find(o => o.id === id);
     if (!obj) return;
+    const baseSelection = selectedIds.has(id) ? selectedIds : new Set([id]);
+    const primaryIds = expandSelection(baseSelection);
+    primaryIds.add(id);
+
+    const moveIds = new Set(primaryIds);
+    objects.forEach(item => {
+      if (item.attached_to && primaryIds.has(item.attached_to)) {
+        moveIds.add(item.id);
+      }
+    });
+
     const bounds = getObjectBounds(obj);
-    setDragOffset({ x: pos.x - bounds.x, y: pos.y - bounds.y });
-    setDragAnchorId(id);
+    const snapshotObjects = new Map<string, DragSnapshotObject>();
+    moveIds.forEach(moveId => {
+      const item = objects.find(o => o.id === moveId);
+      if (!item) return;
+      snapshotObjects.set(moveId, {
+        x: item.x,
+        y: item.y,
+        type: item.type,
+        points: item.points?.map(point => ({ ...point })),
+      });
+    });
+
+    setSelectedIds(new Set(primaryIds));
+    dragSnapshotRef.current = {
+      anchorBounds: bounds,
+      offset: { x: pos.x - bounds.x, y: pos.y - bounds.y },
+      moveIds,
+      objects: snapshotObjects,
+      canvasRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      latestDelta: { x: 0, y: 0 },
+    };
+    setHostInteractionLocked(true);
     setIsDragging(true);
-  }, [objects, toPercent, editingTextId, getObjectBounds]);
+  }, [objects, selectedIds, expandSelection, toPercent, editingTextId, getObjectBounds, setHostInteractionLocked]);
 
   const handleDoubleClick = useCallback((id: string) => {
     const obj = objects.find(o => o.id === id);
@@ -399,129 +607,122 @@ export function DrawingLayer({
         setSelectedIds(new Set());
       }
       if (e.key === 'Escape') {
+        endDrag(false);
+        endResize(false);
         setSelectedIds(new Set());
         setAttachMode(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, onDeleteObject, editingTextId]);
+  }, [selectedIds, onDeleteObject, editingTextId, endDrag, endResize]);
 
   const handleResizeStart = useCallback((id: string, handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => {
     e.stopPropagation();
     const obj = objects.find(o => o.id === id);
     if (!obj || obj.type === 'pen' || editingTextId) return;
+    const rect = layerRef.current?.getBoundingClientRect();
+    if (!rect) return;
     const pos = toPercent(e.clientX, e.clientY);
+    const snapshot: ResizeSnapshot = {
+      id,
+      handle,
+      startMouse: pos,
+      startRect: { x: obj.x, y: obj.y, width: obj.width, height: obj.height },
+      canvasRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      latestRect: { x: obj.x, y: obj.y, width: obj.width, height: obj.height },
+    };
+    resizeSnapshotRef.current = snapshot;
     setSelectedIds(new Set([id]));
     onBringToFront(id);
+    setHostInteractionLocked(true);
     setResizeState({
       id,
       handle,
       startMouse: pos,
       startRect: { x: obj.x, y: obj.y, width: obj.width, height: obj.height },
     });
-  }, [objects, editingTextId, toPercent, onBringToFront]);
+  }, [objects, editingTextId, toPercent, onBringToFront, setHostInteractionLocked]);
 
   useEffect(() => {
     if (!isDragging) return;
     const handleDocMouseMove = (e: MouseEvent) => {
-      if (!isDragging || selectedIds.size === 0 || !dragOffset || !dragAnchorId || !layerRef.current) return;
-      const r = layerRef.current.getBoundingClientRect();
+      const snapshot = dragSnapshotRef.current;
+      if (!isDragging || !snapshot) return;
+      const r = snapshot.canvasRect;
       const pos = {
         x: ((e.clientX - r.left) / r.width) * 100,
         y: ((e.clientY - r.top) / r.height) * 100,
       };
-      const primaryObj = objects.find(o => o.id === dragAnchorId);
-      if (!primaryObj) return;
-      const primaryBounds = getObjectBounds(primaryObj);
-      const dx = pos.x - dragOffset.x - primaryBounds.x;
-      const dy = pos.y - dragOffset.y - primaryBounds.y;
-      selectedIds.forEach(id => {
-        const obj = objects.find(o => o.id === id);
-        if (obj) {
-          const pointUpdates = obj.points && obj.points.length >= 2 && (obj.type === 'pen' || obj.type === 'line' || obj.type === 'arrow')
-            ? { points: obj.points.map(p => ({ x: p.x + dx, y: p.y + dy })) }
-            : {};
-          onUpdateObject(id, { x: obj.x + dx, y: obj.y + dy, ...pointUpdates });
-          const attached = objects.filter(o => o.attached_to === id);
-          attached.forEach(a => {
-            onUpdateObject(a.id, { x: a.x + dx, y: a.y + dy });
-          });
-        }
-      });
+      previewDragToPosition(pos);
     };
-    const handleDocMouseUp = () => {
-      setIsDragging(false);
-      setDragOffset(null);
-      setDragAnchorId(null);
-    };
+    const handleDocMouseUp = () => endDrag();
+    const handlePointerCancel = () => endDrag();
+    const handleWindowBlur = () => endDrag();
+    const handleDragEnd = () => endDrag();
     document.addEventListener('mousemove', handleDocMouseMove);
     document.addEventListener('mouseup', handleDocMouseUp);
+    window.addEventListener('mouseup', handleDocMouseUp);
+    window.addEventListener('pointerup', handleDocMouseUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('dragend', handleDragEnd);
     return () => {
       document.removeEventListener('mousemove', handleDocMouseMove);
       document.removeEventListener('mouseup', handleDocMouseUp);
+      window.removeEventListener('mouseup', handleDocMouseUp);
+      window.removeEventListener('pointerup', handleDocMouseUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('dragend', handleDragEnd);
+      setHostInteractionLocked(false);
     };
-  }, [isDragging, selectedIds, dragOffset, dragAnchorId, objects, onUpdateObject, getObjectBounds]);
+  }, [isDragging, previewDragToPosition, endDrag, setHostInteractionLocked]);
 
   useEffect(() => {
     if (!resizeState || !layerRef.current) return;
 
     const handleDocMouseMove = (e: MouseEvent) => {
-      if (!resizeState || !layerRef.current) return;
-      const r = layerRef.current.getBoundingClientRect();
+      const snapshot = resizeSnapshotRef.current;
+      if (!resizeState || !snapshot) return;
+      const r = snapshot.canvasRect;
       const pos = {
         x: ((e.clientX - r.left) / r.width) * 100,
         y: ((e.clientY - r.top) / r.height) * 100,
       };
-
-      const { startMouse, startRect, handle, id } = resizeState;
-      const minWidth = 4;
-      const minHeight = 4;
-      const dx = pos.x - startMouse.x;
-      const dy = pos.y - startMouse.y;
-
-      let nextX = startRect.x;
-      let nextY = startRect.y;
-      let nextWidth = startRect.width;
-      let nextHeight = startRect.height;
-
-      if (handle.includes('e')) {
-        nextWidth = Math.max(minWidth, Math.min(100 - startRect.x, startRect.width + dx));
-      }
-      if (handle.includes('s')) {
-        nextHeight = Math.max(minHeight, Math.min(100 - startRect.y, startRect.height + dy));
-      }
-      if (handle.includes('w')) {
-        nextX = Math.max(0, Math.min(startRect.x + dx, startRect.x + startRect.width - minWidth));
-        nextWidth = startRect.width + (startRect.x - nextX);
-      }
-      if (handle.includes('n')) {
-        nextY = Math.max(0, Math.min(startRect.y + dy, startRect.y + startRect.height - minHeight));
-        nextHeight = startRect.height + (startRect.y - nextY);
-      }
-
-      onUpdateObject(id, {
-        x: nextX,
-        y: nextY,
-        width: nextWidth,
-        height: nextHeight,
-      });
+      previewResizeToPosition(pos);
     };
 
-    const handleDocMouseUp = () => {
-      setResizeState(null);
-    };
+    const handleDocMouseUp = () => endResize();
 
     document.addEventListener('mousemove', handleDocMouseMove);
     document.addEventListener('mouseup', handleDocMouseUp);
+    window.addEventListener('mouseup', handleDocMouseUp);
+    window.addEventListener('pointerup', handleDocMouseUp);
+    window.addEventListener('pointercancel', handleDocMouseUp);
+    window.addEventListener('blur', handleDocMouseUp);
     return () => {
       document.removeEventListener('mousemove', handleDocMouseMove);
       document.removeEventListener('mouseup', handleDocMouseUp);
+      window.removeEventListener('mouseup', handleDocMouseUp);
+      window.removeEventListener('pointerup', handleDocMouseUp);
+      window.removeEventListener('pointercancel', handleDocMouseUp);
+      window.removeEventListener('blur', handleDocMouseUp);
+      if (resizeSnapshotRef.current) endResize(false);
     };
-  }, [resizeState, onUpdateObject]);
+  }, [resizeState, previewResizeToPosition, endResize]);
+
+  useEffect(() => {
+    return () => setHostInteractionLocked(false);
+  }, [setHostInteractionLocked]);
 
   const { w: canvasW, h: canvasH } = getSize();
-  const sorted = [...objects].sort((a, b) => a.z_index - b.z_index);
+  const objectById = new Map(objects.map(obj => [obj.id, obj]));
+  const displayZIndexOf = (obj: CanvasObject) => {
+    const parent = obj.attached_to ? objectById.get(obj.attached_to) : null;
+    return parent ? Math.max(obj.z_index, parent.z_index + 1) : obj.z_index;
+  };
+  const sorted = [...objects].sort((a, b) => displayZIndexOf(a) - displayZIndexOf(b));
 
   const anyInteraction = isDragging || isDrawing || !!boxSelectStart || !!resizeState;
   const previewBounds = drawStart && lastMousePos ? {
@@ -610,6 +811,12 @@ export function DrawingLayer({
             onStopEditing={() => setEditingTextId(null)}
             onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
             showResizeHandles={selectedIds.size === 1 && selectedIds.has(obj.id) && tool === 'select'}
+            tasks={tasks}
+            agents={agents}
+            hostInteractionActive={anyInteraction}
+            onAppletStateChange={(stateText) => onUpdateObject(obj.id, { text_content: stateText })}
+            onAppletCreateTask={onCreateAppletTask}
+            onAppletUpdateTask={onUpdateAppletTask}
           />
         ))}
 
@@ -682,6 +889,12 @@ export function DrawingLayer({
           onStopEditing={() => setEditingTextId(null)}
           onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
           showResizeHandles={selectedIds.size === 1 && selectedIds.has(obj.id) && activeTool === 'select'}
+          tasks={tasks}
+          agents={agents}
+          hostInteractionActive={anyInteraction}
+          onAppletStateChange={(stateText) => onUpdateObject(obj.id, { text_content: stateText })}
+          onAppletCreateTask={onCreateAppletTask}
+          onAppletUpdateTask={onUpdateAppletTask}
           interactive
         />
       ))}
@@ -828,7 +1041,7 @@ function BoxSelectListener({
   boxSelectStart,
   setBoxSelectStart,
 }: {
-  layerRef: React.RefObject<HTMLDivElement>;
+  layerRef: React.RefObject<HTMLDivElement | null>;
   objects: CanvasObject[];
   onSelect: (ids: Set<string>) => void;
   boxSelect: { x: number; y: number; w: number; h: number } | null;
@@ -926,6 +1139,12 @@ function CanvasItemWrapper({
   onStopEditing,
   onResizeStart,
   showResizeHandles = false,
+  tasks = [],
+  agents = [],
+  onAppletStateChange,
+  onAppletCreateTask,
+  onAppletUpdateTask,
+  hostInteractionActive = false,
   interactive = false,
 }: {
   obj: CanvasObject;
@@ -942,9 +1161,16 @@ function CanvasItemWrapper({
   onStopEditing: () => void;
   onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => void;
   showResizeHandles?: boolean;
+  tasks?: Task[];
+  agents?: WorkspaceAgent[];
+  onAppletStateChange?: (stateText: string) => void;
+  onAppletCreateTask?: (input: CreateTaskInput) => void;
+  onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
+  hostInteractionActive?: boolean;
   interactive?: boolean;
 }) {
   const showAttachLine = parentObj && !editing;
+  const displayZIndex = parentObj ? Math.max(obj.z_index, parentObj.z_index + 1) : obj.z_index;
   const px = (obj.x / 100) * canvasW;
   const py = (obj.y / 100) * canvasH;
   const pw = (obj.width / 100) * canvasW;
@@ -966,7 +1192,7 @@ function CanvasItemWrapper({
           <svg style={{
             position: 'absolute', inset: 0,
             width: '100%', height: '100%',
-            pointerEvents: 'none', zIndex: obj.z_index,
+            pointerEvents: 'none', zIndex: displayZIndex - 1,
           }}>
             <line
               x1={myCenter.x} y1={myCenter.y}
@@ -996,7 +1222,7 @@ function CanvasItemWrapper({
             width: 0,
             height: 0,
             overflow: 'visible',
-            zIndex: obj.z_index,
+            zIndex: displayZIndex,
             pointerEvents: 'none',
           }}
         >
@@ -1023,6 +1249,12 @@ function CanvasItemWrapper({
                 selected={selected}
                 onSelect={() => {}}
                 attachHighlight={attachMode && !selected}
+                hostInteractionActive={hostInteractionActive}
+                tasks={tasks}
+                agents={agents}
+                onAppletStateChange={onAppletStateChange}
+                onAppletCreateTask={onAppletCreateTask}
+                onAppletUpdateTask={onAppletUpdateTask}
               />
             )}
             {showResizeHandles && obj.type !== 'pen' && !editing && (
@@ -1040,7 +1272,7 @@ function CanvasItemWrapper({
         <svg style={{
           position: 'absolute', inset: 0,
           width: '100%', height: '100%',
-          pointerEvents: 'none', zIndex: 0,
+          pointerEvents: 'none', zIndex: displayZIndex - 1,
         }}>
           <line
             x1={myCenter.x} y1={myCenter.y}
@@ -1087,6 +1319,12 @@ function CanvasItemWrapper({
               selected={selected}
               onSelect={() => {}}
               attachHighlight={attachMode && !selected}
+              hostInteractionActive={hostInteractionActive}
+              tasks={tasks}
+              agents={agents}
+              onAppletStateChange={onAppletStateChange}
+              onAppletCreateTask={onAppletCreateTask}
+              onAppletUpdateTask={onAppletUpdateTask}
             />
             {showResizeHandles && obj.type !== 'pen' && !editing && (
               <ResizeHandles px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />
@@ -1123,7 +1361,11 @@ function ResizeHandles({
       {handles.map(handle => (
         <div
           key={handle.key}
-          onMouseDown={(e) => onResizeStart(handle.key, e)}
+          data-resize-handle
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onResizeStart(handle.key, e);
+          }}
           style={{
             position: 'absolute',
             left: handle.left,
@@ -1163,17 +1405,12 @@ function StickyNoteEditor({
       display: 'flex', flexDirection: 'column',
       transform: 'rotate(-1deg)',
     }}>
-      <textarea
+      <Textarea
         ref={ref}
         defaultValue={obj.text_content}
         onBlur={(e) => { onTextChange(e.target.value); onStopEditing(); }}
         onKeyDown={(e) => { if (e.key === 'Escape') { onTextChange(e.currentTarget.value); onStopEditing(); } }}
-        style={{
-          flex: 1, resize: 'none', border: 'none', outline: 'none',
-          background: 'transparent', padding: '12px',
-          fontSize: `${obj.font_size || 14}px`, lineHeight: 1.5,
-          fontFamily: "'Space Grotesk', sans-serif", color: '#1a1a1a',
-        }}
+        className="min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent p-3 text-sm leading-relaxed text-neutral-950 shadow-none focus-visible:ring-0"
       />
     </div>
   );
@@ -1223,36 +1460,17 @@ function TextEditor({
 
 function DrawFAB({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
-    <div style={{
-      position: 'absolute',
-      bottom: '16px',
-      right: '16px',
-      zIndex: 600,
-    }}>
-      <button
+    <div className="absolute right-4 bottom-4 z-[600]">
+      <Button
+        type="button"
+        variant={active ? 'destructive' : 'default'}
+        size="icon-lg"
         onClick={onClick}
         title={active ? 'Exit drawing' : 'Draw on canvas'}
-        style={{
-          width: '48px',
-          height: '48px',
-          borderRadius: '50%',
-          background: active ? 'var(--error)' : 'var(--accent)',
-          border: 'none',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'white',
-          boxShadow: active
-            ? '0 4px 20px rgba(239, 68, 68, 0.4)'
-            : '0 4px 20px rgba(59, 130, 246, 0.4)',
-          transition: 'transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; }}
-        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+        className="size-12 rounded-full shadow-lg transition-transform hover:scale-105"
       >
-        {active ? <X size={20} /> : <Pencil size={20} />}
-      </button>
+        {active ? <X data-icon="inline-start" className="size-5" /> : <Pencil data-icon="inline-start" className="size-5" />}
+      </Button>
     </div>
   );
 }
@@ -1287,54 +1505,37 @@ function SelectionActionBar({
   onDelete: () => void;
 }) {
   return (
-    <div style={{
-      position: 'fixed',
-      bottom: `${bottomOffset}px`,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 9999,
-      display: 'flex',
-      gap: '4px',
-      background: 'var(--canvas-elevated)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-lg)',
-      padding: '4px 6px',
-      boxShadow: 'var(--shadow-lg)',
-    }}>
-      <span style={{
-        fontSize: '11px', color: 'var(--text-secondary)',
-        padding: '4px 8px', display: 'flex', alignItems: 'center',
-      }}>
+    <div
+      className="fixed left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-1 rounded-lg border bg-popover px-1.5 py-1 shadow-lg"
+      style={{ bottom: `${bottomOffset}px` }}
+    >
+      <Badge variant="outline" className="text-[11px]">
         {count} selected
-      </span>
+      </Badge>
 
       {attachMode && (
-        <span style={{
-          fontSize: '10px', color: 'var(--accent)',
-          padding: '4px 8px', display: 'flex', alignItems: 'center',
-          background: 'var(--accent-subtle)', borderRadius: 'var(--radius-sm)',
-        }}>
+        <Badge variant="secondary" className="text-[10px]">
           Click an item to attach
-        </span>
+        </Badge>
       )}
 
       {count >= 2 && !hasGroup && (
-        <ActionButton icon={<Group size={13} />} label="Group" onClick={onGroup} />
+        <ActionButton icon={<Group data-icon="inline-start" className="size-3.5" />} label="Group" onClick={onGroup} />
       )}
       {hasGroup && (
-        <ActionButton icon={<Ungroup size={13} />} label="Ungroup" onClick={onUngroup} />
+        <ActionButton icon={<Ungroup data-icon="inline-start" className="size-3.5" />} label="Ungroup" onClick={onUngroup} />
       )}
       {hasSticky && count === 1 && !attachMode && (
-        <ActionButton icon={<Link2 size={13} />} label="Stick to..." onClick={onAttach} />
+        <ActionButton icon={<Link2 data-icon="inline-start" className="size-3.5" />} label="Stick to..." onClick={onAttach} />
       )}
       {hasAttached && (
-        <ActionButton icon={<Unlink size={13} />} label="Detach" onClick={onDetach} />
+        <ActionButton icon={<Unlink data-icon="inline-start" className="size-3.5" />} label="Detach" onClick={onDetach} />
       )}
       {canCreateTask && (
-        <ActionButton icon={<ListTodo size={13} />} label="Create task" onClick={onCreateTask} />
+        <ActionButton icon={<ListTodo data-icon="inline-start" className="size-3.5" />} label="Create task" onClick={onCreateTask} />
       )}
       <ActionButton
-        icon={<Trash2 size={13} />}
+        icon={<Trash2 data-icon="inline-start" className="size-3.5" />}
         label="Delete"
         danger
         onClick={onDelete}
@@ -1346,31 +1547,19 @@ function SelectionActionBar({
 function ActionButton({
   icon, label, onClick, danger = false,
 }: {
-  icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean;
+  icon: ReactNode; label: string; onClick: () => void; danger?: boolean;
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      variant={danger ? 'destructive' : 'outline'}
+      size="xs"
       onClick={onClick}
       title={label}
-      style={{
-        display: 'flex', alignItems: 'center', gap: '5px',
-        padding: '4px 10px',
-        background: danger ? 'var(--error-subtle)' : 'var(--canvas-raised)',
-        border: danger ? '1px solid rgba(248,113,113,0.3)' : '1px solid var(--border)',
-        borderRadius: 'var(--radius-md)', cursor: 'pointer',
-        color: danger ? 'var(--error)' : 'var(--text-primary)',
-        fontSize: '11px', fontWeight: 500, fontFamily: 'inherit',
-        transition: 'background var(--transition-fast)',
-      }}
-      onMouseEnter={e => {
-        e.currentTarget.style.background = danger ? 'rgba(248,113,113,0.15)' : 'var(--accent-subtle)';
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.background = danger ? 'var(--error-subtle)' : 'var(--canvas-raised)';
-      }}
+      className={cn('text-[11px]', danger && 'border-destructive/30')}
     >
       {icon}
       {label}
-    </button>
+    </Button>
   );
 }

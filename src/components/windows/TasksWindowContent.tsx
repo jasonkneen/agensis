@@ -1,12 +1,57 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  CheckCircle2, Circle, Plus, Trash2, Flag, Clock, User,
-  ChevronRight, ChevronDown, MessageSquare, CornerDownRight, Send,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Circle,
+  Clock,
+  CornerDownRight,
+  Flag,
+  MessageSquare,
+  Plus,
+  Send,
+  Trash2,
+  User,
 } from 'lucide-react';
-import type { Task, TaskStatus, TaskPriority } from '../../types';
+import type { Task, TaskPriority, TaskStatus } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useTaskComments } from '../../hooks/useTaskComments';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import { Input } from '@/components/ui/input';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from '@/components/ui/item';
+import {
+  Marker,
+  MarkerContent,
+  MarkerIcon,
+} from '@/components/ui/marker';
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from '@/components/ui/native-select';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 interface TasksWindowContentProps {
   tasks: Task[];
@@ -20,18 +65,18 @@ interface TasksWindowContentProps {
   onDeleteTask: (id: string) => void;
 }
 
-const PRIORITY_COLORS: Record<TaskPriority, string> = {
-  low: 'var(--text-muted)',
-  normal: 'var(--text-secondary)',
-  high: '#f59e0b',
-  urgent: '#ef4444',
-};
-
 const STATUS_LABELS: Record<TaskStatus, string> = {
   todo: 'To do',
   in_progress: 'In progress',
   done: 'Done',
   cancelled: 'Cancelled',
+};
+
+const PRIORITY_LABELS: Record<TaskPriority, string> = {
+  low: 'Low',
+  normal: 'Normal',
+  high: 'High',
+  urgent: 'Urgent',
 };
 
 export function TasksWindowContent({
@@ -50,31 +95,31 @@ export function TasksWindowContent({
   const [newAssignee, setNewAssignee] = useState<string>('');
   const [filter, setFilter] = useState<'open' | 'all' | 'mine'>('open');
 
-  // Children indexed by parent. Built from ALL tasks so a visible parent always
-  // shows its subtasks even when a filter would otherwise hide them.
   const childrenMap = useMemo(() => {
-    const m: Record<string, Task[]> = {};
-    tasks.forEach(t => {
-      if (t.parent_id) (m[t.parent_id] = m[t.parent_id] || []).push(t);
+    const map: Record<string, Task[]> = {};
+    tasks.forEach(task => {
+      if (task.parent_id) {
+        (map[task.parent_id] = map[task.parent_id] || []).push(task);
+      }
     });
-    return m;
+    return map;
   }, [tasks]);
 
   const filteredTopLevel = useMemo(() => {
-    const topLevel = tasks.filter(t => !t.parent_id);
-    if (filter === 'open') return topLevel.filter(t => t.status !== 'done' && t.status !== 'cancelled');
+    const topLevel = tasks.filter(task => !task.parent_id);
+    if (filter === 'open') return topLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled');
     if (filter === 'mine') {
-      const me = members.find(m => m.email === currentUserEmail);
+      const me = members.find(member => member.email === currentUserEmail);
       if (!me) return [];
-      return topLevel.filter(t => t.assignee_id === me.user_id);
+      return topLevel.filter(task => task.assignee_id === me.user_id);
     }
     return topLevel;
   }, [tasks, filter, members, currentUserEmail]);
 
   const grouped = useMemo(() => {
-    const g: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
-    filteredTopLevel.forEach(t => g[t.status].push(t));
-    return g;
+    const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
+    filteredTopLevel.forEach(task => groups[task.status].push(task));
+    return groups;
   }, [filteredTopLevel]);
 
   const handleAdd = () => {
@@ -92,173 +137,124 @@ export function TasksWindowContent({
 
   const memberLabel = (assigneeId: string | null) => {
     if (!assigneeId) return null;
-    const m = members.find(mm => mm.user_id === assigneeId);
-    return m?.email?.split('@')[0] || 'Someone';
+    const member = members.find(item => item.user_id === assigneeId);
+    return member?.email?.split('@')[0] || 'Someone';
   };
 
+  const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
-        background: 'var(--canvas-elevated)', flexShrink: 0,
-      }}>
-        {(['open', 'mine', 'all'] as const).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '4px 10px',
-              background: filter === f ? 'var(--accent-subtle)' : 'transparent',
-              border: filter === f ? '1px solid var(--accent-border)' : '1px solid transparent',
-              borderRadius: 'var(--radius-sm)',
-              color: filter === f ? 'var(--accent)' : 'var(--text-secondary)',
-              cursor: 'pointer',
-              fontSize: '11px',
-              fontWeight: 500,
-              textTransform: 'capitalize',
-            }}
-          >
-            {f}
-          </button>
-        ))}
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-          {filteredTopLevel.filter(t => t.status !== 'done' && t.status !== 'cancelled').length} open
-        </span>
-      </div>
-
-      {/* Add task row */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
-      }}>
-        <Plus size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <input
-          type="text"
-          value={newTitle}
-          onChange={e => setNewTitle(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
-          placeholder="Add a task..."
-          style={{
-            flex: 1,
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            color: 'var(--text-primary)',
-            fontSize: '13px',
-          }}
-        />
-        <select
-          value={newPriority}
-          onChange={e => setNewPriority(e.target.value as TaskPriority)}
-          style={{
-            background: 'var(--canvas-raised)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)',
-            color: 'var(--text-secondary)',
-            fontSize: '11px',
-            padding: '3px 6px',
-            cursor: 'pointer',
+    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
+        <ToggleGroup
+          type="single"
+          size="sm"
+          variant="outline"
+          value={filter}
+          onValueChange={value => {
+            if (value) setFilter(value as 'open' | 'all' | 'mine');
           }}
         >
-          <option value="low">Low</option>
-          <option value="normal">Normal</option>
-          <option value="high">High</option>
-          <option value="urgent">Urgent</option>
-        </select>
-        {members.length > 0 && (
-          <select
-            value={newAssignee}
-            onChange={e => setNewAssignee(e.target.value)}
-            style={{
-              background: 'var(--canvas-raised)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--text-secondary)',
-              fontSize: '11px',
-              padding: '3px 6px',
-              cursor: 'pointer',
-              maxWidth: '90px',
-            }}
-          >
-            <option value="">Unassigned</option>
-            {members.map(m => (
-              <option key={m.user_id} value={m.user_id}>
-                {m.email?.split('@')[0] || 'Member'}
-              </option>
-            ))}
-          </select>
-        )}
-        <button
-          onClick={handleAdd}
-          disabled={!newTitle.trim()}
-          style={{
-            padding: '5px 12px',
-            background: newTitle.trim() ? 'var(--accent)' : 'var(--canvas-overlay)',
-            border: 'none',
-            borderRadius: 'var(--radius-sm)',
-            color: newTitle.trim() ? '#fff' : 'var(--text-muted)',
-            fontSize: '11px',
-            fontWeight: 500,
-            cursor: newTitle.trim() ? 'pointer' : 'not-allowed',
-          }}
-        >
-          Add
-        </button>
+          <ToggleGroupItem value="open">Open</ToggleGroupItem>
+          <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
+          <ToggleGroupItem value="all">All</ToggleGroupItem>
+        </ToggleGroup>
+        <div className="flex-1" />
+        <Badge variant="secondary">{openCount} open</Badge>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-        {filteredTopLevel.length === 0 ? (
-          <div style={{
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            gap: '8px', padding: '40px 16px', textAlign: 'center',
-          }}>
-            <CheckCircle2 size={32} style={{ color: 'var(--text-muted)', opacity: 0.35 }} />
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: 0 }}>
-              No tasks here. Type above to add one.
-            </p>
+      <div className="shrink-0 border-b border-border bg-card p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-56 flex-1">
+            <Input
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleAdd();
+              }}
+              placeholder="Add a task..."
+            />
           </div>
-        ) : (
-          (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => {
-            const items = grouped[status];
-            if (items.length === 0) return null;
-            return (
-              <div key={status} style={{ padding: '8px 0' }}>
-                <div style={{
-                  padding: '4px 14px',
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  color: 'var(--text-muted)',
-                  letterSpacing: '0.04em',
-                }}>
-                  {STATUS_LABELS[status]} ({items.length})
-                </div>
-                {items.map(task => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    subtasks={childrenMap[task.id] || []}
-                    assigneeLabel={memberLabel(task.assignee_id)}
-                    members={members}
-                    workspaceId={workspaceId}
-                    currentUserId={currentUserId}
-                    onToggle={() => onToggleStatus(task)}
-                    onDelete={() => onDeleteTask(task.id)}
-                    onChangeStatus={(newStatus) => onUpdateTask(task.id, { status: newStatus })}
-                    onChangeAssignee={(assigneeId) => onUpdateTask(task.id, { assignee_id: assigneeId })}
-                    onAddSubtask={(title) => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
-                    onToggleSubtask={(sub) => onToggleStatus(sub)}
-                    onDeleteSubtask={(id) => onDeleteTask(id)}
-                  />
-                ))}
-              </div>
-            );
-          })
-        )}
+          <NativeSelect
+            value={newPriority}
+            onChange={e => setNewPriority(e.target.value as TaskPriority)}
+            size="sm"
+            aria-label="Priority"
+          >
+            {(Object.keys(PRIORITY_LABELS) as TaskPriority[]).map(priority => (
+              <NativeSelectOption key={priority} value={priority}>{PRIORITY_LABELS[priority]}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+          {members.length > 0 && (
+            <NativeSelect
+              value={newAssignee}
+              onChange={e => setNewAssignee(e.target.value)}
+              size="sm"
+              className="max-w-40"
+              aria-label="Assignee"
+            >
+              <NativeSelectOption value="">Unassigned</NativeSelectOption>
+              {members.map(member => (
+                <NativeSelectOption key={member.user_id} value={member.user_id}>
+                  {member.email?.split('@')[0] || 'Member'}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          )}
+          <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim()}>
+            <Plus data-icon="inline-start" />
+            Add
+          </Button>
+        </div>
       </div>
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-4 p-3">
+          {filteredTopLevel.length === 0 ? (
+            <Empty className="min-h-80 border-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <CheckCircle2 />
+                </EmptyMedia>
+                <EmptyTitle>No tasks here</EmptyTitle>
+                <EmptyDescription>Type above to add one.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => {
+              const items = grouped[status];
+              if (items.length === 0) return null;
+              return (
+                <section key={status} className="flex flex-col gap-2">
+                  <Marker variant="separator">
+                    <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
+                  </Marker>
+                  <ItemGroup className="gap-1">
+                    {items.map(task => (
+                      <TaskRow
+                        key={task.id}
+                        task={task}
+                        subtasks={childrenMap[task.id] || []}
+                        assigneeLabel={memberLabel(task.assignee_id)}
+                        members={members}
+                        workspaceId={workspaceId}
+                        currentUserId={currentUserId}
+                        onToggle={() => onToggleStatus(task)}
+                        onDelete={() => onDeleteTask(task.id)}
+                        onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
+                        onChangeAssignee={assigneeId => onUpdateTask(task.id, { assignee_id: assigneeId })}
+                        onAddSubtask={title => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
+                        onToggleSubtask={sub => onToggleStatus(sub)}
+                        onDeleteSubtask={id => onDeleteTask(id)}
+                      />
+                    ))}
+                  </ItemGroup>
+                </section>
+              );
+            })
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -292,166 +288,89 @@ function TaskRow({
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const done = task.status === 'done';
-  const doneSubs = subtasks.filter(s => s.status === 'done').length;
+  const doneSubs = subtasks.filter(subtask => subtask.status === 'done').length;
 
   return (
-    <div>
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '6px',
-          padding: '8px 14px',
-          background: hovered ? 'var(--canvas-raised)' : 'transparent',
-          transition: 'background var(--transition-fast)',
-        }}
-      >
-        <button
-          onClick={() => setExpanded(e => !e)}
-          title={expanded ? 'Collapse' : 'Expand'}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-            marginTop: '2px', color: 'var(--text-muted)', flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', width: '14px',
-          }}
-        >
-          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </button>
-        <button
-          onClick={onToggle}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 0, marginTop: '1px',
-            color: done ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0,
-          }}
-        >
-          {done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
-        </button>
-        <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => setExpanded(e => !e)}>
-          <div style={{
-            fontSize: '13px',
-            color: done ? 'var(--text-muted)' : 'var(--text-primary)',
-            textDecoration: done ? 'line-through' : 'none',
-            wordBreak: 'break-word',
-            lineHeight: 1.4,
-          }}>
+    <div className="flex flex-col">
+      <Item variant="default" className="items-start hover:bg-muted/50">
+        <ItemActions className="gap-1 pt-0.5">
+          <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
+            {expanded ? <ChevronDown /> : <ChevronRight />}
+          </Button>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onToggle} aria-label={done ? 'Mark incomplete' : 'Mark complete'}>
+            {done ? <CheckCircle2 /> : <Circle />}
+          </Button>
+        </ItemActions>
+        <ItemContent className="min-w-0 cursor-pointer" onClick={() => setExpanded(value => !value)}>
+          <ItemTitle className={done ? 'max-w-full whitespace-normal text-muted-foreground line-through' : 'max-w-full whitespace-normal'}>
             {task.title}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px', flexWrap: 'wrap' }}>
+          </ItemTitle>
+          <div className="flex flex-wrap items-center gap-1.5">
             {task.priority !== 'normal' && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                fontSize: '10px', color: PRIORITY_COLORS[task.priority], fontWeight: 500,
-              }}>
-                <Flag size={9} />
+              <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
+                <Flag />
                 {task.priority}
-              </span>
+              </Badge>
             )}
             {task.due_date && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                fontSize: '10px', color: 'var(--text-muted)',
-              }}>
-                <Clock size={9} />
+              <Badge variant="outline">
+                <Clock />
                 {new Date(task.due_date).toLocaleDateString()}
-              </span>
+              </Badge>
             )}
             {assigneeLabel && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                fontSize: '10px', color: 'var(--text-muted)',
-              }}>
-                <User size={9} />
+              <Badge variant="outline">
+                <User />
                 {assigneeLabel}
-              </span>
+              </Badge>
             )}
             {subtasks.length > 0 && (
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: '3px',
-                fontSize: '10px', color: 'var(--text-muted)',
-              }}>
-                <CornerDownRight size={9} />
+              <Badge variant="outline">
+                <CornerDownRight />
                 {doneSubs}/{subtasks.length}
-              </span>
+              </Badge>
             )}
             {task.source_type && task.source_type !== 'manual' && (
-              <span style={{
-                fontSize: '9px',
-                padding: '1px 5px',
-                background: 'var(--canvas-overlay)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.03em',
-              }}>
-                {task.source_type}
-              </span>
+              <Badge variant="secondary">{task.source_type}</Badge>
             )}
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '4px', opacity: hovered ? 1 : 0, transition: 'opacity var(--transition-fast)' }}>
+        </ItemContent>
+        <ItemActions className="ml-auto flex-wrap justify-end">
           {members.length > 0 && (
-            <select
+            <NativeSelect
               value={task.assignee_id || ''}
               onChange={e => onChangeAssignee(e.target.value || null)}
               onClick={e => e.stopPropagation()}
-              title="Assign to"
-              style={{
-                background: 'var(--canvas-raised)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-secondary)',
-                fontSize: '10px',
-                padding: '2px 4px',
-                cursor: 'pointer',
-                maxWidth: '75px',
-              }}
+              size="sm"
+              className="max-w-32"
+              aria-label="Assign task"
             >
-              <option value="">Unassigned</option>
-              {members.map(m => (
-                <option key={m.user_id} value={m.user_id}>
-                  {m.email?.split('@')[0] || 'Member'}
-                </option>
+              <NativeSelectOption value="">Unassigned</NativeSelectOption>
+              {members.map(member => (
+                <NativeSelectOption key={member.user_id} value={member.user_id}>
+                  {member.email?.split('@')[0] || 'Member'}
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           )}
-          <select
+          <NativeSelect
             value={task.status}
             onChange={e => onChangeStatus(e.target.value as TaskStatus)}
             onClick={e => e.stopPropagation()}
-            style={{
-              background: 'var(--canvas-raised)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--text-secondary)',
-              fontSize: '10px',
-              padding: '2px 4px',
-              cursor: 'pointer',
-            }}
+            size="sm"
+            aria-label="Task status"
           >
-            <option value="todo">To do</option>
-            <option value="in_progress">In progress</option>
-            <option value="done">Done</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-          <button
-            onClick={onDelete}
-            title="Delete task"
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-muted)', display: 'flex', padding: '3px',
-            }}
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      </div>
+            {(Object.keys(STATUS_LABELS) as TaskStatus[]).map(status => (
+              <NativeSelectOption key={status} value={status}>{STATUS_LABELS[status]}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete task">
+            <Trash2 />
+          </Button>
+        </ItemActions>
+      </Item>
 
       {expanded && (
         <TaskDetail
@@ -502,131 +421,98 @@ function TaskDetail({
   };
 
   return (
-    <div style={{
-      padding: '8px 14px 12px 34px',
-      background: 'var(--canvas-elevated)',
-      borderBottom: '1px solid var(--border-subtle)',
-    }}>
-      {/* Subtasks */}
-      <div style={{
-        fontSize: '10px', fontWeight: 600, textTransform: 'uppercase',
-        color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: '4px',
-      }}>
-        Subtasks
-      </div>
-      {subtasks.map(sub => {
-        const subDone = sub.status === 'done';
-        return (
-          <div key={sub.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0' }}>
-            <button
-              onClick={() => onToggleSubtask(sub)}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                color: subDone ? 'var(--accent)' : 'var(--text-muted)', display: 'flex', flexShrink: 0,
-              }}
-            >
-              {subDone ? <CheckCircle2 size={13} /> : <Circle size={13} />}
-            </button>
-            <span style={{
-              flex: 1, fontSize: '12px',
-              color: subDone ? 'var(--text-muted)' : 'var(--text-primary)',
-              textDecoration: subDone ? 'line-through' : 'none', wordBreak: 'break-word',
-            }}>
-              {sub.title}
-            </span>
-            <button
-              onClick={() => onDeleteSubtask(sub.id)}
-              title="Delete subtask"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: '2px' }}
-            >
-              <Trash2 size={11} />
-            </button>
-          </div>
-        );
-      })}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-        <CornerDownRight size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <input
-          type="text"
-          value={subInput}
-          onChange={e => setSubInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') addSub(); }}
-          placeholder="Add a subtask..."
-          style={{
-            flex: 1, background: 'transparent', border: 'none', outline: 'none',
-            color: 'var(--text-primary)', fontSize: '12px',
-          }}
-        />
-        <button
-          onClick={addSub}
-          disabled={!subInput.trim()}
-          style={{
-            padding: '3px 8px',
-            background: subInput.trim() ? 'var(--accent)' : 'var(--canvas-overlay)',
-            border: 'none', borderRadius: 'var(--radius-sm)',
-            color: subInput.trim() ? '#fff' : 'var(--text-muted)',
-            fontSize: '10px', fontWeight: 500, cursor: subInput.trim() ? 'pointer' : 'not-allowed',
-          }}
-        >
-          Add
-        </button>
-      </div>
+    <div className="ml-9 flex flex-col gap-4 border-l border-border py-3 pr-2 pl-4">
+      <section className="flex flex-col gap-2">
+        <Marker>
+          <MarkerIcon>
+            <CornerDownRight />
+          </MarkerIcon>
+          <MarkerContent>Subtasks</MarkerContent>
+        </Marker>
+        {subtasks.length > 0 && (
+          <ItemGroup className="gap-1">
+            {subtasks.map(subtask => {
+              const subDone = subtask.status === 'done';
+              return (
+                <Item key={subtask.id} size="xs" variant="muted">
+                  <Button type="button" variant="ghost" size="icon-xs" onClick={() => onToggleSubtask(subtask)} aria-label="Toggle subtask">
+                    {subDone ? <CheckCircle2 /> : <Circle />}
+                  </Button>
+                  <ItemContent className="min-w-0">
+                    <ItemTitle className={subDone ? 'max-w-full whitespace-normal text-muted-foreground line-through' : 'max-w-full whitespace-normal'}>
+                      {subtask.title}
+                    </ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <Button type="button" variant="ghost" size="icon-xs" onClick={() => onDeleteSubtask(subtask.id)} aria-label="Delete subtask">
+                      <Trash2 />
+                    </Button>
+                  </ItemActions>
+                </Item>
+              );
+            })}
+          </ItemGroup>
+        )}
+        <InputGroup>
+          <InputGroupAddon>
+            <CornerDownRight />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={subInput}
+            onChange={e => setSubInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') addSub();
+            }}
+            placeholder="Add a subtask..."
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton onClick={addSub} disabled={!subInput.trim()}>
+              Add
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+      </section>
 
-      {/* Comments */}
-      <div style={{
-        fontSize: '10px', fontWeight: 600, textTransform: 'uppercase',
-        color: 'var(--text-muted)', letterSpacing: '0.04em', margin: '12px 0 4px',
-        display: 'flex', alignItems: 'center', gap: '5px',
-      }}>
-        <MessageSquare size={11} />
-        Comments {comments.length > 0 && `(${comments.length})`}
-      </div>
-      {comments.map(c => (
-        <div key={c.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '4px 0' }}>
-          <div style={{
-            width: '5px', height: '5px', borderRadius: '50%', marginTop: '6px',
-            background: 'var(--accent)', flexShrink: 0,
-          }} />
-          <span style={{ flex: 1, fontSize: '12px', color: 'var(--text-primary)', wordBreak: 'break-word', lineHeight: 1.4 }}>
-            {c.content}
-          </span>
-          <button
-            onClick={() => deleteComment(c.id)}
-            title="Delete comment"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: '2px' }}
-          >
-            <Trash2 size={11} />
-          </button>
-        </div>
-      ))}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-        <input
-          type="text"
-          value={commentInput}
-          onChange={e => setCommentInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') addComment(); }}
-          placeholder="Write a comment..."
-          style={{
-            flex: 1, background: 'var(--canvas-raised)', border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-sm)', outline: 'none', padding: '5px 8px',
-            color: 'var(--text-primary)', fontSize: '12px',
-          }}
-        />
-        <button
-          onClick={addComment}
-          disabled={!commentInput.trim()}
-          title="Send"
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            width: '26px', height: '26px', borderRadius: 'var(--radius-sm)',
-            background: commentInput.trim() ? 'var(--accent)' : 'var(--canvas-overlay)',
-            border: 'none', cursor: commentInput.trim() ? 'pointer' : 'not-allowed',
-            color: commentInput.trim() ? '#fff' : 'var(--text-muted)', flexShrink: 0,
-          }}
-        >
-          <Send size={12} />
-        </button>
-      </div>
+      <section className="flex flex-col gap-2">
+        <Marker>
+          <MarkerIcon>
+            <MessageSquare />
+          </MarkerIcon>
+          <MarkerContent>Comments {comments.length > 0 && `(${comments.length})`}</MarkerContent>
+        </Marker>
+        {comments.length > 0 && (
+          <ItemGroup className="gap-1">
+            {comments.map(comment => (
+              <Item key={comment.id} size="xs" variant="muted">
+                <ItemMedia className="size-2 rounded-full bg-primary" />
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="max-w-full whitespace-normal font-normal">{comment.content}</ItemTitle>
+                </ItemContent>
+                <ItemActions>
+                  <Button type="button" variant="ghost" size="icon-xs" onClick={() => deleteComment(comment.id)} aria-label="Delete comment">
+                    <Trash2 />
+                  </Button>
+                </ItemActions>
+              </Item>
+            ))}
+          </ItemGroup>
+        )}
+        <InputGroup>
+          <InputGroupInput
+            value={commentInput}
+            onChange={e => setCommentInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') addComment();
+            }}
+            placeholder="Write a comment..."
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton size="icon-xs" onClick={addComment} disabled={!commentInput.trim()} aria-label="Send comment">
+              <Send />
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+      </section>
     </div>
   );
 }

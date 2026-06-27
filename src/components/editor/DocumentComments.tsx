@@ -1,7 +1,15 @@
-import React, { useState, useMemo } from 'react';
-import { MessageCircle, Send, Check, Trash2, CornerDownRight, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Check, CornerDownRight, MessageCircle, Send, Trash2, X } from 'lucide-react';
 import type { DocumentComment } from '../../types';
 import type { CreateCommentInput } from '../../hooks/useDocumentComments';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
+import { Item, ItemContent } from '@/components/ui/item';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 interface DocumentCommentsProps {
   comments: DocumentComment[];
@@ -16,6 +24,17 @@ interface DocumentCommentsProps {
   onDelete: (id: string) => void;
   onClose?: () => void;
 }
+
+const avatarColors = [
+  'bg-red-500',
+  'bg-orange-500',
+  'bg-yellow-500',
+  'bg-green-500',
+  'bg-cyan-500',
+  'bg-blue-500',
+  'bg-violet-500',
+  'bg-pink-500',
+];
 
 function userInitial(email?: string): string {
   return (email?.[0] || 'U').toUpperCase();
@@ -51,7 +70,6 @@ export function DocumentComments({
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
 
-  // When a pending anchor arrives from the doc selection, absorb it
   if (pendingAnchor && pendingAnchor !== anchorText) {
     setAnchorText(pendingAnchor);
     onAnchorConsumed?.();
@@ -63,9 +81,10 @@ export function DocumentComments({
   );
 
   const unresolvedCount = topLevel.filter(c => !c.resolved).length;
+  const canSubmit = newContent.trim().length > 0;
 
   const handleSubmit = () => {
-    if (!newContent.trim()) return;
+    if (!canSubmit) return;
     onCreate({
       content: newContent.trim(),
       parent_id: replyTo,
@@ -84,223 +103,117 @@ export function DocumentComments({
   };
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      width: '280px',
-      borderLeft: '1px solid var(--border-subtle)',
-      background: 'var(--canvas-elevated)',
-      flexShrink: 0,
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--border-subtle)',
-        flexShrink: 0,
-      }}>
-        <MessageCircle size={13} style={{ color: 'var(--text-secondary)' }} />
-        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          Comments
-        </span>
+    <aside className="flex h-full w-[280px] shrink-0 flex-col border-l border-border/60 bg-background">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+        <MessageCircle data-icon="inline-start" className="size-3.5 text-muted-foreground" />
+        <span className="text-xs font-semibold text-foreground">Comments</span>
         {unresolvedCount > 0 && (
-          <span style={{
-            fontSize: '10px',
-            padding: '1px 6px',
-            background: 'var(--accent-subtle)',
-            color: 'var(--accent)',
-            borderRadius: '999px',
-            fontWeight: 600,
-          }}>
+          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
             {unresolvedCount}
-          </span>
+          </Badge>
         )}
-        <div style={{ flex: 1 }} />
-        <button
+        <div className="flex-1" />
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
           onClick={() => setShowResolved(v => !v)}
           title={showResolved ? 'Hide resolved' : 'Show resolved'}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: showResolved ? 'var(--accent)' : 'var(--text-muted)',
-            fontSize: '10px',
-            padding: '2px 4px',
-          }}
+          className={cn(showResolved && 'text-primary')}
         >
           {showResolved ? 'Hide resolved' : 'Show all'}
-        </button>
+        </Button>
         {onClose && (
-          <button
-            onClick={onClose}
-            title="Close comments"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              display: 'flex',
-              padding: '2px',
-            }}
-          >
-            <X size={12} />
-          </button>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} title="Close comments">
+            <X data-icon="inline-start" className="size-3" />
+          </Button>
         )}
-      </div>
+      </header>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}>
-        {visibleTopLevel.length === 0 ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            padding: '24px 8px',
-            textAlign: 'center',
-          }}>
-            <MessageCircle size={22} style={{ color: 'var(--text-muted)', opacity: 0.35 }} />
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
-              {comments.length === 0
-                ? 'No comments yet. Start a conversation about this doc.'
-                : 'No unresolved comments.'}
-            </p>
-          </div>
-        ) : (
-          visibleTopLevel.map(comment => (
-            <CommentThread
-              key={comment.id}
-              comment={comment}
-              replies={replyMap[comment.id] || []}
-              isReplyTarget={replyTo === comment.id}
-              onStartReply={() => setReplyTo(comment.id)}
-              onCancelReply={() => setReplyTo(null)}
-              onResolve={onResolve}
-              onDelete={onDelete}
-            />
-          ))
-        )}
-      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-2 p-2.5">
+          {visibleTopLevel.length === 0 ? (
+            <Empty className="min-h-40 border-0 p-4">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <MessageCircle className="size-4" />
+                </EmptyMedia>
+                <EmptyDescription className="text-xs">
+                  {comments.length === 0
+                    ? 'No comments yet. Start a conversation about this doc.'
+                    : 'No unresolved comments.'}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            visibleTopLevel.map(comment => (
+              <CommentThread
+                key={comment.id}
+                comment={comment}
+                replies={replyMap[comment.id] || []}
+                isReplyTarget={replyTo === comment.id}
+                onStartReply={() => setReplyTo(comment.id)}
+                onCancelReply={() => setReplyTo(null)}
+                onResolve={onResolve}
+                onDelete={onDelete}
+              />
+            ))
+          )}
+        </div>
+      </ScrollArea>
 
-      <div style={{
-        padding: '10px 12px',
-        borderTop: '1px solid var(--border-subtle)',
-        flexShrink: 0,
-      }}>
+      <footer className="shrink-0 space-y-2 border-t border-border/60 p-3">
         {anchorText && !replyTo && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '6px',
-            marginBottom: '6px',
-            padding: '4px 6px',
-            background: 'var(--canvas-overlay)',
-            borderLeft: '2px solid var(--accent)',
-            borderRadius: '2px',
-            fontSize: '10px',
-            fontStyle: 'italic',
-            color: 'var(--text-muted)',
-          }}>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>
-              &ldquo;{anchorText.slice(0, 120)}{anchorText.length > 120 ? '...' : ''}&rdquo;
-            </span>
-            <button
-              onClick={() => setAnchorText('')}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--text-muted)',
-                display: 'flex',
-                padding: 0,
-                flexShrink: 0,
-              }}
-            >
-              <X size={10} />
-            </button>
-          </div>
+          <Item variant="muted" size="xs" className="items-start border-l-2 border-l-primary text-xs italic">
+            <ItemContent className="min-w-0">
+              <p className="line-clamp-2 text-muted-foreground">
+                &ldquo;{anchorText.slice(0, 120)}{anchorText.length > 120 ? '...' : ''}&rdquo;
+              </p>
+            </ItemContent>
+            <Button type="button" variant="ghost" size="icon-xs" onClick={() => setAnchorText('')} title="Clear anchor">
+              <X data-icon="inline-start" className="size-3" />
+            </Button>
+          </Item>
         )}
         {replyTo && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            marginBottom: '6px',
-            fontSize: '10px',
-            color: 'var(--text-muted)',
-          }}>
-            <CornerDownRight size={10} />
-            Replying to comment
-            <button
+          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <CornerDownRight className="size-3" />
+            <span>Replying to comment</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="ml-auto size-5"
               onClick={() => setReplyTo(null)}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--text-muted)',
-                marginLeft: 'auto',
-                display: 'flex',
-                padding: 0,
-              }}
+              title="Cancel reply"
             >
-              <X size={10} />
-            </button>
+              <X data-icon="inline-start" className="size-3" />
+            </Button>
           </div>
         )}
-        <div style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '6px',
-          background: 'var(--canvas-raised)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-md)',
-          padding: '6px 8px',
-        }}>
-          <Avatar email={currentUserEmail} size={18} />
-          <textarea
+        <div className="flex items-start gap-2 rounded-lg border bg-card p-2">
+          <UserAvatar email={currentUserEmail} className="size-5" />
+          <Textarea
             value={newContent}
             onChange={e => setNewContent(e.target.value)}
             onKeyDown={handleKey}
             placeholder={replyTo ? 'Reply...' : 'Add a comment...'}
             rows={2}
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--text-primary)',
-              fontSize: '12px',
-              resize: 'none',
-              fontFamily: 'inherit',
-              lineHeight: 1.4,
-              minHeight: '32px',
-            }}
+            className="min-h-10 flex-1 resize-none border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
           />
-          <button
+          <Button
+            type="button"
             onClick={handleSubmit}
-            disabled={!newContent.trim()}
+            disabled={!canSubmit}
             title="Send (Cmd+Enter)"
-            style={{
-              background: newContent.trim() ? 'var(--accent)' : 'var(--canvas-overlay)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '22px',
-              height: '22px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: newContent.trim() ? '#fff' : 'var(--text-muted)',
-              cursor: newContent.trim() ? 'pointer' : 'not-allowed',
-              flexShrink: 0,
-            }}
+            size="icon-xs"
+            className="rounded-full"
           >
-            <Send size={10} />
-          </button>
+            <Send data-icon="inline-start" className="size-3" />
+          </Button>
         </div>
-      </div>
-    </div>
+      </footer>
+    </aside>
   );
 }
 
@@ -322,63 +235,42 @@ function CommentThread({
   onDelete: (id: string) => void;
 }) {
   return (
-    <div style={{
-      marginBottom: '10px',
-      padding: '8px 10px',
-      background: isReplyTarget ? 'var(--accent-subtle)' : 'var(--canvas-raised)',
-      border: `1px solid ${isReplyTarget ? 'var(--accent-border)' : 'var(--border-subtle)'}`,
-      borderRadius: 'var(--radius-md)',
-      opacity: comment.resolved ? 0.6 : 1,
-    }}>
+    <Item
+      variant={isReplyTarget ? 'outline' : 'muted'}
+      className={cn(
+        'block rounded-lg p-2.5',
+        isReplyTarget && 'border-primary/40 bg-primary/5',
+        comment.resolved && 'opacity-60',
+      )}
+    >
       <CommentBody comment={comment} onResolve={onResolve} onDelete={onDelete} />
 
       {comment.anchor_text && (
-        <div style={{
-          marginTop: '4px',
-          padding: '4px 6px',
-          background: 'var(--canvas-overlay)',
-          borderLeft: '2px solid var(--accent)',
-          fontSize: '10px',
-          fontStyle: 'italic',
-          color: 'var(--text-muted)',
-          borderRadius: '2px',
-        }}>
-          “{comment.anchor_text.slice(0, 120)}{comment.anchor_text.length > 120 ? '…' : ''}”
-        </div>
+        <blockquote className="mt-2 line-clamp-2 rounded border-l-2 border-l-primary bg-muted/60 px-2 py-1 text-[10px] italic text-muted-foreground">
+          "{comment.anchor_text.slice(0, 120)}{comment.anchor_text.length > 120 ? '...' : ''}"
+        </blockquote>
       )}
 
       {replies.length > 0 && (
-        <div style={{
-          marginTop: '6px',
-          paddingLeft: '12px',
-          borderLeft: '1px solid var(--border-subtle)',
-        }}>
+        <div className="mt-2 space-y-1.5 border-l border-border pl-3">
           {replies.map(r => (
-            <div key={r.id} style={{ marginTop: '6px' }}>
-              <CommentBody comment={r} onResolve={onResolve} onDelete={onDelete} compact />
-            </div>
+            <CommentBody key={r.id} comment={r} onResolve={onResolve} onDelete={onDelete} compact />
           ))}
         </div>
       )}
 
       {!comment.resolved && (
-        <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-          <button
-            onClick={isReplyTarget ? onCancelReply : onStartReply}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              fontSize: '10px',
-              padding: '2px 4px',
-            }}
-          >
-            {isReplyTarget ? 'Cancel' : 'Reply'}
-          </button>
-        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="mt-1 h-5 px-1.5 text-[10px] text-muted-foreground"
+          onClick={isReplyTarget ? onCancelReply : onStartReply}
+        >
+          {isReplyTarget ? 'Cancel' : 'Reply'}
+        </Button>
       )}
-    </div>
+    </Item>
   );
 }
 
@@ -394,56 +286,37 @@ function CommentBody({
   compact?: boolean;
 }) {
   return (
-    <div style={{ display: 'flex', gap: '6px' }}>
-      <Avatar email={''} seed={comment.user_id || comment.id} size={compact ? 16 : 20} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-          <span style={{ fontSize: compact ? '10px' : '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Teammate
-          </span>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
-            {formatTime(comment.created_at)}
-          </span>
-          <div style={{ flex: 1 }} />
+    <div className="flex gap-2">
+      <UserAvatar seed={comment.user_id || comment.id} className={compact ? 'size-4' : 'size-5'} />
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 flex items-center gap-1.5">
+          <span className={cn('font-semibold text-foreground', compact ? 'text-[10px]' : 'text-[11px]')}>Teammate</span>
+          <span className="text-[9px] text-muted-foreground">{formatTime(comment.created_at)}</span>
+          <div className="flex-1" />
           {!compact && (
-            <button
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className={cn('size-5', comment.resolved && 'text-primary')}
               onClick={() => onResolve(comment.id, !comment.resolved)}
               title={comment.resolved ? 'Reopen' : 'Resolve'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: comment.resolved ? 'var(--accent)' : 'var(--text-muted)',
-                display: 'flex',
-                padding: '2px',
-              }}
             >
-              <Check size={11} />
-            </button>
+              <Check data-icon="inline-start" className="size-3" />
+            </Button>
           )}
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="size-5 text-muted-foreground"
             onClick={() => onDelete(comment.id)}
             title="Delete"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              display: 'flex',
-              padding: '2px',
-            }}
           >
-            <Trash2 size={10} />
-          </button>
+            <Trash2 data-icon="inline-start" className="size-3" />
+          </Button>
         </div>
-        <p style={{
-          fontSize: compact ? '11px' : '12px',
-          color: 'var(--text-primary)',
-          margin: 0,
-          lineHeight: 1.4,
-          wordBreak: 'break-word',
-          whiteSpace: 'pre-wrap',
-        }}>
+        <p className={cn('whitespace-pre-wrap break-words text-foreground', compact ? 'text-[11px]' : 'text-xs')}>
           {comment.content}
         </p>
       </div>
@@ -451,27 +324,15 @@ function CommentBody({
   );
 }
 
-function Avatar({ email, seed, size }: { email: string; seed?: string; size: number }) {
+function UserAvatar({ email, seed, className }: { email?: string; seed?: string; className?: string }) {
   const source = email || seed || 'user';
-  const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
   let hash = 0;
   for (let i = 0; i < source.length; i++) hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0;
-  const color = colors[Math.abs(hash) % colors.length];
+  const color = avatarColors[Math.abs(hash) % avatarColors.length];
+
   return (
-    <div style={{
-      width: `${size}px`,
-      height: `${size}px`,
-      borderRadius: '50%',
-      background: color,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      color: '#fff',
-      fontSize: `${Math.floor(size * 0.5)}px`,
-      fontWeight: 700,
-      flexShrink: 0,
-    }}>
-      {userInitial(email || source)}
-    </div>
+    <Avatar className={cn(className)}>
+      <AvatarFallback className={cn(color, 'text-[10px] font-bold text-white')}>{userInitial(email || source)}</AvatarFallback>
+    </Avatar>
   );
 }

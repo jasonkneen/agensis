@@ -1,8 +1,13 @@
-import React, { useState, useRef } from 'react';
-import { Send, Plus, Mic, FileText, X } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { FileText, Mic, Plus, Send, X } from 'lucide-react';
 import { ModelSelector } from '../chat/ModelSelector';
 import { getSetting } from '../../lib/settings';
 import type { Document, MemoryFact } from '../../types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
+import { cn } from '@/lib/utils';
 import bg1 from '../../../images/download-21.jpg';
 import bg2 from '../../../images/download-22.jpg';
 import bg3 from '../../../images/download-24.jpg';
@@ -20,6 +25,13 @@ interface HomeCanvasProps {
 
 const BACKGROUND_IMAGES = [bg1, bg2, bg3, bg4, bg5];
 
+const suggestions = [
+  'Summarize my documents',
+  'Help me brainstorm',
+  'Write a draft',
+  'Explain a concept',
+];
+
 export function HomeCanvas({
   documents,
   memoryFacts,
@@ -32,14 +44,13 @@ export function HomeCanvas({
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  const filteredDocs = documents.filter(d =>
-    d.title.toLowerCase().includes(docPickerQuery.toLowerCase())
-  );
   const [backgroundImage] = useState(() => BACKGROUND_IMAGES[Math.floor(Math.random() * BACKGROUND_IMAGES.length)]);
 
+  const filteredDocs = documents.filter(d => d.title.toLowerCase().includes(docPickerQuery.toLowerCase()));
+  const canSend = input.trim().length > 0;
+
   const handleSend = () => {
-    if (!input.trim()) return;
+    if (!canSend) return;
     onSendMessage(input.trim(), selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
@@ -58,6 +69,7 @@ export function HomeCanvas({
         return;
       }
     }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -102,304 +114,105 @@ export function HomeCanvas({
   };
 
   return (
-    <div style={{
-      position: 'absolute',
-      inset: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      overflow: 'hidden',
-      padding: '0 24px',
-      pointerEvents: 'none',
-    }}>
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        backgroundImage: `url(${backgroundImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center center',
-        backgroundRepeat: 'no-repeat',
-        opacity: 'var(--home-bg-image-opacity)',
-        pointerEvents: 'none',
-      }} />
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'var(--home-bg-overlay)',
-        pointerEvents: 'none',
-      }} />
-      <div style={{
-        position: 'relative',
-        zIndex: 1,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '24px',
-        maxWidth: '640px',
-        width: '100%',
-        pointerEvents: 'auto',
-      }}>
-        <h1 style={{
-          fontSize: '28px',
-          fontWeight: 600,
-          color: 'var(--text-primary)',
-          textAlign: 'center',
-          margin: 0,
-          letterSpacing: '-0.02em',
-          lineHeight: 1.2,
-        }}>
-          What's on your mind?
-        </h1>
+    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-6">
+      <img
+        src={backgroundImage}
+        alt=""
+        className="pointer-events-none absolute inset-0 size-full object-cover opacity-[var(--home-bg-image-opacity)]"
+      />
+      <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
 
-        <div style={{ width: '100%', position: 'relative' }}>
+      <div className="pointer-events-auto relative z-10 flex w-full max-w-3xl flex-col items-center gap-5">
+        <h1 className="text-center text-3xl font-semibold leading-tight text-foreground">What's on your mind?</h1>
+
+        <div className="relative w-full">
           {showDocPicker && filteredDocs.length > 0 && (
-            <div style={{
-              position: 'absolute',
-              bottom: '100%',
-              left: 0,
-              right: 0,
-              marginBottom: '4px',
-              background: 'var(--canvas-overlay)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-md)',
-              boxShadow: 'var(--shadow-lg)',
-              maxHeight: '200px',
-              overflowY: 'auto',
-              zIndex: 50,
-            }}>
-              <div style={{
-                padding: '6px 12px',
-                fontSize: '11px',
-                fontWeight: 600,
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                borderBottom: '1px solid var(--border-subtle)',
-              }}>
-                Link a document
-              </div>
-              {filteredDocs.map(doc => (
-                <button
-                  key={doc.id}
-                  onClick={() => handleDocSelect(doc)}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 12px',
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    color: 'var(--text-primary)',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                    transition: 'background var(--transition-fast)',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-subtle)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                >
-                  <FileText size={13} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
-                  <span>{doc.title}</span>
-                </button>
-              ))}
-            </div>
+            <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-52 rounded-lg border bg-popover shadow-lg">
+              <CommandList className="max-h-52">
+                <CommandGroup heading="Link a document">
+                  {filteredDocs.map(doc => (
+                    <CommandItem key={doc.id} value={doc.title} onSelect={() => handleDocSelect(doc)}>
+                      <FileText data-icon="inline-start" className="size-3.5 text-muted-foreground" />
+                      <span className="truncate">{doc.title}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
           )}
 
           {linkedDocs.length > 0 && (
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+            <div className="mb-2 flex flex-wrap gap-1.5">
               {linkedDocs.map(doc => (
-                <span
-                  key={doc.id}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '3px 8px',
-                    background: 'var(--accent-subtle)',
-                    border: '1px solid var(--accent-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '11px',
-                    color: 'var(--accent)',
-                    fontWeight: 500,
-                  }}
-                >
-                  <FileText size={10} />
-                  {doc.title}
-                  <button
+                <Badge key={doc.id} variant="secondary" className="gap-1">
+                  <FileText data-icon="inline-start" className="size-3" />
+                  <span className="max-w-48 truncate">{doc.title}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="ml-0.5 size-4 rounded-full p-0"
                     onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, display: 'flex' }}
+                    title="Remove document"
                   >
-                    <X size={10} />
-                  </button>
-                </span>
+                    <X data-icon="inline-start" className="size-2.5" />
+                  </Button>
+                </Badge>
               ))}
             </div>
           )}
 
-          <div style={{
-            background: 'var(--canvas-elevated)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-lg)',
-            overflow: 'hidden',
-            boxShadow: 'var(--shadow-md)',
-            transition: 'border-color var(--transition-fast), box-shadow var(--transition-fast)',
-          }}>
-            <textarea
+          <InputGroup className="h-auto flex-col items-stretch overflow-hidden bg-card shadow-md">
+            <InputGroupTextarea
               ref={inputRef}
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder="Chat with AI..."
               rows={2}
-              style={{
-                width: '100%',
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                padding: '14px 16px 8px',
-                resize: 'none',
-                fontFamily: 'inherit',
-                lineHeight: '1.5',
-                maxHeight: '160px',
-                overflowY: 'auto',
-              }}
-              onInput={e => {
-                const el = e.currentTarget;
-                el.style.height = 'auto';
-                el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-              }}
-              onFocus={e => {
-                const parent = e.currentTarget.parentElement;
-                if (parent) {
-                  parent.style.borderColor = 'var(--accent-border)';
-                  parent.style.boxShadow = '0 0 0 3px var(--accent-subtle), var(--shadow-md)';
-                }
-              }}
-              onBlur={e => {
-                const parent = e.currentTarget.parentElement;
-                if (parent) {
-                  parent.style.borderColor = 'var(--border)';
-                  parent.style.boxShadow = 'var(--shadow-md)';
-                }
-              }}
+              className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed"
             />
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '6px 10px 8px',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                <button
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '28px',
-                    height: '28px',
-                    background: 'none',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    transition: 'color var(--transition-fast)',
-                  }}
-                  title="Attach"
-                >
-                  <Plus size={16} />
-                </button>
-                <button
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '28px',
-                    height: '28px',
-                    background: 'none',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    transition: 'color var(--transition-fast)',
-                  }}
-                  title="Voice"
-                >
-                  <Mic size={15} />
-                </button>
+            <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+              <div className="flex shrink-0 items-center gap-1">
+                <InputGroupButton title="Attach" size="icon-sm">
+                  <Plus data-icon="inline-start" className="size-4" />
+                </InputGroupButton>
+                <InputGroupButton title="Voice" size="icon-sm">
+                  <Mic data-icon="inline-start" className="size-4" />
+                </InputGroupButton>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div className="flex min-w-0 items-center gap-2">
                 <ModelSelector value={selectedModel} onChange={setSelectedModel} />
-                <button
+                <InputGroupButton
                   onClick={handleSend}
-                  disabled={!input.trim()}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '30px',
-                    height: '30px',
-                    borderRadius: '50%',
-                    background: input.trim() ? 'var(--accent)' : 'var(--canvas-raised)',
-                    border: 'none',
-                    cursor: input.trim() ? 'pointer' : 'not-allowed',
-                    color: input.trim() ? 'white' : 'var(--text-muted)',
-                    transition: 'all var(--transition-fast)',
-                    flexShrink: 0,
-                  }}
+                  disabled={!canSend}
+                  title="Send"
+                  size="icon-sm"
+                  variant="default"
+                  className="rounded-full"
                 >
-                  <Send size={13} />
-                </button>
+                  <Send data-icon="inline-start" className="size-4" />
+                </InputGroupButton>
               </div>
-            </div>
-          </div>
+            </InputGroupAddon>
+          </InputGroup>
         </div>
 
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          flexWrap: 'wrap',
-          justifyContent: 'center',
-        }}>
-          {[
-            'Summarize my documents',
-            'Help me brainstorm',
-            'Write a draft',
-            'Explain a concept',
-          ].map(suggestion => (
-            <button
+        <div className="flex flex-wrap justify-center gap-2">
+          {suggestions.map(suggestion => (
+            <Button
               key={suggestion}
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn('home-suggestion-pill rounded-full bg-card/90 text-muted-foreground backdrop-blur')}
               onClick={() => {
                 setInput(suggestion);
                 inputRef.current?.focus();
               }}
-              style={{
-                padding: '6px 14px',
-                background: 'var(--canvas-elevated)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-xl)',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                cursor: 'pointer',
-                transition: 'all var(--transition-fast)',
-                whiteSpace: 'nowrap',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.borderColor = 'var(--accent-border)';
-                e.currentTarget.style.color = 'var(--accent)';
-                e.currentTarget.style.background = 'var(--accent-subtle)';
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.borderColor = 'var(--border)';
-                e.currentTarget.style.color = 'var(--text-secondary)';
-                e.currentTarget.style.background = 'var(--canvas-elevated)';
-              }}
             >
               {suggestion}
-            </button>
+            </Button>
           ))}
         </div>
       </div>

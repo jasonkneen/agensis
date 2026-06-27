@@ -69,6 +69,24 @@ export function useChat(workspaceId: string | null) {
     return data;
   }, [workspaceId]);
 
+  const updateSession = useCallback(async (id: string, updates: Partial<ChatSession>) => {
+    const { data } = await backendClient
+      .from('chat_sessions')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (data) {
+      setSessions(prev => prev.map(session => session.id === id ? data : session));
+      setActiveSession(prev => prev?.id === id ? data : prev);
+    }
+    return data as ChatSession | null;
+  }, []);
+
+  const archiveSession = useCallback((id: string, archived = true) => {
+    return updateSession(id, { archived_at: archived ? new Date().toISOString() : null });
+  }, [updateSession]);
+
   // Top-level messages (no thread parent)
   const topLevelMessages = messages.filter(m => !m.thread_parent_id);
 
@@ -129,6 +147,7 @@ export function useChat(workspaceId: string | null) {
     }
 
     const insertPayload: Record<string, unknown> = {
+      id: userMsg.id,
       session_id: activeSession.id,
       role: 'user',
       content,
@@ -179,6 +198,10 @@ export function useChat(workspaceId: string | null) {
       const agentContext = agent ? {
         name: agent.name,
         systemPrompt: agent.system_prompt,
+        soul: agent.soul,
+        instructions: agent.instructions,
+        tools: agent.tools || [],
+        skills: agent.skills || [],
         model: agent.model,
       } : null;
 
@@ -205,6 +228,7 @@ export function useChat(workspaceId: string | null) {
           m.id === assistantMsgId ? { ...m, content: errMsg } : m
         ));
         const errInsert: Record<string, unknown> = {
+          id: assistantMsgId,
           session_id: activeSession.id,
           role: 'assistant',
           content: errMsg,
@@ -245,6 +269,7 @@ export function useChat(workspaceId: string | null) {
 
       if (fullContent) {
         const assistantInsert: Record<string, unknown> = {
+          id: assistantMsgId,
           session_id: activeSession.id,
           role: 'assistant',
           content: fullContent,
@@ -285,6 +310,8 @@ export function useChat(workspaceId: string | null) {
     loading,
     streaming,
     createSession,
+    updateSession,
+    archiveSession,
     sendMessage,
     deleteSession,
   };

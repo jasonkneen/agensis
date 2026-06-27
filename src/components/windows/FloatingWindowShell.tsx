@@ -1,6 +1,15 @@
-import React, { useRef, useCallback, useState } from 'react';
-import { X, Minus, Maximize2, MoreHorizontal, Share2, Copy, Trash2 } from 'lucide-react';
+import React, { useCallback, useRef, useState } from 'react';
+import { Copy, Maximize2, Minus, MoreHorizontal, Share2, Trash2, X } from 'lucide-react';
 import type { FloatingWindow } from '../../types';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface FloatingWindowShellProps {
   window: FloatingWindow;
@@ -25,11 +34,11 @@ export function FloatingWindowShell({
   breadcrumb,
   children,
 }: FloatingWindowShellProps) {
+  const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
   const resizeRef = useRef<{ startX: number; startY: number; winW: number; winH: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button')) return;
@@ -47,21 +56,44 @@ export function FloatingWindowShell({
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
-      onUpdate(win.id, {
-        x: Math.max(0, dragRef.current.winX + dx),
-        y: Math.max(0, dragRef.current.winY + dy),
-      });
+      shellRef.current?.style.setProperty('transform', `translate3d(${dx}px, ${dy}px, 0)`);
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      if (dragRef.current) {
+        const dx = ev.clientX - dragRef.current.startX;
+        const dy = ev.clientY - dragRef.current.startY;
+        const x = Math.max(0, dragRef.current.winX + dx);
+        const y = Math.max(0, dragRef.current.winY + dy);
+        if (shellRef.current) {
+          shellRef.current.style.left = `${x}px`;
+          shellRef.current.style.top = `${y}px`;
+          shellRef.current.style.removeProperty('transform');
+        }
+        onUpdate(win.id, {
+          x,
+          y,
+        });
+      }
       dragRef.current = null;
       setIsDragging(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
+    };
+
+    const onCancel = () => {
+      shellRef.current?.style.removeProperty('transform');
+      dragRef.current = null;
+      setIsDragging(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onCancel);
   }, [win.id, win.x, win.y, onFocus, onUpdate]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -77,281 +109,187 @@ export function FloatingWindowShell({
     setIsResizing(true);
 
     const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current) return;
+      if (!resizeRef.current || !shellRef.current) return;
       const dx = ev.clientX - resizeRef.current.startX;
       const dy = ev.clientY - resizeRef.current.startY;
-      onUpdate(win.id, {
-        width: Math.max(300, resizeRef.current.winW + dx),
-        height: Math.max(250, resizeRef.current.winH + dy),
-      });
+      shellRef.current.style.width = `${Math.max(300, resizeRef.current.winW + dx)}px`;
+      shellRef.current.style.height = `${Math.max(250, resizeRef.current.winH + dy)}px`;
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      if (resizeRef.current) {
+        const dx = ev.clientX - resizeRef.current.startX;
+        const dy = ev.clientY - resizeRef.current.startY;
+        const width = Math.max(300, resizeRef.current.winW + dx);
+        const height = Math.max(250, resizeRef.current.winH + dy);
+        if (shellRef.current) {
+          shellRef.current.style.width = `${width}px`;
+          shellRef.current.style.height = `${height}px`;
+        }
+        onUpdate(win.id, { width, height });
+      }
       resizeRef.current = null;
       setIsResizing(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
+    };
+
+    const onCancel = () => {
+      if (shellRef.current) {
+        shellRef.current.style.width = `${win.width}px`;
+        shellRef.current.style.height = `${win.height}px`;
+      }
+      resizeRef.current = null;
+      setIsResizing(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onCancel);
   }, [win.id, win.width, win.height, onFocus, onUpdate]);
+
+  const handleMaximize = useCallback(() => {
+    onFocus(win.id);
+    onUpdate(win.id, {
+      x: 24,
+      y: 24,
+      width: Math.max(360, window.innerWidth - 72),
+      height: Math.max(300, window.innerHeight - 96),
+    });
+  }, [win.id, onFocus, onUpdate]);
 
   if (win.minimized) return null;
 
   return (
     <div
+      ref={shellRef}
       data-floating-window
       onMouseDown={() => onFocus(win.id)}
+      className="absolute flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl"
       style={{
-        position: 'absolute',
         left: win.x,
         top: win.y,
         width: win.width,
         height: win.height,
         zIndex: win.zIndex,
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--canvas-elevated)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
         userSelect: isDragging || isResizing ? 'none' : 'auto',
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
       }}
     >
       <div
         onMouseDown={handleDragStart}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '8px 12px',
-          background: 'var(--canvas-elevated)',
-          borderBottom: '1px solid var(--border-subtle)',
-          cursor: 'grab',
-          flexShrink: 0,
-          minHeight: '40px',
-        }}
+        className="flex h-10 shrink-0 cursor-grab items-center gap-2 border-b border-border bg-card px-3"
       >
         {titleIcon && (
-          <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-muted)', flexShrink: 0 }}>
+          <span className="flex shrink-0 items-center text-muted-foreground">
             {titleIcon}
           </span>
         )}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
           {breadcrumb && (
             <>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{breadcrumb}</span>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{'>'}</span>
+              <span className="truncate text-xs text-muted-foreground">{breadcrumb}</span>
+              <span className="text-xs text-muted-foreground">{'>'}</span>
             </>
           )}
-          <span style={{
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}>
-            {win.title}
-          </span>
+          <span className="truncate text-xs font-medium">{win.title}</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-          <button
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
             onClick={() => onMinimize(win.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Minimize"
+            aria-label="Minimize"
           >
-            <Minus size={13} />
-          </button>
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '24px',
-                height: '24px',
-                background: menuOpen ? 'var(--canvas-raised)' : 'none',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                color: menuOpen ? 'var(--text-primary)' : 'var(--text-muted)',
-                transition: 'all var(--transition-fast)',
-              }}
-              title="More"
-            >
-              <MoreHorizontal size={13} />
-            </button>
+            <Minus />
+          </Button>
 
-            {menuOpen && (
-              <>
-                <div
-                  style={{ position: 'fixed', inset: 0, zIndex: 100 }}
-                  onClick={() => setMenuOpen(false)}
-                />
-                <div style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: '100%',
-                  marginTop: '4px',
-                  background: 'var(--canvas-overlay)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: 'var(--shadow-lg)',
-                  zIndex: 101,
-                  minWidth: '160px',
-                  overflow: 'hidden',
-                  animation: 'fadeSlideIn 0.15s ease forwards',
-                }}>
-                  <MenuButton
-                    icon={<Share2 size={13} />}
-                    label="Share..."
-                    onClick={() => { setMenuOpen(false); onShare?.(); }}
-                  />
-                  <MenuButton
-                    icon={<Copy size={13} />}
-                    label="Duplicate"
-                    onClick={() => setMenuOpen(false)}
-                  />
-                  <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-                  <MenuButton
-                    icon={<Maximize2 size={13} />}
-                    label="Maximize"
-                    onClick={() => setMenuOpen(false)}
-                  />
-                  <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-                  <MenuButton
-                    icon={<Trash2 size={13} />}
-                    label="Close window"
-                    onClick={() => { setMenuOpen(false); onClose(win.id); }}
-                    danger
-                  />
-                </div>
-              </>
-            )}
-          </div>
-          <button
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Maximize"
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="ghost" size="icon-xs" aria-label="Window actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  disabled={!onShare}
+                  onSelect={() => onShare?.()}
+                >
+                  <Share2 />
+                  Share
+                </DropdownMenuItem>
+                <DropdownMenuItem>
+                  <Copy />
+                  Duplicate
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem onSelect={handleMaximize}>
+                  <Maximize2 />
+                  Maximize
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => onClose(win.id)}
+                >
+                  <Trash2 />
+                  Close window
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={handleMaximize}
+            aria-label="Maximize"
           >
-            <Maximize2 size={12} />
-          </button>
-          <button
+            <Maximize2 />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
             onClick={() => onClose(win.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Close"
+            aria-label="Close"
           >
-            <X size={13} />
-          </button>
+            <X />
+          </Button>
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         {children}
       </div>
 
       <div
         onMouseDown={handleResizeStart}
-        style={{
-          position: 'absolute',
-          right: 0,
-          bottom: 0,
-          width: '16px',
-          height: '16px',
-          cursor: 'nwse-resize',
-          zIndex: 10,
-        }}
+        className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
       >
         <svg
           width="10"
           height="10"
           viewBox="0 0 10 10"
-          style={{ position: 'absolute', right: '3px', bottom: '3px', opacity: 0.3 }}
+          className="absolute right-1 bottom-1 opacity-30"
         >
-          <line x1="9" y1="1" x2="1" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
-          <line x1="9" y1="4" x2="4" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
-          <line x1="9" y1="7" x2="7" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
+          <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
+          <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
+          <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
         </svg>
       </div>
     </div>
-  );
-}
-
-function MenuButton({
-  icon,
-  label,
-  onClick,
-  danger = false,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        padding: '8px 12px',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-        color: danger ? 'var(--error)' : 'var(--text-primary)',
-        fontSize: '12px',
-        textAlign: 'left',
-        fontFamily: 'inherit',
-        transition: 'background var(--transition-fast)',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--canvas-raised)')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-    >
-      <span style={{ display: 'flex', color: danger ? 'var(--error)' : 'var(--text-muted)' }}>{icon}</span>
-      {label}
-    </button>
   );
 }

@@ -5,6 +5,10 @@ export interface Workspace {
   icon: string;
   user_id?: string | null;
   auto_share?: boolean;
+  local_path?: string;
+  project_kind?: string;
+  git_root?: string;
+  git_remote?: string;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +28,8 @@ export interface ChatSession {
   workspace_id: string;
   title: string;
   model: string;
+  folder?: string | null;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,7 +62,7 @@ export interface UploadedFile {
   created_at: string;
 }
 
-export type CanvasObjectType = 'rect' | 'ellipse' | 'diamond' | 'arrow' | 'line' | 'pen' | 'text' | 'image' | 'video' | 'file' | 'sticky_note';
+export type CanvasObjectType = 'rect' | 'ellipse' | 'diamond' | 'arrow' | 'line' | 'pen' | 'text' | 'image' | 'video' | 'file' | 'applet' | 'sticky_note';
 
 export interface CanvasObject {
   id: string;
@@ -202,8 +208,9 @@ export type AIModel = {
 };
 
 export const AI_MODELS: AIModel[] = [
-  { id: 'auto', label: 'Auto', description: 'Automatically selects the best model' },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable model' },
+  { id: 'auto', label: 'Auto', description: 'Uses the recommended default model' },
+  { id: 'claude-fable-5', label: 'Claude Fable 5', description: 'Generally available default' },
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Most capable model' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Balanced performance' },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', description: 'Fastest model' },
 ];
@@ -226,8 +233,24 @@ export interface WorkspaceAgent {
   avatar: string;
   description: string;
   system_prompt: string;
+  soul?: string;
+  instructions?: string;
+  tools?: string[];
+  skills?: string[];
   model: string;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentWebhook {
+  id: string;
+  workspace_id: string;
+  agent_id: string | null;
+  name: string;
+  token: string;
+  enabled: boolean;
+  last_triggered_at: string | null;
   created_at: string;
   updated_at: string;
 }

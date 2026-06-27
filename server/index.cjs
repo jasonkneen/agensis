@@ -2,10 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const express = require('express');
 const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
 const ALLOWED_TABLES = new Set([
@@ -24,6 +29,7 @@ const ALLOWED_TABLES = new Set([
   'task_comments',
   'document_versions',
   'workspace_agents',
+  'agent_webhooks',
   'activity_events',
 ]);
 
@@ -252,6 +258,62 @@ function getAnthropicApiKey() {
   return resolveSecret('ANTHROPIC_API_KEY');
 }
 
+async function ensureRuntimeSchema() {
+  const db = getDb();
+  await db.unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS local_path text DEFAULT '';
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_remote text DEFAULT '';
+
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
+
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+
+    CREATE TABLE IF NOT EXISTS agent_webhooks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      name text NOT NULL DEFAULT 'Webhook',
+      token text NOT NULL UNIQUE,
+      enabled boolean NOT NULL DEFAULT true,
+      last_triggered_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
+
+    ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
+  `);
+  await db.unsafe(`
+    DO $$
+    DECLARE constraint_name text;
+    BEGIN
+      SELECT con.conname INTO constraint_name
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      WHERE rel.relname = 'canvas_objects'
+        AND con.conname = 'canvas_objects_type_check'
+      LIMIT 1;
+
+      IF constraint_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE canvas_objects DROP CONSTRAINT %I', constraint_name);
+      END IF;
+
+      ALTER TABLE canvas_objects
+        ADD CONSTRAINT canvas_objects_type_check
+        CHECK (type IN ('rect', 'ellipse', 'diamond', 'arrow', 'line', 'pen', 'text', 'image', 'video', 'file', 'applet', 'sticky_note'));
+    END $$;
+  `);
+}
+
 function getDb() {
   if (db) return db;
   const databaseUrl = getDatabaseUrl();
@@ -337,14 +399,266 @@ function verifyPassword(password, passwordHash) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
 }
 
+function resolveAnthropicModel(model) {
+  if (!model || model === 'auto') return 'claude-fable-5';
+  const allowed = new Set([
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5',
+  ]);
+  return allowed.has(model) ? model : 'claude-fable-5';
+}
+
+async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext }) {
+  const apiKey = await getAnthropicApiKey();
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: resolveAnthropicModel(model),
+      max_tokens: 4096,
+      messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
+      system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  return (payload.content || [])
+    .map((part) => part?.type === 'text' ? part.text : '')
+    .filter(Boolean)
+    .join('\n');
+}
+
+function safeFileName(name) {
+  return String(name || 'upload')
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180) || 'upload';
+}
+
+function getUploadRoot() {
+  return process.env.HATCH_UPLOAD_ROOT || path.join(process.cwd(), '.hatch_uploads');
+}
+
+function storagePathFor(workspaceId, id, name) {
+  return path.join(String(workspaceId), `${id}-${safeFileName(name)}`);
+}
+
+function resolveStoragePath(storagePath) {
+  const root = path.resolve(getUploadRoot());
+  const fullPath = path.resolve(root, storagePath || '');
+  if (!fullPath.startsWith(root + path.sep)) {
+    throw new Error('Invalid storage path');
+  }
+  return fullPath;
+}
+
+function resolveCommandPath(command) {
+  const pathEnv = process.env.PATH || '';
+  const home = os.homedir();
+  const nvmBinDirs = [];
+  try {
+    const nvmVersions = path.join(home, '.nvm', 'versions', 'node');
+    fs.readdirSync(nvmVersions, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .forEach(entry => nvmBinDirs.push(path.join(nvmVersions, entry.name, 'bin')));
+  } catch {
+    // optional
+  }
+  const candidates = [
+    ...pathEnv.split(path.delimiter).filter(Boolean),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    path.join(home, '.local', 'bin'),
+    path.join(home, 'bin'),
+    path.join(home, '.bun', 'bin'),
+    path.join(home, '.cargo', 'bin'),
+    ...nvmBinDirs,
+  ];
+  const seen = new Set();
+  for (const dir of candidates) {
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    const candidate = path.join(dir, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // keep looking
+    }
+  }
+  return null;
+}
+
+async function probeCommand(command, args = ['--version']) {
+  const resolvedPath = resolveCommandPath(command);
+  if (!resolvedPath) return { command, available: false, path: null, version: null };
+  let version = null;
+  try {
+    const { stdout, stderr } = await execFileAsync(resolvedPath, args, { timeout: 5000, maxBuffer: 1024 * 128 });
+    version = String(stdout || stderr || '').trim().split('\n')[0] || null;
+  } catch (error) {
+    version = String(error.stdout || error.stderr || '').trim().split('\n')[0] || null;
+  }
+  return { command, available: true, path: resolvedPath, version };
+}
+
+function packageStatus(name) {
+  try {
+    const packagePath = require.resolve(`${name}/package.json`, { paths: [process.cwd()] });
+    const json = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    return { name, available: true, version: json.version || null, path: packagePath };
+  } catch {
+    return { name, available: false, version: null, path: null };
+  }
+}
+
+function countDirectoryEntries(dir, predicate = () => true) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
+  } catch {
+    return 0;
+  }
+}
+
+function detectSkillLibraries(workspacePath = '') {
+  const home = os.homedir();
+  const repoPath = workspacePath && path.isAbsolute(workspacePath) ? workspacePath : process.cwd();
+  const candidates = [
+    { id: 'codex-user-skills', label: 'Codex user skills', type: 'skills', path: path.join(home, '.codex', 'skills') },
+    { id: 'agents-user-skills', label: 'Local agent skills', type: 'skills', path: path.join(home, '.agents', 'skills') },
+    { id: 'workspace-codex-skills', label: 'Workspace Codex skills', type: 'skills', path: path.join(repoPath, '.codex', 'skills') },
+    { id: 'claude-agents', label: 'Claude agents', type: 'agents', path: path.join(home, '.claude', 'agents') },
+    { id: 'workspace-claude-agents', label: 'Workspace Claude agents', type: 'agents', path: path.join(repoPath, '.claude', 'agents') },
+    { id: 'claude-commands', label: 'Claude commands', type: 'commands', path: path.join(home, '.claude', 'commands') },
+    { id: 'codex-config', label: 'Codex config', type: 'config', path: path.join(home, '.codex', 'config.toml') },
+    { id: 'gemini-config', label: 'Gemini settings', type: 'config', path: path.join(home, '.gemini', 'settings.json') },
+    { id: 'qwen-config', label: 'Qwen settings', type: 'config', path: path.join(home, '.qwen', 'settings.json') },
+    { id: 'opencode-config', label: 'OpenCode config', type: 'config', path: path.join(home, '.config', 'opencode', 'opencode.json') },
+  ];
+
+  return candidates.map(candidate => {
+    const exists = fs.existsSync(candidate.path);
+    const isDirectory = exists && fs.statSync(candidate.path).isDirectory();
+    return {
+      ...candidate,
+      available: exists,
+      count: isDirectory ? countDirectoryEntries(candidate.path, entry => !entry.name.startsWith('.')) : exists ? 1 : 0,
+    };
+  });
+}
+
+async function detectCapabilities(workspacePath = '') {
+  const cliDefinitions = [
+    { id: 'claude', label: 'Claude Code', command: 'claude' },
+    { id: 'codex', label: 'Codex', command: 'codex' },
+    { id: 'opencode', label: 'OpenCode', command: 'opencode' },
+    { id: 'gemini', label: 'Gemini CLI', command: 'gemini' },
+    { id: 'qwen', label: 'Qwen Code', command: 'qwen' },
+    { id: 'goose', label: 'Goose', command: 'goose' },
+    { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent' },
+    { id: 'amp', label: 'Amp', command: 'amp' },
+    { id: 'crush', label: 'Charm Crush', command: 'crush' },
+    { id: 'grok', label: 'Grok', command: 'grok' },
+    { id: 'aider', label: 'Aider', command: 'aider' },
+    { id: 'kimi', label: 'Kimi', command: 'kimi' },
+  ];
+
+  const clis = await Promise.all(cliDefinitions.map(async definition => ({
+    ...definition,
+    ...(await probeCommand(definition.command)),
+  })));
+
+  const packages = [
+    '@anthropic-ai/claude-agent-sdk',
+    '@agentclientprotocol/claude-agent-acp',
+    '@agentclientprotocol/sdk',
+    '@openai/codex',
+    '@anthropic-ai/sdk',
+  ].map(packageStatus);
+
+  return {
+    checkedAt: new Date().toISOString(),
+    workspacePath: workspacePath || process.cwd(),
+    clis,
+    packages,
+    skills: detectSkillLibraries(workspacePath),
+    codexAppServer: {
+      available: clis.some(cli => cli.id === 'codex' && cli.available),
+      command: 'codex app-server',
+      transports: ['stdio', 'websocket', 'unix'],
+    },
+  };
+}
+
+async function inspectProjectPath(inputPath) {
+  const resolved = path.resolve(String(inputPath || ''));
+  const exists = fs.existsSync(resolved);
+  const result = {
+    path: resolved,
+    exists,
+    isDirectory: exists ? fs.statSync(resolved).isDirectory() : false,
+    gitRoot: '',
+    gitBranch: '',
+    gitRemote: '',
+    projectKind: exists ? 'folder' : '',
+  };
+  if (!exists) return result;
+
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], { timeout: 5000 });
+    result.gitRoot = stdout.trim();
+    result.projectKind = 'git';
+  } catch {
+    return result;
+  }
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', resolved, 'branch', '--show-current'], { timeout: 5000 });
+    result.gitBranch = stdout.trim();
+  } catch {
+    // optional
+  }
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', resolved, 'remote', 'get-url', 'origin'], { timeout: 5000 });
+    result.gitRemote = stdout.trim();
+  } catch {
+    // optional
+  }
+  return result;
+}
+
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   const sections = [];
   if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
     if (agentContext.name) {
       sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared Hatch workspace.`);
     }
+    if (agentContext.soul) {
+      sections.push(`Agent soul: ${agentContext.soul}`);
+    }
     if (agentContext.systemPrompt) {
       sections.push(agentContext.systemPrompt);
+    }
+    if (agentContext.instructions) {
+      sections.push(`Instructions:\n${agentContext.instructions}`);
+    }
+    if (Array.isArray(agentContext.tools) && agentContext.tools.length > 0) {
+      sections.push(`Available tool preferences: ${agentContext.tools.join(', ')}`);
+    }
+    if (Array.isArray(agentContext.skills) && agentContext.skills.length > 0) {
+      sections.push(`Selected skill libraries: ${agentContext.skills.join(', ')}`);
     }
     sections.push('');
   } else {
@@ -478,7 +792,10 @@ function attachRealtime(server) {
 function createApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '50mb' }));
+  void ensureRuntimeSchema().catch((error) => {
+    console.warn('[backend] runtime schema migration failed:', error.message || error);
+  });
 
   // NOTE: Auth enforcement (requireAuth gate + workspace membership checks) was
   // reverted — it denied legitimate access for existing users/data and broke
@@ -490,6 +807,154 @@ function createApp() {
     try {
       await getDb().unsafe('select 1');
       res.json({ ok: true });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.get('/backend/system/capabilities', async (req, res) => {
+    try {
+      const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
+      res.json({ data: await detectCapabilities(workspacePath), error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/system/inspect-path', async (req, res) => {
+    try {
+      const inspected = await inspectProjectPath(req.body?.path || '');
+      res.json({ data: inspected, error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/files/upload', async (req, res) => {
+    try {
+      const { workspace_id: workspaceId, name, type, contentBase64 } = req.body || {};
+      if (!workspaceId || !name || typeof contentBase64 !== 'string') {
+        return jsonError(res, 400, new Error('workspace_id, name, and contentBase64 are required'));
+      }
+      const id = crypto.randomUUID();
+      const buffer = Buffer.from(contentBase64, 'base64');
+      const storagePath = storagePathFor(workspaceId, id, name);
+      const fullPath = resolveStoragePath(storagePath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, buffer);
+      const sha = crypto.createHash('sha256').update(buffer).digest('hex');
+      const rows = await getDb().unsafe(
+        `insert into uploaded_files (id, workspace_id, name, size, type, storage_path, content_sha256)
+         values ($1, $2, $3, $4, $5, $6, $7)
+         returning *`,
+        [id, workspaceId, String(name), buffer.length, String(type || ''), storagePath, sha],
+      );
+      notifyDbSubscribers('uploaded_files', 'INSERT', rows);
+      res.json({ data: rows[0], error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.get('/backend/files/:id/content', async (req, res) => {
+    try {
+      const rows = await getDb().unsafe('select name, type, storage_path from uploaded_files where id = $1 limit 1', [req.params.id]);
+      const file = rows[0];
+      if (!file?.storage_path) return jsonError(res, 404, new Error('File content is not stored'));
+      const fullPath = resolveStoragePath(file.storage_path);
+      if (!fs.existsSync(fullPath)) return jsonError(res, 404, new Error('File content is missing on disk'));
+      res.setHeader('Content-Type', file.type || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `inline; filename="${safeFileName(file.name)}"`);
+      fs.createReadStream(fullPath).pipe(res);
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/agent-webhooks', async (req, res) => {
+    try {
+      const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
+      if (!workspaceId || !name) return jsonError(res, 400, new Error('workspace_id and name are required'));
+      const token = crypto.randomBytes(32).toString('base64url');
+      const rows = await getDb().unsafe(
+        `insert into agent_webhooks (workspace_id, agent_id, name, token)
+         values ($1, $2, $3, $4)
+         returning *`,
+        [workspaceId, agentId || null, String(name).trim(), token],
+      );
+      notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
+      res.json({ data: rows[0], error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/webhooks/:token', async (req, res) => {
+    try {
+      const token = String(req.params.token || '');
+      const rows = await getDb().unsafe(
+        `select w.*, a.name as agent_name, a.system_prompt, a.model, a.soul, a.instructions, a.tools, a.skills
+         from agent_webhooks w
+         left join workspace_agents a on a.id = w.agent_id
+         where w.token = $1 and w.enabled = true
+         limit 1`,
+        [token],
+      );
+      const webhook = rows[0];
+      if (!webhook) return jsonError(res, 404, new Error('Webhook not found'));
+
+      const prompt = String(req.body?.prompt || req.body?.text || req.body?.message || JSON.stringify(req.body || {})).trim();
+      if (!prompt) return jsonError(res, 400, new Error('Webhook payload did not include prompt, text, or message'));
+
+      const sessionRows = await getDb().unsafe(
+        `insert into chat_sessions (workspace_id, title, model, folder)
+         values ($1, $2, $3, $4)
+         returning *`,
+        [webhook.workspace_id, `Webhook: ${webhook.name}`, webhook.model || 'auto', 'Webhooks'],
+      );
+      const session = sessionRows[0];
+      const messageRows = await getDb().unsafe(
+        `insert into messages (session_id, role, content) values ($1, 'user', $2) returning *`,
+        [session.id, prompt],
+      );
+
+      await getDb().unsafe('update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1', [webhook.id]);
+      notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
+      notifyDbSubscribers('messages', 'INSERT', messageRows);
+
+      let assistantMessage = null;
+      try {
+        const content = await runAnthropicCompletion({
+          model: webhook.model || 'auto',
+          messages: [{ role: 'user', content: prompt }],
+          memory: null,
+          documents: null,
+          workspaceContext: { triggeredBy: 'webhook', webhook: webhook.name },
+          agentContext: webhook.agent_id ? {
+            name: webhook.agent_name,
+            systemPrompt: webhook.system_prompt,
+            soul: webhook.soul,
+            instructions: webhook.instructions,
+            tools: Array.isArray(webhook.tools) ? webhook.tools : [],
+            skills: Array.isArray(webhook.skills) ? webhook.skills : [],
+          } : null,
+        });
+        const assistantRows = await getDb().unsafe(
+          `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
+          [session.id, content],
+        );
+        assistantMessage = assistantRows[0];
+        notifyDbSubscribers('messages', 'INSERT', assistantRows);
+      } catch (error) {
+        const assistantRows = await getDb().unsafe(
+          `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
+          [session.id, `Webhook received, but agent execution failed: ${error.message || error}`],
+        );
+        assistantMessage = assistantRows[0];
+        notifyDbSubscribers('messages', 'INSERT', assistantRows);
+      }
+
+      res.json({ data: { session, userMessage: messageRows[0], assistantMessage }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }
@@ -668,15 +1133,7 @@ function createApp() {
       if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
 
       const { messages, model, memory, documents, workspaceContext, agentContext } = req.body || {};
-      const resolvedModel = !model || model === 'auto'
-        ? 'claude-opus-4-5'
-        : model === 'claude-opus-4-6'
-          ? 'claude-opus-4-5'
-          : model === 'claude-sonnet-4-6'
-            ? 'claude-sonnet-4-5'
-            : model === 'claude-haiku-4-5'
-              ? 'claude-haiku-4-5'
-              : 'claude-opus-4-5';
+      const resolvedModel = resolveAnthropicModel(model);
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',

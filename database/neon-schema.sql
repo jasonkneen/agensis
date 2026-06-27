@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   icon text DEFAULT '🏠',
   user_id uuid,
   auto_share boolean DEFAULT false,
+  local_path text DEFAULT '',
+  project_kind text DEFAULT '',
+  git_root text DEFAULT '',
+  git_remote text DEFAULT '',
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -48,11 +52,15 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
   title text NOT NULL DEFAULT 'New Chat',
   model text DEFAULT 'auto',
+  folder text DEFAULT 'General',
+  archived_at timestamptz,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace_id ON chat_sessions(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
 
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -86,6 +94,7 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
   size bigint DEFAULT 0,
   type text DEFAULT '',
   storage_path text DEFAULT '',
+  content_sha256 text DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 
@@ -119,7 +128,7 @@ CREATE TABLE IF NOT EXISTS canvas_objects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id uuid,
-  type text NOT NULL DEFAULT 'rect' CHECK (type IN ('rect', 'ellipse', 'diamond', 'arrow', 'line', 'pen', 'text', 'image', 'video', 'file', 'sticky_note')),
+  type text NOT NULL DEFAULT 'rect' CHECK (type IN ('rect', 'ellipse', 'diamond', 'arrow', 'line', 'pen', 'text', 'image', 'video', 'file', 'applet', 'sticky_note')),
   x double precision NOT NULL DEFAULT 50,
   y double precision NOT NULL DEFAULT 50,
   width double precision NOT NULL DEFAULT 10,
@@ -198,6 +207,10 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   avatar text NOT NULL DEFAULT '🤖',
   description text DEFAULT '',
   system_prompt text NOT NULL DEFAULT '',
+  soul text DEFAULT '',
+  instructions text DEFAULT '',
+  tools jsonb DEFAULT '[]'::jsonb,
+  skills jsonb DEFAULT '[]'::jsonb,
   model text NOT NULL DEFAULT 'auto',
   created_by uuid,
   created_at timestamptz DEFAULT now(),
@@ -205,6 +218,21 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
+
+CREATE TABLE IF NOT EXISTS agent_webhooks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  name text NOT NULL DEFAULT 'Webhook',
+  token text NOT NULL UNIQUE,
+  enabled boolean NOT NULL DEFAULT true,
+  last_triggered_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
 
 CREATE TABLE IF NOT EXISTS document_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

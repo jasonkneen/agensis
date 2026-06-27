@@ -479,3 +479,22 @@ export function apiUrl(path: string) {
 export function apiAuthHeaders(): Record<string, string> {
   return authHeaders();
 }
+
+export interface SystemCapabilities {
+  checkedAt: string;
+  workspacePath: string;
+  clis: Array<{ id: string; label: string; command: string; available: boolean; path: string | null; version: string | null }>;
+  packages: Array<{ name: string; available: boolean; version: string | null; path: string | null }>;
+  skills: Array<{ id: string; label: string; type: string; path: string; available: boolean; count: number }>;
+  codexAppServer: { available: boolean; command: string; transports: string[] };
+}
+
+export async function getSystemCapabilities(workspacePath?: string): Promise<SystemCapabilities | null> {
+  const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : '';
+  const response = await fetch(apiUrl(`/backend/system/capabilities${query}`), {
+    headers: apiAuthHeaders(),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.error) return null;
+  return payload.data as SystemCapabilities;
+}

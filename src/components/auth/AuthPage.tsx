@@ -1,5 +1,11 @@
-import { useState } from 'react';
-import { Sparkles, Mail, Lock, ArrowRight, Loader2 } from 'lucide-react';
+import { useState, type FormEvent } from 'react';
+import { ArrowRight, Lock, Mail, Sparkles } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field, FieldGroup } from '@/components/ui/field';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
+import { Spinner } from '@/components/ui/spinner';
 
 interface AuthPageProps {
   onSignIn: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -14,7 +20,7 @@ export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -53,218 +59,102 @@ export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
   };
 
   return (
-    <div style={{
-      height: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: 'var(--canvas-base)',
-      padding: '24px',
-    }}>
-      <div style={{
-        width: '100%',
-        maxWidth: '400px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '32px',
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{
-            width: '56px',
-            height: '56px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, var(--accent), #60a5fa)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 20px',
-            boxShadow: '0 8px 32px rgba(79, 156, 249, 0.3)',
-          }}>
-            <Sparkles size={26} style={{ color: 'white' }} />
+    <main className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="flex w-full max-w-md flex-col gap-6">
+        <div className="text-center">
+          <div className="mx-auto mb-5 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
+            <Sparkles data-icon="inline-start" className="size-7" />
           </div>
-          <h1 style={{
-            fontSize: '28px',
-            fontWeight: 700,
-            color: 'var(--text-primary)',
-            margin: '0 0 8px',
-            letterSpacing: '-0.02em',
-          }}>
+          <h1 className="text-3xl font-bold tracking-normal text-foreground">
             {mode === 'signin' ? 'Welcome back' : 'Create your account'}
           </h1>
-          <p style={{
-            fontSize: '14px',
-            color: 'var(--text-secondary)',
-            margin: 0,
-          }}>
+          <p className="mt-2 text-sm text-muted-foreground">
             {mode === 'signin'
               ? 'Sign in to your Hatch workspace'
               : 'Get started with your intelligent workspace'}
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ position: 'relative' }}>
-            <Mail size={16} style={{
-              position: 'absolute',
-              left: '14px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: 'var(--text-muted)',
-              pointerEvents: 'none',
-            }} />
-            <input
-              type="email"
-              placeholder="Email address"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              autoFocus
-              style={{
-                width: '100%',
-                padding: '12px 14px 12px 42px',
-                background: 'var(--canvas-elevated)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                outline: 'none',
-                transition: 'border-color var(--transition-fast)',
-                fontFamily: 'inherit',
-              }}
-              onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-              onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-            />
-          </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>{mode === 'signin' ? 'Sign in' : 'Sign up'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit}>
+              <FieldGroup>
+                <Field>
+                  <InputGroup>
+                    <InputGroupAddon align="inline-start">
+                      <Mail data-icon="inline-start" className="size-4" />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      type="email"
+                      placeholder="Email address"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      autoFocus
+                    />
+                  </InputGroup>
+                </Field>
 
-          <div style={{ position: 'relative' }}>
-            <Lock size={16} style={{
-              position: 'absolute',
-              left: '14px',
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: 'var(--text-muted)',
-              pointerEvents: 'none',
-            }} />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '12px 14px 12px 42px',
-                background: 'var(--canvas-elevated)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                outline: 'none',
-                transition: 'border-color var(--transition-fast)',
-                fontFamily: 'inherit',
-              }}
-              onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-              onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-            />
-          </div>
+                <Field>
+                  <InputGroup>
+                    <InputGroupAddon align="inline-start">
+                      <Lock data-icon="inline-start" className="size-4" />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      type="password"
+                      placeholder="Password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                    />
+                  </InputGroup>
+                </Field>
 
-          {mode === 'signup' && (
-            <div style={{ position: 'relative' }}>
-              <Lock size={16} style={{
-                position: 'absolute',
-                left: '14px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: 'var(--text-muted)',
-                pointerEvents: 'none',
-              }} />
-              <input
-                type="password"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '12px 14px 12px 42px',
-                  background: 'var(--canvas-elevated)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  outline: 'none',
-                  transition: 'border-color var(--transition-fast)',
-                  fontFamily: 'inherit',
-                }}
-                onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-              />
-            </div>
-          )}
+                {mode === 'signup' && (
+                  <Field>
+                    <InputGroup>
+                      <InputGroupAddon align="inline-start">
+                        <Lock data-icon="inline-start" className="size-4" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        type="password"
+                        placeholder="Confirm password"
+                        value={confirmPassword}
+                        onChange={e => setConfirmPassword(e.target.value)}
+                      />
+                    </InputGroup>
+                  </Field>
+                )}
 
-          {error && (
-            <div style={{
-              padding: '10px 14px',
-              background: 'var(--error-subtle)',
-              border: '1px solid var(--error)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--error)',
-              fontSize: '13px',
-              lineHeight: 1.5,
-            }}>
-              {error}
-            </div>
-          )}
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
 
-          <button
-            type="submit"
-            disabled={submitting}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              padding: '12px',
-              background: submitting ? 'var(--accent-hover)' : 'var(--accent)',
-              border: 'none',
-              borderRadius: 'var(--radius-md)',
-              color: 'white',
-              fontSize: '14px',
-              fontWeight: 600,
-              cursor: submitting ? 'not-allowed' : 'pointer',
-              transition: 'background var(--transition-fast)',
-              fontFamily: 'inherit',
-            }}
-          >
-            {submitting ? (
-              <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-            ) : (
-              <>
-                {mode === 'signin' ? 'Sign in' : 'Create account'}
-                <ArrowRight size={16} />
-              </>
-            )}
-          </button>
-        </form>
+                <Button type="submit" disabled={submitting} className="w-full">
+                  {submitting ? (
+                    <Spinner className="size-4" />
+                  ) : (
+                    <>
+                      {mode === 'signin' ? 'Sign in' : 'Create account'}
+                      <ArrowRight data-icon="inline-end" className="size-4" />
+                    </>
+                  )}
+                </Button>
+              </FieldGroup>
+            </form>
+          </CardContent>
+        </Card>
 
-        <div style={{ textAlign: 'center' }}>
-          <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-            {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
-          </span>
-          <button
-            onClick={toggleMode}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--accent)',
-              fontSize: '13px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              padding: 0,
-              fontFamily: 'inherit',
-            }}
-          >
+        <div className="text-center text-sm text-muted-foreground">
+          {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
+          <Button type="button" variant="link" className="h-auto px-0" onClick={toggleMode}>
             {mode === 'signin' ? 'Sign up' : 'Sign in'}
-          </button>
+          </Button>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

@@ -4,13 +4,21 @@ import * as ResizablePrimitive from "react-resizable-panels"
 
 import { cn } from "@/lib/utils"
 
+type ResizablePanelGroupProps = Omit<ResizablePrimitive.GroupProps, "orientation"> & {
+  direction?: ResizablePrimitive.GroupProps["orientation"]
+  orientation?: ResizablePrimitive.GroupProps["orientation"]
+}
+
 function ResizablePanelGroup({
   className,
+  direction,
+  orientation,
   ...props
-}: ResizablePrimitive.GroupProps) {
+}: ResizablePanelGroupProps) {
   return (
     <ResizablePrimitive.Group
       data-slot="resizable-panel-group"
+      orientation={orientation ?? direction}
       className={cn(
         "flex h-full w-full aria-[orientation=vertical]:flex-col",
         className

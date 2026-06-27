@@ -1,9 +1,34 @@
 import React from 'react';
 import {
-  FileText, CheckCircle2, MessageSquare, Brain, MessageCircle,
-  UserPlus, Palette, Activity,
+  Activity,
+  Brain,
+  CheckCircle2,
+  FileText,
+  MessageCircle,
+  MessageSquare,
+  Palette,
+  UserPlus,
 } from 'lucide-react';
 import type { ActivityEvent, ActivityEventType } from '../../types';
+import { Badge } from '@/components/ui/badge';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from '@/components/ui/item';
+import { Marker, MarkerContent } from '@/components/ui/marker';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Spinner } from '@/components/ui/spinner';
 
 interface ActivityWindowContentProps {
   events: ActivityEvent[];
@@ -15,38 +40,23 @@ function iconFor(type: ActivityEventType): React.ReactNode {
     case 'document_created':
     case 'document_updated':
     case 'document_deleted':
-      return <FileText size={13} />;
+      return <FileText />;
     case 'task_created':
     case 'task_completed':
     case 'task_updated':
-      return <CheckCircle2 size={13} />;
+      return <CheckCircle2 />;
     case 'chat_created':
-      return <MessageSquare size={13} />;
+      return <MessageSquare />;
     case 'memory_added':
-      return <Brain size={13} />;
+      return <Brain />;
     case 'comment_created':
-      return <MessageCircle size={13} />;
+      return <MessageCircle />;
     case 'member_joined':
-      return <UserPlus size={13} />;
+      return <UserPlus />;
     case 'canvas_updated':
-      return <Palette size={13} />;
+      return <Palette />;
     default:
-      return <Activity size={13} />;
-  }
-}
-
-function colorFor(type: ActivityEventType): string {
-  switch (type) {
-    case 'task_completed':
-      return '#22c55e';
-    case 'document_deleted':
-      return '#ef4444';
-    case 'member_joined':
-      return '#8b5cf6';
-    case 'comment_created':
-      return '#f59e0b';
-    default:
-      return 'var(--accent)';
+      return <Activity />;
   }
 }
 
@@ -66,12 +76,15 @@ function formatTime(iso: string): string {
 
 function groupByDay(events: ActivityEvent[]): Array<{ label: string; items: ActivityEvent[] }> {
   const groups: Record<string, ActivityEvent[]> = {};
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
 
   events.forEach(event => {
-    const d = new Date(event.created_at);
-    const dayStart = new Date(d); dayStart.setHours(0, 0, 0, 0);
+    const date = new Date(event.created_at);
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
     let label: string;
     if (dayStart.getTime() === today.getTime()) label = 'Today';
     else if (dayStart.getTime() === yesterday.getTime()) label = 'Yesterday';
@@ -85,101 +98,56 @@ function groupByDay(events: ActivityEvent[]): Array<{ label: string; items: Acti
 export function ActivityWindowContent({ events, loading }: ActivityWindowContentProps) {
   if (loading && events.length === 0) {
     return (
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--text-muted)', fontSize: '12px',
-      }}>
-        Loading activity…
-      </div>
+      <Empty className="h-full border-0">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Spinner />
+          </EmptyMedia>
+          <EmptyTitle>Loading activity</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
   if (events.length === 0) {
     return (
-      <div style={{
-        display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        height: '100%', gap: '10px', padding: '24px', textAlign: 'center',
-      }}>
-        <Activity size={32} style={{ color: 'var(--text-muted)', opacity: 0.35 }} />
-        <div>
-          <p style={{ fontSize: '13px', color: 'var(--text-primary)', margin: '0 0 4px', fontWeight: 500 }}>
-            No activity yet
-          </p>
-          <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0 }}>
-            Team actions will show up here as they happen.
-          </p>
-        </div>
-      </div>
+      <Empty className="h-full border-0">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Activity />
+          </EmptyMedia>
+          <EmptyTitle>No activity yet</EmptyTitle>
+          <EmptyDescription>Team actions will show up here as they happen.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
-  const grouped = groupByDay(events);
-
   return (
-    <div style={{ height: '100%', overflowY: 'auto', padding: '6px 0' }}>
-      {grouped.map(group => (
-        <div key={group.label}>
-          <div style={{
-            padding: '10px 16px 4px',
-            fontSize: '10px',
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            color: 'var(--text-muted)',
-            letterSpacing: '0.04em',
-          }}>
-            {group.label}
-          </div>
-          {group.items.map(event => (
-            <div
-              key={event.id}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '10px',
-                padding: '8px 16px',
-                borderLeft: '2px solid transparent',
-                transition: 'background var(--transition-fast)',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--canvas-raised)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            >
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '24px',
-                height: '24px',
-                borderRadius: '50%',
-                background: `color-mix(in srgb, ${colorFor(event.event_type)} 18%, var(--canvas-raised))`,
-                color: colorFor(event.event_type),
-                flexShrink: 0,
-                marginTop: '1px',
-              }}>
-                {iconFor(event.event_type)}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{
-                  fontSize: '12px',
-                  color: 'var(--text-primary)',
-                  margin: 0,
-                  wordBreak: 'break-word',
-                  lineHeight: 1.4,
-                }}>
-                  {event.title}
-                </p>
-                <p style={{
-                  fontSize: '10px',
-                  color: 'var(--text-muted)',
-                  margin: '2px 0 0',
-                }}>
-                  {formatTime(event.created_at)}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
+    <ScrollArea className="h-full">
+      <div className="flex flex-col gap-4 p-3">
+        {groupByDay(events).map(group => (
+          <section key={group.label} className="flex flex-col gap-2">
+            <Marker variant="separator">
+              <MarkerContent>{group.label}</MarkerContent>
+            </Marker>
+            <ItemGroup className="gap-1">
+              {group.items.map(event => (
+                <Item key={event.id} variant="default" className="hover:bg-muted/50">
+                  <ItemMedia variant="icon" className="size-8 rounded-full bg-muted">
+                    {iconFor(event.event_type)}
+                  </ItemMedia>
+                  <ItemContent className="min-w-0">
+                    <ItemTitle className="max-w-full truncate">{event.title}</ItemTitle>
+                    <ItemDescription>{formatTime(event.created_at)}</ItemDescription>
+                  </ItemContent>
+                  <Badge variant="secondary">{event.event_type.replace(/_/g, ' ')}</Badge>
+                </Item>
+              ))}
+            </ItemGroup>
+          </section>
+        ))}
+      </div>
+    </ScrollArea>
   );
 }

@@ -1,7 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
-import { backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineDelete } from '../lib/offlineBackend';
 import type { UploadedFile } from '../types';
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.slice(result.indexOf(',') + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 export function useFiles(workspaceId: string | null) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -26,20 +38,27 @@ export function useFiles(workspaceId: string | null) {
     fetchFiles();
   }, [fetchFiles]);
 
-  const uploadFiles = useCallback(async (uploadedFiles: File[]) => {
-    if (!workspaceId) return;
-    const inserts = uploadedFiles.map(f => ({
-      workspace_id: workspaceId,
-      name: f.name,
-      size: f.size,
-      type: f.type,
-      storage_path: '',
-    }));
-    const { data } = await backendClient
-      .from('uploaded_files')
-      .insert(inserts)
-      .select();
-    if (data) setFiles(prev => [...data, ...prev]);
+  const uploadFiles = useCallback(async (uploadedFiles: File[]): Promise<UploadedFile[]> => {
+    if (!workspaceId) return [];
+    const uploaded: UploadedFile[] = [];
+    for (const file of uploadedFiles) {
+      const contentBase64 = await fileToBase64(file);
+      const response = await fetch(apiUrl('/backend/files/upload'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          contentBase64,
+        }),
+      });
+      const payload = await response.json();
+      if (response.ok && payload.data) uploaded.push(payload.data as UploadedFile);
+    }
+    if (uploaded.length > 0) setFiles(prev => [...uploaded, ...prev]);
+    return uploaded;
   }, [workspaceId]);
 
   const deleteFile = useCallback(async (id: string) => {

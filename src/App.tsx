@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2 } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -19,6 +19,26 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog';
+import { Badge } from './components/ui/badge';
+import { Button } from './components/ui/button';
+import { Card, CardContent } from './components/ui/card';
+import { Checkbox } from './components/ui/checkbox';
+import { Label } from './components/ui/label';
+import { ScrollArea } from './components/ui/scroll-area';
+import { Spinner } from './components/ui/spinner';
+import { cn } from './lib/utils';
 import { getSetting } from './lib/settings';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -37,10 +57,13 @@ import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
 import { useWorkspaceContext } from './hooks/useWorkspaceContext';
 import { useAgents } from './hooks/useAgents';
+import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import type { CanvasTemplate } from './lib/canvasTemplates';
+import type { CanvasAppDefinition } from './lib/canvasApps';
+import { makeAppletState } from './lib/canvasApps';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent } from './types';
+import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 import bg1 from '../images/download-21.jpg';
@@ -67,7 +90,7 @@ export default function App() {
   const [canvasGridBackground] = useState(() => CANVAS_BACKGROUNDS[Math.floor(Math.random() * CANVAS_BACKGROUNDS.length)]);
   const activeSceneRef = useRef<HTMLDivElement>(null);
 
-  const { workspaces, loading: wsLoading, createWorkspace } = useWorkspaces(user?.id);
+  const { workspaces, loading: wsLoading, createWorkspace, updateWorkspace } = useWorkspaces(user?.id);
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
 
   useEffect(() => {
@@ -85,7 +108,7 @@ export default function App() {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, sendMessage,
+    createSession, updateSession, archiveSession, sendMessage,
   } = useChat(activeWorkspaceId);
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
@@ -156,10 +179,21 @@ export default function App() {
     updateAgent,
     deleteAgent,
   } = useAgents(activeWorkspaceId || null, user?.id);
+  const {
+    webhooks: agentWebhooks,
+    createWebhook: createAgentWebhook,
+    updateWebhook: updateAgentWebhook,
+  } = useAgentWebhooks(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    description: string;
+    actionLabel: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
 
   const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
     workspaceName: activeWorkspace?.name || 'Workspace',
@@ -286,6 +320,22 @@ export default function App() {
     }
   }, [createLayer, addCanvasObject]);
 
+  const handleCreateCanvasApp = useCallback(async (app: CanvasAppDefinition) => {
+    await addCanvasObject('applet', {
+      x: 12,
+      y: 10,
+      width: 76,
+      height: 72,
+      fill: 'var(--canvas-raised)',
+      stroke: 'var(--border)',
+      stroke_width: 1,
+      file_name: app.id,
+      text_content: makeAppletState(app.id, { agentRuns: [] }),
+      src: app.buildHtml(),
+      layer_id: activeLayerId,
+    });
+  }, [addCanvasObject, activeLayerId]);
+
   const handleCreateTask = useCallback(async (input: CreateTaskInput) => {
     const task = await createTask(input);
     if (task) {
@@ -382,9 +432,10 @@ export default function App() {
     model: string,
     memFacts?: MemoryFact[],
     docs?: Document[],
+    threadParentId?: string | null,
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent);
+    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleHomeSendMessage = useCallback(async (
@@ -456,31 +507,22 @@ export default function App() {
   const handleDeleteCanvasFromGrid = useCallback(async (layerId: string) => {
     const layer = layers.find(item => item.id === layerId);
     if (!layer || layerId === baseLayerId) return;
-    const confirmed = window.confirm(`Delete ${layer.name}? This will remove its canvas items.`);
-    if (!confirmed) return;
-
-    await deleteObjectsInLayer(layerId);
-    deleteLayer(layerId);
+    setConfirmAction({
+      title: `Delete ${layer.name}?`,
+      description: 'This will remove the canvas and all items on it.',
+      actionLabel: 'Delete',
+      onConfirm: async () => {
+        await deleteObjectsInLayer(layerId);
+        deleteLayer(layerId);
+      },
+    });
   }, [layers, baseLayerId, deleteObjectsInLayer, deleteLayer]);
 
 
   if (authLoading) {
     return (
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'var(--canvas-base)',
-      }}>
-        <div style={{
-          width: '32px',
-          height: '32px',
-          border: '3px solid var(--border)',
-          borderTopColor: 'var(--accent)',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }} />
+      <div className="flex h-screen items-center justify-center bg-background">
+        <Spinner className="size-8" />
       </div>
     );
   }
@@ -490,12 +532,7 @@ export default function App() {
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      height: '100vh',
-      overflow: 'hidden',
-      background: 'var(--canvas-base)',
-    }}>
+    <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
         workspace={activeWorkspace}
         collapsed={sidebarCollapsed}
@@ -507,6 +544,8 @@ export default function App() {
         onCreateWorkspace={handleCreateWorkspace}
         onDocumentOpen={handleDocumentOpen}
         onSessionOpen={handleSessionOpen}
+        onSessionUpdate={updateSession}
+        onSessionArchive={archiveSession}
         onOpenMemory={handleOpenMemory}
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}
@@ -523,7 +562,7 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, position: 'relative' }}>
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
           online={online}
           syncing={syncing}
@@ -533,7 +572,7 @@ export default function App() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <main ref={canvasRef} className="relative flex-1 overflow-hidden">
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
@@ -547,7 +586,10 @@ export default function App() {
 
             <CursorOverlay cursors={cursors} />
 
-            <div ref={activeSceneRef} style={{ position: 'absolute', inset: 0, opacity: showCanvasGrid ? 0.12 : 1, transition: 'opacity 180ms ease' }}>
+            <div
+              ref={activeSceneRef}
+              className={cn('absolute inset-0 transition-opacity duration-200', showCanvasGrid ? 'opacity-10' : 'opacity-100')}
+            >
               <CanvasLayerScene
                 documents={documents}
                 facts={facts}
@@ -568,11 +610,14 @@ export default function App() {
                 activityEvents={activityEvents}
                 activityLoading={activityLoading}
                 agents={agents}
+                agentWebhooks={agentWebhooks}
                 selectedAgent={selectedAgent}
                 onSelectAgent={setSelectedAgent}
                 onCreateAgent={createAgent}
                 onUpdateAgent={updateAgent}
                 onDeleteAgent={deleteAgent}
+                onCreateAgentWebhook={createAgentWebhook}
+                onUpdateAgentWebhook={updateAgentWebhook}
                 topLevelMessages={topLevelMessages}
                 threadMessages={threadMessages}
                 threadReplyCounts={threadReplyCounts}
@@ -625,6 +670,7 @@ export default function App() {
                   entity_type: 'document',
                   title: docTitle ? `New comment on ${docTitle}` : 'New document comment',
                 })}
+                onRequestConfirm={setConfirmAction}
               />
             </div>
 
@@ -640,6 +686,10 @@ export default function App() {
               onCreateGroup={createCanvasGroup}
               onDeleteGroup={deleteCanvasGroup}
               onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
+              tasks={tasks}
+              agents={agents}
+              onCreateAppletTask={handleCreateTask}
+              onUpdateAppletTask={handleUpdateTask}
             />
 
             {showCanvasGrid && (
@@ -661,47 +711,30 @@ export default function App() {
               open={templatePickerOpen}
               onClose={() => setTemplatePickerOpen(false)}
               onApply={handleApplyTemplate}
+              onCreateApp={handleCreateCanvasApp}
             />
 
             {minimizedActiveWindows.length > 0 && (
-              <div style={{
-                position: 'absolute',
-                bottom: '72px',
-                right: '12px',
-                display: 'flex',
-                gap: '6px',
-                zIndex: 50,
-              }}>
+              <div className="absolute right-3 bottom-[72px] z-50 flex gap-1.5">
                 {minimizedActiveWindows.map(win => (
-                  <button
+                  <Button
                     key={win.id}
+                    type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => minimizeWindow(win.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '6px 12px',
-                      background: 'var(--canvas-elevated)',
-                      border: '1px solid var(--border)',
-                      borderRadius: 'var(--radius-md)',
-                      cursor: 'pointer',
-                      color: 'var(--text-primary)',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      boxShadow: 'var(--shadow-md)',
-                      transition: 'all var(--transition-fast)',
-                    }}
+                    className="bg-popover shadow-md"
                   >
-                    {win.type === 'chat' ? <MessageSquare size={12} />
-                      : win.type === 'memory' ? <Brain size={12} />
-                      : win.type === 'tasks' ? <CheckCircle2 size={12} />
-                      : win.type === 'activity' ? <Activity size={12} />
-                      : win.type === 'agents' ? <Bot size={12} />
-                      : <FileText size={12} />}
-                    <span style={{ maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {win.type === 'chat' ? <MessageSquare data-icon="inline-start" className="size-3" />
+                      : win.type === 'memory' ? <Brain data-icon="inline-start" className="size-3" />
+                      : win.type === 'tasks' ? <CheckCircle2 data-icon="inline-start" className="size-3" />
+                      : win.type === 'activity' ? <Activity data-icon="inline-start" className="size-3" />
+                      : win.type === 'agents' ? <Bot data-icon="inline-start" className="size-3" />
+                      : <FileText data-icon="inline-start" className="size-3" />}
+                    <span className="max-w-[120px] truncate">
                       {win.title}
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -754,11 +787,38 @@ export default function App() {
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        workspace={activeWorkspace}
+        onUpdateWorkspace={updateWorkspace}
         workspaceName={activeWorkspace?.name || 'Personal'}
         userEmail={user.email || ''}
         themeMode={themeMode}
         onThemeChange={setTheme}
       />
+
+      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const action = confirmAction?.onConfirm;
+                setConfirmAction(null);
+                void action?.();
+              }}
+            >
+              {confirmAction?.actionLabel || 'Confirm'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -783,11 +843,14 @@ function CanvasLayerScene({
   activityEvents,
   activityLoading,
   agents,
+  agentWebhooks,
   selectedAgent,
   onSelectAgent,
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onCreateAgentWebhook,
+  onUpdateAgentWebhook,
   topLevelMessages,
   threadMessages,
   threadReplyCounts,
@@ -817,6 +880,7 @@ function CanvasLayerScene({
   onToggleTaskStatus,
   onDeleteTask,
   onCommentCreated,
+  onRequestConfirm,
 }: {
   documents: Document[];
   facts: MemoryFact[];
@@ -837,11 +901,14 @@ function CanvasLayerScene({
   activityEvents: ActivityEvent[];
   activityLoading: boolean;
   agents: WorkspaceAgent[];
+  agentWebhooks: AgentWebhook[];
   selectedAgent: WorkspaceAgent | null;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; model?: string }) => void;
+  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
+  onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
   topLevelMessages: import('./types').Message[];
   threadMessages: import('./types').Message[];
   threadReplyCounts: Record<string, number>;
@@ -858,7 +925,7 @@ function CanvasLayerScene({
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimizeWindow: (id: string) => void;
   onShareWindow: (title: string) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null) => void;
   onSetActiveSession: (session: ChatSession) => void;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
@@ -871,6 +938,12 @@ function CanvasLayerScene({
   onToggleTaskStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
   onCommentCreated: (docTitle?: string) => void;
+  onRequestConfirm: (confirm: {
+    title: string;
+    description: string;
+    actionLabel: string;
+    onConfirm: () => void | Promise<void>;
+  }) => void;
 }) {
   return (
     <>
@@ -898,28 +971,25 @@ function CanvasLayerScene({
               titleIcon={<MessageSquare size={13} />}
               breadcrumb={workspaceName}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '6px 10px', borderBottom: '1px solid var(--border-subtle)',
-                  background: 'var(--canvas-elevated)', fontSize: '10px',
-                  color: 'var(--text-muted)', flexShrink: 0,
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
+              <div className="flex h-full flex-col">
+                <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-3 text-xs text-muted-foreground">
+                  <Label className="min-w-0 flex-1 cursor-pointer font-normal">
+                    <Checkbox
                       checked={useWorkspaceCtx}
-                      onChange={onToggleWorkspaceCtx}
-                      style={{ cursor: 'pointer' }}
+                      onCheckedChange={() => onToggleWorkspaceCtx()}
+                      className="size-4 shrink-0"
                     />
-                    Use workspace knowledge
-                  </label>
-                  <span style={{ color: 'var(--text-muted)' }}>·</span>
-                  <span title="The AI can see open tasks, recent documents, memory, and canvas notes">
-                    {useWorkspaceCtx ? `${documents.length} docs · ${facts.length} facts · ${tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length} tasks` : 'Context off'}
-                  </span>
+                    <span className="truncate text-xs leading-none">Use workspace knowledge</span>
+                  </Label>
+                  <Badge
+                    variant="secondary"
+                    title="The AI can see open tasks, recent documents, memory, and canvas notes"
+                    className="ml-auto max-w-[45%] truncate text-xs"
+                  >
+                    {useWorkspaceCtx ? `${documents.length} docs / ${facts.length} facts / ${tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length} tasks` : 'Context off'}
+                  </Badge>
                 </div>
-                <div style={{ flex: 1, minHeight: 0 }}>
+                <div className="min-h-0 flex-1">
                   <ChatWindowContent
                     messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
                     topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
@@ -942,7 +1012,7 @@ function CanvasLayerScene({
                     onCloseThread={onCloseThread}
                     onSendThreadReply={(content, model) => {
                       if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                      onSendMessage(content, model, facts, undefined);
+                      onSendMessage(content, model, facts, undefined, activeThreadId);
                     }}
                   />
                 </div>
@@ -973,14 +1043,21 @@ function CanvasLayerScene({
                 currentUserEmail={userEmail}
                 onAutoSave={onAutoSaveDocument}
                 onToggleFavorite={onToggleFavorite}
-                onDelete={async (id) => {
-                  const confirmed = window.confirm('Delete this document?');
-                  if (!confirmed) return;
-                  await onDeleteDocument(id);
-                  onCloseWindow(win.id);
+                onDelete={(id) => {
+                  onRequestConfirm({
+                    title: 'Delete this document?',
+                    description: 'This removes the document from the workspace.',
+                    actionLabel: 'Delete',
+                    onConfirm: async () => {
+                      await onDeleteDocument(id);
+                      onCloseWindow(win.id);
+                    },
+                  });
                 }}
                 onTitleChange={(title) => onUpdateWindow(win.id, { title })}
                 onCommentCreated={onCommentCreated}
+                tasks={tasks}
+                onUpdateTask={onUpdateTask}
               />
             </FloatingWindowShell>
           );
@@ -1074,9 +1151,12 @@ function CanvasLayerScene({
             >
               <AgentsWindowContent
                 agents={agents}
+                webhooks={agentWebhooks}
                 onCreateAgent={onCreateAgent}
                 onUpdateAgent={onUpdateAgent}
                 onDeleteAgent={onDeleteAgent}
+                onCreateWebhook={onCreateAgentWebhook}
+                onUpdateWebhook={onUpdateAgentWebhook}
               />
             </FloatingWindowShell>
           );
@@ -1108,90 +1188,32 @@ function WorkspacePresenceAvatars({
   const overflow = users.length - visibleUsers.length;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: '14px',
-        right: '14px',
-        zIndex: 85,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        padding: '8px 10px',
-        background: 'color-mix(in srgb, var(--canvas-elevated) 82%, transparent)',
-        border: '1px solid var(--border)',
-        borderRadius: '999px',
-        boxShadow: 'var(--shadow-md)',
-        backdropFilter: 'blur(10px)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', marginRight: overflow > 0 ? '2px' : 0 }}>
+    <div className="absolute top-3.5 right-3.5 z-[85] flex items-center gap-2 rounded-full border bg-popover/85 px-2.5 py-2 shadow-md backdrop-blur">
+      <AvatarGroup>
         {visibleUsers.map((person, index) => (
-          <div
+          <Avatar
             key={person.id}
+            size="sm"
             title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
-            style={{
-              width: '30px',
-              height: '30px',
-              marginLeft: index === 0 ? 0 : '-8px',
-              borderRadius: '50%',
-              border: '2px solid var(--canvas-base)',
-              background: person.color,
-              color: 'white',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '11px',
-              fontWeight: 700,
-              letterSpacing: '-0.01em',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
-              position: 'relative',
-            }}
+            className={cn(index > 0 && '-ml-2')}
           >
-            {(person.name || '?').slice(0, 2).toUpperCase()}
-            {person.isCurrentUser && (
-              <span
-                style={{
-                  position: 'absolute',
-                  right: '-1px',
-                  bottom: '-1px',
-                  width: '9px',
-                  height: '9px',
-                  borderRadius: '50%',
-                  background: '#22c55e',
-                  border: '2px solid var(--canvas-base)',
-                }}
-              />
-            )}
-          </div>
+            <AvatarFallback className="text-[10px] font-bold">
+              {(person.name || '?').slice(0, 2).toUpperCase()}
+            </AvatarFallback>
+            {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
+          </Avatar>
         ))}
         {overflow > 0 && (
-          <div
-            title={`${overflow} more users`}
-            style={{
-              width: '30px',
-              height: '30px',
-              marginLeft: '-8px',
-              borderRadius: '50%',
-              border: '2px solid var(--canvas-base)',
-              background: 'var(--canvas-raised)',
-              color: 'var(--text-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '11px',
-              fontWeight: 700,
-            }}
-          >
+          <AvatarGroupCount title={`${overflow} more users`} className="-ml-2 size-6 text-[10px]">
             +{overflow}
-          </div>
+          </AvatarGroupCount>
         )}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.1 }}>
+      </AvatarGroup>
+      <div className="flex min-w-0 flex-col">
+        <span className="text-[11px] font-semibold leading-tight text-foreground">
           {users.length === 1 ? 'Just you' : `${users.length} here now`}
         </span>
-        <span style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.1 }}>
+        <span className="text-[10px] leading-tight text-muted-foreground">
           Live workspace presence
         </span>
       </div>
@@ -1207,31 +1229,17 @@ function CanvasGridButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
       onClick={onClick}
       title="Show all canvases"
-      style={{
-        position: 'absolute',
-        top: '14px',
-        left: '14px',
-        zIndex: 80,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        padding: '10px 12px',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--border)',
-        background: 'var(--canvas-elevated)',
-        boxShadow: 'var(--shadow-md)',
-        cursor: 'pointer',
-        color: 'var(--text-primary)',
-        fontSize: '12px',
-        fontWeight: 600,
-      }}
+      className="absolute top-3.5 left-3.5 z-[80] bg-popover/95 shadow-md backdrop-blur"
     >
-      <Layers3 size={15} />
+      <Layers3 data-icon="inline-start" className="size-4" />
       <span>{activeLayerName}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -1261,173 +1269,93 @@ function CanvasGridOverlay({
   return (
     <div
       onClick={onClose}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 120,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '32px',
-        overflow: 'hidden',
-      }}
+      className="absolute inset-0 z-[120] flex items-center justify-center overflow-hidden p-8"
     >
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        backgroundImage: `url(${backgroundImage})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center center',
-        backgroundRepeat: 'no-repeat',
-        opacity: 0.22,
-        pointerEvents: 'none',
-      }} />
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'var(--home-bg-overlay)',
-        pointerEvents: 'none',
-      }} />
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        background: 'rgba(8, 8, 8, 0.10)',
-        backdropFilter: 'blur(8px)',
-        pointerEvents: 'none',
-      }} />
+      <img src={backgroundImage} alt="" className="pointer-events-none absolute inset-0 size-full object-cover opacity-20" />
+      <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
+      <div className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-md" />
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 'min(1200px, 100%)',
-          maxHeight: '100%',
-          overflow: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '18px',
-          position: 'relative',
-        }}
+        className="relative flex max-h-full w-full max-w-6xl flex-col gap-5"
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <header className="flex items-center justify-between gap-4">
           <div>
-            <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>All workspaces</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Choose a workspace or create a new one</div>
+            <h2 className="text-2xl font-bold text-foreground">All workspaces</h2>
+            <p className="text-sm text-muted-foreground">Choose a workspace or create a new one</p>
           </div>
-          <button
-            onClick={onCreateLayer}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '10px 14px',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--accent-border)',
-              background: 'var(--accent-subtle)',
-              color: 'var(--accent)',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            <Layers3 size={15} />
+          <Button type="button" onClick={onCreateLayer}>
+            <Layers3 data-icon="inline-start" className="size-4" />
             New workspace
-          </button>
-        </div>
+          </Button>
+        </header>
 
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap: '18px',
-        }}>
-          {layers.map(layer => {
-            const layerObjects = objects.filter(obj => (obj.layer_id || 'base') === layer.id);
-            const layerWindows = windows.filter(win => (win.canvasId || 'base') === layer.id && !win.minimized);
-            const isActive = layer.id === activeLayerId;
-            return (
-              <button
-                key={layer.id}
-                onClick={() => onSelectLayer(layer.id)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px',
-                  padding: '12px',
-                  borderRadius: '18px',
-                  border: isActive ? '1px solid var(--accent-border)' : '1px solid var(--border)',
-                  background: isActive ? 'var(--accent-subtle)' : 'var(--canvas-elevated)',
-                  boxShadow: isActive ? '0 0 0 1px var(--accent-border), var(--shadow-lg)' : 'var(--shadow-lg)',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <div style={{
-                  aspectRatio: '4 / 3',
-                  width: '100%',
-                  borderRadius: '14px',
-                  border: '1px solid var(--border)',
-                  background: 'linear-gradient(180deg, var(--canvas-elevated), var(--canvas-raised))',
-                  overflow: 'hidden',
-                  position: 'relative',
-                }}>
-                  <div style={{
-                    position: 'absolute',
-                    inset: 0,
-                    background: 'radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 45%), linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.08))',
-                  }} />
-                  <div style={{
-                    position: 'absolute',
-                    inset: '12px',
-                    borderRadius: '10px',
-                    border: '1px dashed var(--border-strong)',
-                  }} />
-                  {layerObjects.slice(0, 6).map((obj, index) => (
-                    <div
-                      key={obj.id}
-                      style={{
-                        position: 'absolute',
-                        left: `${10 + (index % 3) * 28}%`,
-                        top: `${16 + Math.floor(index / 3) * 26}%`,
-                        width: obj.type === 'line' || obj.type === 'arrow' ? '18%' : '14%',
-                        height: obj.type === 'line' || obj.type === 'arrow' ? '2px' : '12%',
-                        borderRadius: obj.type === 'ellipse' ? '999px' : '6px',
-                        background: obj.fill || 'var(--accent)',
-                        opacity: 0.78,
-                        transform: obj.type === 'diamond' ? 'rotate(45deg)' : obj.type === 'arrow' ? 'rotate(-20deg)' : 'none',
-                      }}
-                    />
-                  ))}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{layer.name}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{layerObjects.length} items • {layerWindows.length} windows</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {isActive && <div style={{ fontSize: '11px', color: 'var(--accent)', fontWeight: 700 }}>Current</div>}
-                    {layer.id !== baseLayerId && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteLayer(layer.id);
-                        }}
-                        style={{
-                          padding: '6px 8px',
-                          borderRadius: '10px',
-                          border: '1px solid rgba(248,113,113,0.3)',
-                          background: 'rgba(248,113,113,0.10)',
-                          color: 'var(--error)',
-                          cursor: 'pointer',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                        }}
-                      >
-                        Delete workspace
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        <ScrollArea className="min-h-0">
+          <div className="grid grid-cols-1 gap-4 pb-1 sm:grid-cols-2 lg:grid-cols-4">
+            {layers.map(layer => {
+              const layerObjects = objects.filter(obj => (obj.layer_id || 'base') === layer.id);
+              const layerWindows = windows.filter(win => (win.canvasId || 'base') === layer.id && !win.minimized);
+              const isActive = layer.id === activeLayerId;
+              const previewCount = Math.min(layerObjects.length, 6);
+              return (
+                <Card
+                  key={layer.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectLayer(layer.id)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') onSelectLayer(layer.id);
+                  }}
+                  className={cn(
+                    'cursor-pointer shadow-lg transition-colors',
+                    isActive && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
+                  )}
+                >
+                  <CardContent className="flex flex-col gap-3 p-3">
+                    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
+                      <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
+                      <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
+                        {Array.from({ length: previewCount }).map((_, index) => (
+                          <span
+                            key={index}
+                            className={cn(
+                              'self-center rounded-md bg-primary/70',
+                              index % 2 === 0 ? 'h-4' : 'h-2',
+                              index % 3 === 0 ? 'rounded-full' : 'rounded-md',
+                            )}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-bold text-foreground">{layer.name}</h3>
+                        <p className="text-xs text-muted-foreground">
+                          {layerObjects.length} items - {layerWindows.length} windows
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {isActive && <Badge variant="secondary">Current</Badge>}
+                        {layer.id !== baseLayerId && (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="xs"
+                            onClick={e => {
+                              e.stopPropagation();
+                              onDeleteLayer(layer.id);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </ScrollArea>
       </div>
     </div>
   );
