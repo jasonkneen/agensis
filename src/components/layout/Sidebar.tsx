@@ -114,6 +114,8 @@ export function Sidebar({
   onToggleCollapse,
   onOpenCommandPalette,
   onOpenWorkspaceGrid,
+  onNewChat,
+  onNewDocument,
   onCreateWorkspace,
   onDocumentOpen,
   onDocumentUpdate,
@@ -121,6 +123,8 @@ export function Sidebar({
   onSessionUpdate,
   onSessionArchive,
   onOpenMemory,
+  onOpenTasks,
+  onOpenActivity,
   onOpenAgents,
   onAgentMessage,
   onAgentProfile,
@@ -173,6 +177,7 @@ export function Sidebar({
       threadSessions: threads,
     };
   }, [uniqueSessions]);
+  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
   const directMessageTargets = React.useMemo(
     () => buildDirectMessageTargets(directSessions, directAgents, favoriteAgentKeys),
     [directSessions, directAgents, favoriteAgentKeys],
@@ -248,10 +253,14 @@ export function Sidebar({
         <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
         <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
         <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
+        <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
+        {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
         <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
         {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
         {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
+        {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
         <div className="flex-1" />
+        <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
         <SidebarRailButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
       </aside>
     );
@@ -387,6 +396,8 @@ export function Sidebar({
               label="Channels"
               icon={<Hash />}
               count={activeChannelSessions.length}
+              actionLabel="New channel"
+              onAction={onNewChat}
               open={openSections.has('channels')}
               onOpenChange={open => toggleSection('channels', open)}
             >
@@ -432,6 +443,8 @@ export function Sidebar({
               label="Documents"
               icon={<FileText />}
               count={uniqueRecents.length}
+              actionLabel="New document"
+              onAction={onNewDocument}
               open={openSections.has('documents')}
               onOpenChange={open => toggleSection('documents', open)}
             >
@@ -494,7 +507,29 @@ export function Sidebar({
                 />
               ))}
             </SidebarSection>
+            <SidebarSection
+              id="archive"
+              label="Archive"
+              icon={<Archive />}
+              count={archivedSessions.length}
+              open={openSections.has('archive')}
+              onOpenChange={open => toggleSection('archive', open)}
+            >
+              {archivedSessions.slice(0, 8).map(session => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  archived
+                  onOpen={() => onSessionOpen(session)}
+                  onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
+                  onArchive={() => onSessionArchive?.(session.id, false)}
+                  presenceUsers={chatPresence[session.id] || []}
+                />
+              ))}
+            </SidebarSection>
+            {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
             <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+            {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
             {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
             {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
         </div>
@@ -510,6 +545,9 @@ export function Sidebar({
             <div className="truncate text-xs font-medium">{userEmail}</div>
             <div className="truncate text-xs text-muted-foreground">{workspace?.name || 'Personal'}</div>
           </div>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="App settings">
+            <Settings className="size-4" />
+          </Button>
           <Button type="button" variant="ghost" size="icon-sm" onClick={onSignOut} aria-label="Sign out">
             <LogOut className="size-4" />
           </Button>
