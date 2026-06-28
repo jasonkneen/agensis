@@ -1718,15 +1718,13 @@ function WorkspacePresenceAvatars({
 
   const visibleUsers = users.slice(0, 5);
   const overflow = users.length - visibleUsers.length;
-  const userCount = users.filter(user => user.kind !== 'agent').length;
-  const agentCount = users.filter(user => user.kind === 'agent').length;
   const modeOptions: Array<{ value: PresenceVisibilityMode; label: string }> = [
     { value: 'visible', label: 'Visible' },
     { value: 'dimmed', label: 'Dim' },
     { value: 'hidden', label: 'Muted' },
   ];
   return (
-    <div data-presence-panel className="absolute top-3.5 right-3.5 z-[85] flex items-start gap-2">
+    <div data-presence-panel className="absolute top-3.5 right-3.5 z-[11000] flex items-start gap-2">
       {expanded && (
         <div className="w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
           <div className="flex items-center justify-between border-b px-3 py-2">
@@ -1850,9 +1848,10 @@ function WorkspacePresenceAvatars({
       <button
         type="button"
         onClick={() => setExpanded(prev => !prev)}
-        className="flex items-center gap-2 rounded-full border bg-popover/90 px-2.5 py-2 text-left shadow-md backdrop-blur transition-colors hover:bg-popover"
+        className="flex items-center rounded-full border bg-popover/90 p-1.5 text-left shadow-md backdrop-blur transition-colors hover:bg-popover"
         aria-expanded={expanded}
-        aria-label="Shared users"
+        aria-label={`${users.length} shared participants`}
+        title={`${users.length} shared participants`}
       >
         <AvatarGroup>
           {visibleUsers.map((person, index) => {
@@ -1883,14 +1882,6 @@ function WorkspacePresenceAvatars({
             </AvatarGroupCount>
           )}
         </AvatarGroup>
-        <div className="flex min-w-0 flex-col">
-          <span className="text-[11px] font-semibold leading-tight text-foreground">
-            {userCount === 1 && agentCount === 0 ? 'Just you' : `${userCount} users / ${agentCount} agents`}
-          </span>
-          <span className="text-[10px] leading-tight text-muted-foreground">
-            Shared participants
-          </span>
-        </div>
       </button>
     </div>
   );

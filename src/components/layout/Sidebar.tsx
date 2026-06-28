@@ -126,17 +126,19 @@ export function Sidebar({
   const resizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
   const [closedSections, setClosedSections] = React.useState<Set<string>>(() => new Set());
   const userInitial = (userEmail[0] || 'U').toUpperCase();
-  const activeSessions = sessions.filter(session => !session.archived_at);
-  const archivedSessions = sessions.filter(session => session.archived_at);
+  const uniqueSessions = React.useMemo(() => uniqueById(sessions), [sessions]);
+  const uniqueRecents = React.useMemo(() => uniqueById(recents), [recents]);
+  const activeSessions = uniqueSessions.filter(session => !session.archived_at);
+  const archivedSessions = uniqueSessions.filter(session => session.archived_at);
   const folderNames = Array.from(new Set(activeSessions.map(session => session.folder || 'General')));
   const groupedSessions = folderNames.map(folder => ({
     folder,
     sessions: activeSessions.filter(session => (session.folder || 'General') === folder),
   }));
-  const documentFolderNames = Array.from(new Set(recents.map(doc => doc.folder || 'General')));
+  const documentFolderNames = Array.from(new Set(uniqueRecents.map(doc => doc.folder || 'General')));
   const groupedDocuments = documentFolderNames.map(folder => ({
     folder,
-    documents: recents.filter(doc => (doc.folder || 'General') === folder),
+    documents: uniqueRecents.filter(doc => (doc.folder || 'General') === folder),
   }));
   const focusedWindow = floatingWindows
     .filter(win => !win.minimized)
@@ -145,6 +147,14 @@ export function Sidebar({
     ), null);
   const focusedWindowType = focusedWindow?.type;
   const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
+
+  React.useEffect(() => {
+    const left = collapsed ? 68 : sidebarWidth + 16;
+    document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
+    document.documentElement.style.setProperty('--workspace-viewport-top', '8px');
+    document.documentElement.style.setProperty('--workspace-viewport-right', '8px');
+    document.documentElement.style.setProperty('--workspace-viewport-bottom', '8px');
+  }, [collapsed, sidebarWidth]);
 
   const toggleSection = (id: string, open: boolean) => {
     setClosedSections(prev => {
@@ -368,6 +378,15 @@ export function Sidebar({
       />
     </aside>
   );
+}
+
+function uniqueById<T extends { id: string }>(items: T[]) {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 function IconButton({ icon, title, onClick }: { icon: React.ReactNode; title: string; onClick: () => void }) {

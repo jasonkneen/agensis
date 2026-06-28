@@ -89,12 +89,23 @@ import {
 } from '@/components/ui/message-scroller';
 import { Spinner } from '@/components/ui/spinner';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -196,6 +207,7 @@ export function ChatWindowContent({
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
+  const [deleteMessageTarget, setDeleteMessageTarget] = useState<ChatMessage | null>(null);
   const [panelWidth, setPanelWidth] = useState(360);
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectRoot, setProjectRoot] = useState('');
@@ -579,7 +591,8 @@ export function ChatWindowContent({
     const { error } = await backendClient
       .from('messages')
       .update({ pinned: nextPinned })
-      .eq('id', message.id);
+      .eq('id', message.id)
+      .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { pinned: message.pinned });
     setMessageActionBusy(null);
   };
@@ -601,24 +614,33 @@ export function ChatWindowContent({
     const previous = visibleMessages.find(message => message.id === messageId);
     setMessageOverride(messageId, { content: nextContent });
     setMessageActionBusy(messageId);
-    const { error } = await backendClient
+    const updateQuery = backendClient
       .from('messages')
       .update({ content: nextContent })
       .eq('id', messageId);
+    if (previous?.session_id) updateQuery.eq('session_id', previous.session_id);
+    const { error } = await updateQuery;
     if (error && previous) setMessageOverride(messageId, { content: previous.content });
     setMessageActionBusy(null);
     setEditingMessageId(null);
     setEditingContent('');
   };
 
-  const handleDeleteMessage = async (message: ChatMessage) => {
-    if (typeof window !== 'undefined' && !window.confirm('Delete this channel post?')) return;
+  const handleDeleteMessage = (message: ChatMessage) => {
+    setDeleteMessageTarget(message);
+  };
+
+  const handleConfirmDeleteMessage = async () => {
+    const message = deleteMessageTarget;
+    if (!message) return;
+    setDeleteMessageTarget(null);
     setMessageOverride(message.id, { deleted: true });
     setMessageActionBusy(message.id);
     const { error } = await backendClient
       .from('messages')
       .delete()
-      .eq('id', message.id);
+      .eq('id', message.id)
+      .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { deleted: false });
     setMessageActionBusy(null);
   };
@@ -761,7 +783,7 @@ export function ChatWindowContent({
                   {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
                 </span>
               ))}
-              <Badge variant="secondary" className="h-6 gap-1">
+              <Badge variant="secondary" className="h-6 gap-1" title={`${participants.length} participants`}>
                 <Users className="size-3" />
                 {participants.length}
               </Badge>
@@ -803,7 +825,7 @@ export function ChatWindowContent({
                           onCancelEdit={handleCancelEdit}
                           onChangeEdit={setEditingContent}
                           onSaveEdit={() => void handleSaveEdit()}
-                          onDelete={() => void handleDeleteMessage(msg)}
+                          onDelete={() => handleDeleteMessage(msg)}
                           onOpenThread={onOpenThread ? () => {
                             onOpenThread(msg.id);
                             openThread();
@@ -1082,6 +1104,33 @@ export function ChatWindowContent({
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={Boolean(deleteMessageTarget)} onOpenChange={open => {
+        if (!open) setDeleteMessageTarget(null);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this post?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the post from the channel. Thread replies attached to it may also stop showing in context.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deleteMessageTarget && messageActionBusy === deleteMessageTarget.id)}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={Boolean(deleteMessageTarget && messageActionBusy === deleteMessageTarget.id)}
+              onClick={event => {
+                event.preventDefault();
+                void handleConfirmDeleteMessage();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1229,6 +1278,17 @@ function ChannelSidePanel({
   onClose: () => void;
 }) {
   const isPins = type === 'pins';
+  const openUploadedFile = async (file: UploadedFile) => {
+    const response = await fetch(apiUrl(`/backend/files/${encodeURIComponent(file.id)}/content`), {
+      headers: apiAuthHeaders(),
+    });
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+  };
+
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
@@ -1262,11 +1322,7 @@ function ChannelSidePanel({
               <div className="space-y-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploaded</div>
                 {uploadedFiles.map(file => (
-                  <div key={file.id} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-sm">
-                    <Paperclip className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                    <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
-                  </div>
+                  <UploadedFileRow key={file.id} file={file} onOpen={() => void openUploadedFile(file)} />
                 ))}
               </div>
             )}
@@ -1291,6 +1347,33 @@ function ChannelSidePanel({
         )}
       </div>
     </div>
+  );
+}
+
+function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => void }) {
+  const isImage = (file.type || '').startsWith('image/');
+  const preview = useAuthenticatedObjectUrl(isImage ? apiUrl(`/backend/files/${encodeURIComponent(file.id)}/content`) : null);
+
+  return (
+    <button
+      type="button"
+      className="flex w-full min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+      onClick={onOpen}
+      title={`Open ${file.name}`}
+    >
+      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border bg-background">
+        {isImage && preview.src ? (
+          <img src={preview.src} alt="" className="size-full object-cover" draggable={false} />
+        ) : (
+          <Paperclip className="size-4 text-muted-foreground" />
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{file.name}</span>
+        <span className="block truncate text-xs text-muted-foreground">{file.type || 'File'}</span>
+      </span>
+      <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+    </button>
   );
 }
 

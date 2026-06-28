@@ -428,17 +428,41 @@
 :root[data-ui-theme="tinyworld"] .sidebar-search {
   border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
   color: var(--tw-accent-outline) !important;
-  background: var(--tw-accent-fill) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
+    var(--tw-accent-fill) !important;
   box-shadow:
     inset 0 1px 0 var(--tw-control-inset),
     inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
     var(--tw-control-shadow) !important;
 }
 
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-search {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
+    var(--tw-accent-fill) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.26),
+    0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
+}
+
 :root[data-ui-theme="tinyworld"] .sidebar-action-row:hover,
 :root[data-ui-theme="tinyworld"] .sidebar-search:hover,
 :root[data-ui-theme="tinyworld"] .sidebar-action-row[data-active="true"] {
-  background: var(--tw-accent-hover) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
+    var(--tw-accent-hover) !important;
+}
+
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row:hover,
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-search:hover,
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row[data-active="true"] {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
+    var(--tw-accent-hover) !important;
 }
 
 :root[data-ui-theme="tinyworld"] .sidebar-item-row {

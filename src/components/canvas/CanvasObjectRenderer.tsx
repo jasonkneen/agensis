@@ -3,6 +3,8 @@ import { AlertTriangle, FileText, RotateCw } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { CANVAS_APPS, parseAppletState } from '../../lib/canvasApps';
+import { apiAuthHeaders } from '../../lib/backendClient';
+import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 
 interface CanvasObjectRendererProps {
   obj: CanvasObject;
@@ -677,6 +679,8 @@ function MediaObject({
   selected: boolean;
   attachHighlight: boolean;
 }) {
+  const media = useAuthenticatedObjectUrl(obj.src);
+
   return (
     <div
       data-canvas-item-id={obj.id}
@@ -700,29 +704,56 @@ function MediaObject({
       }}
     >
       {obj.type === 'image' ? (
-        <img
-          src={obj.src}
-          alt={obj.file_name}
-          draggable={false}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            display: 'block',
-          }}
-        />
+        media.src ? (
+          <img
+            src={media.src}
+            alt={obj.file_name}
+            draggable={false}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+            }}
+          />
+        ) : (
+          <MediaPlaceholder label={media.error ? 'Image unavailable' : 'Loading image...'} />
+        )
       ) : (
-        <video
-          src={obj.src}
-          controls
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-            display: 'block',
-          }}
-        />
+        media.src ? (
+          <video
+            src={media.src}
+            controls
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              display: 'block',
+            }}
+          />
+        ) : (
+          <MediaPlaceholder label={media.error ? 'Video unavailable' : 'Loading video...'} />
+        )
       )}
+    </div>
+  );
+}
+
+function MediaPlaceholder({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        width: '100%',
+        height: '100%',
+        placeItems: 'center',
+        padding: 12,
+        color: 'var(--text-muted)',
+        fontSize: 12,
+        textAlign: 'center',
+      }}
+    >
+      {label}
     </div>
   );
 }
@@ -745,7 +776,9 @@ function FileObject({
     setFailed(false);
     if (!isPreviewable) return;
 
-    fetch(obj.src)
+    fetch(obj.src, {
+      headers: shouldFetchWithApiAuth(obj.src) ? apiAuthHeaders() : undefined,
+    })
       .then(response => {
         if (!response.ok) throw new Error('Preview failed');
         return response.text();

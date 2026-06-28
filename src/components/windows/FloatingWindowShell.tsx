@@ -201,10 +201,10 @@ export function FloatingWindowShell({
   const shellStyle: React.CSSProperties = isMaximized
     ? {
         position: 'absolute',
-        left: 8,
-        top: 8,
-        width: 'calc(100% - 16px)',
-        height: 'calc(100% - 16px)',
+        left: 'var(--workspace-viewport-left, 8px)',
+        top: 'var(--workspace-viewport-top, 8px)',
+        width: 'calc(100% - var(--workspace-viewport-left, 8px) - var(--workspace-viewport-right, 8px))',
+        height: 'calc(100% - var(--workspace-viewport-top, 8px) - var(--workspace-viewport-bottom, 8px))',
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
