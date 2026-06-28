@@ -465,6 +465,9 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS is_favorite boolean NOT NULL DEFAULT false;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS participants jsonb NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'mention';
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS max_agent_turns integer NOT NULL DEFAULT 10;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS auto_rounds integer NOT NULL DEFAULT 3;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
@@ -746,10 +749,22 @@ function createAgentConnectToken() {
 }
 
 function normalizeBaseUrl(value) {
-  return String(value || '').trim().replace(/\/$/, '');
+  const text = String(value || '').trim().replace(/\/+$/, '');
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
 }
 
 function requestBaseUrl(req) {
+  const publicUrl = normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL || process.env.PUBLIC_URL || '');
+  if (publicUrl) return publicUrl;
   const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
   const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
   const proto = forwardedProto || req.protocol || 'http';
@@ -763,33 +778,17 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, model, permissionMode }) {
-  const agentBin = path.resolve(__dirname, '..', 'agent', 'agensis-cli', 'bin', 'agensis.mjs');
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode }) {
   const resolvedModel = resolveAnthropicModel(model);
   const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
   const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
+  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
   if (resolvedPermissionMode === 'yolo') {
     commandPermissionArgs.push('--no-sandbox');
   }
-  const localCommand = [
-    'node',
-    shellQuote(agentBin),
-    '--url',
-    shellQuote(baseUrl),
-    '--token',
-    shellQuote(token),
-    '--workspace',
-    shellQuote(workspaceId),
-    '--agent',
-    shellQuote(agentId),
-    '--handle',
-    shellQuote(handle),
-    '--model',
-    shellQuote(resolvedModel),
-    ...commandPermissionArgs,
-  ].join(' ');
   const portableCommand = [
     'agensis',
+    'connect',
     '--url',
     shellQuote(baseUrl),
     '--token',
@@ -800,11 +799,13 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
     shellQuote(agentId),
     '--handle',
     shellQuote(handle),
+    '--name',
+    shellQuote(displayName),
     '--model',
     shellQuote(resolvedModel),
     ...commandPermissionArgs,
   ].join(' ');
-  return { localCommand, portableCommand };
+  return { localCommand: portableCommand, portableCommand };
 }
 
 async function verifyAgentConnectToken(token) {
@@ -1983,6 +1984,7 @@ function createApp() {
         workspaceId: agent.workspace_id,
         agentId,
         handle,
+        name: updateRows[0]?.name || agent.name,
         model: updateRows[0]?.model || agent.model,
         permissionMode: updateRows[0]?.permission_mode || agent.permission_mode,
       });
@@ -1991,7 +1993,7 @@ function createApp() {
           agent: updateRows[0],
           handle,
           token,
-          command: commands.localCommand,
+          command: commands.portableCommand,
           localCommand: commands.localCommand,
           portableCommand: commands.portableCommand,
           baseUrl,

@@ -7,6 +7,7 @@ import { createQueue } from "./queue.mjs";
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 const DEFAULT_MODEL = "claude-opus-4-8";
+export const AGENSIS_CLI_VERSION = "0.1.14";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
@@ -63,7 +64,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
           permissionFlags: permissionFlagsForMode(config.permissionMode),
           once: config.once,
           runtime: "agensis",
-          version: "0.1.0",
+          version: AGENSIS_CLI_VERSION,
         },
       });
       heartbeatTimer = setInterval(() => {
@@ -152,19 +153,19 @@ export async function runAgensisDaemon(rawConfig = {}) {
 
 function normalizeConfig(raw) {
   const config = {
-    url: String(raw.url || raw.baseUrl || "").trim(),
-    token: String(raw.token || "").trim(),
-    workspace: String(raw.workspace || raw.workspaceId || "").trim(),
-    agent: String(raw.agent || raw.agentId || "").trim(),
-    handle: slugHandle(raw.handle || raw.name || "agent"),
-    name: String(raw.name || raw.handle || "agensis Agent").trim(),
-    cwd: String(raw.cwd || process.cwd()).trim(),
+    url: String(raw.url || raw.baseUrl || process.env.AGENSIS_URL || "").trim(),
+    token: String(raw.token || process.env.AGENSIS_TOKEN || "").trim(),
+    workspace: String(raw.workspace || raw.workspaceId || process.env.AGENSIS_WORKSPACE || process.env.AGENSIS_WORKSPACE_ID || "").trim(),
+    agent: String(raw.agent || raw.agentId || process.env.AGENSIS_AGENT || process.env.AGENSIS_AGENT_ID || "").trim(),
+    handle: slugHandle(raw.handle || process.env.AGENSIS_HANDLE || raw.name || process.env.AGENSIS_NAME || "agent"),
+    name: String(raw.name || process.env.AGENSIS_NAME || raw.handle || process.env.AGENSIS_HANDLE || "agensis Agent").trim(),
+    cwd: String(raw.cwd || process.env.AGENSIS_CWD || process.cwd()).trim(),
     codingCmd: String(raw.codingCmd || process.env.AGENSIS_CODING_CMD || process.env.CODING_CMD || "claude -p").trim(),
     model: resolveModel(raw.model || process.env.AGENSIS_MODEL || process.env.CLAUDE_MODEL || ""),
     permissionMode: normalizePermissionMode(raw.permissionMode || raw.permission_mode || raw.permission || process.env.AGENSIS_PERMISSION_MODE || "default"),
-    timeoutMs: Number(raw.timeoutMs || DEFAULT_TIMEOUT_MS),
-    heartbeatMs: Number(raw.heartbeatMs || DEFAULT_HEARTBEAT_MS),
-    once: Boolean(raw.once),
+    timeoutMs: Number(raw.timeoutMs || process.env.AGENSIS_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
+    heartbeatMs: Number(raw.heartbeatMs || process.env.AGENSIS_HEARTBEAT_MS || DEFAULT_HEARTBEAT_MS),
+    once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
   };
   const missing = [];

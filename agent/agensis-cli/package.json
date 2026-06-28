@@ -2,14 +2,25 @@
   "name": "agensis-cli",
   "version": "0.1.14",
   "description": "Run a local agensis workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to agensis.",
+  "homepage": "https://agensis.io",
   "type": "module",
   "bin": {
     "agensis": "bin/agensis.mjs"
   },
+  "exports": {
+    ".": "./src/agensis.mjs"
+  },
+  "scripts": {
+    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs",
+    "pack:dry-run": "npm pack --dry-run"
+  },
   "files": [
-    "bin",
-    "src",
-    "README.md"
+    "bin/agensis.mjs",
+    "src/agensis.mjs",
+    "src/cli.mjs",
+    "src/queue.mjs",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
@@ -25,6 +36,9 @@
   ],
   "dependencies": {
     "ws": "^8.20.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }

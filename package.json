@@ -59,6 +59,7 @@
     "@types/react": "19",
     "@types/react-dom": "19",
     "@vitejs/plugin-react": "^4.3.1",
+    "agensis-cli": "file:agent/agensis-cli",
     "autoprefixer": "^10.4.18",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { runAgensisDaemon } from "../src/agensis.mjs";
+import { AGENSIS_CLI_VERSION, runAgensisDaemon } from "../src/agensis.mjs";
 
 function parseArgs(argv) {
   const args = { command: "connect" };
@@ -19,6 +19,10 @@ function parseArgs(argv) {
     const key = rawKey.replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
     if (key === "help") {
       args.help = true;
+      continue;
+    }
+    if (key === "version") {
+      args.version = true;
       continue;
     }
     if (key === "once") {
@@ -50,7 +54,7 @@ Usage:
   agensis connect --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
 
 Required:
-  --url <url>             agensis app URL, for example http://localhost:5174
+  --url <url>             agensis app/backend URL, for example https://agensis.io or http://localhost:5173
   --token <token>         Agent connection token from agensis
   --workspace <id>        Workspace id
   --agent <id>            Workspace agent id
@@ -67,6 +71,7 @@ Options:
   --timeout-ms <ms>       Kill a job after this time, default: 1800000
   --heartbeat-ms <ms>     Local terminal heartbeat interval, default: 15000
   --once                  Run one queued job then exit
+  --version               Print the CLI version
   --help                  Show this help
 `;
 }
@@ -75,6 +80,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     process.stdout.write(usage());
+    return;
+  }
+  if (args.version) {
+    process.stdout.write(`${AGENSIS_CLI_VERSION}\n`);
     return;
   }
   if (args.command !== "connect") {

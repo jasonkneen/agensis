@@ -2113,11 +2113,26 @@ function withLiveParticipantStatus(
 ): DisplayParticipant {
   if (participant.kind !== 'agent') return participant;
   const agentId = participant.agent_id || participant.id.replace(/^agent:/, '');
-  const agent = agents.find(item => item.id === agentId);
-  const connection = agentConnections.find(item => item.agent_id === agentId && item.status !== 'offline');
+  const normalizedHandle = stringValue(participant.handle).toLowerCase();
+  const agent = agents.find(item => {
+    if (item.id === agentId) return true;
+    const handle = agentHandle(item).toLowerCase();
+    return Boolean(normalizedHandle && handle === normalizedHandle);
+  });
+  const resolvedAgentId = agent?.id || agentId;
+  const connection = agentConnections.find(item => {
+    if (item.status === 'offline') return false;
+    if (item.agent_id && item.agent_id === resolvedAgentId) return true;
+    const handle = stringValue(item.handle).toLowerCase();
+    return Boolean(normalizedHandle && handle === normalizedHandle);
+  });
+  const handle = participant.handle || (agent ? agentHandle(agent) : null);
   return {
     ...participant,
+    id: resolvedAgentId ? `agent:${resolvedAgentId}` : participant.id,
     name: participant.name || agent?.name || 'Agent',
+    handle,
+    agent_id: resolvedAgentId || participant.agent_id || null,
     status: connection?.status || participant.status || agent?.run_mode || 'built-in',
     connected: Boolean(connection),
   };
@@ -2221,6 +2236,7 @@ function participantCandidateKey(candidate: ParticipantCandidate): string {
   if (candidate.kind === 'user') {
     return candidate.user_id ? `user:${candidate.user_id}` : candidate.id;
   }
+  if (candidate.agent_id) return `agent-id:${candidate.agent_id}`;
   const handle = stringValue(candidate.handle).toLowerCase();
   if (handle) return `agent:${handle}`;
   const name = stringValue(candidate.name).toLowerCase();

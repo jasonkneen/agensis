@@ -1,143 +1,98 @@
 # agensis-cli
 
-Run **your own** coding agent — Claude Code, Codex, Cursor, or any command — as
-an autonomous teammate inside a [agensis](https://agensis.io) channel.
+Run a local agensis workspace agent daemon from your machine.
 
-It connects to agensis over MCP, watches for `@mentions` of your agent in a
-git-linked channel (including thread replies), runs your coding agent in a
-**local** checkout, and — by default — **opens a PR for review**. Your code and
-your git/`gh` credentials never leave your machine — agensis only relays messages.
+The npm package is `agensis-cli`; the installed command is `agensis`.
+It connects to an agensis workspace over websocket, receives agent jobs, runs
+your configured coding CLI in the local folder, and posts results back to the
+workspace.
 
-```
-agensis channel  ──MCP/HTTPS──▶  agensis-cli (your laptop)
-  human: "@scout fix the navbar overflow"
-  agent: branches, runs your coding CLI, commits + pushes, opens a PR
-  agent: posts a report card with the PR link
-  human: Approve  ▶  agensis merges the PR
-         Reject   ▶  agensis closes the PR
-         Changes  ▶  agent re-works with your note
-```
-
-Prefer **approve-before-push**? Set `"gate": true` — the agent then posts the
-proposed diff as a card and pushes only after you Approve (nothing leaves your
-machine until then).
-
-## Quick start
-
-In agensis: open your agent's profile → **Connect** → copy the
-`agensis --join …` command. Then on your machine, **run it from inside your
-repo's folder** — the daemon matches the repo by its git remote, so no config is
-needed:
+## Install
 
 ```sh
-cd ~/code/your-repo
-npx --package agensis-cli agensis --join <blob>        # token + endpoint from the link; repo auto-detected from cwd
+npm install -g agensis-cli
 ```
 
-Running from elsewhere, or want to map several repos explicitly? Use a config:
-
-```jsonc
-// ~/.agensis/agent.json  (or ./agensis-cli.json)
-{
-  "url": "https://agensis.io/api/mcp",
-  "token": "mgo_…",
-  "repos": { "your-org/your-repo": "/Users/you/code/your-repo" },
-  "codingCmd": "claude -p --permission-mode acceptEdits",  // safe default; see Permissions / autonomy. or "codex exec", "cursor-agent", any command
-  "chatCmd": "claude -p --model claude-haiku-4-5",  // FAST command for chat replies + the plan-ack (set if your stack isn't Claude)
-  "defaultBranch": "main",
-  "gate": false,               // default: open a PR directly. true = approve-before-push
-  "heartbeatMs": 180000,       // long runs post one "still working…" thread reply this often (0 = off, min 15s)
-  "chatTimeoutMs": 90000       // cap a chat reply / plan-ack so a stalled model can't go silent
-}
-```
-
-**Staying responsive.** Every code task posts an **instant acknowledgement**
-(under a second), and — if your server exposes `edit_message` and a `chatCmd` is
-set — a quick **plan** ("On it — I'll do X, then open a PR") edits into it. On a
-run longer than `heartbeatMs` (default 3 min; env `AGENSIS_HEARTBEAT_MS`, `0`
-disables, clamped to ≥15s) the agent posts **one progress reply** in the thread
-then edits it in place with elapsed time + the CLI's latest line — so the channel
-shows it's alive without thread spam. When the run ends, that message is retired
-to a short "done" line. A run that **times out or errors** says so honestly (with
-a stderr tail) instead of claiming "no changes". Chat replies use the faster
-`chatCmd` (default Haiku; falls back to `codingCmd` if unset) bounded by
-`chatTimeoutMs`. The responsive surface needs an agensis server new enough to expose
-`edit_message`; older servers just skip the live edits.
+Or run without a global install:
 
 ```sh
-agensis          # watch every channel the agent is in
-agensis --channel <id>   # scope to one channel
+npx --package agensis-cli agensis connect --help
 ```
 
-## How it works
+## Connect An Agent
 
-- **Trigger** — an `@mention` of your agent in a channel that's linked to a repo.
-- **Chat or code?** — the agent reads the conversation and decides with the model
-  (via `chatCmd`), not a keyword list: a question/greeting/"let's just discuss" →
-  a chat reply; anything asking for a change — including "just code it", "finish
-  it", "approved", or "go for it" after a request, in any language → a code run.
-- **Repo resolution** — the channel's linked repo is mapped to a local path via
-  `repos`. No mapping → the agent says so and stops.
-- **Run** — it branches off `defaultBranch` (refuses a dirty tree), runs
-  `codingCmd` with the task, and stages the result.
-- **Open a PR** (default) — it commits, pushes with *your* `git`/`gh`, opens a PR,
-  and posts a report card with the link. Review on the card: **Approve** merges,
-  **Reject** closes, **Request changes** re-works.
-- **Approve-before-push** (`gate:true`) — instead, it posts the staged diff as a
-  card and polls for your decision; **Approve** pushes + opens the PR, **Reject**
-  discards the branch, **Request changes** re-runs with your note (bounded rounds).
+In agensis, open the agent profile, choose Connect, and copy the generated
+command. It should look like:
 
-## Model & permissions
+```sh
+agensis connect \
+  --url https://agensis.io \
+  --token aga_... \
+  --workspace <workspace-id> \
+  --agent <agent-id> \
+  --handle general \
+  --name general \
+  --model claude-haiku-4-5 \
+  --permission-mode default
+```
 
-You don't have to hand-write `codingCmd`: the agent's **Connect via MCP** panel in
-agensis has **Model** (Vendor default / Opus / Sonnet / Haiku) and **Permissions**
-(Ask before edits / Auto-approve edits / Skip all prompts) pickers that bake your
-choice into the generated `--coding-cmd`. Change it later by editing `codingCmd` in
-`agensis-cli.json` — the daemon re-reads the file between polls and applies it
-without a restart (your `url`/`token` are never affected). The next section
-explains what each permission level means.
+Run it from the folder where the coding CLI should execute:
 
-## Permissions / autonomy
+```sh
+cd /path/to/repo
+agensis connect --url ... --token ... --workspace ... --agent ...
+```
 
-`codingCmd` decides how much the coding agent can do on its own. Three levels,
-safest first:
+The command stays connected, sends heartbeats, accepts queued jobs, and exits on
+Ctrl+C.
 
-- **`--permission-mode acceptEdits` (default).** The agent edits files without
-  prompting, but in headless `claude -p` a step that needs bash — run the tests,
-  install a dep — has no interactive prompt to grant, so the task can **stall**.
-  Good when the work is edit-only; frustrating for anything that needs to run
-  commands.
-- **`--dangerously-skip-permissions` (recommended for independent agents).** Full
-  autonomy: the agent can run the tests, install deps, and finish hands-off.
-  Caution: it can run **any** command in the repo you point it at — only use it
-  on a repo and machine where that's acceptable. This is the option to pick if
-  you want the agent to actually work on its own.
+## Options
 
-  ```jsonc
-  "codingCmd": "claude -p --dangerously-skip-permissions"
-  ```
+Required:
 
-- **Approve-before-push (`gate:true`), most cautious.** Independent of the two
-  above — the agent still runs locally, but posts the proposed diff as a card and
-  pushes only after you Approve. Pair it with either permission mode.
+- `--url <url>`: agensis app/backend URL, for example `https://agensis.io` or `http://localhost:5173`
+- `--token <token>`: agent connection token from agensis
+- `--workspace <id>`: workspace id
+- `--agent <id>`: workspace agent id
 
-The default stays `acceptEdits`. Reach for `--dangerously-skip-permissions` when
-you want a truly hands-off teammate, and keep `gate:true` if you'd rather review
-before anything is pushed.
+Optional:
+
+- `--handle <name>`: mention handle used in channels
+- `--name <name>`: display name
+- `--cwd <path>`: folder where the coding CLI runs
+- `--coding-cmd <command>`: command used for jobs, default `claude -p`
+- `--model <id>`: default model passed to supported coding CLIs
+- `--permission-mode <mode>`: `default`, `accept_edits`, or `yolo`
+- `--yolo`: alias for `--permission-mode yolo`
+- `--no-sandbox`: alias for `--permission-mode yolo`
+- `--timeout-ms <ms>`: kill a job after this time, default `1800000`
+- `--heartbeat-ms <ms>`: local terminal heartbeat interval, default `15000`
+- `--once`: run one queued job then exit
+- `--version`: print the CLI version
+- `--help`: show help
+
+Environment fallbacks:
+
+- `AGENSIS_URL`
+- `AGENSIS_TOKEN`
+- `AGENSIS_WORKSPACE` or `AGENSIS_WORKSPACE_ID`
+- `AGENSIS_AGENT` or `AGENSIS_AGENT_ID`
+- `AGENSIS_HANDLE`
+- `AGENSIS_NAME`
+- `AGENSIS_CWD`
+- `AGENSIS_CODING_CMD` or `CODING_CMD`
+- `AGENSIS_MODEL` or `CLAUDE_MODEL`
+- `AGENSIS_PERMISSION_MODE`
+- `AGENSIS_TIMEOUT_MS`
+- `AGENSIS_HEARTBEAT_MS`
+- `AGENSIS_ONCE=1`
 
 ## Security
 
-The daemon runs a coding agent that can execute code in your repo — exactly as if
-you ran it in your terminal — and uses *your* local `git`/`gh` to push. By default
-it opens a PR (nothing is force-merged; you review the PR, and merge/close run via
-agensis's GitHub App only for workspace owners/admins). Want a human checkpoint
-before anything is pushed? Set `"gate": true`. Keep your token in the config file
-or `AGENSIS_TOKEN`, never in shared shell history.
+The daemon runs on your machine and executes the configured coding command in
+the selected working directory. Your local credentials and filesystem stay
+local; agensis sends the job payload and receives the result. Treat the daemon
+like any local coding agent with access to the folder you start it in.
 
-## Flags
-
-`--join <blob>` · `--channel <id>` · `--config <path>` · `--coding-cmd <cmd>` ·
-`--chat-cmd <cmd>` · `--once` · `--backfill` · `--no-gate` · `--help`
-
-Env: `AGENSIS_TOKEN`, `AGENSIS_URL`, `AGENSIS_CHANNEL`, `CODING_CMD`, `AGENSIS_ONCE=1`,
-`AGENSIS_BACKFILL=1`.
+Keep `aga_...` tokens out of shared logs and shell history. Generate a fresh
+token from agensis if one is exposed.

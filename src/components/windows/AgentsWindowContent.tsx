@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Bot, Check, Copy, Link2, Monitor, Pencil, Plus, Power, Save, Terminal, Trash2, X } from 'lucide-react';
 import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent } from '../../types';
-import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -563,11 +563,11 @@ function AgentRow({
         },
         body: JSON.stringify({
           handle: editHandle || agent.handle || agentHandle(agent.name),
-          baseUrl: typeof window === 'undefined' ? undefined : window.location.origin,
+          baseUrl: apiBaseUrl(),
         }),
       });
       const payload = await response.json().catch(() => null);
-      const command = payload?.data?.localCommand || payload?.data?.command || '';
+      const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
       if (!response.ok || !command) return;
       setConnectionCommand(command);
       setEditRunMode('daemon');

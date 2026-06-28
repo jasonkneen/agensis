@@ -529,6 +529,12 @@ export function apiUrl(path: string) {
   return backendUrl(path);
 }
 
+export function apiBaseUrl() {
+  if (BACKEND_BASE) return BACKEND_BASE;
+  if (typeof window !== 'undefined') return window.location.origin;
+  return '';
+}
+
 // Authorization header for raw fetch() calls to backend endpoints that don't go
 // through the query builder (e.g. ai-chat, settings).
 export function apiAuthHeaders(): Record<string, string> {
