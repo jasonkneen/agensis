@@ -2,33 +2,41 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
+  Brain,
   ChevronDown,
+  Code2,
   Command as CommandIcon,
   CornerDownRight,
+  Database,
   FileText,
   Folder,
   FolderOpen,
+  Globe,
   Hash,
   HardDrive,
   Layers,
   Link2,
   MessageSquare,
   Mic,
+  Monitor,
   Palette,
   Paperclip,
   Pencil,
   Pin,
   Plus,
   RotateCcw,
-  Search,
+  Rocket,
   Send,
+  ShieldCheck,
   Sparkles,
+  Terminal,
   Trash2,
   Upload,
   UserPlus,
   Users,
   Wrench,
   X,
+  type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
@@ -119,6 +127,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import type { CreateTaskInput } from '../../hooks/useTasks';
+import { isImageAvatar } from '../../lib/openpets';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -148,6 +157,8 @@ interface ChatWindowContentProps {
   onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
   systemCapabilities?: SystemCapabilities | null;
   contextControls?: React.ReactNode;
+  isDirectMessage?: boolean;
+  onAgentProfile?: (agentIdOrHandle: string) => void;
 }
 
 type ChannelPresenceUser = {
@@ -191,7 +202,7 @@ type LinkedFile = {
   size: number;
 };
 
-type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'is_favorite' | 'archived_at' | 'participants'>;
+type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'is_favorite' | 'archived_at' | 'participants'>;
 
 const CHANNEL_META_COLUMNS = '*';
 
@@ -205,6 +216,7 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile';
 
 export function ChatWindowContent({
   messages,
@@ -232,6 +244,7 @@ export function ChatWindowContent({
   onCreateTask,
   systemCapabilities = null,
   contextControls,
+  isDirectMessage: isDirectMessageProp = false,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
@@ -246,7 +259,8 @@ export function ChatWindowContent({
   const [atStartPos, setAtStartPos] = useState(-1);
   const [hashStartPos, setHashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [sidePanel, setSidePanel] = useState<'thread' | 'files' | 'pins' | null>(null);
+  const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
+  const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
   const [channelMeta, setChannelMeta] = useState<ChannelSessionMeta | null>(null);
@@ -265,6 +279,7 @@ export function ChatWindowContent({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const autoOpenedProfileForRef = useRef<string | null>(null);
 
   const filteredDocs = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
@@ -590,6 +605,7 @@ export function ChatWindowContent({
           setChannelMeta({
             id: inferredSessionId,
             title: channelTitle || 'general',
+            folder: null,
             is_favorite: false,
             archived_at: null,
             participants: [],
@@ -608,6 +624,30 @@ export function ChatWindowContent({
     () => normalizeChannelParticipants(channelMeta?.participants),
     [channelMeta?.participants],
   );
+  const directAgent = useMemo(
+    () => directAgentFromParticipants(persistedParticipants),
+    [persistedParticipants],
+  );
+  const isDirectMessage = isDirectMessageProp || Boolean(directAgent) || channelMeta?.folder === 'Direct messages';
+  const directProfileKey = directAgent?.agent_id || directAgent?.handle || directAgent?.name || null;
+  const profileAgent = useMemo(() => {
+    const key = profileAgentKey || directProfileKey;
+    if (!key) return null;
+    return agents.find(agent => agentMatchesLookupKey(agent, key)) || null;
+  }, [agents, directProfileKey, profileAgentKey]);
+  const profileParticipant = useMemo(() => {
+    const key = profileAgentKey || profileAgent?.id || directProfileKey;
+    if (!key) return directAgent;
+    return persistedParticipants.find(participant => participantMatchesLookupKey(participant, key)) || directAgent;
+  }, [directAgent, directProfileKey, persistedParticipants, profileAgent, profileAgentKey]);
+
+  useEffect(() => {
+    if (!isDirectMessage || !directProfileKey || sidePanel !== null) return;
+    if (autoOpenedProfileForRef.current === directProfileKey) return;
+    autoOpenedProfileForRef.current = directProfileKey;
+    setProfileAgentKey(directProfileKey);
+    setSidePanel('profile');
+  }, [directProfileKey, isDirectMessage, sidePanel]);
 
   const participantCandidates = useMemo(
     () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants, visibleMessages),
@@ -663,6 +703,7 @@ export function ChatWindowContent({
       return {
         id: inferredSessionId,
         title: channelTitle || 'general',
+        folder: null,
         is_favorite: false,
         archived_at: null,
         participants: [],
@@ -831,6 +872,12 @@ export function ChatWindowContent({
   const openThread = () => {
     setSidePanel('thread');
   };
+  const openAgentProfilePanel = (agentIdOrHandle?: string | null) => {
+    const key = agentIdOrHandle || directProfileKey || profileAgent?.id || '';
+    if (!key) return;
+    setProfileAgentKey(key);
+    setSidePanel('profile');
+  };
   const closeSidePanel = () => {
     if (sidePanel === 'thread') onCloseThread?.();
     setSidePanel(null);
@@ -856,32 +903,47 @@ export function ChatWindowContent({
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
           <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
-                  <Hash data-icon="inline-start" />
-                  <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
-                  <ChevronDown className="size-3" />
+            {isDirectMessage ? (
+              <Button
+                type="button"
+                variant={sidePanel === 'profile' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2"
+                onClick={() => openAgentProfilePanel()}
+              >
+                <Bot data-icon="inline-start" />
+                <span className="max-w-48 truncate font-semibold">{directAgent?.name || channelTitle || 'Direct message'}</span>
+              </Button>
+            ) : (
+              <>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
+                      <Hash data-icon="inline-start" />
+                      <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
+                      <ChevronDown className="size-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-72">
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        handleOpenParticipantsDialog();
+                      }}
+                    >
+                      <UserPlus data-icon="inline-start" />
+                      Add people or agents
+                    </DropdownMenuItem>
+                    {channelActionStatus && (
+                      <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2">
+                  <Link2 data-icon="inline-start" />
+                  Connect
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-72">
-                <DropdownMenuItem
-                  onSelect={() => {
-                    handleOpenParticipantsDialog();
-                  }}
-                >
-                  <UserPlus data-icon="inline-start" />
-                  Add people or agents
-                </DropdownMenuItem>
-                {channelActionStatus && (
-                  <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2">
-              <Link2 data-icon="inline-start" />
-              Connect
-            </Button>
+              </>
+            )}
             <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)}>
               <MessageSquare data-icon="inline-start" />
               Messages
@@ -895,34 +957,49 @@ export function ChatWindowContent({
               Pins
             </Button>
             <div className="min-w-2 flex-1" />
-            {contextControls && (
+            {!isDirectMessage && contextControls && (
               <div className="flex min-w-0 max-w-[40vw] shrink overflow-x-auto text-xs text-muted-foreground">
                 {contextControls}
               </div>
             )}
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
-              <RotateCcw data-icon="inline-start" />
-              Catch up
-            </Button>
-            <div className="flex items-center gap-1">
-              {participants.slice(0, 3).map(participant => (
-                <span
-                  key={participant.id}
-                  className="relative flex size-6 items-center justify-center rounded-full bg-muted text-[10px] font-semibold"
-                  title={[participant.name, participant.status].filter(Boolean).join(' - ')}
-                >
-                  {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
-                  {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
-                </span>
-              ))}
-              <Badge variant="secondary" className="h-6 gap-1" title={`${participants.length} participants`}>
-                <Users className="size-3" />
-                {participants.length}
-              </Badge>
-            </div>
-            <Button type="button" variant="ghost" size="icon-xs" aria-label="Search channel">
-              <Search />
-            </Button>
+            {!isDirectMessage && (
+              <>
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
+                  <RotateCcw data-icon="inline-start" />
+                  Catch up
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="participant-count-chip h-8 gap-1 px-2"
+                      title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
+                    >
+                      <Users data-icon="inline-start" />
+                      {participants.length}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    {participants.map(participant => (
+                      <DropdownMenuItem key={participant.id} className="gap-2">
+                        <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
+                          {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
+                          {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm">{participant.name}</span>
+                          {participant.status && (
+                            <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
+                          )}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
           </div>
         </div>
         <MessageScrollerProvider autoScroll={autoScroll}>
@@ -935,9 +1012,9 @@ export function ChatWindowContent({
                       <EmptyMedia variant="icon">
                         <Sparkles />
                       </EmptyMedia>
-                      <EmptyTitle>Channel is open</EmptyTitle>
+                      <EmptyTitle>{isDirectMessage ? 'Direct message is open' : 'Channel is open'}</EmptyTitle>
                       <EmptyDescription>
-                        Post a message below to start this channel.
+                        {isDirectMessage ? 'Send a message below to talk to this agent.' : 'Post a message below to start this channel.'}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -962,6 +1039,7 @@ export function ChatWindowContent({
                             onOpenThread(msg.id);
                             openThread();
                           } : undefined}
+                          onAgentProfile={openAgentProfilePanel}
                         />
                       </MessageScrollerItem>
                     ))}
@@ -1131,7 +1209,9 @@ export function ChatWindowContent({
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={`Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
+                placeholder={isDirectMessage
+                  ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
+                  : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
                 disabled={streaming}
                 rows={1}
                 className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
@@ -1235,7 +1315,15 @@ export function ChatWindowContent({
             onPointerDown={beginPanelResize}
             aria-hidden
           />
-          {sidePanel === 'thread' && activeThreadId && parentMessage && onSendThreadReply ? (
+          {sidePanel === 'profile' ? (
+            <AgentProfileSidePanel
+              agent={profileAgent}
+              participant={profileParticipant}
+              connections={agentConnections}
+              lookupKey={profileAgentKey || directProfileKey}
+              onClose={closeSidePanel}
+            />
+          ) : sidePanel === 'thread' && activeThreadId && parentMessage && onSendThreadReply ? (
             <ChatThreadPanel
               parentMessage={parentMessage}
               threadMessages={visibleThreadMessages}
@@ -1381,6 +1469,7 @@ function ChatMessageBubble({
   onSaveEdit,
   onDelete,
   onOpenThread,
+  onAgentProfile,
 }: {
   msg: ChatMessage;
   isStreaming?: boolean;
@@ -1395,6 +1484,7 @@ function ChatMessageBubble({
   onSaveEdit?: () => void;
   onDelete?: () => void;
   onOpenThread?: () => void;
+  onAgentProfile?: (agentIdOrHandle: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -1406,6 +1496,8 @@ function ChatMessageBubble({
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
+  const canOpenAgentProfile = msg.sender_kind === 'agent' && Boolean(msg.sender_id || msg.sender_name);
+  const agentProfileKey = msg.sender_id || msg.sender_name || '';
 
   return (
     <div className="group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40">
@@ -1414,7 +1506,17 @@ function ChatMessageBubble({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-sm font-semibold text-foreground">{senderName}</span>
+          {canOpenAgentProfile ? (
+            <button
+              type="button"
+              className="truncate text-left text-sm font-semibold text-foreground underline-offset-2 hover:underline"
+              onClick={() => onAgentProfile?.(agentProfileKey)}
+            >
+              {senderName}
+            </button>
+          ) : (
+            <span className="truncate text-sm font-semibold text-foreground">{senderName}</span>
+          )}
           {timeLabel && <span className="shrink-0 text-xs text-muted-foreground">{timeLabel}</span>}
         </div>
         {isEditing ? (
@@ -1625,6 +1727,123 @@ function ChannelSidePanel({
           <p className="text-sm text-muted-foreground">No uploaded, workspace, or agent files found.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+function AgentProfileSidePanel({
+  agent,
+  participant,
+  connections,
+  lookupKey,
+  onClose,
+}: {
+  agent: WorkspaceAgent | null;
+  participant: ChannelParticipant | null;
+  connections: AgentConnection[];
+  lookupKey?: string | null;
+  onClose: () => void;
+}) {
+  const handle = agent?.handle || participant?.handle || (agent ? agentHandle(agent) : normalizeAgentLookupKey(participant?.name));
+  const name = agent?.name || participant?.name || 'Agent';
+  const matchingConnections = useMemo(
+    () => connections.filter(connection => connectionMatchesAgentProfile(connection, agent, participant, lookupKey)),
+    [agent, connections, lookupKey, participant],
+  );
+  const activeConnection = matchingConnections.find(connection => connection.status !== 'offline') || matchingConnections[0] || null;
+  const status = activeConnection?.status || participant?.status || (agent?.run_mode === 'daemon' ? 'daemon' : 'built-in');
+  const description = agent?.description || agent?.soul || '';
+  const prompt = agent?.system_prompt || agent?.instructions || '';
+  const chips = [...(agent?.tools || []), ...(agent?.skills || [])].filter(Boolean);
+  const AvatarIcon = getAgentAvatarIcon(agent?.avatar);
+
+  return (
+    <div className="flex h-full min-w-0 flex-col">
+      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+        <Bot className="size-4 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">Profile</span>
+        <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close profile">
+          <X />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="flex flex-col items-center text-center">
+          <div className="grid size-20 place-items-center overflow-hidden rounded-2xl border bg-muted text-2xl font-semibold">
+            {isImageAvatar(agent?.avatar) ? (
+              <img src={agent?.avatar || ''} alt="" className="size-full object-cover" draggable={false} />
+            ) : AvatarIcon ? (
+              <AvatarIcon className="size-9 text-muted-foreground" />
+            ) : (
+              <Bot className="size-9 text-muted-foreground" />
+            )}
+          </div>
+          <div className="mt-3 text-base font-semibold">{name}</div>
+          {handle && <div className="text-sm text-muted-foreground">@{handle}</div>}
+          <Badge variant={status === 'online' || status === 'busy' ? 'default' : 'secondary'} className="mt-2 capitalize">
+            {status}
+          </Badge>
+        </div>
+
+        <div className="mt-5 space-y-3 text-sm">
+          <AgentProfileField label="Runtime" value={agent?.run_mode === 'daemon' || activeConnection ? 'Connected agent' : 'Built in'} />
+          <AgentProfileField label="Model" value={agent?.model || 'Auto'} />
+          {activeConnection && (
+            <>
+              <AgentProfileField label="Host" value={activeConnection.host || 'Local'} />
+              <AgentProfileField label="Working directory" value={activeConnection.cwd || 'Not reported'} />
+            </>
+          )}
+          {description && (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Description</div>
+              <div className="whitespace-pre-wrap text-sm leading-relaxed">{description}</div>
+            </div>
+          )}
+          {prompt && (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Instructions</div>
+              <div className="max-h-44 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{prompt}</div>
+            </div>
+          )}
+          {chips.length > 0 && (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Tools and skills</div>
+              <div className="flex flex-wrap gap-1.5">
+                {chips.map(chip => (
+                  <Badge key={chip} variant="secondary" className="max-w-full truncate">
+                    {chip}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          {matchingConnections.length > 1 && (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Connections</div>
+              <div className="space-y-1.5">
+                {matchingConnections.map(connection => (
+                  <div key={connection.id} className="flex min-w-0 items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">{connection.name || connection.handle}</span>
+                    <Badge variant={connection.status === 'online' || connection.status === 'busy' ? 'default' : 'secondary'} className="capitalize">
+                      {connection.status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentProfileField({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
+  return (
+    <div className="flex min-w-0 items-start justify-between gap-3 border-b border-border/60 pb-2 last:border-b-0">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium">{value}</span>
     </div>
   );
 }
@@ -2078,6 +2297,7 @@ function applyMessageOverrides(messages: ChatMessage[], overrides: MessageOverri
 function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMeta {
   return {
     ...meta,
+    folder: meta.folder ?? null,
     is_favorite: Boolean(meta.is_favorite),
     archived_at: meta.archived_at ?? null,
     participants: normalizeChannelParticipants(meta.participants),
@@ -2102,8 +2322,94 @@ function normalizeChannelParticipants(value: unknown): ChannelParticipant[] {
       user_id: kind === 'user' ? (stringValue(record.user_id) || id.replace(/^user:/, '')) : null,
       agent_id: kind === 'agent' ? (stringValue(record.agent_id) || id.replace(/^agent:/, '')) : null,
       added_at: stringValue(record.added_at) || null,
+      direct: Boolean(record.direct),
     }];
   });
+}
+
+function directAgentFromParticipants(participants: ChannelParticipant[]): ChannelParticipant | null {
+  const agentParticipants = participants.filter(participant =>
+    participant.kind === 'agent' && (participant.agent_id || participant.handle)
+  );
+  return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+function normalizeAgentLookupKey(value?: string | null): string {
+  return stringValue(value)
+    .trim()
+    .replace(/^@+/, '')
+    .toLowerCase();
+}
+
+function agentMatchesLookupKey(agent: WorkspaceAgent, key?: string | null): boolean {
+  const normalizedKey = normalizeAgentLookupKey(key);
+  if (!normalizedKey) return false;
+  return [
+    agent.id,
+    agent.handle,
+    agent.name,
+    agentHandle(agent),
+  ].some(value => normalizeAgentLookupKey(value) === normalizedKey);
+}
+
+function participantMatchesLookupKey(participant: ChannelParticipant, key?: string | null): boolean {
+  const normalizedKey = normalizeAgentLookupKey(key);
+  if (!normalizedKey || participant.kind !== 'agent') return false;
+  return [
+    participant.id,
+    participant.agent_id,
+    participant.handle,
+    participant.name,
+    participant.id.replace(/^agent:/, ''),
+  ].some(value => normalizeAgentLookupKey(value) === normalizedKey);
+}
+
+function getAgentAvatarIcon(value?: string | null): LucideIcon | null {
+  switch (normalizeAgentLookupKey(value)) {
+    case 'icon:bot':
+      return Bot;
+    case 'icon:sparkles':
+      return Sparkles;
+    case 'icon:brain':
+      return Brain;
+    case 'icon:terminal':
+      return Terminal;
+    case 'icon:code':
+      return Code2;
+    case 'icon:command':
+      return CommandIcon;
+    case 'icon:wrench':
+      return Wrench;
+    case 'icon:database':
+      return Database;
+    case 'icon:shield':
+      return ShieldCheck;
+    case 'icon:rocket':
+      return Rocket;
+    case 'icon:globe':
+      return Globe;
+    case 'icon:monitor':
+      return Monitor;
+    default:
+      return null;
+  }
+}
+
+function connectionMatchesAgentProfile(
+  connection: AgentConnection,
+  agent: WorkspaceAgent | null,
+  participant: ChannelParticipant | null,
+  key?: string | null,
+): boolean {
+  const normalizedKey = normalizeAgentLookupKey(key);
+  const agentId = agent?.id || participant?.agent_id || participant?.id.replace(/^agent:/, '') || null;
+  const handle = agent?.handle || participant?.handle || null;
+  if (agentId && connection.agent_id === agentId) return true;
+  return [
+    connection.handle,
+    connection.name,
+    handle,
+  ].some(value => Boolean(normalizedKey && normalizeAgentLookupKey(value) === normalizedKey));
 }
 
 function withLiveParticipantStatus(
@@ -2222,14 +2528,51 @@ function buildParticipantCandidates(
 
 function dedupeParticipantCandidates(candidates: ParticipantCandidate[]): ParticipantCandidate[] {
   const byKey = new Map<string, ParticipantCandidate>();
+  const aliases = new Map<string, string>();
   candidates.forEach(candidate => {
-    const key = participantCandidateKey(candidate);
+    let key = participantCandidateKey(candidate);
+    for (const alias of participantCandidateAliases(candidate)) {
+      const existingKey = aliases.get(alias);
+      if (existingKey) {
+        key = existingKey;
+        break;
+      }
+    }
     const previous = byKey.get(key);
     if (!previous || participantCandidateRank(candidate) > participantCandidateRank(previous)) {
-      byKey.set(key, { ...previous, ...candidate });
+      byKey.set(key, {
+        ...previous,
+        ...candidate,
+        agent_id: previous?.agent_id || candidate.agent_id || null,
+        user_id: previous?.user_id || candidate.user_id || null,
+        handle: previous?.handle || candidate.handle || null,
+        status: candidate.status || previous?.status || null,
+        subtitle: candidate.subtitle || previous?.subtitle,
+        connected: Boolean(candidate.connected || previous?.connected),
+      });
+      participantCandidateAliases(byKey.get(key)!).forEach(alias => aliases.set(alias, key));
+    } else {
+      participantCandidateAliases(previous).forEach(alias => aliases.set(alias, key));
     }
   });
   return Array.from(byKey.values());
+}
+
+function participantCandidateAliases(candidate: ParticipantCandidate): string[] {
+  const aliases = new Set<string>();
+  aliases.add(participantCandidateKey(candidate));
+  if (candidate.kind === 'user') {
+    if (candidate.user_id) aliases.add(`user-id:${candidate.user_id}`);
+    const name = stringValue(candidate.name).toLowerCase();
+    if (name === 'you') aliases.add('user:self');
+    return Array.from(aliases);
+  }
+  if (candidate.agent_id) aliases.add(`agent-id:${candidate.agent_id}`);
+  const handle = stringValue(candidate.handle).toLowerCase();
+  if (handle) aliases.add(`agent-handle:${handle}`);
+  const name = stringValue(candidate.name).toLowerCase();
+  if (name) aliases.add(`agent-name:${name}`);
+  return Array.from(aliases);
 }
 
 function participantCandidateKey(candidate: ParticipantCandidate): string {

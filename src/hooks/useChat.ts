@@ -89,12 +89,22 @@ export function useChat(workspaceId: string | null) {
     };
   }, [activeSession?.id]);
 
-  const createSession = useCallback(async (model = 'auto') => {
+  const createSession = useCallback(async (model = 'auto', initial: Partial<ChatSession> = {}) => {
     if (!workspaceId) return null;
     if (!navigator.onLine) return null;
+    const initialFields: Record<string, unknown> = { ...initial };
+    delete initialFields.id;
+    delete initialFields.workspace_id;
+    delete initialFields.created_at;
+    delete initialFields.updated_at;
     const { data } = await backendClient
       .from('chat_sessions')
-      .insert({ workspace_id: workspaceId, title: 'New Channel', model })
+      .insert({
+        workspace_id: workspaceId,
+        title: initial.title || 'New Channel',
+        model,
+        ...initialFields,
+      })
       .select()
       .single();
     if (data) {
@@ -219,7 +229,8 @@ export function useChat(workspaceId: string | null) {
 
     const hasMention = Boolean(firstAgentMention(content));
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
-    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget));
+    const directAgentChannel = Boolean(directAgentParticipant(session));
+    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel));
 
     if (shouldRouteToAgent) {
       const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
@@ -406,6 +417,14 @@ function hasAgentTargetInThread(threadMessages: Message[]): boolean {
     if (message.sender_kind === 'agent' && message.sender_id) return true;
     return Boolean(firstAgentMention(message.content));
   });
+}
+
+function directAgentParticipant(session: ChatSession | null | undefined): boolean {
+  const participants = Array.isArray(session?.participants) ? session.participants : [];
+  const agentParticipants = participants.filter(participant =>
+    participant?.kind === 'agent' && (participant.agent_id || participant.handle)
+  );
+  return agentParticipants.some(participant => participant.direct) || agentParticipants.length === 1;
 }
 
 function errorMessage(value: unknown): string {

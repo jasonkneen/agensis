@@ -469,19 +469,18 @@
 
 :root[data-ui-theme="tinyworld"] .sidebar-action-row,
 :root[data-ui-theme="tinyworld"] .sidebar-search {
-  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
-  color: var(--tw-accent-outline) !important;
+  border-color: color-mix(in srgb, var(--tw-control-outline) 36%, transparent) !important;
+  color: var(--text-secondary) !important;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
-    var(--tw-accent-fill) !important;
+    var(--tw-control-fill) !important;
   box-shadow:
     inset 0 1px 0 var(--tw-control-inset),
-    inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
+    inset 0 -3px 0 var(--tw-control-bevel),
     var(--tw-control-shadow) !important;
 }
 
 :root[data-ui-theme="tinyworld"] .knowledge-context-trigger,
-:root[data-ui-theme="tinyworld"] .channel-header [data-slot="badge"],
 :root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
   border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
   color: var(--tw-gold-outline) !important;
@@ -492,6 +491,12 @@
     inset 0 1px 0 var(--tw-control-inset),
     inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
     var(--tw-control-shadow) !important;
+}
+
+:root[data-ui-theme="tinyworld"] .knowledge-context-trigger [data-slot="badge"] {
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--tw-gold-outline) 18%, transparent) !important;
+  box-shadow: none !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
@@ -509,9 +514,15 @@
 :root[data-ui-theme="tinyworld"] .sidebar-action-row:hover,
 :root[data-ui-theme="tinyworld"] .sidebar-search:hover,
 :root[data-ui-theme="tinyworld"] .sidebar-action-row[data-active="true"] {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
+  color: var(--tw-accent-outline) !important;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
     var(--tw-accent-hover) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
+    var(--tw-control-shadow) !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row:hover,
@@ -539,6 +550,21 @@
     inset 0 1px 0 var(--tw-control-inset),
     inset 0 -3px 0 var(--tw-control-bevel),
     var(--tw-control-shadow);
+}
+
+.home-workspace-composer {
+  background: color-mix(in srgb, var(--canvas-elevated) 94%, transparent) !important;
+  border-color: color-mix(in srgb, var(--border-strong) 76%, transparent) !important;
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.24),
+    0 2px 12px rgba(0, 0, 0, 0.12) !important;
+}
+
+:root[data-theme="dark"] .home-workspace-composer {
+  background: color-mix(in srgb, var(--canvas-elevated) 92%, transparent) !important;
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.42),
+    0 2px 12px rgba(0, 0, 0, 0.28) !important;
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"]:not([data-size^="icon"]):not([data-size="xs"]):not([data-size="sm"]) {
@@ -1065,6 +1091,8 @@
   --channel-composer: var(--card);
   --channel-side: var(--card);
   background: var(--channel-surface) !important;
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
 .channel-header {
@@ -1086,17 +1114,17 @@
 }
 
 :root[data-theme="dark"] .channel-shell {
-  --channel-surface: #090909;
-  --channel-header: #151515;
-  --channel-composer: #151515;
-  --channel-side: #111111;
+  --channel-surface: rgba(9, 9, 9, 0.82);
+  --channel-header: rgba(21, 21, 21, 0.82);
+  --channel-composer: rgba(21, 21, 21, 0.82);
+  --channel-side: rgba(17, 17, 17, 0.82);
 }
 
 :root[data-theme="light"] .channel-shell {
-  --channel-surface: #ffffff;
-  --channel-header: #ffffff;
-  --channel-composer: #ffffff;
-  --channel-side: #ffffff;
+  --channel-surface: rgba(255, 255, 255, 0.86);
+  --channel-header: rgba(255, 255, 255, 0.9);
+  --channel-composer: rgba(255, 255, 255, 0.9);
+  --channel-side: rgba(255, 255, 255, 0.9);
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] .channel-message-surface,
@@ -1106,10 +1134,10 @@
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] .channel-shell {
-  --channel-surface: #090909;
-  --channel-header: #1b1b1b;
-  --channel-composer: #1b1b1b;
-  --channel-side: #101010;
+  --channel-surface: rgba(9, 9, 9, 0.84);
+  --channel-header: rgba(27, 27, 27, 0.86);
+  --channel-composer: rgba(27, 27, 27, 0.86);
+  --channel-side: rgba(16, 16, 16, 0.86);
 }
 
 :root[data-ui-theme="neo"][data-theme="light"] .channel-message-surface,
@@ -1119,10 +1147,16 @@
 }
 
 :root[data-ui-theme="neo"][data-theme="light"] .channel-shell {
-  --channel-surface: #fff9df;
-  --channel-header: #ffffff;
-  --channel-composer: #ffffff;
-  --channel-side: #ffffff;
+  --channel-surface: rgba(255, 249, 223, 0.86);
+  --channel-header: rgba(255, 255, 255, 0.9);
+  --channel-composer: rgba(255, 255, 255, 0.9);
+  --channel-side: rgba(255, 255, 255, 0.9);
+}
+
+[data-floating-window] {
+  background: color-mix(in srgb, var(--card) 84%, transparent) !important;
+  backdrop-filter: blur(20px) saturate(155%);
+  -webkit-backdrop-filter: blur(20px) saturate(155%);
 }
 
 [data-canvas-item-id][data-transforming="true"] {

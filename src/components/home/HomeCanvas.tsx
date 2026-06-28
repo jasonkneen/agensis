@@ -166,7 +166,7 @@ export function HomeCanvas({
             </div>
           )}
 
-          <InputGroup className="h-auto flex-col items-stretch overflow-hidden bg-card shadow-md">
+          <InputGroup className="home-workspace-composer h-auto flex-col items-stretch overflow-hidden border bg-card/95 shadow-xl backdrop-blur-md">
             <InputGroupTextarea
               ref={inputRef}
               value={input}
@@ -174,7 +174,7 @@ export function HomeCanvas({
               onKeyDown={handleKeyDown}
               placeholder="Message the workspace..."
               rows={2}
-              className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed"
+              className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground/85"
             />
             <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
               <div className="flex shrink-0 items-center gap-1">

@@ -8,6 +8,7 @@
         "@base-ui/react": "^1.6.0",
         "@fontsource-variable/geist": "^5.2.9",
         "@netlify/database": "^1.1.0",
+        "@open-pets/client": "^3.0.0",
         "@shadcn/react": "^0.1.0",
         "@tailwindcss/vite": "^4.3.1",
         "class-variance-authority": "^0.7.1",
@@ -41,6 +42,7 @@
         "@types/react": "19",
         "@types/react-dom": "19",
         "@vitejs/plugin-react": "^4.3.1",
+        "agensis-cli": "file:agent/agensis-cli",
         "autoprefixer": "^10.4.18",
         "electron": "^33.2.0",
         "electron-builder": "^25.1.8",
@@ -440,6 +442,8 @@
 
     "@npmcli/move-file": ["@npmcli/move-file@2.0.1", "", { "dependencies": { "mkdirp": "^1.0.4", "rimraf": "^3.0.2" } }, "sha512-mJd2Z5TjYWq/ttPLLGqArdtnC74J6bOzg4rMDnN+p1xTacZ2yPRCk2y0oSWQtygLR9YVQXgOcONrwtnk3JupxQ=="],
 
+    "@open-pets/client": ["@open-pets/client@3.0.0", "", {}, "sha512-K8SdULYUALmUpTIJy5hjaJJIUGLvRWuJybRI4sKwGECbtwyW124BZJENHw+3LyiIcCp6c3pTzjewgtTA+LA7wg=="],
+
     "@pkgjs/parseargs": ["@pkgjs/parseargs@0.11.0", "", {}, "sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg=="],
 
     "@radix-ui/number": ["@radix-ui/number@1.1.2", "", {}, "sha512-ceTwaxc4I5IOi97DgCotl3pqiyRGvffcc0oOsE2dQYaJOFIDsDt4VWG6xEbg1QePv9QWausCEIppud/tJ1wNig=="],
@@ -747,6 +751,8 @@
     "acorn": ["acorn@8.16.0", "", { "bin": "bin/acorn" }, "sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw=="],
 
     "acorn-jsx": ["acorn-jsx@5.3.2", "", { "peerDependencies": { "acorn": "^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ=="],
+
+    "agensis-cli": ["agensis-cli@file:agent/agensis-cli", { "dependencies": { "ws": "^8.20.0" }, "bin": { "agensis": "bin/agensis.mjs" } }],
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
 

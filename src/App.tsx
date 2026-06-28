@@ -72,7 +72,7 @@ import { makeAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { ChannelParticipant, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -103,6 +103,39 @@ type WorkspacePresenceUser = {
   activityItems?: string[];
   windows?: FloatingWindow[];
 };
+
+function normalizeAgentLookupKey(value?: string | null) {
+  return (value || '').trim().replace(/^@+/, '').toLowerCase();
+}
+
+function directAgentParticipantForSession(session?: ChatSession | null): ChannelParticipant | null {
+  const participants = Array.isArray(session?.participants) ? session.participants : [];
+  const agentParticipants = participants.filter(participant =>
+    participant?.kind === 'agent' && (participant.agent_id || participant.handle || participant.name)
+  );
+  if (agentParticipants.length === 0) return null;
+  return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+function isDirectChatSession(session?: ChatSession | null) {
+  return Boolean(directAgentParticipantForSession(session)) || session?.folder === 'Direct messages';
+}
+
+function isDirectSessionForAgent(session: ChatSession, agentId?: string | null, handle?: string | null) {
+  if (!isDirectChatSession(session)) return false;
+  const participant = directAgentParticipantForSession(session);
+  const targetAgentId = normalizeAgentLookupKey(agentId);
+  const targetHandle = normalizeAgentLookupKey(handle);
+  const participantAgentId = normalizeAgentLookupKey(participant?.agent_id);
+  const participantHandle = normalizeAgentLookupKey(participant?.handle);
+  const participantName = normalizeAgentLookupKey(participant?.name);
+  const title = normalizeAgentLookupKey(session.title);
+
+  return Boolean(
+    (targetAgentId && participantAgentId === targetAgentId)
+    || (targetHandle && (participantHandle === targetHandle || participantName === targetHandle || title === targetHandle))
+  );
+}
 
 function loadPresenceVisibility(): PresenceVisibilityMap {
   try {
@@ -228,12 +261,12 @@ function KnowledgeContextControl({
           type="button"
           variant={enabled ? 'secondary' : 'outline'}
           size="sm"
-          className="knowledge-context-trigger h-7 shrink-0 gap-1.5 rounded-full px-2.5 text-xs"
+          className="knowledge-context-trigger h-8 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs"
           title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
         >
           <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
           <span>Knowledge</span>
-          <Badge variant="outline" className="h-5 rounded-full px-1.5 text-[10px]">
+          <Badge variant="secondary" className="h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
             {activeTotal}
           </Badge>
           <ChevronDown className="size-3" />
@@ -305,6 +338,7 @@ export default function App() {
   const [presenceVisibility, setPresenceVisibility] = useState<PresenceVisibilityMap>(() => loadPresenceVisibility());
   const [presenceFavorites, setPresenceFavorites] = useState<string[]>(() => loadPresenceFavorites());
   const [focusedPresenceUserId, setFocusedPresenceUserId] = useState<string | null>(null);
+  const [focusedAgentKey, setFocusedAgentKey] = useState<string | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [shareDialogTitle, setShareDialogTitle] = useState('');
@@ -689,6 +723,11 @@ export default function App() {
     openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenAgentProfile = useCallback((agentIdOrHandle?: string | null) => {
+    if (agentIdOrHandle) setFocusedAgentKey(agentIdOrHandle);
+    handleOpenAgents();
+  }, [handleOpenAgents]);
+
   const handleCreateCanvasApp = useCallback(async (app: CanvasAppDefinition) => {
     await addCanvasObject('applet', {
       x: 12,
@@ -760,6 +799,43 @@ export default function App() {
     setActiveSession(session);
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
   }, [setActiveSession, openWindow, activeLayerId, user?.id]);
+
+  const handleAgentDirectMessage = useCallback(async (agent: { id: string; agentId?: string | null; name: string; handle: string | null }) => {
+    const handle = agent.handle?.trim().replace(/^@+/, '') || '';
+    const agentId = agent.agentId || agent.id || null;
+    const title = agent.name?.trim() || (handle ? `@${handle}` : 'Agent');
+    const existing = sessions.find(session => !session.archived_at && isDirectSessionForAgent(session, agentId, handle));
+    if (existing) {
+      handleSessionOpen(existing);
+      return;
+    }
+
+    const participant: ChannelParticipant = {
+      id: agentId ? `agent:${agentId}` : `agent:${handle}`,
+      kind: 'agent',
+      name: title,
+      handle: handle || null,
+      agent_id: agentId,
+      user_id: null,
+      status: null,
+      direct: true,
+      added_at: new Date().toISOString(),
+    };
+    const session = await createSession('auto', {
+      title,
+      folder: 'Direct messages',
+      participants: [participant],
+    });
+    if (!session) return;
+    setActiveSession(session);
+    openWindow('chat', { title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'chat_created',
+      entity_type: 'chat',
+      entity_id: session.id,
+      title: `New agent chat: ${title}`,
+    });
+  }, [sessions, handleSessionOpen, createSession, setActiveSession, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleOpenPresenceWindow = useCallback((win: FloatingWindow) => {
     if (win.isPrivate) return;
@@ -964,10 +1040,14 @@ export default function App() {
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}
         onOpenAgents={handleOpenAgents}
+        onAgentMessage={handleAgentDirectMessage}
+        onAgentProfile={(agent) => handleOpenAgentProfile(agent.agentId || agent.id || agent.handle || agent.name)}
         onOpenTemplates={() => setTemplatePickerOpen(true)}
         openTaskCount={openTasks.length}
         recents={recents}
         sessions={sessions}
+        agents={agents}
+        agentConnections={agentConnections}
         floatingWindows={windows}
         documentPresence={itemPresence.documentPresence}
         chatPresence={itemPresence.chatPresence}
@@ -988,7 +1068,7 @@ export default function App() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} className="relative flex-1 overflow-hidden">
+        <main ref={canvasRef} data-workspace-viewport className="relative flex-1 overflow-hidden">
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
@@ -1036,6 +1116,7 @@ export default function App() {
                 uploadedFiles={uploadedFiles}
                 onUploadFiles={uploadFiles}
                 selectedAgent={selectedAgent}
+                focusedAgentKey={focusedAgentKey}
                 systemCapabilities={systemCapabilities}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
@@ -1043,6 +1124,7 @@ export default function App() {
                 contextCounts={contextCounts}
                 contextCountsTitle={contextCountsTitle}
                 onSelectAgent={setSelectedAgent}
+                onAgentProfile={handleOpenAgentProfile}
                 onCreateAgent={createAgent}
                 onUpdateAgent={updateAgent}
                 onDeleteAgent={deleteAgent}
@@ -1292,6 +1374,8 @@ function CanvasLayerScene({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  focusedAgentKey,
+  onAgentProfile,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
   topLevelMessages,
@@ -1360,6 +1444,8 @@ function CanvasLayerScene({
   onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string; run_mode?: 'builtin' | 'daemon' }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  focusedAgentKey: string | null;
+  onAgentProfile: (agentIdOrHandle?: string | null) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
   topLevelMessages: import('./types').Message[];
@@ -1447,8 +1533,10 @@ function CanvasLayerScene({
                   agentConnections={agentConnections}
                   presenceUsers={presenceUsers}
                   selectedAgent={selectedAgent}
-                  onSelectAgent={onSelectAgent}
-                  canvasGroups={canvasGroups}
+	                  onSelectAgent={onSelectAgent}
+	                  onAgentProfile={onAgentProfile}
+	                  isDirectMessage={isDirectChatSession(winSession)}
+	                  canvasGroups={canvasGroups}
                   canvasObjects={canvasObjects}
                   workspaceId={workspaceId}
                   uploadedFiles={uploadedFiles}
@@ -1640,6 +1728,7 @@ function CanvasLayerScene({
                 agents={agents}
                 webhooks={agentWebhooks}
                 connections={agentConnections}
+                focusedAgentKey={focusedAgentKey}
                 onCreateAgent={onCreateAgent}
                 onUpdateAgent={onUpdateAgent}
                 onDeleteAgent={onDeleteAgent}

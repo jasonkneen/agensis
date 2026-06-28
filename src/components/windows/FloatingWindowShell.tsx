@@ -12,6 +12,151 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
+const SNAP_THRESHOLD = 44;
+const MIN_WINDOW_WIDTH = 320;
+const MIN_WINDOW_HEIGHT = 260;
+
+type WindowBounds = { x: number; y: number; width: number; height: number };
+
+function getShellViewport(shell: HTMLElement | null): { width: number; height: number; rect: DOMRect | null } {
+  const viewport = shell?.closest('[data-workspace-viewport]') || document.querySelector('[data-workspace-viewport]');
+  const rect = viewport?.getBoundingClientRect() || null;
+  if (rect && rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height, rect };
+  }
+  const parent = shell?.offsetParent instanceof HTMLElement ? shell.offsetParent : null;
+  const parentRect = parent?.getBoundingClientRect() || null;
+  if (parentRect && parentRect.width > 0 && parentRect.height > 0) {
+    return { width: parentRect.width, height: parentRect.height, rect: parentRect };
+  }
+  if (typeof window !== 'undefined') {
+    return { width: window.innerWidth, height: window.innerHeight, rect: null };
+  }
+  return { width: 1024, height: 720, rect: null };
+}
+
+function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
+  const viewport = getShellViewport(shell);
+  const width = Math.min(bounds.width, Math.max(MIN_WINDOW_WIDTH, viewport.width));
+  const height = Math.min(bounds.height, Math.max(MIN_WINDOW_HEIGHT, viewport.height));
+  return {
+    x: Math.round(Math.min(Math.max(0, bounds.x), Math.max(0, viewport.width - width))),
+    y: Math.round(Math.min(Math.max(0, bounds.y), Math.max(0, viewport.height - height))),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
+function splitBounds(bounds: WindowBounds, edge: 'left' | 'right' | 'top' | 'bottom'): WindowBounds {
+  if (edge === 'left') {
+    return { x: bounds.x, y: bounds.y, width: Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width / 2)), height: bounds.height };
+  }
+  if (edge === 'right') {
+    const width = Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width / 2));
+    return { x: bounds.x + Math.max(0, bounds.width - width), y: bounds.y, width, height: bounds.height };
+  }
+  if (edge === 'top') {
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height / 2)) };
+  }
+  const height = Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height / 2));
+  return { x: bounds.x, y: bounds.y + Math.max(0, bounds.height - height), width: bounds.width, height };
+}
+
+function pointerInsideBounds(pointerX: number, pointerY: number, bounds: WindowBounds) {
+  return pointerX >= bounds.x
+    && pointerX <= bounds.x + bounds.width
+    && pointerY >= bounds.y
+    && pointerY <= bounds.y + bounds.height;
+}
+
+function nearestEdge(pointerX: number, pointerY: number, bounds: WindowBounds): 'left' | 'right' | 'top' | 'bottom' | null {
+  const distances: Array<{ edge: 'left' | 'right' | 'top' | 'bottom'; distance: number }> = [
+    { edge: 'left', distance: Math.abs(pointerX - bounds.x) },
+    { edge: 'right', distance: Math.abs(pointerX - (bounds.x + bounds.width)) },
+    { edge: 'top', distance: Math.abs(pointerY - bounds.y) },
+    { edge: 'bottom', distance: Math.abs(pointerY - (bounds.y + bounds.height)) },
+  ];
+  const nearest = distances.sort((a, b) => a.distance - b.distance)[0];
+  return nearest.distance <= SNAP_THRESHOLD ? nearest.edge : null;
+}
+
+function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: DOMRect | null): WindowBounds[] {
+  if (!shell || !viewportRect) return [];
+  const currentId = shell.dataset.floatingWindowId;
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-floating-window]'))
+    .filter(element => element.dataset.floatingWindowId !== currentId)
+    .map(element => {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.left - viewportRect.left,
+        y: rect.top - viewportRect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    })
+    .filter(bounds => bounds.width >= MIN_WINDOW_WIDTH && bounds.height >= MIN_WINDOW_HEIGHT);
+}
+
+function getSnapPreviewBounds(
+  clientX: number,
+  clientY: number,
+  shell: HTMLElement | null,
+): WindowBounds | null {
+  const viewport = getShellViewport(shell);
+  const rect = viewport.rect;
+  const pointerX = rect ? clientX - rect.left : clientX;
+  const pointerY = rect ? clientY - rect.top : clientY;
+
+  if (
+    pointerX < 0
+    || pointerY < 0
+    || pointerX > viewport.width
+    || pointerY > viewport.height
+  ) {
+    return null;
+  }
+
+  const workspaceBounds = { x: 0, y: 0, width: viewport.width, height: viewport.height };
+  const workspaceEdge = nearestEdge(pointerX, pointerY, workspaceBounds);
+  if (workspaceEdge) return clampWindowBounds(splitBounds(workspaceBounds, workspaceEdge), shell);
+
+  for (const bounds of getOtherWindowBounds(shell, rect)) {
+    if (!pointerInsideBounds(pointerX, pointerY, bounds)) continue;
+    const edge = nearestEdge(pointerX, pointerY, bounds);
+    if (edge) return clampWindowBounds(splitBounds(bounds, edge), shell);
+  }
+
+  return null;
+}
+
+function restoreBoundsForDrag(
+  clientX: number,
+  clientY: number,
+  shell: HTMLElement | null,
+  win: FloatingWindow,
+): WindowBounds {
+  const viewport = getShellViewport(shell);
+  const rect = viewport.rect;
+  const pointerX = rect ? clientX - rect.left : clientX;
+  const pointerY = rect ? clientY - rect.top : clientY;
+  const source = win.restoreBounds || {
+    x: win.x,
+    y: win.y,
+    width: Math.min(Math.max(MIN_WINDOW_WIDTH, Math.round(viewport.width * 0.62)), viewport.width),
+    height: Math.min(Math.max(MIN_WINDOW_HEIGHT, Math.round(viewport.height * 0.68)), viewport.height),
+  };
+  const width = Math.min(Math.max(MIN_WINDOW_WIDTH, source.width), viewport.width);
+  const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, source.height), viewport.height);
+  const pointerRatio = viewport.width > 0 ? Math.min(0.86, Math.max(0.14, pointerX / viewport.width)) : 0.5;
+
+  return clampWindowBounds({
+    x: pointerX - width * pointerRatio,
+    y: Math.min(pointerY - 20, Math.max(0, viewport.height - height)),
+    width,
+    height,
+  }, shell);
+}
+
 interface FloatingWindowShellProps {
   window: FloatingWindow;
   onClose: (id: string) => void;
@@ -46,18 +191,31 @@ export function FloatingWindowShell({
   const resizeRef = useRef<{ startX: number; startY: number; winW: number; winH: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [snapPreview, setSnapPreview] = useState<WindowBounds | null>(null);
   const isMaximized = Boolean(win.maximized);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
-    if (!canControl || isMaximized) return;
+    if (!canControl) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
+    const startBounds = isMaximized ? restoreBoundsForDrag(e.clientX, e.clientY, shellRef.current, win) : {
+      x: win.x,
+      y: win.y,
+      width: win.width,
+      height: win.height,
+    };
+    if (isMaximized && shellRef.current) {
+      shellRef.current.style.left = `${startBounds.x}px`;
+      shellRef.current.style.top = `${startBounds.y}px`;
+      shellRef.current.style.width = `${startBounds.width}px`;
+      shellRef.current.style.height = `${startBounds.height}px`;
+    }
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      winX: win.x,
-      winY: win.y,
+      winX: startBounds.x,
+      winY: startBounds.y,
     };
     setIsDragging(true);
 
@@ -66,25 +224,35 @@ export function FloatingWindowShell({
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
       shellRef.current?.style.setProperty('transform', `translate3d(${dx}px, ${dy}px, 0)`);
+      setSnapPreview(getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current));
     };
 
     const onUp = (ev: MouseEvent) => {
       if (dragRef.current) {
         const dx = ev.clientX - dragRef.current.startX;
         const dy = ev.clientY - dragRef.current.startY;
-        const x = Math.max(0, dragRef.current.winX + dx);
-        const y = Math.max(0, dragRef.current.winY + dy);
+        const fallback = {
+          x: dragRef.current.winX + dx,
+          y: dragRef.current.winY + dy,
+          width: startBounds.width,
+          height: startBounds.height,
+        };
+        const next = getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current) || clampWindowBounds(fallback, shellRef.current);
         if (shellRef.current) {
-          shellRef.current.style.left = `${x}px`;
-          shellRef.current.style.top = `${y}px`;
+          shellRef.current.style.left = `${next.x}px`;
+          shellRef.current.style.top = `${next.y}px`;
+          shellRef.current.style.width = `${next.width}px`;
+          shellRef.current.style.height = `${next.height}px`;
           shellRef.current.style.removeProperty('transform');
         }
         onUpdate(win.id, {
-          x,
-          y,
+          ...next,
+          maximized: false,
+          restoreBounds: next,
         });
       }
       dragRef.current = null;
+      setSnapPreview(null);
       setIsDragging(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -94,6 +262,7 @@ export function FloatingWindowShell({
     const onCancel = () => {
       shellRef.current?.style.removeProperty('transform');
       dragRef.current = null;
+      setSnapPreview(null);
       setIsDragging(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -103,7 +272,7 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, onFocus, onUpdate, canControl, isMaximized]);
+  }, [win, onFocus, onUpdate, canControl, isMaximized]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     if (!canControl || isMaximized) return;
@@ -122,21 +291,30 @@ export function FloatingWindowShell({
       if (!resizeRef.current || !shellRef.current) return;
       const dx = ev.clientX - resizeRef.current.startX;
       const dy = ev.clientY - resizeRef.current.startY;
-      shellRef.current.style.width = `${Math.max(300, resizeRef.current.winW + dx)}px`;
-      shellRef.current.style.height = `${Math.max(250, resizeRef.current.winH + dy)}px`;
+      const viewport = getShellViewport(shellRef.current);
+      const width = Math.min(Math.max(MIN_WINDOW_WIDTH, resizeRef.current.winW + dx), Math.max(MIN_WINDOW_WIDTH, viewport.width - win.x));
+      const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, resizeRef.current.winH + dy), Math.max(MIN_WINDOW_HEIGHT, viewport.height - win.y));
+      shellRef.current.style.width = `${width}px`;
+      shellRef.current.style.height = `${height}px`;
     };
 
     const onUp = (ev: MouseEvent) => {
       if (resizeRef.current) {
         const dx = ev.clientX - resizeRef.current.startX;
         const dy = ev.clientY - resizeRef.current.startY;
-        const width = Math.max(300, resizeRef.current.winW + dx);
-        const height = Math.max(250, resizeRef.current.winH + dy);
+        const next = clampWindowBounds({
+          x: win.x,
+          y: win.y,
+          width: Math.max(MIN_WINDOW_WIDTH, resizeRef.current.winW + dx),
+          height: Math.max(MIN_WINDOW_HEIGHT, resizeRef.current.winH + dy),
+        }, shellRef.current);
         if (shellRef.current) {
-          shellRef.current.style.width = `${width}px`;
-          shellRef.current.style.height = `${height}px`;
+          shellRef.current.style.left = `${next.x}px`;
+          shellRef.current.style.top = `${next.y}px`;
+          shellRef.current.style.width = `${next.width}px`;
+          shellRef.current.style.height = `${next.height}px`;
         }
-        onUpdate(win.id, { width, height });
+        onUpdate(win.id, { ...next, restoreBounds: next });
       }
       resizeRef.current = null;
       setIsResizing(false);
@@ -160,7 +338,7 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
+  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
@@ -201,10 +379,10 @@ export function FloatingWindowShell({
   const shellStyle: React.CSSProperties = isMaximized
     ? {
         position: 'absolute',
-        left: 'var(--workspace-viewport-left, 8px)',
-        top: 'var(--workspace-viewport-top, 8px)',
-        width: 'calc(100% - var(--workspace-viewport-left, 8px) - var(--workspace-viewport-right, 8px))',
-        height: 'calc(100% - var(--workspace-viewport-top, 8px) - var(--workspace-viewport-bottom, 8px))',
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -225,17 +403,31 @@ export function FloatingWindowShell({
       };
 
   return (
-    <div
-      ref={shellRef}
-      data-floating-window
-      onMouseDown={() => onFocus(win.id)}
-      className="flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl"
-      style={shellStyle}
-    >
+    <>
+      {snapPreview && (
+        <div
+          className="pointer-events-none absolute rounded-lg border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
+          style={{
+            left: snapPreview.x,
+            top: snapPreview.y,
+            width: snapPreview.width,
+            height: snapPreview.height,
+            zIndex: win.zIndex + 1,
+          }}
+        />
+      )}
+      <div
+        ref={shellRef}
+        data-floating-window
+        data-floating-window-id={win.id}
+        onMouseDown={() => onFocus(win.id)}
+        className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/85 text-card-foreground shadow-xl backdrop-blur-xl"
+        style={shellStyle}
+      >
       <div
         onMouseDown={handleDragStart}
         className={cn(
-          'flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-3',
+          'flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card/80 px-3 backdrop-blur-xl',
           canControl ? 'cursor-grab' : 'cursor-default',
         )}
       >
@@ -257,7 +449,7 @@ export function FloatingWindowShell({
         <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"
-            variant={win.isPrivate ? 'secondary' : 'ghost'}
+            variant={win.isPrivate ? 'secondary' : 'outline'}
             size="icon-xs"
             onClick={() => {
               if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
@@ -271,7 +463,7 @@ export function FloatingWindowShell({
 
           <Button
             type="button"
-            variant={win.locked ? 'secondary' : 'ghost'}
+            variant={win.locked ? 'secondary' : 'outline'}
             size="icon-xs"
             onClick={() => {
               if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
@@ -285,7 +477,7 @@ export function FloatingWindowShell({
 
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="icon-xs"
             onClick={() => onMinimize(win.id)}
             disabled={!canControl}
@@ -296,7 +488,7 @@ export function FloatingWindowShell({
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="ghost" size="icon-xs" aria-label="Window actions">
+              <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
@@ -344,7 +536,7 @@ export function FloatingWindowShell({
 
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="icon-xs"
             onClick={handleMaximize}
             disabled={!canControl}
@@ -354,7 +546,7 @@ export function FloatingWindowShell({
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="icon-xs"
             onClick={() => onClose(win.id)}
             disabled={!canControl}
@@ -377,23 +569,24 @@ export function FloatingWindowShell({
         ) : children}
       </div>
 
-      {!isMaximized && (
-        <div
-          onMouseDown={handleResizeStart}
-          className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
-        >
-          <svg
-            width="10"
-            height="10"
-            viewBox="0 0 10 10"
-            className="absolute right-1 bottom-1 opacity-30"
+        {!isMaximized && (
+          <div
+            onMouseDown={handleResizeStart}
+            className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
           >
-            <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
-            <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
-            <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        </div>
-      )}
-    </div>
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              className="absolute right-1 bottom-1 opacity-30"
+            >
+              <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
+              <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
+              <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
+            </svg>
+          </div>
+        )}
+      </div>
+    </>
   );
 }

@@ -938,9 +938,23 @@ function refreshConnectedAgentConfigs(eventType, rows) {
   }
 }
 
+function parseAgentMentions(content) {
+  const out = [];
+  const seen = new Set();
+  const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
+  let match;
+  while ((match = re.exec(String(content || '')))) {
+    const handle = slugHandle(match[2]);
+    if (handle && !seen.has(handle)) {
+      seen.add(handle);
+      out.push(handle);
+    }
+  }
+  return out;
+}
+
 function firstAgentMention(content) {
-  const match = String(content || '').match(/(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/);
-  return match ? slugHandle(match[2]) : '';
+  return parseAgentMentions(content)[0] || '';
 }
 
 function validUuid(value) {
@@ -969,7 +983,7 @@ async function inferThreadAgentTarget(sessionId, threadParentId) {
   return null;
 }
 
-function agentContextFromRow(agent) {
+function agentContextFromRow(agent, coParticipants = []) {
   if (!agent) return null;
   return {
     id: agent.id,
@@ -983,7 +997,372 @@ function agentContextFromRow(agent) {
     skills: parseJsonArray(agent.skills),
     model: resolveAnthropicModel(agent.model),
     permissionMode: normalizeAgentPermissionMode(agent.permission_mode),
+    coParticipants: Array.isArray(coParticipants) ? coParticipants : [],
   };
+}
+
+// --- Multi-agent channel orchestration ---------------------------------------
+
+const CHANNEL_CONTEXT_LIMIT = 40;
+const conversationLocks = new Set();
+
+function clampInt(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function isAgentPlaceholder(row) {
+  return row.sender_kind === 'agent' && /^Thinking \d/.test(textFromValue(row.content).trim());
+}
+
+function dedupeAgentsById(agents) {
+  const seen = new Set();
+  const out = [];
+  for (const agent of agents) {
+    const id = String(agent?.id || '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(agent);
+  }
+  return out;
+}
+
+function directAgentParticipantFromSession(session) {
+  const agentParticipants = parseJsonArray(session?.participants)
+    .filter((participant) => participant && participant.kind === 'agent' && (participant.agent_id || participant.handle));
+  if (agentParticipants.length === 0) return null;
+  return agentParticipants.find((participant) => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
+  const rows = threadParentId
+    ? await getDb().unsafe(
+        `select id, role, content, sender_kind, sender_id, sender_name, created_at
+         from messages
+         where session_id = $1 and (id = $2 or thread_parent_id = $2)
+         order by created_at desc
+         limit $3`,
+        [sessionId, threadParentId, limit],
+      )
+    : await getDb().unsafe(
+        `select id, role, content, sender_kind, sender_id, sender_name, created_at
+         from messages
+         where session_id = $1 and thread_parent_id is null
+         order by created_at desc
+         limit $2`,
+        [sessionId, limit],
+      );
+  return rows.filter((row) => !isAgentPlaceholder(row)).reverse();
+}
+
+// Rebuild conversation context from the running agent's point of view: its own
+// messages are 'assistant', everyone else (humans and other agents) is 'user'
+// with a "[@handle]:" / "[name]:" prefix so the agent can tell who said what.
+async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = null) {
+  const rows = await loadChannelMessages(sessionId, threadParentId);
+  const runningId = String(runningAgent?.id || '');
+  const mapped = [];
+  for (const row of rows) {
+    const text = textFromValue(row.content).trim();
+    if (!text) continue;
+    const isOwn = row.sender_kind === 'agent' && String(row.sender_id || '') === runningId;
+    if (isOwn) {
+      mapped.push({ role: 'assistant', content: text });
+      continue;
+    }
+    const label = row.sender_kind === 'agent'
+      ? `@${slugHandle(row.sender_name || 'agent')}`
+      : (row.sender_name ? String(row.sender_name) : 'User');
+    mapped.push({ role: 'user', content: `[${label}]: ${text}` });
+  }
+  const merged = [];
+  for (const message of mapped) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === message.role) last.content = `${last.content}\n\n${message.content}`;
+    else merged.push({ role: message.role, content: message.content });
+  }
+  while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
+  return merged;
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants) {
+  const selfHandle = slugHandle(agent.handle || agent.name);
+  const lines = [];
+  if (coParticipants.length > 0) {
+    lines.push(
+      `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
+      'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
+      '',
+    );
+  }
+  lines.push('Conversation so far:');
+  for (const message of contextMessages) {
+    lines.push(message.role === 'assistant' ? `[@${selfHandle} (you)]: ${message.content}` : message.content);
+  }
+  lines.push('', 'Write your next reply as @' + selfHandle + '.');
+  return lines.join('\n');
+}
+
+function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
+  for (let i = 0; i < burst.length; i++) {
+    const row = burst[i];
+    const authorAgentId = row.sender_kind === 'agent' ? String(row.sender_id || '') : '';
+    for (const handle of parseAgentMentions(row.content)) {
+      const agent = byHandle.get(handle);
+      if (!agent) continue;
+      const agentId = String(agent.id);
+      if (authorAgentId && agentId === authorAgentId) continue; // ignore self-mentions
+      if (agentId === latestAuthorAgentId) continue; // never reply to itself back-to-back
+      let satisfied = false;
+      for (let j = i + 1; j < burst.length; j++) {
+        if (burst[j].sender_kind === 'agent' && String(burst[j].sender_id || '') === agentId) {
+          satisfied = true;
+          break;
+        }
+      }
+      if (!satisfied) return agent;
+    }
+  }
+  return null;
+}
+
+function pickAutoNextAgent(burst, rosterAgents, latestAuthorAgentId, autoRounds) {
+  if (rosterAgents.length === 0) return null;
+  const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
+  if (agentTurns >= autoRounds * rosterAgents.length) return null;
+  let candidate = rosterAgents[agentTurns % rosterAgents.length];
+  if (String(candidate.id) === latestAuthorAgentId && rosterAgents.length > 1) {
+    candidate = rosterAgents[(agentTurns + 1) % rosterAgents.length];
+  }
+  return candidate;
+}
+
+async function hasActiveBurstJob(sessionId, agentId) {
+  const rows = await getDb().unsafe(
+    `select id from agent_jobs where session_id = $1 and agent_id = $2 and status = 'running' limit 1`,
+    [sessionId, String(agentId)],
+  );
+  return rows.length > 0;
+}
+
+// Runs exactly one agent turn (builtin or daemon), rebuilding context from the DB.
+// Returns { ok, pending }. pending=true means a daemon job is in flight and the
+// conversation will resume from handleAgentJobResult.
+async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
+  const handle = slugHandle(agent.handle || agent.name);
+  const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
+  const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
+  const agentContext = agentContextFromRow(agent, coParticipants);
+
+  if (runMode === 'builtin') {
+    const jobRows = await getDb().unsafe(
+      `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, started_at, metadata)
+       values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
+       returning *`,
+      [workspaceId, agent.id, sessionId, createdBy, '', JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin' })],
+    );
+    notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+    try {
+      const responseText = await runAnthropicCompletion({
+        model: resolveAnthropicModel(agent.model),
+        messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
+        memory: null,
+        documents: null,
+        workspaceContext: null,
+        agentContext,
+        workspaceId,
+      });
+      const updatedRows = await getDb().unsafe(
+        `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
+        [jobRows[0].id, responseText],
+      );
+      notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+      const messageRows = await getDb().unsafe(
+        `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+         values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+         returning *`,
+        [sessionId, responseText || `@${handle} finished without output.`, threadParentId || null, String(agent.id), agent.name],
+      );
+      notifyDbSubscribers('messages', 'INSERT', messageRows);
+      return { ok: true, pending: false };
+    } catch (error) {
+      const errorText = error?.message || 'Built-in agent failed';
+      const updatedRows = await getDb().unsafe(
+        `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
+        [jobRows[0].id, errorText],
+      );
+      notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+      const messageRows = await getDb().unsafe(
+        `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+         values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+         returning *`,
+        [sessionId, `@${handle} failed: ${errorText}`, threadParentId || null, String(agent.id), agent.name],
+      );
+      notifyDbSubscribers('messages', 'INSERT', messageRows);
+      return { ok: false, pending: false };
+    }
+  }
+
+  const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
+  if (!connection) {
+    const assistantRows = await getDb().unsafe(
+      `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+       returning *`,
+      [
+        sessionId,
+        `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
+        threadParentId || null,
+        String(agent.id),
+        agent.name,
+      ],
+    );
+    notifyDbSubscribers('messages', 'INSERT', assistantRows);
+    return { ok: false, pending: false };
+  }
+
+  const responseMessageId = crypto.randomUUID();
+  const pendingMessageRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+     values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
+     returning *`,
+    [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+  );
+  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
+
+  const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants);
+  const jobRows = await getDb().unsafe(
+    `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
+     values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
+     returning *`,
+    [
+      workspaceId,
+      agent.id,
+      connection.connectionId,
+      sessionId,
+      createdBy,
+      daemonPrompt,
+      JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' }),
+    ],
+  );
+  notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => {});
+  const agentPayload = agentRuntimePayload(agent);
+  sendWs(connection.ws, {
+    type: 'agent_job',
+    job: {
+      id: jobRows[0].id,
+      workspaceId,
+      sessionId,
+      threadParentId: threadParentId || null,
+      prompt: daemonPrompt,
+      handle,
+      model: agentPayload.model,
+      permissionMode: agentPayload.permissionMode,
+      permission_mode: agentPayload.permission_mode,
+      permissionFlags: agentPayload.permissionFlags,
+      agent: agentPayload,
+      responseMessageId,
+    },
+  });
+  return { ok: true, pending: true };
+}
+
+// Single entry point that advances a channel conversation by one or more turns.
+// Seeded by the dispatch endpoint and resumed after every agent message lands.
+// Drains a queue of agent turns under one shared budget (max_agent_turns), one
+// agent at a time. Builtin turns loop here; daemon turns return and resume async.
+async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
+  if (!workspaceId || !sessionId) return;
+  const lockKey = `${sessionId}::${threadParentId || ''}`;
+  if (conversationLocks.has(lockKey)) return;
+  conversationLocks.add(lockKey);
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const sessionRows = await getDb().unsafe(
+        'select id, workspace_id, participants from chat_sessions where id = $1 limit 1',
+        [sessionId],
+      );
+      const session = sessionRows[0];
+      if (!session || String(session.workspace_id) !== String(workspaceId)) return;
+      const maxTurns = 10;
+      const directTarget = directAgentParticipantFromSession(session);
+
+      const rows = await loadChannelMessages(sessionId, threadParentId);
+      if (rows.length === 0) return;
+      let startIdx = -1;
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i].role === 'user') { startIdx = i; break; }
+      }
+      if (startIdx === -1) return; // no human seed; nothing to do
+      const burst = rows.slice(startIdx);
+      const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
+      if (agentTurns >= maxTurns) return; // budget exhausted
+
+      const latest = rows[rows.length - 1];
+      const latestAuthorAgentId = latest.sender_kind === 'agent' ? String(latest.sender_id || '') : '';
+
+      const agents = await getDb().unsafe(
+        'select * from workspace_agents where workspace_id = $1 order by created_at asc',
+        [workspaceId],
+      );
+      if (agents.length === 0) return;
+      const byHandle = new Map();
+      for (const agent of agents) {
+        byHandle.set(slugHandle(agent.handle || agent.name), agent);
+        const nameHandle = slugHandle(agent.name);
+        if (!byHandle.has(nameHandle)) byHandle.set(nameHandle, agent);
+      }
+      const participantAgentIds = new Set();
+      for (const participant of parseJsonArray(session.participants)) {
+        if (participant && participant.kind === 'agent' && participant.agent_id) {
+          participantAgentIds.add(String(participant.agent_id));
+        }
+      }
+
+      let nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
+      if (!nextAgent && agentTurns === 0 && directTarget) {
+        nextAgent = agents.find((agent) => (directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
+          || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle))));
+      }
+      if (!nextAgent && agentTurns === 0 && threadParentId) {
+        const target = await inferThreadAgentTarget(sessionId, threadParentId);
+        if (target) {
+          nextAgent = agents.find((agent) => (target.agentId && String(agent.id) === target.agentId)
+            || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle)));
+        }
+      }
+      if (!nextAgent) return;
+      if (await hasActiveBurstJob(sessionId, nextAgent.id)) return;
+
+      const involved = new Map();
+      for (const id of participantAgentIds) {
+        const agent = agents.find((row) => String(row.id) === id);
+        if (agent) involved.set(id, agent);
+      }
+      for (const row of burst) {
+        if (row.sender_kind === 'agent' && row.sender_id) {
+          const agent = agents.find((entry) => String(entry.id) === String(row.sender_id));
+          if (agent) involved.set(String(agent.id), agent);
+        }
+        for (const handle of parseAgentMentions(row.content)) {
+          const agent = byHandle.get(handle);
+          if (agent) involved.set(String(agent.id), agent);
+        }
+      }
+      const coParticipants = [...involved.values()]
+        .filter((agent) => String(agent.id) !== String(nextAgent.id))
+        .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
+
+      const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants });
+      if (!result || result.pending) return; // daemon resumes asynchronously; stop the loop
+      // builtin turn finished synchronously — loop to evaluate the next turn
+    }
+  } finally {
+    conversationLocks.delete(lockKey);
+  }
 }
 
 function agentLiveMessageContent(message) {
@@ -1111,6 +1490,12 @@ async function handleAgentJobResult(ws, message) {
     notifyDbSubscribers('messages', 'INSERT', messageRows);
   }
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => {});
+  // Resume the channel conversation now that this daemon turn has landed.
+  void continueConversation({
+    workspaceId: job.workspace_id,
+    sessionId: job.session_id,
+    threadParentId,
+  }).catch((error) => console.error('continueConversation (daemon) failed', error));
 }
 
 async function handleAgentJobDelta(ws, message) {
@@ -1558,6 +1943,16 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
     if (Array.isArray(agentContext.skills) && agentContext.skills.length > 0) {
       sections.push(`Selected skill libraries: ${agentContext.skills.join(', ')}`);
     }
+    if (Array.isArray(agentContext.coParticipants) && agentContext.coParticipants.length > 0) {
+      const roster = agentContext.coParticipants.map((peer) => `@${peer.handle}${peer.name ? ` (${peer.name})` : ''}`).join(', ');
+      sections.push(
+        '',
+        `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
+        '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
+        '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+        '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
+      );
+    }
     sections.push('');
   } else {
     sections.push(
@@ -1790,8 +2185,9 @@ function createApp() {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '50mb' }));
-  void ensureRuntimeSchema().catch((error) => {
+  const runtimeSchemaReady = ensureRuntimeSchema().catch((error) => {
     console.warn('[backend] runtime schema migration failed:', error.message || error);
+    throw error;
   });
 
   // Auth is enforced at the route boundary and again per workspace-scoped
@@ -1801,6 +2197,15 @@ function createApp() {
     try {
       await getDb().unsafe('select 1');
       res.json({ ok: true });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.use('/backend', async (_req, res, next) => {
+    try {
+      await runtimeSchemaReady;
+      next();
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -2011,195 +2416,36 @@ function createApp() {
 
   app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
     try {
-      const { workspaceId, sessionId, messageId, content, threadParentId, messages, memory, documents, workspaceContext } = req.body || {};
+      const { workspaceId, sessionId, content, threadParentId } = req.body || {};
       if (!workspaceId || !sessionId || !content) {
         return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
       }
       await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
-      const sessionRows = await getDb().unsafe('select id, workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
+      const sessionRows = await getDb().unsafe(
+        'select id, workspace_id, participants from chat_sessions where id = $1 limit 1',
+        [sessionId],
+      );
       if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
         return jsonError(res, 404, new Error('Channel not found'));
       }
-      const explicitHandle = firstAgentMention(content);
-      const threadTarget = !explicitHandle && threadParentId
+      // The user message is already persisted by the client before dispatch, so
+      // the orchestrator reconstructs all context (mentions, history, budget)
+      // straight from the database. We only decide here whether to kick it off.
+      const mentions = parseAgentMentions(content);
+      const directTarget = directAgentParticipantFromSession(sessionRows[0]);
+      const threadTarget = mentions.length === 0 && threadParentId
         ? await inferThreadAgentTarget(sessionId, threadParentId)
         : null;
-      const agents = await getDb().unsafe(
-        `select *
-         from workspace_agents
-         where workspace_id = $1
-         order by created_at asc`,
-        [workspaceId],
-      );
-      const wantedHandle = explicitHandle || threadTarget?.handle || '';
-      const wantedAgentId = threadTarget?.agentId || '';
-      if (!wantedHandle && !wantedAgentId) {
-        return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_thread_agent' }, error: null });
+      const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget);
+      if (!willDispatch) {
+        return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
       }
-      const agent = agents.find((row) => {
-        const rowHandle = slugHandle(row.handle || row.name);
-        return (wantedAgentId && String(row.id) === wantedAgentId)
-          || (wantedHandle && (rowHandle === wantedHandle || slugHandle(row.name) === wantedHandle));
-      });
-      if (!agent) {
-        return res.json({ data: { dispatched: false, reason: 'agent_not_found', handle: wantedHandle, agentId: wantedAgentId }, error: null });
-      }
-      const handle = slugHandle(agent.handle || agent.name || wantedHandle);
-      const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
-      if (runMode === 'builtin') {
-        const jobRows = await getDb().unsafe(
-          `insert into agent_jobs (workspace_id, agent_id, session_id, message_id, created_by, prompt, status, started_at, metadata)
-           values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
-           returning *`,
-          [
-            workspaceId,
-            agent.id,
-            sessionId,
-            messageId || null,
-            req.userId,
-            String(content),
-            JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin', inferredFromThread: !explicitHandle && Boolean(threadTarget) }),
-          ],
-        );
-        notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
-
-        try {
-          const responseText = await runAnthropicCompletion({
-            model: resolveAnthropicModel(agent.model),
-            messages: Array.isArray(messages) && messages.length > 0
-              ? messages.map((m) => ({ role: m.role, content: textFromValue(m.content) }))
-              : [{ role: 'user', content: String(content) }],
-            memory,
-            documents,
-            workspaceContext,
-            agentContext: agentContextFromRow(agent),
-            workspaceId,
-          });
-          const updatedRows = await getDb().unsafe(
-            `update agent_jobs
-             set status = 'done', response = $2, finished_at = now(), updated_at = now()
-             where id = $1
-             returning *`,
-            [jobRows[0].id, responseText],
-          );
-          notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
-          const messageRows = await getDb().unsafe(
-            `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-             values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-             returning *`,
-            [
-              sessionId,
-              responseText || `@${handle} finished without output.`,
-              threadParentId || null,
-              String(agent.id),
-              agent.name,
-            ],
-          );
-          notifyDbSubscribers('messages', 'INSERT', messageRows);
-          return res.json({ data: { dispatched: true, connected: false, mode: 'builtin', agent, handle, job: updatedRows[0], message: messageRows[0] }, error: null });
-        } catch (error) {
-          const errorText = error?.message || 'Built-in agent failed';
-          const updatedRows = await getDb().unsafe(
-            `update agent_jobs
-             set status = 'error', error = $2, finished_at = now(), updated_at = now()
-             where id = $1
-             returning *`,
-            [jobRows[0].id, errorText],
-          );
-          notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
-          const messageRows = await getDb().unsafe(
-            `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-             values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-             returning *`,
-            [
-              sessionId,
-              `@${handle} failed: ${errorText}`,
-              threadParentId || null,
-              String(agent.id),
-              agent.name,
-            ],
-          );
-          notifyDbSubscribers('messages', 'INSERT', messageRows);
-          return res.json({ data: { dispatched: true, connected: false, mode: 'builtin', agent, handle, job: updatedRows[0], message: messageRows[0] }, error: null });
-        }
-      }
-
-      const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
-      if (!connection) {
-        const assistantRows = await getDb().unsafe(
-          `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-           values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-           returning *`,
-          [
-            sessionId,
-            `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
-            threadParentId || null,
-            String(agent.id),
-            agent.name,
-          ],
-        );
-        notifyDbSubscribers('messages', 'INSERT', assistantRows);
-        return res.json({ data: { dispatched: true, connected: false, mode: 'daemon', agent, handle }, error: null });
-      }
-
-      const responseMessageId = crypto.randomUUID();
-      const pendingMessageRows = await getDb().unsafe(
-        `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
-         returning *`,
-        [
-          responseMessageId,
-          sessionId,
-          'Thinking 0s',
-          threadParentId || null,
-          String(agent.id),
-          agent.name,
-        ],
-      );
-      notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
-
-      const jobRows = await getDb().unsafe(
-        `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, message_id, created_by, prompt, status, started_at, metadata)
-         values ($1, $2, $3, $4, $5, $6, $7, 'running', now(), $8::jsonb)
-         returning *`,
-        [
-          workspaceId,
-          agent.id,
-          connection.connectionId,
-          sessionId,
-          messageId || null,
-          req.userId,
-          String(content),
-          JSON.stringify({
-            handle,
-            threadParentId: threadParentId || null,
-            responseMessageId,
-            inferredFromThread: !explicitHandle && Boolean(threadTarget),
-          }),
-        ],
-      );
-      notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
-      await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => {});
-      const agentPayload = agentRuntimePayload(agent);
-      sendWs(connection.ws, {
-        type: 'agent_job',
-        job: {
-          id: jobRows[0].id,
-          workspaceId,
-          sessionId,
-          messageId: messageId || null,
-          threadParentId: threadParentId || null,
-          prompt: String(content),
-          handle,
-          model: agentPayload.model,
-          permissionMode: agentPayload.permissionMode,
-          permission_mode: agentPayload.permission_mode,
-          permissionFlags: agentPayload.permissionFlags,
-          agent: agentPayload,
-          responseMessageId,
-        },
-      });
-      res.json({ data: { dispatched: true, connected: true, mode: 'daemon', agent, handle, job: jobRows[0] }, error: null });
+      // Fire and forget: the conversation advances in the background as each agent
+      // message lands and is streamed to clients over realtime. Holding the POST
+      // open for the whole multi-turn chain would block the user's UI.
+      void continueConversation({ workspaceId, sessionId, threadParentId: threadParentId || null })
+        .catch((error) => console.error('continueConversation (dispatch) failed', error));
+      return res.json({ data: { dispatched: true, mode: directTarget ? 'direct' : 'mention', mentions }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }

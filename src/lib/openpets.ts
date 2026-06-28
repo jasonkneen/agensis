@@ -22,7 +22,7 @@ const OPENPETS_PAGE_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
 let featuredPetsPromise: Promise<OpenPet[]> | null = null;
 
 export function isImageAvatar(value: string | null | undefined) {
-  return Boolean(value && /^https?:\/\//i.test(value));
+  return Boolean(value && /^(https?:\/\/|\/|data:image\/|blob:)/i.test(value));
 }
 
 export function fetchFeaturedOpenPets(limit = 24) {

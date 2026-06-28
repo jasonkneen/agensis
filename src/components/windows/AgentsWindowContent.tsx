@@ -1,5 +1,29 @@
-import { useEffect, useState } from 'react';
-import { Bot, Check, Copy, Link2, Monitor, Pencil, Plus, Power, Save, Terminal, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Bot,
+  Brain,
+  Check,
+  Code2,
+  Command,
+  Copy,
+  Database,
+  Globe,
+  Link2,
+  Monitor,
+  Pencil,
+  Plus,
+  Power,
+  Rocket,
+  Save,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
+  Trash2,
+  Upload,
+  Wrench,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
@@ -30,13 +54,17 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, type OpenPet } from '../../lib/openpets';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
   webhooks: AgentWebhook[];
   connections?: AgentConnection[];
+  focusedAgentKey?: string | null;
   onCreateAgent: (input: {
     name: string;
     avatar?: string;
@@ -58,11 +86,26 @@ interface AgentsWindowContentProps {
 }
 
 const DEFAULT_AGENT_AVATAR = 'AI';
+const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon }> = [
+  { value: 'icon:bot', label: 'Bot', icon: Bot },
+  { value: 'icon:sparkles', label: 'Sparkles', icon: Sparkles },
+  { value: 'icon:brain', label: 'Brain', icon: Brain },
+  { value: 'icon:terminal', label: 'Terminal', icon: Terminal },
+  { value: 'icon:code', label: 'Code', icon: Code2 },
+  { value: 'icon:command', label: 'Command', icon: Command },
+  { value: 'icon:wrench', label: 'Tools', icon: Wrench },
+  { value: 'icon:database', label: 'Data', icon: Database },
+  { value: 'icon:shield', label: 'Shield', icon: ShieldCheck },
+  { value: 'icon:rocket', label: 'Rocket', icon: Rocket },
+  { value: 'icon:globe', label: 'Globe', icon: Globe },
+  { value: 'icon:monitor', label: 'Monitor', icon: Monitor },
+];
 
 export function AgentsWindowContent({
   agents,
   webhooks,
   connections = [],
+  focusedAgentKey,
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
@@ -85,6 +128,7 @@ export function AgentsWindowContent({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
+  const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
 
   useEffect(() => {
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
@@ -207,6 +251,7 @@ export function AgentsWindowContent({
               <AgentRow
                 key={agent.id}
                 agent={agent}
+                focused={agentMatchesKey(agent, normalizedFocusedAgentKey)}
                 isEditing={editingId === agent.id}
                 confirmDelete={confirmDeleteId === agent.id}
                 onEdit={() => setEditingId(editingId === agent.id ? null : agent.id)}
@@ -295,6 +340,8 @@ function AgentForm({
   const options = modelOptions(model);
   const canSubmit = Boolean(name.trim());
   const [openPets, setOpenPets] = useState<OpenPet[]>([]);
+  const [avatarTab, setAvatarTab] = useState<'icon' | 'avatar' | 'openpets' | 'upload'>('icon');
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -308,17 +355,25 @@ function AgentForm({
     };
   }, []);
 
+  const handleUploadAvatar = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') onAvatarChange(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <FieldGroup className="gap-3">
-      <div className="grid grid-cols-[3rem_1fr_10rem] gap-2">
+      <div className="grid grid-cols-[4.5rem_1fr_10rem] gap-2">
         <Field>
-          <FieldLabel htmlFor="agent-avatar">Avatar</FieldLabel>
-          <Input
-            id="agent-avatar"
-            value={avatar}
-            onChange={e => onAvatarChange(e.target.value)}
-            className="text-center"
-          />
+          <FieldLabel>Preview</FieldLabel>
+          <div className="grid aspect-square place-items-center overflow-hidden rounded-xl border bg-muted text-lg font-semibold">
+            <AgentAvatarPreview value={avatar} className="size-full" />
+          </div>
         </Field>
         <Field>
           <FieldLabel htmlFor="agent-name">Name</FieldLabel>
@@ -340,28 +395,90 @@ function AgentForm({
         </Field>
       </div>
 
-      {openPets.length > 0 && (
-        <Field>
-          <FieldLabel>OpenPets avatar</FieldLabel>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))] gap-2">
-            {openPets.slice(0, 18).map(pet => (
+      <Tabs value={avatarTab} onValueChange={value => setAvatarTab(value as typeof avatarTab)} className="agent-avatar-tabs gap-3">
+        <TabsList className="grid h-10 w-full grid-cols-4 rounded-xl">
+          <TabsTrigger value="icon">Icon</TabsTrigger>
+          <TabsTrigger value="avatar">Avatar</TabsTrigger>
+          <TabsTrigger value="openpets">OpenPets</TabsTrigger>
+          <TabsTrigger value="upload">Upload</TabsTrigger>
+        </TabsList>
+        <TabsContent value="icon" className="mt-0">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(3rem,1fr))] gap-2">
+            {AGENT_ICON_CHOICES.map(choice => {
+              const Icon = choice.icon;
+              return (
+                <button
+                  key={choice.value}
+                  type="button"
+                  className={cn(
+                    'flex aspect-square items-center justify-center rounded-lg border bg-muted/40 transition hover:border-primary/60',
+                    avatar === choice.value && 'border-primary ring-2 ring-primary/40',
+                  )}
+                  onClick={() => onAvatarChange(choice.value)}
+                  title={choice.label}
+                  aria-label={`Use ${choice.label} icon`}
+                >
+                  <Icon className="size-5" />
+                </button>
+              );
+            })}
+          </div>
+        </TabsContent>
+        <TabsContent value="avatar" className="mt-0">
+          <div className="agent-avatar-grid grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2 overflow-y-auto pr-1">
+            {AGENT_AVATAR_CHOICES.map(choice => (
               <button
-                key={pet.id}
+                key={choice.id}
                 type="button"
-                className={[
-                  'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition',
-                  openPetAvatarId === pet.id ? 'border-primary ring-2 ring-primary/40' : 'border-border hover:border-primary/60',
-                ].join(' ')}
-                onClick={() => onOpenPetAvatarChange(pet)}
-                title={pet.displayName}
-                aria-label={`Use ${pet.displayName} OpenPets avatar`}
+                className={cn(
+                  'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition hover:border-primary/60',
+                  avatar === choice.src && 'border-primary ring-2 ring-primary/40',
+                )}
+                onClick={() => onAvatarChange(choice.src)}
+                title={choice.label}
+                aria-label={`Use ${choice.label} avatar`}
               >
-                <img src={pet.thumbnail} alt="" className="size-full object-contain" loading="lazy" />
+                <img src={choice.src} alt="" className="size-full rounded-md object-contain" loading="lazy" draggable={false} />
               </button>
             ))}
           </div>
-        </Field>
-      )}
+        </TabsContent>
+        <TabsContent value="openpets" className="mt-0">
+          {openPets.length > 0 ? (
+            <div className="grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4rem,1fr))] gap-2 overflow-y-auto pr-1">
+              {openPets.map(pet => (
+                <button
+                  key={pet.id}
+                  type="button"
+                  className={cn(
+                    'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition hover:border-primary/60',
+                    openPetAvatarId === pet.id && 'border-primary ring-2 ring-primary/40',
+                  )}
+                  onClick={() => onOpenPetAvatarChange(pet)}
+                  title={pet.displayName}
+                  aria-label={`Use ${pet.displayName} OpenPets avatar`}
+                >
+                  <img src={pet.thumbnail} alt="" className="size-full object-contain" loading="lazy" draggable={false} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border bg-muted/30 px-3 py-4 text-sm text-muted-foreground">No OpenPets available.</div>
+          )}
+        </TabsContent>
+        <TabsContent value="upload" className="mt-0">
+          <button
+            type="button"
+            className="flex min-h-32 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/30 text-sm text-muted-foreground transition hover:border-primary/60 hover:text-foreground"
+            onClick={() => uploadInputRef.current?.click()}
+          >
+            <Upload className="size-5" />
+            Choose an image
+            <span className="text-xs text-muted-foreground/80">PNG, JPG, GIF</span>
+          </button>
+          <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={handleUploadAvatar} />
+        </TabsContent>
+      </Tabs>
 
       <Field>
         <FieldLabel htmlFor="agent-description">Description</FieldLabel>
@@ -483,6 +600,7 @@ function AgentForm({
 
 function AgentRow({
   agent,
+  focused,
   isEditing,
   confirmDelete,
   onEdit,
@@ -497,6 +615,7 @@ function AgentRow({
   onToggleWebhook,
 }: {
   agent: WorkspaceAgent;
+  focused: boolean;
   isEditing: boolean;
   confirmDelete: boolean;
   onEdit: () => void;
@@ -628,15 +747,11 @@ function AgentRow({
   return (
     <Item
       variant="default"
-      className="hover:bg-muted/50"
+      className={cn('hover:bg-muted/50', focused && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30')}
       onMouseEnter={onCancelDelete}
     >
       <ItemMedia className="size-9 overflow-hidden rounded-full bg-muted text-base">
-        {isImageAvatar(agent.avatar) ? (
-          <img src={agent.avatar} alt="" className="size-full object-cover" loading="lazy" />
-        ) : (
-          agent.avatar || DEFAULT_AGENT_AVATAR
-        )}
+        <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
       </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="max-w-full truncate">{agent.name}</ItemTitle>
@@ -764,6 +879,32 @@ function modelOptions(current: string) {
   return [{ id: current, label: current, description: 'Saved model' }, ...AI_MODELS];
 }
 
+function AgentAvatarPreview({ value, className }: { value?: string | null; className?: string }) {
+  const avatar = value || DEFAULT_AGENT_AVATAR;
+  const iconChoice = getAgentIconChoice(avatar);
+  if (isImageAvatar(avatar)) {
+    return <img src={avatar} alt="" className={cn('size-full object-contain', className)} loading="lazy" draggable={false} />;
+  }
+  if (iconChoice) {
+    const Icon = iconChoice.icon;
+    return (
+      <span className={cn('grid size-full place-items-center text-muted-foreground', className)}>
+        <Icon className="size-5" />
+      </span>
+    );
+  }
+  return (
+    <span className={cn('grid size-full place-items-center text-sm font-semibold', className)}>
+      {avatar.slice(0, 2).toUpperCase()}
+    </span>
+  );
+}
+
+function getAgentIconChoice(value?: string | null) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return AGENT_ICON_CHOICES.find(choice => choice.value === normalized) || null;
+}
+
 function displayModel(model?: string | null) {
   const option = AI_MODELS.find(entry => entry.id === model);
   return option?.label || model || 'Auto';
@@ -781,6 +922,23 @@ function addToken(value: string, token: string) {
   const next = new Set(splitList(value));
   next.add(token);
   return Array.from(next).join(', ');
+}
+
+function normalizeAgentKey(value?: string | null) {
+  return String(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .toLowerCase();
+}
+
+function agentMatchesKey(agent: WorkspaceAgent, key: string) {
+  if (!key) return false;
+  return [
+    agent.id,
+    agent.handle,
+    agent.name,
+    agentHandle(agent.name),
+  ].some(value => normalizeAgentKey(value) === key);
 }
 
 function agentHandle(value: string) {

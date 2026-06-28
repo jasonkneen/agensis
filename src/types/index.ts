@@ -36,6 +36,9 @@ export interface ChatSession {
   folder?: string | null;
   is_favorite?: boolean;
   participants?: ChannelParticipant[] | null;
+  conversation_mode?: 'mention' | 'auto' | null;
+  max_agent_turns?: number | null;
+  auto_rounds?: number | null;
   archived_at?: string | null;
   version?: number;
   created_at: string;
@@ -51,6 +54,7 @@ export type ChannelParticipant = {
   user_id?: string | null;
   agent_id?: string | null;
   added_at?: string | null;
+  direct?: boolean | null;
 };
 
 export interface Message {
