@@ -305,16 +305,14 @@ export function Sidebar({
       </div>
 
       <div className="px-2 pb-2">
-        <Button
+        <button
           type="button"
-          variant="outline"
-          size="sm"
-          className="sidebar-search min-w-0 w-full justify-start text-muted-foreground"
+          className="sidebar-search flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2.5 text-left text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onOpenCommandPalette}
         >
-          <Search data-icon="inline-start" />
-          <span className="truncate">Search...</span>
-        </Button>
+          <Search className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left">Search...</span>
+        </button>
       </div>
 
       <ScrollArea className="min-h-0 flex-1 px-2">
@@ -882,22 +880,20 @@ function ActionTile({
   onClick: () => void;
 }) {
   return (
-    <Button
+    <button
       type="button"
-      variant={active ? 'secondary' : 'ghost'}
-      size="sm"
-      className="sidebar-action-row min-w-0 w-full justify-start overflow-hidden"
+      className="sidebar-action-row flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       data-active={active ? 'true' : undefined}
       onClick={onClick}
     >
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {typeof count === 'number' && (
         <span className="sidebar-action-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
           {formatCount(count)}
         </span>
       )}
-    </Button>
+    </button>
   );
 }
 
@@ -995,17 +991,15 @@ function ItemRow({
   presenceUsers?: ItemPresenceUser[];
 }) {
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="sm"
-      className={`sidebar-item-row sidebar-item-row-${kind} min-w-0 w-full justify-start overflow-hidden text-muted-foreground`}
+      className={`sidebar-item-row sidebar-item-row-${kind} flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring`}
       onClick={onClick}
     >
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {presenceUsers.length > 0 && (
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {presenceUsers.slice(0, 3).map(person => (
@@ -1021,7 +1015,7 @@ function ItemRow({
           )}
         </span>
       )}
-    </Button>
+    </button>
   );
 }
 
