@@ -87,6 +87,14 @@ function backendUrl(path: string) {
   return `${BACKEND_BASE}${path}`;
 }
 
+function realtimeDisabledOnThisHost() {
+  if (typeof window === 'undefined') return true;
+  if (BACKEND_BASE) return false;
+  const { protocol, hostname } = window.location;
+  if (protocol !== 'https:') return false;
+  return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]';
+}
+
 function getWsUrl() {
   const token = getStoredSession()?.access_token;
   const withToken = (url: string) => {
@@ -281,6 +289,7 @@ class RealtimeManager {
 
   ensureConnected() {
     if (typeof WebSocket === 'undefined') return;
+    if (realtimeDisabledOnThisHost()) return;
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -308,6 +317,7 @@ class RealtimeManager {
 
     this.socket.addEventListener('close', () => {
       this.socket = null;
+      if (realtimeDisabledOnThisHost()) return;
       if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = window.setTimeout(() => this.ensureConnected(), 800);
     });
@@ -315,6 +325,10 @@ class RealtimeManager {
 
   register(channel: LocalChannel) {
     this.channels.add(channel);
+    if (realtimeDisabledOnThisHost()) {
+      channel.notifyStatus('UNAVAILABLE');
+      return;
+    }
     this.ensureConnected();
     if (this.socket?.readyState === WebSocket.OPEN) {
       channel.resubscribe();
@@ -324,10 +338,12 @@ class RealtimeManager {
 
   unregister(channel: LocalChannel) {
     this.channels.delete(channel);
+    if (realtimeDisabledOnThisHost()) return;
     this.send({ action: 'unsubscribe', channel: channel.name });
   }
 
   send(message: Record<string, unknown>) {
+    if (realtimeDisabledOnThisHost()) return;
     const encoded = JSON.stringify(message);
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(encoded);
