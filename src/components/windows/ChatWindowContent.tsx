@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Bot,
   ChevronDown,
+  Command as CommandIcon,
   CornerDownRight,
   FileText,
+  Folder,
+  FolderOpen,
   Hash,
+  HardDrive,
   Layers,
   Link2,
   MessageSquare,
   Mic,
+  Palette,
   Paperclip,
   Pencil,
   Pin,
@@ -18,14 +24,16 @@ import {
   Send,
   Sparkles,
   Trash2,
+  Upload,
   UserPlus,
   Users,
+  Wrench,
   X,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
-import { apiAuthHeaders, apiUrl, backendClient } from '../../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient, type SystemCapabilities } from '../../lib/backendClient';
 import type {
   CanvasGroup,
   CanvasObject,
@@ -77,6 +85,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
@@ -102,7 +115,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
 import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
+import type { CreateTaskInput } from '../../hooks/useTasks';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -128,6 +144,9 @@ interface ChatWindowContentProps {
   channelTitle?: string;
   workspaceId?: string | null;
   uploadedFiles?: UploadedFile[];
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
+  onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
+  systemCapabilities?: SystemCapabilities | null;
   contextControls?: React.ReactNode;
 }
 
@@ -145,6 +164,31 @@ type ProjectFileEntry = {
   size: number;
   mtime: string;
   kind: 'file';
+  sourceId?: string;
+  sourceKind?: 'workspace' | 'agent';
+  sourceLabel?: string;
+  sourceRoot?: string;
+  agentId?: string | null;
+  connectionId?: string | null;
+  handle?: string;
+  status?: string;
+};
+
+type ProjectFileSource = {
+  id: string;
+  kind: 'workspace' | 'agent';
+  label: string;
+  root: string;
+  files: ProjectFileEntry[];
+};
+
+type LinkedFile = {
+  id: string;
+  kind: 'uploaded' | 'project';
+  name: string;
+  path: string;
+  sourceLabel: string;
+  size: number;
 };
 
 type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'is_favorite' | 'archived_at' | 'participants'>;
@@ -184,13 +228,19 @@ export function ChatWindowContent({
   channelTitle = 'general',
   workspaceId = null,
   uploadedFiles = [],
+  onUploadFiles,
+  onCreateTask,
+  systemCapabilities = null,
   contextControls,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
+  const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [showGroupPicker, setShowGroupPicker] = useState(false);
+  const [addContextOpen, setAddContextOpen] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [groupPickerQuery, setGroupPickerQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
@@ -210,8 +260,11 @@ export function ChatWindowContent({
   const [panelWidth, setPanelWidth] = useState(360);
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectRoot, setProjectRoot] = useState('');
+  const [projectFileSources, setProjectFileSources] = useState<ProjectFileSource[]>([]);
   const [projectFilesLoading, setProjectFilesLoading] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const filteredDocs = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
@@ -231,6 +284,52 @@ export function ChatWindowContent({
     return canvasGroups.filter(g => g.name.toLowerCase().includes(q));
   }, [canvasGroups, groupPickerQuery]);
 
+  const composerProjectGroups = useMemo(() => {
+    if (projectFileSources.length > 0) {
+      return projectFileSources
+        .map(source => ({ source, files: Array.isArray(source.files) ? source.files : [] }))
+        .filter(group => group.files.length > 0);
+    }
+    if (projectFiles.length === 0) return [];
+    return [{
+      source: { id: 'workspace', kind: 'workspace' as const, label: 'Workspace folder', root: projectRoot, files: projectFiles },
+      files: projectFiles,
+    }];
+  }, [projectFileSources, projectFiles, projectRoot]);
+
+  const composerProjectFiles = useMemo(
+    () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
+    [composerProjectGroups],
+  );
+
+  const skillOptions = useMemo(() => {
+    const fromCapabilities = systemCapabilities?.skills
+      .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
+      .map(skill => ({
+        id: skill.id,
+        label: skill.label,
+        detail: `${skill.count} item${skill.count === 1 ? '' : 's'}`,
+      })) || [];
+    const fromAgents = Array.from(new Set(agents.flatMap(agent => agent.skills || []).filter(Boolean)))
+      .map(skill => ({ id: skill, label: skill, detail: 'Agent skill' }));
+    return [...fromCapabilities, ...fromAgents].slice(0, 10);
+  }, [agents, systemCapabilities]);
+
+  const toolOptions = useMemo(() => {
+    const packages = systemCapabilities?.packages
+      .filter(pkg => pkg.available)
+      .map(pkg => ({ id: pkg.name, label: pkg.name, detail: pkg.version || 'Package' })) || [];
+    const commands = systemCapabilities?.clis
+      .filter(cli => cli.available)
+      .map(cli => ({ id: cli.id, label: cli.label, detail: cli.command })) || [];
+    const agentTools = Array.from(new Set(agents.flatMap(agent => agent.tools || []).filter(Boolean)))
+      .map(tool => ({ id: tool, label: tool, detail: 'Agent tool' }));
+    const codexServer = systemCapabilities?.codexAppServer.available
+      ? [{ id: 'codex-app-server', label: 'Codex app server', detail: systemCapabilities.codexAppServer.command }]
+      : [];
+    return [...packages, ...commands, ...codexServer, ...agentTools].slice(0, 10);
+  }, [agents, systemCapabilities]);
+
   const buildGroupContext = (groups: CanvasGroup[]): string => {
     return groups.map(group => {
       const groupObjects = canvasObjects.filter(object => object.group_id === group.id);
@@ -246,6 +345,9 @@ export function ChatWindowContent({
   const handleSend = () => {
     if (!input.trim() || streaming) return;
     let content = input.trim();
+    if (linkedFiles.length > 0) {
+      content = `${buildFileContext(linkedFiles)}\n\n${content}`;
+    }
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
@@ -253,7 +355,67 @@ export function ChatWindowContent({
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
+    setLinkedFiles([]);
     inputRef.current?.focus();
+  };
+
+  const insertComposerText = (text: string) => {
+    const target = inputRef.current;
+    const start = target?.selectionStart ?? input.length;
+    const end = target?.selectionEnd ?? input.length;
+    const needsSpaceBefore = start > 0 && !/\s$/.test(input.slice(0, start));
+    const needsSpaceAfter = end < input.length && !/^\s/.test(input.slice(end));
+    const next = `${input.slice(0, start)}${needsSpaceBefore ? ' ' : ''}${text}${needsSpaceAfter ? ' ' : ''}${input.slice(end)}`;
+    setInput(next);
+    setAddContextOpen(false);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const cursor = start + text.length + (needsSpaceBefore ? 1 : 0);
+      inputRef.current?.setSelectionRange(cursor, cursor);
+    });
+  };
+
+  const addLinkedFile = (file: LinkedFile) => {
+    setLinkedFiles(prev => prev.find(item => item.id === file.id) ? prev : [...prev, file]);
+    setAddContextOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const addLinkedDoc = (doc: Document) => {
+    if (!linkedDocs.find(item => item.id === doc.id)) setLinkedDocs(prev => [...prev, doc]);
+    setAddContextOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const addLinkedGroup = (group: CanvasGroup) => {
+    if (!linkedGroups.find(item => item.id === group.id)) setLinkedGroups(prev => [...prev, group]);
+    setAddContextOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const handleUploadSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length || !onUploadFiles) return;
+    setUploadStatus('Uploading...');
+    try {
+      const uploaded = await onUploadFiles(files);
+      setLinkedFiles(prev => {
+        const existing = new Set(prev.map(file => file.id));
+        const next = [...prev];
+        uploaded.forEach(file => {
+          const linked = linkedUploadedFile(file);
+          if (!existing.has(linked.id)) next.push(linked);
+        });
+        return next;
+      });
+      setUploadStatus(uploaded.length > 0 ? `${uploaded.length} file${uploaded.length === 1 ? '' : 's'} attached` : 'Upload failed');
+      if (uploaded.length > 0) setAddContextOpen(false);
+    } catch {
+      setUploadStatus('Upload failed');
+    } finally {
+      inputRef.current?.focus();
+    }
   };
 
   const handleAgentSelect = (agent: WorkspaceAgent) => {
@@ -644,11 +806,13 @@ export function ChatWindowContent({
       .then(payload => {
         if (cancelled) return;
         setProjectFiles(Array.isArray(payload?.data?.files) ? payload.data.files : []);
+        setProjectFileSources(Array.isArray(payload?.data?.sources) ? payload.data.sources : []);
         setProjectRoot(typeof payload?.data?.root === 'string' ? payload.data.root : '');
       })
       .catch(() => {
         if (!cancelled) {
           setProjectFiles([]);
+          setProjectFileSources([]);
           setProjectRoot('');
         }
       })
@@ -815,8 +979,27 @@ export function ChatWindowContent({
           </div>
         ) : (
         <div className="channel-composer border-t border-border p-2">
-          {(linkedDocs.length > 0 || linkedGroups.length > 0) && (
+          {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
             <AttachmentGroup className="mb-2">
+              {linkedFiles.map(file => (
+                <Attachment key={file.id} state="done" size="xs">
+                  <AttachmentMedia variant="icon">
+                    {file.kind === 'uploaded' ? <Paperclip /> : <HardDrive />}
+                  </AttachmentMedia>
+                  <AttachmentContent>
+                    <AttachmentTitle>{file.name}</AttachmentTitle>
+                    <AttachmentDescription>{file.sourceLabel}</AttachmentDescription>
+                  </AttachmentContent>
+                  <AttachmentActions>
+                    <AttachmentAction
+                      aria-label={`Remove ${file.name}`}
+                      onClick={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
+                    >
+                      <X />
+                    </AttachmentAction>
+                  </AttachmentActions>
+                </Attachment>
+              ))}
               {linkedDocs.map(doc => (
                 <Attachment key={doc.id} state="done" size="xs">
                   <AttachmentMedia variant="icon">
@@ -860,20 +1043,28 @@ export function ChatWindowContent({
 
           <div className="relative">
             {showDocPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-56 rounded-xl border border-border shadow-lg">
-                <CommandList>
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-3 max-h-[min(480px,calc(100vh-180px))] rounded-2xl border border-border bg-popover p-2 shadow-xl">
+                <CommandList className="max-h-[min(420px,calc(100vh-220px))]">
                   <CommandEmpty>No agents or documents found.</CommandEmpty>
                   {filteredAgents.length > 0 && (
-                    <CommandGroup heading="Agents">
+                    <CommandGroup heading="Agents" className="pb-2">
                       {filteredAgents.map(agent => (
                         <CommandItem
                           key={agent.id}
                           value={`${agent.name} ${agentHandle(agent)}`}
+                          className="min-h-14 rounded-xl px-3 py-2"
                           onSelect={() => handleAgentSelect(agent)}
                         >
-                          <Bot />
-                          <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                          <span className="text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                            <Bot className="size-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">{agent.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {agent.description || agent.model || 'Agent'}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
                         </CommandItem>
                       ))}
                     </CommandGroup>
@@ -883,10 +1074,18 @@ export function ChatWindowContent({
                       <CommandItem
                         key={doc.id}
                         value={doc.title}
+                        className="min-h-14 rounded-xl px-3 py-2"
                         onSelect={() => handleDocSelect(doc)}
                       >
-                        <FileText />
-                        <span className="truncate">{doc.title}</span>
+                        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                          <FileText className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{doc.title}</span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {doc.folder || (doc.is_favorite ? 'Favorite document' : 'Document context')}
+                          </span>
+                        </span>
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -895,8 +1094,8 @@ export function ChatWindowContent({
             )}
 
             {showGroupPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-56 rounded-xl border border-border shadow-lg">
-                <CommandList>
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-3 max-h-[min(420px,calc(100vh-180px))] rounded-2xl border border-border bg-popover p-2 shadow-xl">
+                <CommandList className="max-h-[min(360px,calc(100vh-220px))]">
                   <CommandEmpty>No groups found.</CommandEmpty>
                   <CommandGroup heading="Canvas groups">
                     {filteredGroups.map(group => {
@@ -905,11 +1104,17 @@ export function ChatWindowContent({
                         <CommandItem
                           key={group.id}
                           value={group.name}
+                          className="min-h-14 rounded-xl px-3 py-2"
                           onSelect={() => handleGroupSelect(group)}
                         >
-                          <Layers />
-                          <span className="min-w-0 flex-1 truncate">{group.name}</span>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                            <Layers className="size-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">{group.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">Canvas group context</span>
+                          </span>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                             {objectCount} item{objectCount === 1 ? '' : 's'}
                           </span>
                         </CommandItem>
@@ -938,9 +1143,50 @@ export function ChatWindowContent({
               />
               <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
                 <div className="flex items-center gap-1">
-                  <InputGroupButton size="icon-xs" aria-label="Attach file">
-                    <Plus />
-                  </InputGroupButton>
+                  <Popover open={addContextOpen} onOpenChange={(open) => {
+                    setAddContextOpen(open);
+                    if (open) {
+                      setShowDocPicker(false);
+                      setShowGroupPicker(false);
+                    }
+                  }}>
+                    <PopoverTrigger asChild>
+                      <InputGroupButton size="icon-xs" aria-label="Add context">
+                        <Plus />
+                      </InputGroupButton>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      side="top"
+                      align="start"
+                      sideOffset={8}
+                      className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                    >
+                      <ComposerAddContent
+                        documents={documents}
+                        agents={agents}
+                        uploadedFiles={uploadedFiles}
+                        projectFiles={composerProjectFiles}
+                        canvasGroups={canvasGroups}
+                        skillOptions={skillOptions}
+                        toolOptions={toolOptions}
+                        uploadEnabled={Boolean(onUploadFiles)}
+                        uploadStatus={uploadStatus}
+                        onUploadFiles={() => fileInputRef.current?.click()}
+                        onUploadFolder={() => folderInputRef.current?.click()}
+                        onOpenFiles={() => {
+                          setSidePanel('files');
+                          setAddContextOpen(false);
+                        }}
+                        onAddUploadedFile={(file) => addLinkedFile(linkedUploadedFile(file))}
+                        onAddProjectFile={(file, source) => addLinkedFile(linkedProjectFile(file, source))}
+                        onAddDocument={addLinkedDoc}
+                        onAddGroup={addLinkedGroup}
+                        onAddAgent={(agent) => insertComposerText(`@${agentHandle(agent)} `)}
+                        onAddSkill={(skill) => insertComposerText(`Use skill: ${skill.label}. `)}
+                        onAddTool={(tool) => insertComposerText(`Use tool: ${tool.label}. `)}
+                      />
+                    </PopoverContent>
+                  </Popover>
                   <InputGroupButton size="icon-xs" aria-label="Voice input">
                     <Mic />
                   </InputGroupButton>
@@ -959,6 +1205,21 @@ export function ChatWindowContent({
                 </div>
               </InputGroupAddon>
             </InputGroup>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleUploadSelection}
+            />
+            <input
+              ref={folderInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleUploadSelection}
+              {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
+            />
           </div>
         </div>
         )}
@@ -989,8 +1250,11 @@ export function ChatWindowContent({
               pinnedMessages={pinnedMessages}
               uploadedFiles={uploadedFiles}
               projectFiles={projectFiles}
+              projectFileSources={projectFileSources}
               projectRoot={projectRoot}
+              agents={agents}
               loading={projectFilesLoading}
+              onCreateTask={onCreateTask}
               onClose={closeSidePanel}
             />
           )}
@@ -1233,19 +1497,43 @@ function ChannelSidePanel({
   pinnedMessages,
   uploadedFiles,
   projectFiles,
+  projectFileSources,
   projectRoot,
+  agents,
   loading,
+  onCreateTask,
   onClose,
 }: {
   type: 'files' | 'pins' | 'thread';
   pinnedMessages: ChatMessage[];
   uploadedFiles: UploadedFile[];
   projectFiles: ProjectFileEntry[];
+  projectFileSources: ProjectFileSource[];
   projectRoot: string;
+  agents: WorkspaceAgent[];
   loading: boolean;
+  onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
   onClose: () => void;
 }) {
   const isPins = type === 'pins';
+  const [selectedFile, setSelectedFile] = useState<SelectedPanelFile | null>(null);
+  const projectGroups = useMemo(() => {
+    if (projectFileSources.length > 0) {
+      return projectFileSources
+        .map(source => ({ source, files: Array.isArray(source.files) ? source.files : [] }))
+        .filter(group => group.files.length > 0);
+    }
+    if (projectFiles.length === 0) return [];
+    return [{
+      source: { id: 'workspace', kind: 'workspace' as const, label: 'Workspace folder', root: projectRoot, files: projectFiles },
+      files: projectFiles,
+    }];
+  }, [projectFileSources, projectFiles, projectRoot]);
+
+  useEffect(() => {
+    if (isPins) setSelectedFile(null);
+  }, [isPins]);
+
   const openUploadedFile = async (file: UploadedFile) => {
     const response = await fetch(apiUrl(`/backend/files/${encodeURIComponent(file.id)}/content`), {
       headers: apiAuthHeaders(),
@@ -1257,12 +1545,22 @@ function ChannelSidePanel({
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
   };
 
+  const fileCount = uploadedFiles.length + projectGroups.reduce((sum, group) => sum + group.files.length, 0);
+
   return (
     <div className="flex h-full min-w-0 flex-col">
       <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        {isPins ? <Pin className="size-4 text-muted-foreground" /> : <Paperclip className="size-4 text-muted-foreground" />}
+        {!isPins && selectedFile ? (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedFile(null)} aria-label="Back to files">
+            <ArrowLeft />
+          </Button>
+        ) : isPins ? (
+          <Pin className="size-4 text-muted-foreground" />
+        ) : (
+          <Paperclip className="size-4 text-muted-foreground" />
+        )}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
-          {isPins ? 'Pinned messages' : 'Files'}
+          {isPins ? 'Pinned messages' : selectedFile ? panelFileName(selectedFile) : 'Files'}
         </span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close side panel">
           <X />
@@ -1282,41 +1580,58 @@ function ChannelSidePanel({
           ) : (
             <p className="text-sm text-muted-foreground">No pinned messages yet.</p>
           )
+        ) : selectedFile ? (
+          <FileDetailPanel
+            selectedFile={selectedFile}
+            agents={agents}
+            onOpenUploaded={openUploadedFile}
+            onCreateTask={onCreateTask}
+            onTaskCreated={() => setSelectedFile(null)}
+          />
         ) : loading ? (
           <p className="text-sm text-muted-foreground">Loading files...</p>
-        ) : uploadedFiles.length > 0 || projectFiles.length > 0 ? (
+        ) : fileCount > 0 ? (
           <div className="space-y-4">
             {uploadedFiles.length > 0 && (
               <div className="space-y-2">
                 <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploaded</div>
                 {uploadedFiles.map(file => (
-                  <UploadedFileRow key={file.id} file={file} onOpen={() => void openUploadedFile(file)} />
+                  <UploadedFileRow
+                    key={file.id}
+                    file={file}
+                    onOpen={() => setSelectedFile({ kind: 'uploaded', file })}
+                  />
                 ))}
               </div>
             )}
-            {projectFiles.length > 0 && (
-              <div className="space-y-2">
+            {projectGroups.map(group => (
+              <div key={group.source.id} className="space-y-2">
                 <div className="min-w-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Workspace folder
-                  {projectRoot && <span className="ml-1 normal-case tracking-normal">({projectRoot})</span>}
+                  {group.source.label}
+                  {group.source.root && <span className="ml-1 normal-case tracking-normal">({group.source.root})</span>}
                 </div>
-                {projectFiles.map(file => (
-                  <div key={file.path} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40">
-                    <FileText className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate" title={file.path}>{file.path}</span>
-                    <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
-                  </div>
+                {group.files.map(file => (
+                  <ProjectFileRow
+                    key={`${group.source.id}:${file.path}`}
+                    file={file}
+                    source={group.source}
+                    onOpen={() => setSelectedFile({ kind: 'project', file, source: group.source })}
+                  />
                 ))}
               </div>
-            )}
+            ))}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">No workspace or uploaded files found.</p>
+          <p className="text-sm text-muted-foreground">No uploaded, workspace, or agent files found.</p>
         )}
       </div>
     </div>
   );
 }
+
+type SelectedPanelFile =
+  | { kind: 'uploaded'; file: UploadedFile }
+  | { kind: 'project'; file: ProjectFileEntry; source: ProjectFileSource };
 
 function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => void }) {
   const isImage = (file.type || '').startsWith('image/');
@@ -1343,6 +1658,415 @@ function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => v
       <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
     </button>
   );
+}
+
+type ComposerContextOption = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+function ComposerAddContent({
+  documents,
+  agents,
+  uploadedFiles,
+  projectFiles,
+  canvasGroups,
+  skillOptions,
+  toolOptions,
+  uploadEnabled,
+  uploadStatus,
+  onUploadFiles,
+  onUploadFolder,
+  onOpenFiles,
+  onAddUploadedFile,
+  onAddProjectFile,
+  onAddDocument,
+  onAddGroup,
+  onAddAgent,
+  onAddSkill,
+  onAddTool,
+}: {
+  documents: Document[];
+  agents: WorkspaceAgent[];
+  uploadedFiles: UploadedFile[];
+  projectFiles: Array<{ file: ProjectFileEntry; source: ProjectFileSource }>;
+  canvasGroups: CanvasGroup[];
+  skillOptions: ComposerContextOption[];
+  toolOptions: ComposerContextOption[];
+  uploadEnabled: boolean;
+  uploadStatus: string;
+  onUploadFiles: () => void;
+  onUploadFolder: () => void;
+  onOpenFiles: () => void;
+  onAddUploadedFile: (file: UploadedFile) => void;
+  onAddProjectFile: (file: ProjectFileEntry, source: ProjectFileSource) => void;
+  onAddDocument: (doc: Document) => void;
+  onAddGroup: (group: CanvasGroup) => void;
+  onAddAgent: (agent: WorkspaceAgent) => void;
+  onAddSkill: (skill: ComposerContextOption) => void;
+  onAddTool: (tool: ComposerContextOption) => void;
+}) {
+  return (
+    <div className="max-h-[inherit] overflow-y-auto p-2">
+      <div className="px-2 pb-2">
+        <div className="text-sm font-medium">Add to message</div>
+        <div className="text-xs text-muted-foreground">Attach files, link context, or route the prompt.</div>
+      </div>
+
+      <ComposerAddSection title="Folder / files">
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button type="button" variant="outline" size="sm" onClick={onUploadFiles} disabled={!uploadEnabled}>
+            <Upload data-icon="inline-start" />
+            Files
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onUploadFolder} disabled={!uploadEnabled}>
+            <FolderOpen data-icon="inline-start" />
+            Folder
+          </Button>
+        </div>
+        {uploadStatus && <div className="px-1 pt-1 text-xs text-muted-foreground">{uploadStatus}</div>}
+        <ComposerAddRow
+          icon={<Paperclip />}
+          label="Browse file list"
+          detail="Uploaded, workspace, and connected agent files"
+          onClick={onOpenFiles}
+        />
+        {uploadedFiles.slice(0, 4).map(file => (
+          <ComposerAddRow
+            key={file.id}
+            icon={<Paperclip />}
+            label={file.name}
+            detail={`Uploaded · ${formatBytes(file.size || 0)}`}
+            onClick={() => onAddUploadedFile(file)}
+          />
+        ))}
+        {projectFiles.slice(0, 6).map(({ file, source }) => (
+          <ComposerAddRow
+            key={`${source.id}:${file.path}`}
+            icon={source.kind === 'agent' ? <Bot /> : <HardDrive />}
+            label={file.path}
+            detail={`${source.label} · ${formatBytes(file.size || 0)}`}
+            onClick={() => onAddProjectFile(file, source)}
+          />
+        ))}
+      </ComposerAddSection>
+
+      <ComposerAddSection title="Agents">
+        {agents.length > 0 ? agents.slice(0, 8).map(agent => (
+          <ComposerAddRow
+            key={agent.id}
+            icon={<Bot />}
+            label={agent.name}
+            detail={`@${agentHandle(agent)}`}
+            onClick={() => onAddAgent(agent)}
+          />
+        )) : (
+          <ComposerAddEmpty>No agents yet.</ComposerAddEmpty>
+        )}
+      </ComposerAddSection>
+
+      <ComposerAddSection title="Documents and canvas">
+        {documents.slice(0, 6).map(doc => (
+          <ComposerAddRow
+            key={doc.id}
+            icon={<FileText />}
+            label={doc.title}
+            detail="Document context"
+            onClick={() => onAddDocument(doc)}
+          />
+        ))}
+        {canvasGroups.slice(0, 6).map(group => (
+          <ComposerAddRow
+            key={group.id}
+            icon={<Layers />}
+            label={group.name}
+            detail="Canvas group context"
+            onClick={() => onAddGroup(group)}
+          />
+        ))}
+        {documents.length === 0 && canvasGroups.length === 0 && <ComposerAddEmpty>No documents or canvas groups yet.</ComposerAddEmpty>}
+      </ComposerAddSection>
+
+      <ComposerAddSection title="Skills">
+        {skillOptions.length > 0 ? skillOptions.map(skill => (
+          <ComposerAddRow
+            key={skill.id}
+            icon={<Sparkles />}
+            label={skill.label}
+            detail={skill.detail}
+            onClick={() => onAddSkill(skill)}
+          />
+        )) : (
+          <ComposerAddEmpty>No detected skills.</ComposerAddEmpty>
+        )}
+      </ComposerAddSection>
+
+      <ComposerAddSection title="Tools">
+        {toolOptions.length > 0 ? toolOptions.map(tool => (
+          <ComposerAddRow
+            key={tool.id}
+            icon={tool.detail.includes('command') ? <CommandIcon /> : <Wrench />}
+            label={tool.label}
+            detail={tool.detail}
+            onClick={() => onAddTool(tool)}
+          />
+        )) : (
+          <ComposerAddEmpty>No detected tools.</ComposerAddEmpty>
+        )}
+      </ComposerAddSection>
+    </div>
+  );
+}
+
+function ComposerAddSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-1 border-t border-border px-2 py-2 first:border-t-0">
+      <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function ComposerAddRow({
+  icon,
+  label,
+  detail,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 focus-visible:bg-muted focus-visible:outline-none"
+      onClick={onClick}
+    >
+      <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground [&_svg]:size-3.5">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{label}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{detail}</span>
+      </span>
+    </button>
+  );
+}
+
+function ComposerAddEmpty({ children }: { children: React.ReactNode }) {
+  return <div className="px-2 py-1 text-xs text-muted-foreground">{children}</div>;
+}
+
+function ProjectFileRow({ file, source, onOpen }: { file: ProjectFileEntry; source: ProjectFileSource; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/40"
+      onClick={onOpen}
+      title={file.path}
+    >
+      {source.kind === 'agent' ? <Bot className="size-4 shrink-0 text-muted-foreground" /> : <FileText className="size-4 shrink-0 text-muted-foreground" />}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{file.path}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{source.label}</span>
+      </span>
+      <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+    </button>
+  );
+}
+
+function FileDetailPanel({
+  selectedFile,
+  agents,
+  onOpenUploaded,
+  onCreateTask,
+  onTaskCreated,
+}: {
+  selectedFile: SelectedPanelFile;
+  agents: WorkspaceAgent[];
+  onOpenUploaded: (file: UploadedFile) => Promise<void>;
+  onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
+  onTaskCreated: () => void;
+}) {
+  const defaultAgentId = agents[0]?.id || '';
+  const [agentId, setAgentId] = useState(defaultAgentId);
+  const [instructions, setInstructions] = useState(() => `Modify ${panelFileName(selectedFile)} based on the requested outcome. Preserve the existing style and report what changed.`);
+  const [saving, setSaving] = useState(false);
+  const fileName = panelFileName(selectedFile);
+  const palette = filePalette(fileName);
+  const haiku = fileHaiku(selectedFile);
+  const sourceLabel = panelFileSourceLabel(selectedFile);
+  const sourcePath = panelFilePath(selectedFile);
+  const size = selectedFile.kind === 'uploaded' ? selectedFile.file.size : selectedFile.file.size;
+  const selectedAgent = agents.find(agent => agent.id === agentId);
+
+  const handleCreateTask = async () => {
+    if (!onCreateTask || saving) return;
+    setSaving(true);
+    try {
+      await onCreateTask({
+        title: `Modify ${fileName}`,
+        description: [
+          `File: ${sourcePath}`,
+          `Source: ${sourceLabel}`,
+          selectedAgent ? `Assigned agent: ${selectedAgent.name}` : '',
+          `Palette: ${palette.join(', ')}`,
+          `Description:\n${haiku}`,
+          `Instructions:\n${instructions.trim() || `Modify ${fileName}.`}`,
+        ].filter(Boolean).join('\n\n'),
+        status: 'in_progress',
+        priority: 'normal',
+        assignee_id: agentId || null,
+        source_type: 'ai',
+        source_id: selectedFile.kind === 'uploaded' ? selectedFile.file.id : `${selectedFile.source.id}:${selectedFile.file.path}`,
+      });
+      onTaskCreated();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border bg-muted/25 p-3">
+        <div className="mb-2 flex min-w-0 items-start gap-2">
+          {selectedFile.kind === 'project' && selectedFile.source.kind === 'agent' ? <Bot className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : <Folder className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold">{fileName}</div>
+            <div className="truncate text-xs text-muted-foreground" title={sourcePath}>{sourcePath}</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+          <div className="truncate">Source: {sourceLabel}</div>
+          <div>{formatBytes(size || 0)}</div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <Palette className="size-3.5" />
+          Palette
+        </div>
+        <div className="flex gap-2">
+          {palette.map(color => (
+            <span key={color} className="h-8 flex-1 rounded-md border shadow-inner" style={{ background: color }} title={color} />
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-background/50 p-3 text-sm leading-relaxed">
+        {haiku.split('\n').map(line => <div key={line}>{line}</div>)}
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assign agent</label>
+        <NativeSelect value={agentId} onChange={event => setAgentId(event.target.value)} className="w-full">
+          <NativeSelectOption value="">Unassigned</NativeSelectOption>
+          {agents.map(agent => (
+            <NativeSelectOption key={agent.id} value={agent.id}>
+              {agent.name}{agent.handle ? ` (@${agent.handle})` : ''}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Instruction</label>
+        <Textarea
+          value={instructions}
+          onChange={event => setInstructions(event.target.value)}
+          rows={5}
+          className="min-h-28 resize-none text-sm"
+          placeholder="Tell the assigned agent how to modify this file..."
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        {selectedFile.kind === 'uploaded' ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => void onOpenUploaded(selectedFile.file)}>
+            Open original
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">Creates an active task from this file.</span>
+        )}
+        <Button type="button" size="sm" onClick={handleCreateTask} disabled={!onCreateTask || saving}>
+          {saving ? <Spinner /> : null}
+          Create task
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function panelFileName(selectedFile: SelectedPanelFile) {
+  return selectedFile.kind === 'uploaded' ? selectedFile.file.name : selectedFile.file.name || selectedFile.file.path.split('/').pop() || selectedFile.file.path;
+}
+
+function panelFilePath(selectedFile: SelectedPanelFile) {
+  return selectedFile.kind === 'uploaded' ? selectedFile.file.name : selectedFile.file.path;
+}
+
+function panelFileSourceLabel(selectedFile: SelectedPanelFile) {
+  return selectedFile.kind === 'uploaded' ? 'Uploaded' : selectedFile.source.label;
+}
+
+function linkedUploadedFile(file: UploadedFile): LinkedFile {
+  return {
+    id: `uploaded:${file.id}`,
+    kind: 'uploaded',
+    name: file.name,
+    path: file.name,
+    sourceLabel: 'Uploaded file',
+    size: file.size || 0,
+  };
+}
+
+function linkedProjectFile(file: ProjectFileEntry, source: ProjectFileSource): LinkedFile {
+  return {
+    id: `project:${source.id}:${file.path}`,
+    kind: 'project',
+    name: file.name || file.path.split('/').pop() || file.path,
+    path: file.path,
+    sourceLabel: source.label,
+    size: file.size || 0,
+  };
+}
+
+function buildFileContext(files: LinkedFile[]) {
+  return [
+    '[Linked files]',
+    ...files.map(file => `- ${file.name} (${file.sourceLabel}): ${file.path}`),
+  ].join('\n');
+}
+
+function filePalette(seed: string) {
+  const hash = hashText(seed);
+  return [0, 48, 112, 184, 252].map(offset => `hsl(${(hash + offset) % 360} 78% ${offset === 0 ? 46 : 58}%)`);
+}
+
+function fileHaiku(selectedFile: SelectedPanelFile) {
+  const name = panelFileName(selectedFile).replace(/\.[^.]+$/, '') || 'File';
+  const source = selectedFile.kind === 'uploaded' ? 'Uploaded' : selectedFile.source.kind === 'agent' ? 'Agent cwd' : 'Workspace';
+  return [
+    `${shortHaikuWord(name)} waits in place`,
+    `${source} light marks the path`,
+    'Hands reshape the file',
+  ].join('\n');
+}
+
+function shortHaikuWord(value: string) {
+  return value.split(/[-_\s]+/).filter(Boolean).slice(0, 3).join(' ') || 'File';
+}
+
+function hashText(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function applyMessageOverrides(messages: ChatMessage[], overrides: MessageOverrides): ChatMessage[] {

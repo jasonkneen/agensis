@@ -685,6 +685,11 @@ function workspaceIdFromSettingsRequest(req) {
   return String(req.query?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || '').trim();
 }
 
+function settingsWorkspaceIdFromRequest(req) {
+  const workspaceId = workspaceIdFromSettingsRequest(req);
+  return workspaceId === 'base' ? '' : workspaceId;
+}
+
 function createPasswordHash(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -1238,6 +1243,63 @@ function workspaceProjectRoot(workspace) {
   } catch {
     return '';
   }
+}
+
+function validFileSourceRoot(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate) return '';
+  const resolved = path.resolve(candidate);
+  try {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
+    return resolved;
+  } catch {
+    return '';
+  }
+}
+
+async function workspaceProjectFileSources(workspaceId, workspace) {
+  const sources = [];
+  const seen = new Set();
+  const addSource = (source) => {
+    const root = validFileSourceRoot(source.root);
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    sources.push({ ...source, root });
+  };
+
+  addSource({
+    id: 'workspace',
+    kind: 'workspace',
+    label: 'Workspace folder',
+    root: workspaceProjectRoot(workspace),
+  });
+
+  const connections = await getDb().unsafe(
+    `select id, agent_id, name, handle, host, cwd, status
+     from agent_connections
+     where workspace_id = $1
+       and coalesce(cwd, '') <> ''
+       and last_seen_at > now() - interval '24 hours'
+     order by status = 'online' desc, status = 'busy' desc, last_seen_at desc`,
+    [workspaceId],
+  );
+
+  connections.forEach(connection => {
+    const handle = slugHandle(connection.handle || connection.name || 'agent');
+    addSource({
+      id: `agent:${connection.id}`,
+      kind: 'agent',
+      label: `${connection.name || handle} cwd`,
+      root: connection.cwd,
+      agent_id: connection.agent_id || null,
+      connection_id: connection.id,
+      handle,
+      host: connection.host || '',
+      status: connection.status || '',
+    });
+  });
+
+  return sources;
 }
 
 function listProjectFiles(root, maxFiles = 300) {
@@ -1817,12 +1879,27 @@ function createApp() {
       );
       const workspace = rows[0];
       if (!workspace) return jsonError(res, 404, new Error('Workspace not found'));
-      const root = workspaceProjectRoot(workspace);
-      if (!root) return res.json({ data: { root: '', files: [] }, error: null });
+      const sources = await workspaceProjectFileSources(workspaceId, workspace);
+      if (sources.length === 0) return res.json({ data: { root: '', files: [], sources: [] }, error: null });
+      const fileSources = sources.map(source => {
+        const files = listProjectFiles(source.root, source.kind === 'agent' ? 160 : 300).map(file => ({
+          ...file,
+          sourceId: source.id,
+          sourceKind: source.kind,
+          sourceLabel: source.label,
+          sourceRoot: source.root,
+          agentId: source.agent_id || null,
+          connectionId: source.connection_id || null,
+          handle: source.handle || '',
+          status: source.status || '',
+        }));
+        return { ...source, files };
+      });
       res.json({
         data: {
-          root,
-          files: listProjectFiles(root),
+          root: fileSources.find(source => source.kind === 'workspace')?.root || '',
+          files: fileSources.flatMap(source => source.files),
+          sources: fileSources,
         },
         error: null,
       });
@@ -2369,9 +2446,8 @@ function createApp() {
 
   app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
-      const workspaceId = workspaceIdFromSettingsRequest(req);
-      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const workspaceId = settingsWorkspaceIdFromRequest(req);
+      if (workspaceId) await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const keys = await listManagedSecrets(workspaceId);
       res.json({ data: { keys }, error: null });
     } catch (error) {
@@ -2382,9 +2458,8 @@ function createApp() {
   app.post('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
       const body = req.body || {};
-      const workspaceId = workspaceIdFromSettingsRequest(req);
-      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const workspaceId = settingsWorkspaceIdFromRequest(req);
+      if (workspaceId) await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const updates = {};
       for (const key of MANAGED_SECRET_KEYS) {
         // Only apply keys that were explicitly provided. An empty string
@@ -2395,7 +2470,8 @@ function createApp() {
         return jsonError(res, 400, new Error('No managed keys provided'));
       }
       for (const [key, value] of Object.entries(updates)) {
-        await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
+        if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
+        else await setSettingValue(key, value);
       }
       const keys = await listManagedSecrets(workspaceId);
       res.json({ data: { keys }, error: null });

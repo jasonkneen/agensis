@@ -1034,7 +1034,9 @@ export default function App() {
                 agentConnections={agentConnections}
                 presenceUsers={workspacePresenceUsers}
                 uploadedFiles={uploadedFiles}
+                onUploadFiles={uploadFiles}
                 selectedAgent={selectedAgent}
+                systemCapabilities={systemCapabilities}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
                 backgroundImage={viewedLayer.background_image || activeWorkspace?.background_image || ''}
@@ -1278,7 +1280,9 @@ function CanvasLayerScene({
   agentConnections,
   presenceUsers,
   uploadedFiles,
+  onUploadFiles,
   selectedAgent,
+  systemCapabilities,
   getPresenceMode,
   backgroundOpacity,
   backgroundImage,
@@ -1344,7 +1348,9 @@ function CanvasLayerScene({
   agentConnections: AgentConnection[];
   presenceUsers: WorkspacePresenceUser[];
   uploadedFiles: UploadedFile[];
+  onUploadFiles: (files: File[]) => Promise<UploadedFile[]>;
   selectedAgent: WorkspaceAgent | null;
+  systemCapabilities: SystemCapabilities | null;
   getPresenceMode: (id?: string | null) => PresenceVisibilityMode;
   backgroundOpacity: number;
   backgroundImage?: string | null;
@@ -1446,6 +1452,9 @@ function CanvasLayerScene({
                   canvasObjects={canvasObjects}
                   workspaceId={workspaceId}
                   uploadedFiles={uploadedFiles}
+                  onUploadFiles={onUploadFiles}
+                  onCreateTask={onCreateTask}
+                  systemCapabilities={systemCapabilities}
                   contextControls={(
                     <KnowledgeContextControl
                       counts={contextCounts}
