@@ -3,6 +3,14 @@
   "version": "0.1.14",
   "description": "Run a local agensis workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to agensis.",
   "homepage": "https://agensis.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasonkneen/agensis.git",
+    "directory": "agent/agensis-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/jasonkneen/agensis/issues"
+  },
   "type": "module",
   "bin": {
     "agensis": "bin/agensis.mjs"
@@ -12,7 +20,9 @@
   },
   "scripts": {
     "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs",
-    "pack:dry-run": "npm pack --dry-run"
+    "pack:dry-run": "npm pack --dry-run",
+    "prepack": "npm run check",
+    "prepublishOnly": "npm run check"
   },
   "files": [
     "bin/agensis.mjs",

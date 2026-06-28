@@ -2,6 +2,11 @@ import { useState, useCallback } from 'react';
 import type { FloatingWindow, FloatingWindowType } from '../types';
 
 let nextZIndex = 100;
+const WORKSPACE_WINDOW_MARGIN = 24;
+const MIN_WINDOW_WIDTH = 320;
+const MIN_WINDOW_HEIGHT = 260;
+
+type WindowBounds = { x: number; y: number; width: number; height: number };
 
 function generateId(): string {
   return `win_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -21,6 +26,27 @@ function getWorkspaceViewportSize(): { width: number; height: number } {
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  const ceiling = Math.max(1, Math.round(max));
+  const floor = Math.min(min, ceiling);
+  return Math.round(clampNumber(value, floor, ceiling));
+}
+
+function fitWindowSize(
+  size: { width: number; height: number },
+  viewport = getWorkspaceViewportSize(),
+  margin = 0,
+): { width: number; height: number } {
+  return {
+    width: clampDimension(size.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - margin * 2)),
+    height: clampDimension(size.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - margin * 2)),
+  };
+}
+
 function getDefaultRestoreSize(type: FloatingWindowType): { width: number; height: number } {
   const viewport = getWorkspaceViewportSize();
   const sizeMap: Record<string, { width: number; height: number }> = {
@@ -31,7 +57,7 @@ function getDefaultRestoreSize(type: FloatingWindowType): { width: number; heigh
     activity: { width: Math.min(620, Math.max(420, Math.round(viewport.width * 0.48))), height: Math.min(720, Math.max(540, Math.round(viewport.height * 0.74))) },
     agents: { width: Math.min(760, Math.max(520, Math.round(viewport.width * 0.58))), height: Math.min(760, Math.max(560, Math.round(viewport.height * 0.76))) },
   };
-  return sizeMap[type] || sizeMap.chat;
+  return fitWindowSize(sizeMap[type] || sizeMap.chat, viewport, WORKSPACE_WINDOW_MARGIN);
 }
 
 function getSpawnPosition(
@@ -43,16 +69,77 @@ function getSpawnPosition(
   }
 
   const viewport = getWorkspaceViewportSize();
-  const maxX = Math.max(24, viewport.width - size.width - 24);
-  const maxY = Math.max(24, viewport.height - size.height - 24);
-  const baseX = Math.min(maxX, Math.max(24, (viewport.width - size.width) / 2));
-  const baseY = Math.min(maxY, Math.max(24, (viewport.height - size.height) / 2));
+  const maxX = Math.max(0, viewport.width - size.width - WORKSPACE_WINDOW_MARGIN);
+  const maxY = Math.max(0, viewport.height - size.height - WORKSPACE_WINDOW_MARGIN);
+  const minX = Math.min(WORKSPACE_WINDOW_MARGIN, maxX);
+  const minY = Math.min(WORKSPACE_WINDOW_MARGIN, maxY);
+  const baseX = clampNumber((viewport.width - size.width) / 2, minX, maxX);
+  const baseY = clampNumber((viewport.height - size.height) / 2, minY, maxY);
   const offset = existing.length * 28;
 
   return {
-    x: Math.round(Math.min(maxX, baseX + (offset % 168))),
-    y: Math.round(Math.min(maxY, baseY + (offset % 112))),
+    x: Math.round(clampNumber(baseX + (offset % 168), minX, maxX)),
+    y: Math.round(clampNumber(baseY + (offset % 112), minY, maxY)),
   };
+}
+
+function clampToViewport(bounds: WindowBounds) {
+  const viewport = getWorkspaceViewportSize();
+  const size = fitWindowSize(bounds, viewport);
+  const maxX = Math.max(0, viewport.width - size.width);
+  const maxY = Math.max(0, viewport.height - size.height);
+
+  return {
+    x: Math.round(clampNumber(bounds.x, 0, maxX)),
+    y: Math.round(clampNumber(bounds.y, 0, maxY)),
+    width: size.width,
+    height: size.height,
+  };
+}
+
+function restoreOpenedWindow(win: FloatingWindow) {
+  const viewport = getWorkspaceViewportSize();
+  const isFullViewport = win.maximized
+    || win.width >= viewport.width - 24
+    || win.height >= viewport.height - 24;
+  const fallbackSize = getDefaultRestoreSize(win.type);
+  const fallbackPosition = getSpawnPosition([], fallbackSize);
+  const source = win.maximized && win.restoreBounds
+    ? win.restoreBounds
+    : isFullViewport
+    ? { ...fallbackPosition, ...fallbackSize }
+    : (win.restoreBounds || { x: win.x, y: win.y, width: win.width, height: win.height });
+  const next = clampToViewport(source);
+  return {
+    ...win,
+    ...next,
+    minimized: false,
+    maximized: false,
+    restoreBounds: next,
+  };
+}
+
+function applyWindowBoundsUpdate(win: FloatingWindow, updates: Partial<FloatingWindow>): FloatingWindow {
+  const merged: FloatingWindow = { ...win, ...updates };
+  const hasBoundsUpdate = updates.x !== undefined
+    || updates.y !== undefined
+    || updates.width !== undefined
+    || updates.height !== undefined;
+
+  if (hasBoundsUpdate && !merged.maximized) {
+    Object.assign(merged, clampToViewport({
+      x: merged.x,
+      y: merged.y,
+      width: merged.width,
+      height: merged.height,
+    }));
+  }
+
+  if (updates.restoreBounds) {
+    merged.restoreBounds = clampToViewport(updates.restoreBounds);
+  }
+
+  return merged;
 }
 
 export function useWindows() {
@@ -68,7 +155,7 @@ export function useWindows() {
         if (existing) {
           nextZIndex++;
           return prev.map(w =>
-            w.id === existing.id ? { ...w, zIndex: nextZIndex, minimized: false } : w
+            w.id === existing.id ? { ...restoreOpenedWindow(w), zIndex: nextZIndex } : w
           );
         }
       }
@@ -77,7 +164,7 @@ export function useWindows() {
         if (existing) {
           nextZIndex++;
           return prev.map(w =>
-            w.id === existing.id ? { ...w, zIndex: nextZIndex, minimized: false } : w
+            w.id === existing.id ? { ...restoreOpenedWindow(w), zIndex: nextZIndex } : w
           );
         }
       }
@@ -86,23 +173,29 @@ export function useWindows() {
 
       const size = getDefaultRestoreSize(type);
       const pos = getSpawnPosition(prev, size);
+      const bounds = clampToViewport({
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+      });
 
       const win: FloatingWindow = {
         id: generateId(),
         type,
         title: opts?.title || (type === 'chat' ? 'Untitled' : 'Untitled'),
-        x: pos.x,
-        y: pos.y,
-        width: size.width,
-        height: size.height,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
         zIndex: nextZIndex,
         minimized: false,
         maximized: false,
         restoreBounds: {
-          x: pos.x,
-          y: pos.y,
-          width: size.width,
-          height: size.height,
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
         },
         canvasId: opts?.canvasId,
         sessionId: opts?.sessionId,
@@ -130,13 +223,18 @@ export function useWindows() {
 
   const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>) => {
     setWindows(prev =>
-      prev.map(w => w.id === id ? { ...w, ...updates } : w)
+      prev.map(w => w.id === id ? applyWindowBoundsUpdate(w, updates) : w)
     );
   }, []);
 
   const minimizeWindow = useCallback((id: string) => {
     setWindows(prev =>
-      prev.map(w => w.id === id ? { ...w, minimized: !w.minimized } : w)
+      prev.map(w => {
+        if (w.id !== id) return w;
+        if (!w.minimized) return { ...w, minimized: true };
+
+        return restoreOpenedWindow(w);
+      })
     );
   }, []);
 

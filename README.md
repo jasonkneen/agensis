@@ -154,6 +154,8 @@ server/
   index.cjs     Neon-backed API + realtime websocket server
 database/
   neon-schema.sql
+agent/
+  agensis-cli/  npm package for the `agensis` agent daemon command
 ```
 
 ## Current product shape
@@ -167,7 +169,7 @@ agensis currently focuses on:
 
 ## Notes
 
-- this is an app repo, not a published npm package
+- the root package is the app; the releasable CLI package is `agent/agensis-cli`
 - realtime behavior depends on the local backend server websocket bridge
 - workspace sharing and presence depend on authenticated users and workspace membership
 

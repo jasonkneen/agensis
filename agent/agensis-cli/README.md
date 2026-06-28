@@ -96,3 +96,14 @@ like any local coding agent with access to the folder you start it in.
 
 Keep `aga_...` tokens out of shared logs and shell history. Generate a fresh
 token from agensis if one is exposed.
+
+## Release Checks
+
+Before publishing `agensis-cli`, run:
+
+```sh
+npm run check
+npm run pack:dry-run
+```
+
+The package publishes the `agensis` command from `bin/agensis.mjs`.

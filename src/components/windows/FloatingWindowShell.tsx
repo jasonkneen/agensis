@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Copy, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -18,8 +18,19 @@ const MIN_WINDOW_HEIGHT = 260;
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  const ceiling = Math.max(1, Math.round(max));
+  const floor = Math.min(min, ceiling);
+  return Math.round(clampNumber(value, floor, ceiling));
+}
+
 function getShellViewport(shell: HTMLElement | null): { width: number; height: number; rect: DOMRect | null } {
-  const viewport = shell?.closest('[data-workspace-viewport]') || document.querySelector('[data-workspace-viewport]');
+  const viewport = shell?.closest('[data-workspace-viewport]')
+    || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
   const rect = viewport?.getBoundingClientRect() || null;
   if (rect && rect.width > 0 && rect.height > 0) {
     return { width: rect.width, height: rect.height, rect };
@@ -37,14 +48,30 @@ function getShellViewport(shell: HTMLElement | null): { width: number; height: n
 
 function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
   const viewport = getShellViewport(shell);
-  const width = Math.min(bounds.width, Math.max(MIN_WINDOW_WIDTH, viewport.width));
-  const height = Math.min(bounds.height, Math.max(MIN_WINDOW_HEIGHT, viewport.height));
+  const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, viewport.width);
+  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, viewport.height);
   return {
-    x: Math.round(Math.min(Math.max(0, bounds.x), Math.max(0, viewport.width - width))),
-    y: Math.round(Math.min(Math.max(0, bounds.y), Math.max(0, viewport.height - height))),
-    width: Math.round(width),
-    height: Math.round(height),
+    x: Math.round(clampNumber(bounds.x, 0, Math.max(0, viewport.width - width))),
+    y: Math.round(clampNumber(bounds.y, 0, Math.max(0, viewport.height - height))),
+    width,
+    height,
   };
+}
+
+function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow): WindowBounds {
+  return clampWindowBounds({
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+  }, shell);
+}
+
+function syncShellBounds(shell: HTMLElement, bounds: WindowBounds) {
+  shell.style.left = `${bounds.x}px`;
+  shell.style.top = `${bounds.y}px`;
+  shell.style.width = `${bounds.width}px`;
+  shell.style.height = `${bounds.height}px`;
 }
 
 function splitBounds(bounds: WindowBounds, edge: 'left' | 'right' | 'top' | 'bottom'): WindowBounds {
@@ -145,8 +172,9 @@ function restoreBoundsForDrag(
     width: Math.min(Math.max(MIN_WINDOW_WIDTH, Math.round(viewport.width * 0.62)), viewport.width),
     height: Math.min(Math.max(MIN_WINDOW_HEIGHT, Math.round(viewport.height * 0.68)), viewport.height),
   };
-  const width = Math.min(Math.max(MIN_WINDOW_WIDTH, source.width), viewport.width);
-  const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, source.height), viewport.height);
+  const sourceBounds = clampWindowBounds(source, shell);
+  const width = sourceBounds.width;
+  const height = sourceBounds.height;
   const pointerRatio = viewport.width > 0 ? Math.min(0.86, Math.max(0.14, pointerX / viewport.width)) : 0.5;
 
   return clampWindowBounds({
@@ -188,28 +216,41 @@ export function FloatingWindowShell({
 }: FloatingWindowShellProps) {
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; winW: number; winH: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; winX: number; winY: number; winW: number; winH: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [snapPreview, setSnapPreview] = useState<WindowBounds | null>(null);
   const isMaximized = Boolean(win.maximized);
+
+  useEffect(() => {
+    const syncBounds = () => {
+      const shell = shellRef.current;
+      if (!shell || isMaximized || isDragging || isResizing) return;
+      syncShellBounds(shell, getCurrentWindowBounds(shell, win));
+    };
+
+    syncBounds();
+
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const viewport = shellRef.current?.closest('[data-workspace-viewport]')
+      || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
+    if (!viewport) return undefined;
+
+    const observer = new ResizeObserver(syncBounds);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [win, isMaximized, isDragging, isResizing]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     if (!canControl) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
-    const startBounds = isMaximized ? restoreBoundsForDrag(e.clientX, e.clientY, shellRef.current, win) : {
-      x: win.x,
-      y: win.y,
-      width: win.width,
-      height: win.height,
-    };
-    if (isMaximized && shellRef.current) {
-      shellRef.current.style.left = `${startBounds.x}px`;
-      shellRef.current.style.top = `${startBounds.y}px`;
-      shellRef.current.style.width = `${startBounds.width}px`;
-      shellRef.current.style.height = `${startBounds.height}px`;
+    const startBounds = isMaximized
+      ? restoreBoundsForDrag(e.clientX, e.clientY, shellRef.current, win)
+      : getCurrentWindowBounds(shellRef.current, win);
+    if (shellRef.current) {
+      syncShellBounds(shellRef.current, startBounds);
     }
     dragRef.current = {
       startX: e.clientX,
@@ -279,23 +320,32 @@ export function FloatingWindowShell({
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
+    const startBounds = getCurrentWindowBounds(shellRef.current, win);
+    if (shellRef.current) {
+      syncShellBounds(shellRef.current, startBounds);
+    }
     resizeRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      winW: win.width,
-      winH: win.height,
+      winX: startBounds.x,
+      winY: startBounds.y,
+      winW: startBounds.width,
+      winH: startBounds.height,
     };
+    setSnapPreview(null);
     setIsResizing(true);
 
     const onMove = (ev: MouseEvent) => {
       if (!resizeRef.current || !shellRef.current) return;
       const dx = ev.clientX - resizeRef.current.startX;
       const dy = ev.clientY - resizeRef.current.startY;
-      const viewport = getShellViewport(shellRef.current);
-      const width = Math.min(Math.max(MIN_WINDOW_WIDTH, resizeRef.current.winW + dx), Math.max(MIN_WINDOW_WIDTH, viewport.width - win.x));
-      const height = Math.min(Math.max(MIN_WINDOW_HEIGHT, resizeRef.current.winH + dy), Math.max(MIN_WINDOW_HEIGHT, viewport.height - win.y));
-      shellRef.current.style.width = `${width}px`;
-      shellRef.current.style.height = `${height}px`;
+      const next = clampWindowBounds({
+        x: resizeRef.current.winX,
+        y: resizeRef.current.winY,
+        width: resizeRef.current.winW + dx,
+        height: resizeRef.current.winH + dy,
+      }, shellRef.current);
+      syncShellBounds(shellRef.current, next);
     };
 
     const onUp = (ev: MouseEvent) => {
@@ -303,16 +353,13 @@ export function FloatingWindowShell({
         const dx = ev.clientX - resizeRef.current.startX;
         const dy = ev.clientY - resizeRef.current.startY;
         const next = clampWindowBounds({
-          x: win.x,
-          y: win.y,
-          width: Math.max(MIN_WINDOW_WIDTH, resizeRef.current.winW + dx),
-          height: Math.max(MIN_WINDOW_HEIGHT, resizeRef.current.winH + dy),
+          x: resizeRef.current.winX,
+          y: resizeRef.current.winY,
+          width: resizeRef.current.winW + dx,
+          height: resizeRef.current.winH + dy,
         }, shellRef.current);
         if (shellRef.current) {
-          shellRef.current.style.left = `${next.x}px`;
-          shellRef.current.style.top = `${next.y}px`;
-          shellRef.current.style.width = `${next.width}px`;
-          shellRef.current.style.height = `${next.height}px`;
+          syncShellBounds(shellRef.current, next);
         }
         onUpdate(win.id, { ...next, restoreBounds: next });
       }
@@ -325,8 +372,7 @@ export function FloatingWindowShell({
 
     const onCancel = () => {
       if (shellRef.current) {
-        shellRef.current.style.width = `${win.width}px`;
-        shellRef.current.style.height = `${win.height}px`;
+        syncShellBounds(shellRef.current, startBounds);
       }
       resizeRef.current = null;
       setIsResizing(false);
@@ -344,12 +390,12 @@ export function FloatingWindowShell({
     if (!canControl) return;
     onFocus(win.id);
     if (win.maximized) {
-      const restoreBounds = win.restoreBounds || {
+      const restoreBounds = clampWindowBounds(win.restoreBounds || {
         x: win.x,
         y: win.y,
         width: win.width,
         height: win.height,
-      };
+      }, shellRef.current);
       onUpdate(win.id, {
         ...restoreBounds,
         maximized: false,
@@ -358,14 +404,10 @@ export function FloatingWindowShell({
       return;
     }
 
+    const currentBounds = getCurrentWindowBounds(shellRef.current, win);
     onUpdate(win.id, {
       maximized: true,
-      restoreBounds: {
-        x: win.x,
-        y: win.y,
-        width: win.width,
-        height: win.height,
-      },
+      restoreBounds: currentBounds,
     });
   }, [win.id, win.x, win.y, win.width, win.height, win.maximized, win.restoreBounds, onFocus, onUpdate, canControl]);
 
@@ -376,6 +418,7 @@ export function FloatingWindowShell({
   const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
+  const displayBounds = getCurrentWindowBounds(shellRef.current, win);
   const shellStyle: React.CSSProperties = isMaximized
     ? {
         position: 'absolute',
@@ -391,10 +434,10 @@ export function FloatingWindowShell({
       }
     : {
         position: 'absolute',
-        left: win.x,
-        top: win.y,
-        width: win.width,
-        height: win.height,
+        left: displayBounds.x,
+        top: displayBounds.y,
+        width: displayBounds.width,
+        height: displayBounds.height,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -404,7 +447,7 @@ export function FloatingWindowShell({
 
   return (
     <>
-      {snapPreview && (
+      {isDragging && snapPreview && (
         <div
           className="pointer-events-none absolute rounded-lg border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
           style={{

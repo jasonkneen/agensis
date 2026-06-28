@@ -1,14 +1,13 @@
 import React from 'react';
 import {
-  Activity,
   Archive,
   Bot,
   Brain,
-  CheckCircle2,
   ChevronRight,
   Copy,
   FileText,
   Folder,
+  Hash,
   Layers3,
   LayoutTemplate,
   LogOut,
@@ -16,11 +15,9 @@ import {
   MoreHorizontal,
   PanelLeft,
   PanelLeftClose,
-  Plus,
   RotateCcw,
   Search,
   Settings,
-  Sparkles,
   Star,
   UserRound,
 } from 'lucide-react';
@@ -67,6 +64,10 @@ type SidebarAgentTarget = {
   runMode?: WorkspaceAgent['run_mode'];
 };
 
+type SidebarMessageTarget = SidebarAgentTarget & {
+  session?: ChatSession;
+};
+
 interface SidebarProps {
   workspace: Workspace | null;
   activeLayerName?: string;
@@ -111,23 +112,16 @@ export function Sidebar({
   collapsed,
   onToggleCollapse,
   onOpenCommandPalette,
-  onOpenWorkspaceGrid,
-  onNewChat,
-  onNewDocument,
-  onCreateWorkspace,
   onDocumentOpen,
   onDocumentUpdate,
   onSessionOpen,
   onSessionUpdate,
   onSessionArchive,
   onOpenMemory,
-  onOpenTasks,
-  onOpenActivity,
   onOpenAgents,
   onAgentMessage,
   onAgentProfile,
   onOpenTemplates,
-  openTaskCount = 0,
   recents,
   sessions,
   agents = [],
@@ -146,7 +140,9 @@ export function Sidebar({
     const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     return Number.isFinite(saved) ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, saved)) : 280;
   });
+  const sidebarRef = React.useRef<HTMLElement | null>(null);
   const resizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
+  const resizeFrameRef = React.useRef<number | null>(null);
   const [openSections, setOpenSections] = React.useState<Set<string>>(() => new Set());
   const [favoriteAgentKeys, setFavoriteAgentKeys] = React.useState<Set<string>>(() => {
     if (typeof localStorage === 'undefined') return new Set();
@@ -164,17 +160,23 @@ export function Sidebar({
     () => buildDirectAgents(agents, agentConnections, favoriteAgentKeys),
     [agents, agentConnections, favoriteAgentKeys],
   );
-  const activeChannelSessions = uniqueSessions.filter(session => !session.archived_at && !isDirectSession(session));
-  const folderNames = Array.from(new Set(activeChannelSessions.map(session => session.folder || 'General')));
-  const groupedSessions = folderNames.map(folder => ({
-    folder,
-    sessions: activeChannelSessions.filter(session => (session.folder || 'General') === folder),
-  }));
-  const documentFolderNames = Array.from(new Set(uniqueRecents.map(doc => doc.folder || 'General')));
-  const groupedDocuments = documentFolderNames.map(folder => ({
-    folder,
-    documents: uniqueRecents.filter(doc => (doc.folder || 'General') === folder),
-  }));
+  const { activeChannelSessions, directSessions, threadSessions } = React.useMemo(() => {
+    const activeSessions = uniqueSessions.filter(session => !session.archived_at);
+    const direct = activeSessions.filter(isDirectSession);
+    const threads = activeSessions.filter(session => !isDirectSession(session) && isThreadSession(session));
+    return {
+      activeChannelSessions: activeSessions.filter(session => !isDirectSession(session) && !isThreadSession(session)),
+      directSessions: direct,
+      threadSessions: threads,
+    };
+  }, [uniqueSessions]);
+  const directMessageTargets = React.useMemo(
+    () => buildDirectMessageTargets(directSessions, directAgents, favoriteAgentKeys),
+    [directSessions, directAgents, favoriteAgentKeys],
+  );
+  const groupedThreadSessions = React.useMemo(() => groupSessionsByFolder(threadSessions, 'Threads'), [threadSessions]);
+  const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
+  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
   const focusedWindow = floatingWindows
     .filter(win => !win.minimized)
     .reduce<FloatingWindow | null>((topWindow, win) => (
@@ -183,13 +185,17 @@ export function Sidebar({
   const focusedWindowType = focusedWindow?.type;
   const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
-  React.useEffect(() => {
-    const left = collapsed ? 68 : sidebarWidth + 16;
+  const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
+    const left = isCollapsed ? 68 : width + 16;
     document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
     document.documentElement.style.setProperty('--workspace-viewport-top', '8px');
     document.documentElement.style.setProperty('--workspace-viewport-right', '8px');
     document.documentElement.style.setProperty('--workspace-viewport-bottom', '8px');
-  }, [collapsed, sidebarWidth]);
+  }, [collapsed]);
+
+  React.useEffect(() => {
+    setWorkspaceViewportLeft(sidebarWidth);
+  }, [setWorkspaceViewportLeft, sidebarWidth]);
 
   const toggleSection = (id: string, open: boolean) => {
     setOpenSections(prev => {
@@ -198,6 +204,15 @@ export function Sidebar({
       else next.delete(id);
       return next;
     });
+  };
+
+  const revealSection = (id: string) => {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    onToggleCollapse();
   };
 
   const toggleAgentFavorite = (agent: SidebarAgentTarget) => {
@@ -221,16 +236,16 @@ export function Sidebar({
           <PanelLeft />
         </Button>
         <Separator />
-        <IconButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
-        <IconButton icon={<Sparkles />} title="New Channel" onClick={onNewChat} />
-        <IconButton icon={<FileText />} title="New Document" onClick={onNewDocument} />
-        {onOpenTasks && <IconButton icon={<CheckCircle2 />} title={`Tasks${openTaskCount ? ` (${openTaskCount})` : ''}`} onClick={onOpenTasks} />}
-        {onOpenActivity && <IconButton icon={<Activity />} title="Activity" onClick={onOpenActivity} />}
-        {onOpenAgents && <IconButton icon={<Bot />} title="AI Agents" onClick={onOpenAgents} />}
-        {onOpenTemplates && <IconButton icon={<LayoutTemplate />} title="Canvas Apps" onClick={onOpenTemplates} />}
-        <IconButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+        <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
+        <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadSessions.length} onClick={() => revealSection('threads')} />
+        <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
+        <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
+        <SidebarRailButton icon={<Bot />} title="Messages" count={directMessageTargets.length} onClick={() => revealSection('messages')} />
+        <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+        {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
+        {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
         <div className="flex-1" />
-        <IconButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
+        <SidebarRailButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
       </aside>
     );
   }
@@ -244,10 +259,22 @@ export function Sidebar({
       if (!resizeRef.current) return;
       const next = resizeRef.current.startWidth + event.clientX - resizeRef.current.startX;
       latestWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next));
-      setSidebarWidth(latestWidth);
+      if (resizeFrameRef.current !== null) return;
+      resizeFrameRef.current = requestAnimationFrame(() => {
+        sidebarRef.current?.style.setProperty('width', `${latestWidth}px`);
+        setWorkspaceViewportLeft(latestWidth, false);
+        resizeFrameRef.current = null;
+      });
     };
 
     const handleUp = () => {
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      sidebarRef.current?.style.setProperty('width', `${latestWidth}px`);
+      setWorkspaceViewportLeft(latestWidth, false);
+      setSidebarWidth(latestWidth);
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(latestWidth)));
       resizeRef.current = null;
       document.removeEventListener('mousemove', handleMove);
@@ -260,6 +287,7 @@ export function Sidebar({
 
   return (
     <aside
+      ref={sidebarRef}
       data-sidebar-panel
       className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl"
       style={{ width: sidebarWidth }}
@@ -269,37 +297,10 @@ export function Sidebar({
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
             <PanelLeftClose />
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="min-w-0 flex-1 justify-start px-2"
-            onClick={onOpenWorkspaceGrid}
-            title="Show all workspaces"
-          >
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-sm font-medium">
             <Layers3 data-icon="inline-start" />
             <span className="truncate">{workspaceLabel}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onCreateWorkspace}
-            aria-label="Create workspace"
-            title="Create workspace"
-          >
-            <Plus />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onOpenSettings}
-            aria-label="Workspace settings"
-            title="Workspace settings"
-          >
-            <Settings />
-          </Button>
+          </div>
         </div>
       </div>
 
@@ -322,22 +323,56 @@ export function Sidebar({
               id="threads"
               label="Threads"
               icon={<MessageSquare />}
-              count={0}
+              count={threadSessions.length}
               open={openSections.has('threads')}
               onOpenChange={open => toggleSection('threads', open)}
             >
-              <div className="px-1.5 py-1 text-xs text-muted-foreground">TBC</div>
+              {groupedThreadSessions.map(group => (
+                group.folder === 'General' ? (
+                  group.sessions.slice(0, 8).map(session => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      icon={<MessageSquare />}
+                      archiveNoun="thread"
+                      onOpen={() => onSessionOpen(session)}
+                      onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
+                      onArchive={() => onSessionArchive?.(session.id, true)}
+                      presenceUsers={chatPresence[session.id] || []}
+                    />
+                  ))
+                ) : (
+                  <SidebarFolderGroup
+                    key={group.folder}
+                    id={`threads-folder:${group.folder}`}
+                    label={group.folder}
+                    count={group.sessions.length}
+                    open={openSections.has(`threads-folder:${group.folder}`)}
+                    onOpenChange={open => toggleSection(`threads-folder:${group.folder}`, open)}
+                  >
+                    {group.sessions.slice(0, 8).map(session => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        icon={<MessageSquare />}
+                        archiveNoun="thread"
+                        onOpen={() => onSessionOpen(session)}
+                        onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
+                        onArchive={() => onSessionArchive?.(session.id, true)}
+                        presenceUsers={chatPresence[session.id] || []}
+                      />
+                    ))}
+                  </SidebarFolderGroup>
+                )
+              ))}
             </SidebarSection>
             <SidebarSection
               id="channels"
               label="Channels"
-              icon={<MessageSquare />}
+              icon={<Hash />}
               count={activeChannelSessions.length}
               open={openSections.has('channels')}
               onOpenChange={open => toggleSection('channels', open)}
-              actionIcon={<Plus />}
-              actionLabel="New channel"
-              onAction={onNewChat}
             >
               {groupedSessions.map(group => (
                 group.folder === 'General' ? (
@@ -345,6 +380,7 @@ export function Sidebar({
                     <SessionRow
                       key={session.id}
                       session={session}
+                      icon={<Hash />}
                       onOpen={() => onSessionOpen(session)}
                       onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
                       onArchive={() => onSessionArchive?.(session.id, true)}
@@ -364,6 +400,7 @@ export function Sidebar({
                       <SessionRow
                         key={session.id}
                         session={session}
+                        icon={<Hash />}
                         onOpen={() => onSessionOpen(session)}
                         onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
                         onArchive={() => onSessionArchive?.(session.id, true)}
@@ -381,9 +418,6 @@ export function Sidebar({
               count={uniqueRecents.length}
               open={openSections.has('documents')}
               onOpenChange={open => toggleSection('documents', open)}
-              actionIcon={<Plus />}
-              actionLabel="New document"
-              onAction={onNewDocument}
             >
               {groupedDocuments.map(group => (
                 group.folder === 'General' ? (
@@ -422,16 +456,22 @@ export function Sidebar({
               id="messages"
               label="Messages"
               icon={<Bot />}
-              count={directAgents.length}
+              count={directMessageTargets.length}
               open={openSections.has('messages')}
               onOpenChange={open => toggleSection('messages', open)}
             >
-              {directAgents.slice(0, 8).map(agent => (
+              {directMessageTargets.slice(0, 8).map(agent => (
                 <DirectAgentRow
                   key={getAgentKey(agent)}
                   agent={agent}
                   favorite={favoriteAgentKeys.has(getAgentKey(agent))}
-                  onMessage={() => onAgentMessage?.(agent)}
+                  onMessage={() => {
+                    if (agent.session) {
+                      onSessionOpen(agent.session);
+                      return;
+                    }
+                    onAgentMessage?.(agent);
+                  }}
                   onProfile={() => onAgentProfile?.(agent)}
                   onCopyMention={() => copyAgentMention(agent)}
                   onToggleFavorite={() => toggleAgentFavorite(agent)}
@@ -439,7 +479,7 @@ export function Sidebar({
               ))}
             </SidebarSection>
             <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
-            {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
+            {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
             {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
         </div>
       </ScrollArea>
@@ -473,6 +513,10 @@ export function Sidebar({
   );
 }
 
+function normalizeSectionName(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
 function uniqueById<T extends { id: string }>(items: T[]) {
   const seen = new Set<string>();
   return items.filter(item => {
@@ -482,13 +526,61 @@ function uniqueById<T extends { id: string }>(items: T[]) {
   });
 }
 
+function groupSessionsByFolder(sessions: ChatSession[], sectionName?: string) {
+  const folderNames = Array.from(new Set(sessions.map(session => getSessionFolder(session, sectionName))));
+  return folderNames.map(folder => ({
+    folder,
+    sessions: sessions.filter(session => getSessionFolder(session, sectionName) === folder),
+  }));
+}
+
+function groupDocumentsByFolder(documents: Document[]) {
+  const folderNames = Array.from(new Set(documents.map(doc => doc.folder || 'General')));
+  return folderNames.map(folder => ({
+    folder,
+    documents: documents.filter(doc => (doc.folder || 'General') === folder),
+  }));
+}
+
+function getSessionFolder(session: ChatSession, sectionName?: string) {
+  const folder = session.folder?.trim() || 'General';
+  return sectionName && normalizeSectionName(folder) === normalizeSectionName(sectionName) ? 'General' : folder;
+}
+
+function directAgentParticipantForSession(session?: ChatSession | null) {
+  const participants = Array.isArray(session?.participants) ? session.participants : [];
+  const agentParticipants = participants.filter(participant =>
+    participant?.kind === 'agent' && (participant.agent_id || participant.handle || participant.name)
+  );
+  if (agentParticipants.length === 0) return null;
+  return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
 function isDirectSession(session: ChatSession) {
+  if (directAgentParticipantForSession(session)) return true;
   if (session.folder === 'Direct messages') return true;
   const participants = Array.isArray(session.participants) ? session.participants : [];
   const agentParticipants = participants.filter(participant => participant.kind === 'agent');
   if (agentParticipants.length !== 1) return false;
   const personParticipants = participants.filter(participant => participant.kind === 'user');
   return personParticipants.length <= 1;
+}
+
+function isThreadSession(session: ChatSession) {
+  const record = session as unknown as Record<string, unknown>;
+  const folder = normalizeSectionName(session.folder);
+  if (folder === 'thread' || folder === 'threads') return true;
+  if (['thread', 'threads'].includes(normalizeSectionName(record.kind))) return true;
+  if (['thread', 'threads'].includes(normalizeSectionName(record.type))) return true;
+  if (['thread', 'threads'].includes(normalizeSectionName(record.category))) return true;
+  return [
+    'thread_parent_id',
+    'threadParentId',
+    'parent_message_id',
+    'parentMessageId',
+    'parent_thread_id',
+    'parentThreadId',
+  ].some(key => Boolean(record[key]));
 }
 
 function normalizeHandle(handle: string | null | undefined) {
@@ -584,6 +676,77 @@ function buildDirectAgents(
   });
 }
 
+function buildDirectMessageTargets(
+  directSessions: ChatSession[],
+  directAgents: SidebarAgentTarget[],
+  favoriteKeys: Set<string>,
+): SidebarMessageTarget[] {
+  const byKey = new Map<string, SidebarMessageTarget>();
+  const aliases = new Map<string, string>();
+
+  const getAliases = (agent: SidebarMessageTarget) => {
+    const keys = new Set<string>();
+    keys.add(getAgentKey(agent));
+    if (agent.agentId) keys.add(`id:${agent.agentId.toLowerCase()}`);
+    if (agent.handle) keys.add(`handle:${agent.handle.toLowerCase()}`);
+    if (agent.name) keys.add(`name:${agent.name.trim().toLowerCase()}`);
+    return Array.from(keys);
+  };
+
+  const findKey = (agent: SidebarMessageTarget) => {
+    for (const alias of getAliases(agent)) {
+      const existingKey = aliases.get(alias);
+      if (existingKey) return existingKey;
+    }
+    return getAgentKey(agent);
+  };
+
+  const upsert = (agent: SidebarMessageTarget) => {
+    const key = findKey(agent);
+    const previous = byKey.get(key);
+    const next: SidebarMessageTarget = {
+      ...previous,
+      ...agent,
+      id: previous?.id || agent.id,
+      agentId: previous?.agentId || agent.agentId,
+      handle: previous?.handle || agent.handle,
+      avatar: previous?.avatar || agent.avatar,
+      runMode: previous?.runMode || agent.runMode,
+      session: previous?.session || agent.session,
+      status: getStatusRank(agent.status) < getStatusRank(previous?.status) ? agent.status : previous?.status,
+    };
+    byKey.set(key, next);
+    for (const alias of getAliases(next)) aliases.set(alias, key);
+  };
+
+  directAgents.forEach(agent => upsert(agent));
+  directSessions.forEach(session => upsert(buildDirectTargetFromSession(session)));
+
+  return Array.from(byKey.values()).sort((a, b) => {
+    const sessionDelta = Number(Boolean(b.session)) - Number(Boolean(a.session));
+    if (sessionDelta !== 0) return sessionDelta;
+    const favoriteDelta = Number(favoriteKeys.has(getAgentKey(b))) - Number(favoriteKeys.has(getAgentKey(a)));
+    if (favoriteDelta !== 0) return favoriteDelta;
+    const statusDelta = getStatusRank(a.status) - getStatusRank(b.status);
+    if (statusDelta !== 0) return statusDelta;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function buildDirectTargetFromSession(session: ChatSession): SidebarMessageTarget {
+  const participant = directAgentParticipantForSession(session);
+  const handle = normalizeHandle(participant?.handle);
+  const agentId = participant?.agent_id || null;
+  return {
+    id: agentId || handle || session.id,
+    agentId,
+    name: participant?.name || session.title || handle || 'Direct message',
+    handle,
+    status: participant?.status as AgentConnection['status'] | undefined,
+    session,
+  };
+}
+
 function copyAgentMention(agent: SidebarAgentTarget) {
   const handle = normalizeHandle(agent.handle);
   if (!handle || typeof navigator === 'undefined') return;
@@ -598,7 +761,7 @@ function DirectAgentRow({
   onCopyMention,
   onToggleFavorite,
 }: {
-  agent: SidebarAgentTarget;
+  agent: SidebarMessageTarget;
   favorite: boolean;
   onMessage: () => void;
   onProfile: () => void;
@@ -610,6 +773,7 @@ function DirectAgentRow({
   const statusColor = status === 'online' ? 'bg-emerald-500' : status === 'busy' ? 'bg-amber-500' : 'bg-muted-foreground/40';
   const avatar = agent.avatar || null;
   const avatarSrc = isImageAvatar(avatar) ? avatar : undefined;
+  const profileEnabled = Boolean(agent.agentId || handle);
 
   return (
     <div className="sidebar-agent-row group flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -652,7 +816,7 @@ function DirectAgentRow({
             <MessageSquare data-icon="inline-start" />
             Message
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onProfile}>
+          <DropdownMenuItem onSelect={onProfile} disabled={!profileEnabled}>
             <UserRound data-icon="inline-start" />
             View profile
           </DropdownMenuItem>
@@ -671,22 +835,49 @@ function DirectAgentRow({
   );
 }
 
-function IconButton({ icon, title, onClick }: { icon: React.ReactNode; title: string; onClick: () => void }) {
+function SidebarRailButton({
+  icon,
+  title,
+  count,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  count?: number;
+  onClick: () => void;
+}) {
   return (
-    <Button type="button" variant="ghost" size="icon-sm" onClick={onClick} aria-label={title} title={title}>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className="sidebar-rail-button relative"
+      onClick={onClick}
+      aria-label={title}
+      title={typeof count === 'number' ? `${title} (${count})` : title}
+    >
       {icon}
+      {typeof count === 'number' && (
+        <span className="sidebar-rail-count">{formatCount(count)}</span>
+      )}
     </Button>
   );
+}
+
+function formatCount(count: number) {
+  return count > 99 ? '99+' : String(count);
 }
 
 function ActionTile({
   icon,
   label,
+  count,
   active = false,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
+  count?: number;
   active?: boolean;
   onClick: () => void;
 }) {
@@ -695,12 +886,17 @@ function ActionTile({
       type="button"
       variant={active ? 'secondary' : 'ghost'}
       size="sm"
-      className="sidebar-action-row w-full justify-start"
+      className="sidebar-action-row min-w-0 w-full justify-start overflow-hidden"
       data-active={active ? 'true' : undefined}
       onClick={onClick}
     >
       {icon}
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {typeof count === 'number' && (
+        <span className="sidebar-action-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+          {formatCount(count)}
+        </span>
+      )}
     </Button>
   );
 }
@@ -712,9 +908,6 @@ function SidebarSection({
   count,
   open,
   onOpenChange,
-  actionIcon,
-  actionLabel,
-  onAction,
   children,
 }: {
   id: string;
@@ -723,49 +916,26 @@ function SidebarSection({
   count: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  actionIcon?: React.ReactNode;
-  actionLabel?: string;
-  onAction?: () => void;
   children: React.ReactNode;
 }) {
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} className="pt-2">
-      <div className="sidebar-section-header flex items-center gap-1">
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-controls={`${id}-content`}
-          >
-            <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-            <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
-              {icon}
-            </span>
-            <span className="min-w-0 flex-1 truncate">{label}</span>
-            {count > 0 && (
-              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-                {count}
-              </span>
-            )}
-          </button>
-        </CollapsibleTrigger>
-        {onAction && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-6 shrink-0"
-            aria-label={actionLabel}
-            title={actionLabel}
-            onClick={event => {
-              event.stopPropagation();
-              onAction();
-            }}
-          >
-            {actionIcon}
-          </Button>
-        )}
-      </div>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="sidebar-section-trigger flex min-w-0 w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-controls={`${id}-content`}
+        >
+          <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
+            {icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+            {formatCount(count)}
+          </span>
+        </button>
+      </CollapsibleTrigger>
       <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
         {children}
       </CollapsibleContent>
@@ -799,8 +969,8 @@ function SidebarFolderGroup({
           <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
           <Folder className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-            {count}
+          <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+            {formatCount(count)}
           </span>
         </button>
       </CollapsibleTrigger>
@@ -829,13 +999,13 @@ function ItemRow({
       type="button"
       variant="ghost"
       size="sm"
-      className={`sidebar-item-row sidebar-item-row-${kind} w-full justify-start text-muted-foreground`}
+      className={`sidebar-item-row sidebar-item-row-${kind} min-w-0 w-full justify-start overflow-hidden text-muted-foreground`}
       onClick={onClick}
     >
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
         {icon}
       </span>
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
       {presenceUsers.length > 0 && (
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {presenceUsers.slice(0, 3).map(person => (
@@ -860,6 +1030,8 @@ const ITEM_FOLDERS = ['General', 'Work', 'Research', 'Drafts', 'Ideas', 'Webhook
 function SessionRow({
   session,
   archived = false,
+  icon,
+  archiveNoun = 'channel',
   onOpen,
   onMoveFolder,
   onArchive,
@@ -867,6 +1039,8 @@ function SessionRow({
 }: {
   session: ChatSession;
   archived?: boolean;
+  icon?: React.ReactNode;
+  archiveNoun?: string;
   onOpen: () => void;
   onMoveFolder: (folder: string) => void;
   onArchive: () => void;
@@ -877,7 +1051,7 @@ function SessionRow({
       <ContextMenuTrigger asChild>
         <div>
           <ItemRow
-            icon={archived ? <Archive /> : <MessageSquare />}
+            icon={archived ? <Archive /> : icon || <MessageSquare />}
             label={session.title}
             onClick={onOpen}
             kind="session"
@@ -903,7 +1077,7 @@ function SessionRow({
         </ContextMenuSub>
         <ContextMenuItem onSelect={onArchive}>
           {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
-          {archived ? 'Unarchive channel' : 'Archive channel'}
+          {archived ? `Unarchive ${archiveNoun}` : `Archive ${archiveNoun}`}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
