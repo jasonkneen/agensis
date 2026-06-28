@@ -795,10 +795,7 @@
 
 [data-sidebar-panel] {
   --sidebar-panel-opacity: 92%;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
+  position: relative;
   z-index: 40;
   background: color-mix(in srgb, var(--card) var(--sidebar-panel-opacity), transparent) !important;
   box-shadow: var(--shadow-lg);
@@ -841,6 +838,7 @@
 .sidebar-search span {
   min-width: 0;
   flex: 1;
+  text-align: left;
 }
 
 .sidebar-rail-button {
@@ -877,7 +875,18 @@
 
 .sidebar-section-trigger,
 .sidebar-folder-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start !important;
   overflow: hidden;
+  text-align: left;
+}
+
+.sidebar-section-trigger > span:not(.sidebar-section-count),
+.sidebar-folder-trigger > span:not(.sidebar-section-count),
+.sidebar-action-row > span:not(.sidebar-action-count),
+.sidebar-item-row > span:not(.sidebar-action-count) {
+  text-align: left;
 }
 
 .sidebar-section-count,
@@ -909,7 +918,11 @@
 }
 
 .sidebar-action-row {
-  gap: 0.45rem;
+  min-height: 2.35rem;
+  gap: 0.6rem;
+  justify-content: flex-start !important;
+  padding-inline: 0.75rem;
+  text-align: left;
 }
 
 .sidebar-action-row[data-active="true"] {
@@ -926,7 +939,9 @@
 .sidebar-item-row {
   min-height: 1.9rem;
   gap: 0.45rem;
+  justify-content: flex-start !important;
   padding-inline: 0.45rem 0.55rem;
+  text-align: left;
 }
 
 .sidebar-item-row:hover {
