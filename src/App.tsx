@@ -159,8 +159,8 @@ function countLabel(value: number, singular: string, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
-function uniqueTokens(values: Array<string | null | undefined>) {
-  return new Set(values.map(value => value?.trim()).filter(Boolean) as string[]);
+function uniqueTokens(values: unknown[]) {
+  return new Set(values.map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean));
 }
 
 function buildContextCounts(

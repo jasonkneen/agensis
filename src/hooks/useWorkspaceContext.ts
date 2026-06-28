@@ -41,8 +41,8 @@ function truncate(text: string, max: number): string {
   return text.slice(0, max).trimEnd() + '…';
 }
 
-function uniqueList(values: Array<string | null | undefined>) {
-  return Array.from(new Set(values.map(value => value?.trim()).filter(Boolean) as string[]));
+function uniqueList(values: unknown[]) {
+  return Array.from(new Set(values.map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean)));
 }
 
 function formatVersion(version?: string | null) {
