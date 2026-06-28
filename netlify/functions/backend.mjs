@@ -177,6 +177,95 @@ async function query(text, params = []) {
   return result.rows;
 }
 
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function publicAgentConnection(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    agent_id: row.agent_id,
+    name: row.name,
+    handle: row.handle,
+    host: row.host,
+    cwd: row.cwd,
+    status: row.status,
+    metadata: parseJsonObject(row.metadata),
+    connected_at: row.connected_at,
+    last_seen_at: row.last_seen_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function ensureAgentConnectionsTable() {
+  await query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_connections (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Agent',
+      handle text NOT NULL DEFAULT '',
+      host text DEFAULT '',
+      cwd text DEFAULT '',
+      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
+      metadata jsonb DEFAULT '{}'::jsonb,
+      connected_at timestamptz DEFAULT now(),
+      last_seen_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    )
+  `);
+  await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id)');
+  await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id)');
+  await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status)');
+}
+
+async function handleSystemCapabilities(req) {
+  const url = new URL(req.url);
+  const workspacePath = url.searchParams.get('workspacePath') || '';
+  return json({
+    data: {
+      checkedAt: new Date().toISOString(),
+      workspacePath,
+      clis: [],
+      packages: [],
+      skills: [],
+      codexAppServer: {
+        available: false,
+        command: '',
+        transports: [],
+      },
+    },
+    error: null,
+  });
+}
+
+async function handleAgentConnections(req) {
+  const url = new URL(req.url);
+  const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
+  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
+  await ensureAgentConnectionsTable();
+  const rows = await query(
+    `select *
+     from agent_connections
+     where workspace_id = $1
+       and last_seen_at > now() - interval '24 hours'
+     order by status = 'online' desc, status = 'busy' desc, last_seen_at desc`,
+    [workspaceId],
+  );
+  return json({ data: rows.map(publicAgentConnection), error: null });
+}
+
 async function handleAuth(pathname, req) {
   const body = await readBody(req);
   const email = String(body?.email || '').trim().toLowerCase();
