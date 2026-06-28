@@ -70,7 +70,7 @@ export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {mode === 'signin'
-              ? 'Sign in to your Hatch workspace'
+              ? 'Sign in to your agensis workspace'
               : 'Get started with your intelligent workspace'}
           </p>
         </div>

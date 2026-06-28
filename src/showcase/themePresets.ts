@@ -82,7 +82,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   },
 ];
 
-const STORAGE_KEY = 'hatch_theme_preset';
+const STORAGE_KEY = 'agensis_theme_preset';
 
 export function applyThemePreset(id: string) {
   const preset = THEME_PRESETS.find((p) => p.id === id) ?? THEME_PRESETS[0];

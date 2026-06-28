@@ -126,7 +126,7 @@ function buildOrderClause(orderBy) {
 
 function buildSystemPrompt(memory, documents, workspaceContext) {
   const sections = [
-    'You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
+    'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
     '',
     'Guidelines:',
     '- Be concise, warm, and thoughtful. Prefer markdown for structure.',

@@ -172,7 +172,7 @@ function AppletObject({
 
   const sendInit = () => {
     iframeRef.current?.contentWindow?.postMessage({
-      type: 'hatch:init',
+      type: 'agensis:init',
       payload: {
         state: parsed.state,
         tasks,
@@ -200,18 +200,18 @@ function AppletObject({
     const handleMessage = (event: MessageEvent) => {
       if (event.source !== iframeRef.current?.contentWindow) return;
       const message = event.data || {};
-      if (message.source !== 'hatch-applet') return;
+      if (message.source !== 'agensis-applet') return;
       const payload = message.payload || {};
-      if (message.type === 'hatch:ready') {
+      if (message.type === 'agensis:ready') {
         setCrash(null);
         sendInit();
         return;
       }
-      if (message.type === 'hatch:setState') {
+      if (message.type === 'agensis:setState') {
         onAppletStateChange?.(JSON.stringify({ appId, state: payload.state || {} }));
         return;
       }
-      if (message.type === 'hatch:createTask') {
+      if (message.type === 'agensis:createTask') {
         const title = String(payload.title || '').trim();
         if (title) {
           onAppletCreateTask?.({
@@ -223,13 +223,13 @@ function AppletObject({
         }
         return;
       }
-      if (message.type === 'hatch:updateTask') {
+      if (message.type === 'agensis:updateTask') {
         if (payload.id && payload.updates) {
           onAppletUpdateTask?.(String(payload.id), payload.updates as Partial<Task>);
         }
         return;
       }
-      if (message.type === 'hatch:crash') {
+      if (message.type === 'agensis:crash') {
         setCrash(String(payload.message || 'Applet crashed'));
       }
     };
@@ -357,12 +357,12 @@ function injectAppletHostTheme(html: string, theme: ReturnType<typeof readApplet
       const safeValue = sanitizeCssValue(value);
       if (!safeValue) return [];
       const cssName = APPLET_THEME_TOKEN_NAMES[key];
-      const hatchName = `--hatch-${key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)}`;
-      return cssName ? [`${cssName}: ${safeValue};`, `${hatchName}: ${safeValue};`] : [`${hatchName}: ${safeValue};`];
+      const agensisName = `--agensis-${key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)}`;
+      return cssName ? [`${cssName}: ${safeValue};`, `${agensisName}: ${safeValue};`] : [`${agensisName}: ${safeValue};`];
     })
     .join('');
   const colorScheme = theme.scheme === 'dark' ? 'dark' : 'light';
-  const styleTag = `<style data-hatch-host-theme>:root{color-scheme:${colorScheme};${declarations}}</style>`;
+  const styleTag = `<style data-agensis-host-theme>:root{color-scheme:${colorScheme};${declarations}}</style>`;
   if (html.includes('</head>')) return html.replace('</head>', `${styleTag}</head>`);
   return `${styleTag}${html}`;
 }

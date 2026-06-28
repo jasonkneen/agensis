@@ -47,7 +47,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 
-const SIDEBAR_WIDTH_KEY = 'hatch_sidebar_width';
+const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
 

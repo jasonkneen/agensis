@@ -1,7 +1,7 @@
 // Pure daemon helpers — no I/O. (Mirror of the app's scripts/lib/daemon.mjs so
 // the package stands alone; keep them equivalent.)
 
-/** Branch name from a task: `hilos/<kebab-first-words>-<suffix>`. */
+/** Branch name from a task: `agensis/<kebab-first-words>-<suffix>`. */
 export function branchSlug(text, suffix) {
   const base =
     String(text || "")
@@ -13,7 +13,7 @@ export function branchSlug(text, suffix) {
       .filter(Boolean)
       .slice(0, 6)
       .join("-") || "task";
-  return `hilos/${base}-${suffix}`;
+  return `agensis/${base}-${suffix}`;
 }
 
 /** Truncate a diff to a byte budget at a line boundary. */
@@ -50,15 +50,15 @@ export function decisionKind(report) {
 
 /** Commit message for an approved proposal. */
 export function commitMessage(task) {
-  const first = String(task || "").split("\n")[0].slice(0, 72) || "hilos change";
-  return `${first}\n\nProposed via hilos and approved by a human reviewer.`;
+  const first = String(task || "").split("\n")[0].slice(0, 72) || "agensis change";
+  return `${first}\n\nProposed via agensis and approved by a human reviewer.`;
 }
 
 /** PR title + body for an approved proposal. */
 export function prTitleBody(task, branch) {
   const title = String(task || "").split("\n")[0].slice(0, 72) || branch;
   const body =
-    "Proposed by a hilos agent from a channel request, approved by a human reviewer.\n\n" +
+    "Proposed by an agensis agent from a channel request, approved by a human reviewer.\n\n" +
     `Task: ${String(task || "").trim()}`;
   return { title, body };
 }

@@ -633,11 +633,11 @@ export function ChatWindowContent({
     });
     visibleMessages.forEach(message => {
       if (message.sender_kind === 'agent' || message.role === 'assistant') {
-        const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:hatch-ai';
+        const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:agensis-ai';
         if (!map.has(id)) {
           map.set(id, {
             id,
-            name: message.sender_name || 'Hatch AI',
+            name: message.sender_name || 'agensis AI',
             kind: 'agent',
             agent_id: message.sender_id || null,
           });
@@ -1400,7 +1400,7 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
-  const senderName = msg.sender_name || (isUser ? 'You' : 'Hatch AI');
+  const senderName = msg.sender_name || (isUser ? 'You' : 'agensis AI');
   const initials = isUser ? 'YO' : (senderName.slice(0, 2).toUpperCase() || 'AI');
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
@@ -1572,7 +1572,7 @@ function ChannelSidePanel({
             <div className="space-y-2">
               {pinnedMessages.map(message => (
                 <div key={message.id} className="rounded-md border bg-muted/40 p-2 text-sm">
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'Hatch AI')}</div>
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'agensis AI')}</div>
                   <MarkdownContent content={safeMessageText(message.content)} compact />
                 </div>
               ))}
@@ -2159,11 +2159,11 @@ function buildParticipantCandidates(
 
   messages.forEach(message => {
     if (message.sender_kind === 'agent' || message.role === 'assistant') {
-      const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:hatch-ai';
+      const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:agensis-ai';
       if (!map.has(id)) {
         map.set(id, {
           id,
-          name: message.sender_name || 'Hatch AI',
+          name: message.sender_name || 'agensis AI',
           kind: 'agent',
           agent_id: message.sender_id || null,
           user_id: null,

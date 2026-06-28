@@ -13,7 +13,7 @@ const { WebSocketServer } = require('ws');
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
-const DEFAULT_AI_MODEL = process.env.HATCH_DEFAULT_AI_MODEL || 'claude-opus-4-8';
+const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
 const ALLOWED_TABLES = new Set([
   'app_users',
   'workspaces',
@@ -742,7 +742,7 @@ function hashAgentToken(token) {
 }
 
 function createAgentConnectToken() {
-  return `hca_${crypto.randomBytes(32).toString('base64url')}`;
+  return `aga_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
 function normalizeBaseUrl(value) {
@@ -764,7 +764,7 @@ function shellQuote(value) {
 }
 
 function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, model, permissionMode }) {
-  const agentBin = path.resolve(__dirname, '..', 'agent', 'hilos-agent', 'bin', 'hilos-agent.mjs');
+  const agentBin = path.resolve(__dirname, '..', 'agent', 'agensis-cli', 'bin', 'agensis.mjs');
   const resolvedModel = resolveAnthropicModel(model);
   const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
   const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
@@ -774,7 +774,6 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   const localCommand = [
     'node',
     shellQuote(agentBin),
-    'hatch',
     '--url',
     shellQuote(baseUrl),
     '--token',
@@ -790,8 +789,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
     ...commandPermissionArgs,
   ].join(' ');
   const portableCommand = [
-    'hatch-agent',
-    'hatch',
+    'agensis',
     '--url',
     shellQuote(baseUrl),
     '--token',
@@ -1200,7 +1198,7 @@ function safeFileName(name) {
 }
 
 function getUploadRoot() {
-  return process.env.HATCH_UPLOAD_ROOT || path.join(process.cwd(), '.hatch_uploads');
+  return process.env.AGENSIS_UPLOAD_ROOT || path.join(process.cwd(), '.agensis_uploads');
 }
 
 function storagePathFor(workspaceId, id, name) {
@@ -1227,7 +1225,7 @@ const PROJECT_FILE_IGNORE_DIRS = new Set([
   '.nuxt',
   'out',
   'coverage',
-  '.hatch_uploads',
+  '.agensis_uploads',
   'release',
   '.cache',
   '.turbo',
@@ -1542,7 +1540,7 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   const sections = [];
   if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
     if (agentContext.name) {
-      sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared Hatch workspace.`);
+      sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
     }
     if (agentContext.soul) {
       sections.push(`Agent soul: ${agentContext.soul}`);
@@ -1562,7 +1560,7 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
     sections.push('');
   } else {
     sections.push(
-      'You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
+      'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
       '',
     );
   }

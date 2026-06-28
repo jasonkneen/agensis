@@ -162,7 +162,7 @@ function ThreadBubble({
     : rawContent;
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
-  const senderName = msg.sender_name || (isUser ? 'You' : 'Hatch AI');
+  const senderName = msg.sender_name || (isUser ? 'You' : 'agensis AI');
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

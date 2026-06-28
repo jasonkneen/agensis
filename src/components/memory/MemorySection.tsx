@@ -225,7 +225,7 @@ function MemoryForm({
         <Textarea
           id="memory-fact"
           autoFocus
-          placeholder="What should Hatch remember?"
+          placeholder="What should agensis remember?"
           value={fact}
           onChange={e => onFactChange(e.target.value)}
           onKeyDown={e => {

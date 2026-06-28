@@ -8,7 +8,7 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 const DEFAULT_MODEL = "claude-opus-4-8";
 
-export async function runHatchDaemon(rawConfig = {}) {
+export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
   let stopped = false;
   let ws = null;
@@ -62,7 +62,7 @@ export async function runHatchDaemon(rawConfig = {}) {
           permissionMode: config.permissionMode,
           permissionFlags: permissionFlagsForMode(config.permissionMode),
           once: config.once,
-          runtime: "hatch-agent",
+          runtime: "agensis",
           version: "0.1.0",
         },
       });
@@ -157,11 +157,11 @@ function normalizeConfig(raw) {
     workspace: String(raw.workspace || raw.workspaceId || "").trim(),
     agent: String(raw.agent || raw.agentId || "").trim(),
     handle: slugHandle(raw.handle || raw.name || "agent"),
-    name: String(raw.name || raw.handle || "Hatch Agent").trim(),
+    name: String(raw.name || raw.handle || "agensis Agent").trim(),
     cwd: String(raw.cwd || process.cwd()).trim(),
-    codingCmd: String(raw.codingCmd || process.env.HATCH_CODING_CMD || process.env.CODING_CMD || "claude -p").trim(),
-    model: resolveModel(raw.model || process.env.HATCH_MODEL || process.env.CLAUDE_MODEL || ""),
-    permissionMode: normalizePermissionMode(raw.permissionMode || raw.permission_mode || raw.permission || process.env.HATCH_PERMISSION_MODE || "default"),
+    codingCmd: String(raw.codingCmd || process.env.AGENSIS_CODING_CMD || process.env.CODING_CMD || "claude -p").trim(),
+    model: resolveModel(raw.model || process.env.AGENSIS_MODEL || process.env.CLAUDE_MODEL || ""),
+    permissionMode: normalizePermissionMode(raw.permissionMode || raw.permission_mode || raw.permission || process.env.AGENSIS_PERMISSION_MODE || "default"),
     timeoutMs: Number(raw.timeoutMs || DEFAULT_TIMEOUT_MS),
     heartbeatMs: Number(raw.heartbeatMs || DEFAULT_HEARTBEAT_MS),
     once: Boolean(raw.once),
@@ -262,7 +262,7 @@ function buildPrompt(config, job) {
   const model = resolveJobModel(config, job);
   const permissionMode = resolveJobPermissionMode(config, job);
   const sections = [
-    "You are running as a local Hatch workspace agent daemon.",
+    "You are running as a local agensis workspace agent daemon.",
     `Workspace: ${job.workspaceId || config.workspace}`,
     `Channel session: ${job.sessionId || ""}`,
     `Agent: ${agent.name || config.name} (@${agent.handle || config.handle})`,
@@ -442,5 +442,5 @@ function slugHandle(value) {
 }
 
 function log(message) {
-  process.stderr.write(`[hatch-agent] ${message}\n`);
+  process.stderr.write(`[agensis] ${message}\n`);
 }

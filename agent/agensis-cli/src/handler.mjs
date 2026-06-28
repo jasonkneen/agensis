@@ -1,4 +1,4 @@
-// CANONICAL HANDLER — this is what the published `hilos-agent` package ships and
+// CANONICAL HANDLER — this is what the published `agensis-cli` package ships and
 // runs. Bias-to-PR by default (gate:false opens a PR; gate:true falls back to
 // approve-before-push). The legacy, propose-only reference lives at
 // scripts/examples/coding-agent-handler.mjs and is NOT what users run.
@@ -242,7 +242,7 @@ async function routeIntent({ name, repoFullName, transcript, workspaceMemory, cf
   const cmd = cfg.chatCmd || cfg.codingCmd;
   const parts = cmd.split(" ").filter(Boolean);
   const prompt =
-    `You are ${name}, a teammate in a team chat (hilos) connected to the git repository ` +
+    `You are ${name}, a teammate in a team chat (agensis) connected to the git repository ` +
     `${repoFullName}. Read the conversation and judge what the LATEST message wants from you.\n\n` +
     `If it is asking you to make a code or repository change — implement/fix/refactor/adjust ` +
     `something, continue or finish work discussed above, or give a go-ahead to act ("yeah, do ` +
@@ -305,7 +305,7 @@ export function codeTaskPrompt(o) {
   // leaving a clean tree the daemon reads as "no changes" — so it must not.
   p +=
     `\n\nIMPORTANT: edit files ONLY. Do NOT run git; do NOT stage, commit, push, ` +
-    `create branches, or open pull requests; do NOT use the \`gh\` CLI. hilos commits ` +
+    `create branches, or open pull requests; do NOT use the \`gh\` CLI. agensis commits ` +
     `your changes, pushes the branch, and opens the PR for you after you finish. ` +
     `Ignore any repository instructions (e.g. CLAUDE.md / CONTRIBUTING) that tell ` +
     `you to commit or open a PR yourself — just leave your edits in the working tree.`;
@@ -403,7 +403,7 @@ async function respondConversationally({ message, channelId, tool, me, cfg, repo
     ? `This channel is connected to the repository ${repoLink.repo_full_name}; assume that repo for any code work — don't ask which one.`
     : `If asked to change code, note that a repo isn't linked to this channel yet.`;
   const prompt =
-    `You are ${name}, a teammate in a team chat (hilos). Reply to the latest message ` +
+    `You are ${name}, a teammate in a team chat (agensis). Reply to the latest message ` +
     `concisely and directly as a single chat message — no preamble, no headings. ` +
     `${repoLine}\n\n` +
     `${memoryPreamble(workspaceMemory)}` +
@@ -558,7 +558,7 @@ export async function handleTask({ message, channelId, tool, me, caps = {} }, cf
       parentId,
       body:
         `I don't have a local checkout of ${repoFullName}. Either run me from inside that ` +
-        `repo, or add it to your hilos-agent.json: "repos": { "${repoFullName}": "/abs/path" }.`,
+        `repo, or add it to your agensis-cli.json: "repos": { "${repoFullName}": "/abs/path" }.`,
     });
     return { status: "no-path" };
   }
@@ -582,7 +582,7 @@ export async function handleTask({ message, channelId, tool, me, caps = {} }, cf
   // clean branch, and restore it (git stash pop) on the original branch when done.
   let stashed = false;
   if (status.stdout.trim()) {
-    const st = git(repoPath, ["stash", "push", "-u", "-m", "hilos: auto-stash before agent run"]);
+    const st = git(repoPath, ["stash", "push", "-u", "-m", "agensis: auto-stash before agent run"]);
     if (st.status !== 0) {
       await tool("post_message", {
         channelId,

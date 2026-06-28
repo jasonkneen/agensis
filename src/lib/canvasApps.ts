@@ -35,7 +35,7 @@ export function parseAppletState(value?: string | null) {
   }
 }
 
-export interface HatchAppletInit {
+export interface AgensisAppletInit {
   state: Record<string, unknown>;
   tasks: Task[];
   agents: WorkspaceAgent[];
@@ -213,31 +213,31 @@ function buildTaskKanbanAppHtml() {
         ["cancelled", "Cancelled"]
       ];
       function post(type, payload) {
-        parent.postMessage({ source: "hatch-applet", type: type, payload: payload || {} }, "*");
+        parent.postMessage({ source: "agensis-applet", type: type, payload: payload || {} }, "*");
       }
-      window.Hatch = {
-        setState: function (next) { state = Object.assign({}, state, next || {}); post("hatch:setState", { state: state }); renderRuns(); },
+      window.Agensis = {
+        setState: function (next) { state = Object.assign({}, state, next || {}); post("agensis:setState", { state: state }); renderRuns(); },
         tasks: {
-          create: function (input) { post("hatch:createTask", input); },
-          update: function (id, updates) { post("hatch:updateTask", { id: id, updates: updates }); }
+          create: function (input) { post("agensis:createTask", input); },
+          update: function (id, updates) { post("agensis:updateTask", { id: id, updates: updates }); }
         },
         agents: {
           queueRun: function (input) {
             var runs = state.agentRuns || [];
             runs.unshift(Object.assign({ id: String(Date.now()), status: "queued", createdAt: new Date().toISOString() }, input || {}));
-            window.Hatch.setState({ agentRuns: runs.slice(0, 20) });
+            window.Agensis.setState({ agentRuns: runs.slice(0, 20) });
           }
         }
       };
       window.addEventListener("error", function (event) {
-        post("hatch:crash", { message: event.message, filename: event.filename, line: event.lineno });
+        post("agensis:crash", { message: event.message, filename: event.filename, line: event.lineno });
       });
       window.addEventListener("unhandledrejection", function (event) {
-        post("hatch:crash", { message: String(event.reason && event.reason.message || event.reason || "Unhandled promise rejection") });
+        post("agensis:crash", { message: String(event.reason && event.reason.message || event.reason || "Unhandled promise rejection") });
       });
       window.addEventListener("message", function (event) {
         var msg = event.data || {};
-        if (msg.type !== "hatch:init") return;
+        if (msg.type !== "agensis:init") return;
         tasks = Array.isArray(msg.payload.tasks) ? msg.payload.tasks : [];
         agents = Array.isArray(msg.payload.agents) ? msg.payload.agents : [];
         state = Object.assign({ agentRuns: [] }, msg.payload.state || {});
@@ -288,7 +288,7 @@ function buildTaskKanbanAppHtml() {
               btn.className = "mini secondary";
               btn.textContent = next[1];
               btn.addEventListener("click", function () {
-                window.Hatch.tasks.update(task.id, { status: next[0] });
+                window.Agensis.tasks.update(task.id, { status: next[0] });
               });
               actions.appendChild(btn);
             });
@@ -311,7 +311,7 @@ function buildTaskKanbanAppHtml() {
       document.getElementById("createTask").addEventListener("click", function () {
         var title = document.getElementById("newTitle").value.trim();
         if (!title) return;
-        window.Hatch.tasks.create({ title: title, priority: document.getElementById("newPriority").value, source_type: "canvas" });
+        window.Agensis.tasks.create({ title: title, priority: document.getElementById("newPriority").value, source_type: "canvas" });
         document.getElementById("newTitle").value = "";
       });
       document.getElementById("newTitle").addEventListener("keydown", function (event) {
@@ -322,10 +322,10 @@ function buildTaskKanbanAppHtml() {
         if (!prompt) return;
         var agentId = document.getElementById("agentSelect").value;
         var agent = agents.find(function (item) { return item.id === agentId; });
-        window.Hatch.agents.queueRun({ agentId: agentId || null, agentName: agent ? agent.name : "Unassigned", prompt: prompt });
+        window.Agensis.agents.queueRun({ agentId: agentId || null, agentName: agent ? agent.name : "Unassigned", prompt: prompt });
         document.getElementById("agentPrompt").value = "";
       });
-      post("hatch:ready");
+      post("agensis:ready");
     })();
   </script>
 </body>

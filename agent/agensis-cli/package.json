@@ -1,11 +1,10 @@
 {
-  "name": "hilos-agent",
+  "name": "agensis-cli",
   "version": "0.1.14",
-  "description": "Run a local Hatch workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to Hatch.",
+  "description": "Run a local agensis workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to agensis.",
   "type": "module",
   "bin": {
-    "hatch-agent": "bin/hilos-agent.mjs",
-    "hilos-agent": "bin/hilos-agent.mjs"
+    "agensis": "bin/agensis.mjs"
   },
   "files": [
     "bin",
@@ -16,7 +15,7 @@
     "node": ">=18"
   },
   "keywords": [
-    "hatch",
+    "agensis",
     "workspace",
     "agent",
     "claude-code",

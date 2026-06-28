@@ -1,8 +1,9 @@
 {
-  "name": "stursky-open-hatch",
+  "name": "agensis",
   "private": true,
   "version": "0.1.0",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
+  "homepage": "https://agensis.io",
   "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
@@ -73,8 +74,8 @@
     "vite": "^5.4.2"
   },
   "build": {
-    "appId": "com.openhatch.app",
-    "productName": "Open Hatch",
+    "appId": "io.agensis.app",
+    "productName": "agensis",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release",

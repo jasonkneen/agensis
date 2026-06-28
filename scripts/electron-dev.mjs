@@ -113,7 +113,7 @@ async function main() {
     env: {
       ...process.env,
       VITE_DEV_SERVER_URL: devUrl,
-      HATCH_BACKEND_EXTERNAL: '1',
+      AGENSIS_BACKEND_EXTERNAL: '1',
     },
   });
 

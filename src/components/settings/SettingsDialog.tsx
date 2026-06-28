@@ -631,7 +631,7 @@ function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
 function AboutPanel() {
   return (
     <FieldGroup>
-      <ReadOnlyValue label="Hatch" value="AI-powered workspace for documents, chat, and memory" />
+      <ReadOnlyValue label="agensis" value="AI-powered workspace for documents, chat, and memory" />
       <ReadOnlyValue label="Backend" value="Neon Postgres, local server on :3142" />
     </FieldGroup>
   );

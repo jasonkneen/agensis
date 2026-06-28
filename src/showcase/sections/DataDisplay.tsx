@@ -59,7 +59,7 @@ export default function DataDisplaySection() {
       <Example label="Card" full>
         <Card className="w-full max-w-sm">
           <CardHeader>
-            <CardTitle>Project Hatch</CardTitle>
+            <CardTitle>Project agensis</CardTitle>
             <CardDescription>A small team building in the open.</CardDescription>
             <CardAction>
               <Button
@@ -80,7 +80,7 @@ export default function DataDisplaySection() {
             <Button variant="outline" size="sm" onClick={() => toast('Shared project link')}>
               Share
             </Button>
-            <Button variant="default" size="sm" onClick={() => toast.success('Joined Project Hatch')}>
+            <Button variant="default" size="sm" onClick={() => toast.success('Joined Project agensis')}>
               Join
             </Button>
           </CardFooter>

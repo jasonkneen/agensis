@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { runHatchDaemon } from "../src/hatch.mjs";
+import { runAgensisDaemon } from "../src/agensis.mjs";
 
 function parseArgs(argv) {
-  const args = { command: "hatch" };
+  const args = { command: "connect" };
   const rest = [...argv];
   const first = rest[0];
   if (first && !first.startsWith("-")) {
@@ -43,15 +43,15 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `Hatch agent daemon
+  return `agensis agent daemon
 
 Usage:
-  hatch-agent hatch --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
-  hilos-agent hatch --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
+  agensis --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
+  agensis connect --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
 
 Required:
-  --url <url>             Hatch app URL, for example http://localhost:5174
-  --token <token>         Agent connection token from Hatch
+  --url <url>             agensis app URL, for example http://localhost:5174
+  --token <token>         Agent connection token from agensis
   --workspace <id>        Workspace id
   --agent <id>            Workspace agent id
 
@@ -77,11 +77,11 @@ async function main() {
     process.stdout.write(usage());
     return;
   }
-  if (args.command !== "hatch") {
-    throw new Error(`Unknown command "${args.command}". This package is now a Hatch agent daemon; use "hatch".`);
+  if (args.command !== "connect") {
+    throw new Error(`Unknown command "${args.command}". Use "agensis --url ..." or "agensis connect --url ...".`);
   }
   args.exitOnOnce = true;
-  await runHatchDaemon(args);
+  await runAgensisDaemon(args);
   if (args.once) {
     process.exit(0);
   }

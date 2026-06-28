@@ -1,5 +1,5 @@
 /*
-  # Hatch App - Core Schema
+  # agensis App - Core Schema
 
   1. Tables
     - `workspaces` - isolated user workspaces
@@ -184,7 +184,7 @@ INSERT INTO documents (workspace_id, title, content)
 VALUES (
   '00000000-0000-0000-0000-000000000001',
   'Getting Started',
-  '<h1>Welcome to Hatch</h1><p>This is your intelligent workspace. Start writing, chatting with AI, or uploading files to get started.</p><h2>What you can do</h2><ul><li>Write and organize documents</li><li>Chat with AI models</li><li>Upload context files</li><li>Save important memories</li></ul>'
+  '<h1>Welcome to agensis</h1><p>This is your intelligent workspace. Start writing, chatting with AI, or uploading files to get started.</p><h2>What you can do</h2><ul><li>Write and organize documents</li><li>Chat with AI models</li><li>Upload context files</li><li>Save important memories</li></ul>'
 )
 ON CONFLICT DO NOTHING;
 

@@ -10,7 +10,7 @@ import { reloadConfig } from "./config.mjs";
 
 export async function run(cfg, { handler = handleTask, log = console } = {}) {
   if (!cfg.token) {
-    log.error("No token. Run `hilos-agent init`, set HILOS_TOKEN, or use --join <blob>.");
+    log.error("No token. Run `agensis-cli init`, set AGENSIS_TOKEN, or use --join <blob>.");
     process.exit(1);
   }
 
@@ -19,10 +19,10 @@ export async function run(cfg, { handler = handleTask, log = console } = {}) {
   const who = await tool("whoami");
   const me = { ...who, handle: mentionHandle(who.agentName) };
   if (!me.handle) {
-    log.error("This agent has no display name / handle — set one in hilos, then reconnect.");
+    log.error("This agent has no display name / handle — set one in agensis, then reconnect.");
     process.exit(1);
   }
-  log.log(`hilos-agent: ${me.agentName} (@${me.handle}) — ${cfg.url}`);
+  log.log(`agensis-cli: ${me.agentName} (@${me.handle}) — ${cfg.url}`);
   if (cfg.channelId) log.log(`scope: channel ${cfg.channelId}`);
   log.log(`repos: ${Object.keys(cfg.repos).join(", ") || "(none configured)"}`);
 
@@ -44,7 +44,7 @@ export async function run(cfg, { handler = handleTask, log = console } = {}) {
   const cursor = { value: since ? new Date(since).toISOString() : null };
 
   // Live config: re-read between polls so model/permission/codingCmd edits to
-  // hilos-agent.json take effect without a restart. Identity stays pinned.
+  // agensis-cli.json take effect without a restart. Identity stays pinned.
   let liveCfg = cfg;
 
   // One-at-a-time worker so the poll loop NEVER blocks on a multi-minute run.
@@ -125,7 +125,7 @@ export async function run(cfg, { handler = handleTask, log = console } = {}) {
   }
 
   do {
-    // Pick up live edits to hilos-agent.json (model/permission/codingCmd/etc.)
+    // Pick up live edits to agensis-cli.json (model/permission/codingCmd/etc.)
     // before each pass. Guarded: a bad file leaves liveCfg untouched.
     try {
       const next = reloadConfig(liveCfg);

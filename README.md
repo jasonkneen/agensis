@@ -1,4 +1,4 @@
-# Stursky aka Open Hatch
+# agensis
 
 A realtime collaborative workspace for chat, documents, memory, files, and a shared canvas.
 
@@ -7,7 +7,7 @@ A realtime collaborative workspace for chat, documents, memory, files, and a sha
 
 ## What it is
 
-Open Hatch is a multiplayer workspace app built with React, TypeScript, Vite, Neon Postgres, and a local Node Backend server. A **workspace** is the top-level shared room. Inside a workspace, users can:
+agensis is a multiplayer workspace app built with React, TypeScript, Vite, Neon Postgres, and a local Node Backend server. A **workspace** is the top-level shared room. Inside a workspace, users can:
 
 - chat with AI
 - create and edit documents
@@ -158,7 +158,7 @@ database/
 
 ## Current product shape
 
-Open Hatch currently focuses on:
+agensis currently focuses on:
 
 - collaborative workspaces
 - shared visual thinking on canvas

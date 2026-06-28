@@ -76,10 +76,10 @@ import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, Floa
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
-const TOUR_KEY = 'hatch_tour_complete';
-const SIDEBAR_KEY = 'hatch_sidebar_collapsed';
-const PRESENCE_VISIBILITY_KEY = 'hatch_presence_visibility';
-const PRESENCE_FAVORITES_KEY = 'hatch_presence_favorites';
+const TOUR_KEY = 'agensis_tour_complete';
+const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
+const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
+const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
 
 type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
@@ -268,14 +268,14 @@ function KnowledgeContextControl({
 }
 
 function buildCanvasAppletCreationBrief(workspaceName: string) {
-  return `Create a new Hatch Canvas Applet for the "${workspaceName}" workspace.
+  return `Create a new agensis Canvas Applet for the "${workspaceName}" workspace.
 
 Use this skill:
-Hatch Canvas Applet Builder
-- Build production-quality self-contained HTML applets for Hatch canvas.
+agensis Canvas Applet Builder
+- Build production-quality self-contained HTML applets for agensis canvas.
 - Treat the applet as a durable, editable artifact, not a throwaway snippet.
 - Keep the implementation isolated, resilient, accessible, responsive, and easy to revise in later chat turns.
-- Use the Hatch iframe SDK contract below for state, tasks, agents, theme, and crash reporting.
+- Use the agensis iframe SDK contract below for state, tasks, agents, theme, and crash reporting.
 
 The applet must be a self-contained single-file HTML artifact:
 - One complete HTML document in a single fenced \`\`\`html block.
@@ -285,14 +285,14 @@ The applet must be a self-contained single-file HTML artifact:
 - Easy to update later: keep constants, state helpers, render functions, and event handlers clearly separated.
 - Accessible controls, stable dimensions, no flashing layout shifts, and no uncaught errors.
 
-Use this Hatch iframe SDK contract:
-- Listen for parent messages with type "hatch:init". The payload can include { state, tasks, agents, theme }.
-- Post { source: "hatch-applet", type: "hatch:ready" } after the app is ready.
-- Persist applet state by posting { source: "hatch-applet", type: "hatch:setState", payload: { state } }.
-- Create tasks by posting { source: "hatch-applet", type: "hatch:createTask", payload: { title, priority, source_type } }.
-- Update tasks by posting { source: "hatch-applet", type: "hatch:updateTask", payload: { id, updates } }.
-- Report runtime failures by posting { source: "hatch-applet", type: "hatch:crash", payload: { message } }.
-- Use payload.theme tokens when present so the applet matches the current Hatch theme.
+Use this agensis iframe SDK contract:
+- Listen for parent messages with type "agensis:init". The payload can include { state, tasks, agents, theme }.
+- Post { source: "agensis-applet", type: "agensis:ready" } after the app is ready.
+- Persist applet state by posting { source: "agensis-applet", type: "agensis:setState", payload: { state } }.
+- Create tasks by posting { source: "agensis-applet", type: "agensis:createTask", payload: { title, priority, source_type } }.
+- Update tasks by posting { source: "agensis-applet", type: "agensis:updateTask", payload: { id, updates } }.
+- Report runtime failures by posting { source: "agensis-applet", type: "agensis:crash", payload: { message } }.
+- Use payload.theme tokens when present so the applet matches the current agensis theme.
 
 First ask one concise question if the applet idea is missing. If I provide a specific applet idea, build the first version directly.`;
 }

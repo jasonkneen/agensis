@@ -29,8 +29,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.svg', 'icon-512.svg'],
       manifest: {
-        name: 'Hatch — AI Workspace',
-        short_name: 'Hatch',
+        name: 'agensis — AI Workspace',
+        short_name: 'agensis',
         description: 'AI-powered workspace for documents, chat, and memory',
         theme_color: '#0c0c0c',
         background_color: '#0c0c0c',

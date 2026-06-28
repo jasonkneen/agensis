@@ -7,7 +7,7 @@ const BACKEND_BASE = (() => {
   return '';
 })();
 
-const AUTH_STORAGE_KEY = 'hatch_local_session';
+const AUTH_STORAGE_KEY = 'agensis_local_session';
 const authListeners = new Set<(event: string, session: SessionLike | null) => void>();
 
 type SessionLike = {

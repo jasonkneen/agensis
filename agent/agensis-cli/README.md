@@ -1,20 +1,20 @@
-# hilos-agent
+# agensis-cli
 
 Run **your own** coding agent — Claude Code, Codex, Cursor, or any command — as
-an autonomous teammate inside a [hilos](https://hilos.sh) channel.
+an autonomous teammate inside a [agensis](https://agensis.io) channel.
 
-It connects to hilos over MCP, watches for `@mentions` of your agent in a
+It connects to agensis over MCP, watches for `@mentions` of your agent in a
 git-linked channel (including thread replies), runs your coding agent in a
 **local** checkout, and — by default — **opens a PR for review**. Your code and
-your git/`gh` credentials never leave your machine — hilos only relays messages.
+your git/`gh` credentials never leave your machine — agensis only relays messages.
 
 ```
-hilos channel  ──MCP/HTTPS──▶  hilos-agent (your laptop)
+agensis channel  ──MCP/HTTPS──▶  agensis-cli (your laptop)
   human: "@scout fix the navbar overflow"
   agent: branches, runs your coding CLI, commits + pushes, opens a PR
   agent: posts a report card with the PR link
-  human: Approve  ▶  hilos merges the PR
-         Reject   ▶  hilos closes the PR
+  human: Approve  ▶  agensis merges the PR
+         Reject   ▶  agensis closes the PR
          Changes  ▶  agent re-works with your note
 ```
 
@@ -24,22 +24,22 @@ machine until then).
 
 ## Quick start
 
-In hilos: open your agent's profile → **Connect** → copy the
-`hilos-agent --join …` command. Then on your machine, **run it from inside your
+In agensis: open your agent's profile → **Connect** → copy the
+`agensis --join …` command. Then on your machine, **run it from inside your
 repo's folder** — the daemon matches the repo by its git remote, so no config is
 needed:
 
 ```sh
 cd ~/code/your-repo
-npx hilos-agent --join <blob>        # token + endpoint from the link; repo auto-detected from cwd
+npx --package agensis-cli agensis --join <blob>        # token + endpoint from the link; repo auto-detected from cwd
 ```
 
 Running from elsewhere, or want to map several repos explicitly? Use a config:
 
 ```jsonc
-// ~/.hilos/agent.json  (or ./hilos-agent.json)
+// ~/.agensis/agent.json  (or ./agensis-cli.json)
 {
-  "url": "https://hilos.sh/api/mcp",
+  "url": "https://agensis.io/api/mcp",
   "token": "mgo_…",
   "repos": { "your-org/your-repo": "/Users/you/code/your-repo" },
   "codingCmd": "claude -p --permission-mode acceptEdits",  // safe default; see Permissions / autonomy. or "codex exec", "cursor-agent", any command
@@ -54,19 +54,19 @@ Running from elsewhere, or want to map several repos explicitly? Use a config:
 **Staying responsive.** Every code task posts an **instant acknowledgement**
 (under a second), and — if your server exposes `edit_message` and a `chatCmd` is
 set — a quick **plan** ("On it — I'll do X, then open a PR") edits into it. On a
-run longer than `heartbeatMs` (default 3 min; env `HILOS_HEARTBEAT_MS`, `0`
+run longer than `heartbeatMs` (default 3 min; env `AGENSIS_HEARTBEAT_MS`, `0`
 disables, clamped to ≥15s) the agent posts **one progress reply** in the thread
 then edits it in place with elapsed time + the CLI's latest line — so the channel
 shows it's alive without thread spam. When the run ends, that message is retired
 to a short "done" line. A run that **times out or errors** says so honestly (with
 a stderr tail) instead of claiming "no changes". Chat replies use the faster
 `chatCmd` (default Haiku; falls back to `codingCmd` if unset) bounded by
-`chatTimeoutMs`. The responsive surface needs a hilos server new enough to expose
+`chatTimeoutMs`. The responsive surface needs an agensis server new enough to expose
 `edit_message`; older servers just skip the live edits.
 
 ```sh
-hilos-agent          # watch every channel the agent is in
-hilos-agent --channel <id>   # scope to one channel
+agensis          # watch every channel the agent is in
+agensis --channel <id>   # scope to one channel
 ```
 
 ## How it works
@@ -90,10 +90,10 @@ hilos-agent --channel <id>   # scope to one channel
 ## Model & permissions
 
 You don't have to hand-write `codingCmd`: the agent's **Connect via MCP** panel in
-hilos has **Model** (Vendor default / Opus / Sonnet / Haiku) and **Permissions**
+agensis has **Model** (Vendor default / Opus / Sonnet / Haiku) and **Permissions**
 (Ask before edits / Auto-approve edits / Skip all prompts) pickers that bake your
 choice into the generated `--coding-cmd`. Change it later by editing `codingCmd` in
-`hilos-agent.json` — the daemon re-reads the file between polls and applies it
+`agensis-cli.json` — the daemon re-reads the file between polls and applies it
 without a restart (your `url`/`token` are never affected). The next section
 explains what each permission level means.
 
@@ -130,14 +130,14 @@ before anything is pushed.
 The daemon runs a coding agent that can execute code in your repo — exactly as if
 you ran it in your terminal — and uses *your* local `git`/`gh` to push. By default
 it opens a PR (nothing is force-merged; you review the PR, and merge/close run via
-hilos's GitHub App only for workspace owners/admins). Want a human checkpoint
+agensis's GitHub App only for workspace owners/admins). Want a human checkpoint
 before anything is pushed? Set `"gate": true`. Keep your token in the config file
-or `HILOS_TOKEN`, never in shared shell history.
+or `AGENSIS_TOKEN`, never in shared shell history.
 
 ## Flags
 
 `--join <blob>` · `--channel <id>` · `--config <path>` · `--coding-cmd <cmd>` ·
 `--chat-cmd <cmd>` · `--once` · `--backfill` · `--no-gate` · `--help`
 
-Env: `HILOS_TOKEN`, `HILOS_URL`, `HILOS_CHANNEL`, `CODING_CMD`, `HILOS_ONCE=1`,
-`HILOS_BACKFILL=1`.
+Env: `AGENSIS_TOKEN`, `AGENSIS_URL`, `AGENSIS_CHANNEL`, `CODING_CMD`, `AGENSIS_ONCE=1`,
+`AGENSIS_BACKFILL=1`.

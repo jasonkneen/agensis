@@ -1,4 +1,4 @@
-// Config resolution: a JSON file (./hilos-agent.json or ~/.hilos/agent.json),
+// Config resolution: a JSON file (./agensis-cli.json or ~/.agensis/agent.json),
 // overlaid by env vars and CLI flags / a --join blob. The join blob carries the
 // MCP url + token (+ optional channel) so a user can paste one command.
 
@@ -6,8 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
-export const GLOBAL_CONFIG = join(homedir(), ".hilos", "agent.json");
-export const LOCAL_CONFIG = "hilos-agent.json";
+export const GLOBAL_CONFIG = join(homedir(), ".agensis", "agent.json");
+export const LOCAL_CONFIG = "agensis-cli.json";
 
 /** Decode a base64url join blob → { url, token, channelId }, or null. */
 export function decodeJoin(blob) {
@@ -30,7 +30,7 @@ function readJson(path) {
   }
 }
 
-/** First config file that exists: explicit path → ./hilos-agent.json → ~/.hilos/agent.json. */
+/** First config file that exists: explicit path → ./agensis-cli.json → ~/.agensis/agent.json. */
 export function findConfigPath(explicit) {
   if (explicit) return explicit;
   if (existsSync(LOCAL_CONFIG)) return LOCAL_CONFIG;
@@ -39,12 +39,12 @@ export function findConfigPath(explicit) {
 }
 
 const DEFAULTS = {
-  url: "https://hilos.sh/api/mcp",
+  url: "https://agensis.io/api/mcp",
   token: "",
   channelId: "", // when set, watch only this channel (the per-channel override)
   repos: {},
   // acceptEdits lets the CLI make file edits without prompting (bias to action);
-  // it still won't run arbitrary commands. Override in hilos-agent.json if you
+  // it still won't run arbitrary commands. Override in agensis-cli.json if you
   // want a stricter (or `--dangerously-skip-permissions`) command.
   codingCmd: "claude -p --permission-mode acceptEdits",
   // Chat replies + the code-task plan-ack use a FAST one-shot model so a casual
@@ -82,15 +82,15 @@ const DEFAULTS = {
 export function resolveConfig({ flags = {}, join: joinPayload } = {}) {
   const file = readJson(findConfigPath(flags.config)) || {};
   const env = {
-    url: process.env.HILOS_URL,
-    token: process.env.HILOS_TOKEN,
-    channelId: process.env.HILOS_CHANNEL,
+    url: process.env.AGENSIS_URL,
+    token: process.env.AGENSIS_TOKEN,
+    channelId: process.env.AGENSIS_CHANNEL,
     codingCmd: process.env.CODING_CMD,
-    chatCmd: process.env.HILOS_CHAT_CMD,
-    heartbeatMs: process.env.HILOS_HEARTBEAT_MS ? Number(process.env.HILOS_HEARTBEAT_MS) : undefined,
-    chatTimeoutMs: process.env.HILOS_CHAT_TIMEOUT_MS ? Number(process.env.HILOS_CHAT_TIMEOUT_MS) : undefined,
-    backfill: process.env.HILOS_BACKFILL === "1" ? true : undefined,
-    once: process.env.HILOS_ONCE === "1" ? true : undefined,
+    chatCmd: process.env.AGENSIS_CHAT_CMD,
+    heartbeatMs: process.env.AGENSIS_HEARTBEAT_MS ? Number(process.env.AGENSIS_HEARTBEAT_MS) : undefined,
+    chatTimeoutMs: process.env.AGENSIS_CHAT_TIMEOUT_MS ? Number(process.env.AGENSIS_CHAT_TIMEOUT_MS) : undefined,
+    backfill: process.env.AGENSIS_BACKFILL === "1" ? true : undefined,
+    once: process.env.AGENSIS_ONCE === "1" ? true : undefined,
   };
   const merged = { ...DEFAULTS, ...file };
   for (const [k, v] of Object.entries(env)) if (v !== undefined && v !== "") merged[k] = v;
@@ -108,7 +108,7 @@ export function resolveConfig({ flags = {}, join: joinPayload } = {}) {
   return merged;
 }
 
-// Run-behavior fields that may change live (edit hilos-agent.json, no restart).
+// Run-behavior fields that may change live (edit agensis-cli.json, no restart).
 // Connection identity (url/token/channelId) is deliberately excluded so a bad or
 // edited file can NEVER drop the daemon's connection.
 const LIVE_FIELDS = [
@@ -137,22 +137,22 @@ const LIVE_FIELDS = [
 export function reloadConfig(prev) {
   // Only ever re-read the file CHOSEN AT LAUNCH. A daemon started without a config
   // file (e.g. `--join` + env) stays file-free — we don't re-discover cwd each
-  // poll, so a hilos-agent.json dropped in later can't start steering which binary
+  // poll, so an agensis-cli.json dropped in later can't start steering which binary
   // the daemon spawns. (Restart to adopt a newly-created file.)
   const path = prev.configPath;
   const file = (path && readJson(path)) || {};
   const next = { ...prev };
   for (const k of LIVE_FIELDS) if (file[k] !== undefined) next[k] = file[k];
   if (process.env.CODING_CMD) next.codingCmd = process.env.CODING_CMD;
-  if (process.env.HILOS_CHAT_CMD) next.chatCmd = process.env.HILOS_CHAT_CMD;
-  if (process.env.HILOS_HEARTBEAT_MS) next.heartbeatMs = Number(process.env.HILOS_HEARTBEAT_MS);
-  if (process.env.HILOS_CHAT_TIMEOUT_MS) next.chatTimeoutMs = Number(process.env.HILOS_CHAT_TIMEOUT_MS);
+  if (process.env.AGENSIS_CHAT_CMD) next.chatCmd = process.env.AGENSIS_CHAT_CMD;
+  if (process.env.AGENSIS_HEARTBEAT_MS) next.heartbeatMs = Number(process.env.AGENSIS_HEARTBEAT_MS);
+  if (process.env.AGENSIS_CHAT_TIMEOUT_MS) next.chatTimeoutMs = Number(process.env.AGENSIS_CHAT_TIMEOUT_MS);
   if (next.heartbeatMs > 0) next.heartbeatMs = Math.max(15000, Number(next.heartbeatMs) || 0);
   if (file.repos) next.repos = { ...DEFAULTS.repos, ...file.repos };
   return next;
 }
 
-/** Write a starter config file (used by `hilos-agent init`). */
+/** Write a starter config file (used by `agensis-cli init`). */
 export function writeStarterConfig(path, partial = {}) {
   const target = path || GLOBAL_CONFIG;
   mkdirSync(dirname(target), { recursive: true });

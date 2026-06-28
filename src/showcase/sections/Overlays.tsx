@@ -231,11 +231,11 @@ export default function OverlaysSection() {
       <Example label="Hover Card">
         <HoverCard>
           <HoverCardTrigger asChild>
-            <Button variant="link">@openhatch</Button>
+            <Button variant="link">@agensis</Button>
           </HoverCardTrigger>
           <HoverCardContent>
             <div className="flex flex-col gap-1">
-              <span className="text-sm font-semibold">OpenHatch</span>
+              <span className="text-sm font-semibold">agensis</span>
               <p className="text-sm text-muted-foreground">
                 Open-source project management for small teams.
               </p>

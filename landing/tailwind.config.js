@@ -17,7 +17,7 @@ export default {
         ],
       },
       colors: {
-        hatch: {
+        agensis: {
           bg: '#0c0c0c',
           panel: '#141414',
           border: '#2a2a2a',

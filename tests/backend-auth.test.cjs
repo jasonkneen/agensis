@@ -7,8 +7,10 @@ function eq(column, value) {
   return { column, operator: 'eq', value };
 }
 
-function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, authSecret = 'test-secret' } = {}) {
+function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, appSettings = {}, authSecret = 'test-secret' } = {}) {
   const secretRows = { ...workspaceSecrets };
+  const settingRows = { ...appSettings };
+  if (authSecret) settingRows.AUTH_SECRET = authSecret;
   return {
     calls: [],
     async unsafe(sql, params = []) {
@@ -25,10 +27,12 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
       }
 
       if (normalized.startsWith('select value from app_settings')) {
-        return authSecret ? [{ value: authSecret }] : [];
+        const value = settingRows[params[0]];
+        return value ? [{ value }] : [];
       }
 
       if (normalized.startsWith('insert into app_settings')) {
+        settingRows[params[0]] = params[1];
         return [];
       }
 
@@ -282,7 +286,7 @@ test('issued auth tokens verify against the persisted auth secret', async () => 
   assert.equal(await __test.verifyToken(`${token}tampered`), null);
 });
 
-test('settings secrets route requires authentication and workspace id', async () => {
+test('settings secrets route requires authentication and supports app-level secrets', async () => {
   installDb({ authSecret: 'fixed-test-secret' });
 
   await withServer(async (baseUrl) => {
@@ -290,10 +294,11 @@ test('settings secrets route requires authentication and workspace id', async ()
     assert.equal(unauthenticated.status, 401);
 
     const token = await __test.issueToken('user-1');
-    const missingWorkspace = await authedFetch(baseUrl, token, '/backend/settings/secrets');
-    const body = await missingWorkspace.json();
-    assert.equal(missingWorkspace.status, 400);
-    assert.equal(body.error.message, 'workspaceId is required');
+    const appLevel = await authedFetch(baseUrl, token, '/backend/settings/secrets');
+    const body = await appLevel.json();
+    assert.equal(appLevel.status, 200);
+    assert.equal(Array.isArray(body.data.keys), true);
+    assert.equal(body.data.keys[0].key, 'ANTHROPIC_API_KEY');
   });
 });
 

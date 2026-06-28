@@ -1,7 +1,7 @@
 /*
   # Agent runtime modes
 
-  Adds the fields needed for Hatch agents that either run through the built-in
+  Adds the fields needed for agensis agents that either run through the built-in
   backend assistant or connect as a remote daemon.
 */
 
