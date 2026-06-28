@@ -456,6 +456,12 @@ async function route(req) {
     await query('select 1');
     return json({ ok: true });
   }
+  if (req.method === 'GET' && pathname === '/backend/system/capabilities') {
+    return handleSystemCapabilities(req);
+  }
+  if (req.method === 'GET' && pathname === '/backend/agents/connections') {
+    return handleAgentConnections(req);
+  }
   if (req.method === 'POST' && (pathname === '/backend/auth/signup' || pathname === '/backend/auth/signin')) {
     return handleAuth(pathname, req);
   }
