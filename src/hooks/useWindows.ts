@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { FloatingWindow, FloatingWindowType } from '../types';
 
 let nextZIndex = 100;
@@ -9,6 +9,13 @@ const TILE_TOLERANCE = 12;
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
 type TileEdge = 'left' | 'right' | 'top' | 'bottom';
+
+type WindowIdentity = {
+  type: FloatingWindowType;
+  canvasId?: string;
+  sessionId?: string;
+  documentId?: string;
+};
 
 function generateId(): string {
   return `win_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -109,6 +116,24 @@ function getFullViewportBounds(): WindowBounds {
   };
 }
 
+function getWindowIdentityKey(source: WindowIdentity): string {
+  const canvasId = source.canvasId || 'base';
+  if (source.sessionId) return `${canvasId}:session:${source.sessionId}`;
+  if (source.documentId) return `${canvasId}:document:${source.documentId}`;
+  return `${canvasId}:type:${source.type}`;
+}
+
+function getVisibleBounds(win: FloatingWindow): WindowBounds {
+  if (win.maximized) return getFullViewportBounds();
+
+  return clampToViewport({
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+  });
+}
+
 function getTileEdge(bounds: WindowBounds): TileEdge | null {
   const viewport = getWorkspaceViewportSize();
   const fullWidth = Math.round(viewport.width);
@@ -167,9 +192,26 @@ function applyWindowBoundsUpdate(win: FloatingWindow, updates: Partial<FloatingW
   return merged;
 }
 
-function maybeSplitPartner(windows: FloatingWindow[], activeId: string): FloatingWindow[] {
+function looksLikeResize(previous: FloatingWindow, next: FloatingWindow): boolean {
+  const previousBounds = getVisibleBounds(previous);
+  const nextBounds = getVisibleBounds(next);
+  const sameOrigin = Math.abs(previousBounds.x - nextBounds.x) <= TILE_TOLERANCE
+    && Math.abs(previousBounds.y - nextBounds.y) <= TILE_TOLERANCE;
+  const sizeChanged = Math.abs(previousBounds.width - nextBounds.width) > TILE_TOLERANCE
+    || Math.abs(previousBounds.height - nextBounds.height) > TILE_TOLERANCE;
+  const previousWasFull = Math.abs(previousBounds.x) <= TILE_TOLERANCE
+    && Math.abs(previousBounds.y) <= TILE_TOLERANCE
+    && Math.abs(previousBounds.width - getFullViewportBounds().width) <= TILE_TOLERANCE
+    && Math.abs(previousBounds.height - getFullViewportBounds().height) <= TILE_TOLERANCE;
+
+  return sameOrigin && sizeChanged && !previousWasFull;
+}
+
+function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingWindow[], activeId: string): FloatingWindow[] {
+  const previousActive = previousWindows.find(w => w.id === activeId);
   const active = windows.find(w => w.id === activeId);
-  if (!active || active.minimized || active.maximized) return windows;
+  if (!previousActive || !active || active.minimized || active.maximized) return windows;
+  if (looksLikeResize(previousActive, active)) return windows;
 
   const activeBounds = {
     x: active.x,
@@ -228,6 +270,11 @@ function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
 
 export function useWindows() {
   const [windows, setWindows] = useState<FloatingWindow[]>([]);
+  const lastBoundsByWindowKey = useRef<Record<string, WindowBounds>>({});
+
+  const rememberWindowBounds = useCallback((win: FloatingWindow) => {
+    lastBoundsByWindowKey.current[getWindowIdentityKey(win)] = getVisibleBounds(win);
+  }, []);
 
   const openWindow = useCallback((
     type: FloatingWindowType,
@@ -267,7 +314,8 @@ export function useWindows() {
         width: restoreSize.width,
         height: restoreSize.height,
       });
-      const bounds = getFullViewportBounds();
+      const rememberedBounds = lastBoundsByWindowKey.current[getWindowIdentityKey({ type, ...opts })];
+      const bounds = rememberedBounds ? clampToViewport(rememberedBounds) : getFullViewportBounds();
 
       const win: FloatingWindow = {
         id: generateId(),
@@ -280,7 +328,7 @@ export function useWindows() {
         zIndex: nextZIndex,
         minimized: false,
         maximized: false,
-        restoreBounds,
+        restoreBounds: rememberedBounds ? bounds : restoreBounds,
         canvasId: opts?.canvasId,
         sessionId: opts?.sessionId,
         documentId: opts?.documentId,
@@ -295,8 +343,12 @@ export function useWindows() {
   }, []);
 
   const closeWindow = useCallback((id: string) => {
-    setWindows(prev => fillSoleVisibleWindow(prev.filter(w => w.id !== id)));
-  }, []);
+    setWindows(prev => {
+      const closing = prev.find(w => w.id === id);
+      if (closing) rememberWindowBounds(closing);
+      return fillSoleVisibleWindow(prev.filter(w => w.id !== id));
+    });
+  }, [rememberWindowBounds]);
 
   const focusWindow = useCallback((id: string) => {
     nextZIndex++;
@@ -308,7 +360,7 @@ export function useWindows() {
   const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>) => {
     setWindows(prev => {
       const updated = prev.map(w => w.id === id ? applyWindowBoundsUpdate(w, updates) : w);
-      return maybeSplitPartner(updated, id);
+      return maybeSplitPartner(prev, updated, id);
     });
   }, []);
 

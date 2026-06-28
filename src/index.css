@@ -794,10 +794,13 @@
 }
 
 [data-sidebar-panel] {
-  --sidebar-panel-opacity: 78%;
+  --sidebar-panel-opacity: 56%;
   position: relative;
   z-index: 40;
-  background: color-mix(in srgb, var(--card) var(--sidebar-panel-opacity), transparent) !important;
+  border-color: color-mix(in srgb, var(--border) 62%, transparent) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
+    color-mix(in srgb, var(--card) var(--sidebar-panel-opacity), transparent) !important;
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
@@ -806,20 +809,23 @@
 }
 
 :root[data-theme="dark"] [data-sidebar-panel] {
-  --sidebar-panel-opacity: 74%;
+  --sidebar-panel-opacity: 52%;
 }
 
 :root[data-ui-theme="tinyworld"] [data-sidebar-panel] {
-  --sidebar-panel-opacity: 68%;
+  --sidebar-panel-opacity: 48%;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
-  --sidebar-panel-opacity: 96%;
+  --sidebar-panel-opacity: 68%;
 }
 
 .sidebar-workspace-pill {
   min-height: 38px;
   overflow: hidden;
+  background: color-mix(in srgb, var(--popover) 58%, transparent) !important;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
 }
 
 .sidebar-workspace-pill [data-slot="button"] {
@@ -833,6 +839,8 @@
 
 .sidebar-search {
   overflow: hidden;
+  justify-content: flex-start !important;
+  text-align: left !important;
 }
 
 .sidebar-search span {
@@ -874,25 +882,32 @@
 }
 
 .sidebar-section-trigger,
-.sidebar-folder-trigger {
+.sidebar-folder-trigger,
+.sidebar-action-row,
+.sidebar-item-row,
+.sidebar-agent-row,
+.sidebar-agent-row > button,
+.sidebar-workspace-switch {
   display: flex;
   align-items: center;
   justify-content: flex-start !important;
   overflow: hidden;
-  text-align: left;
+  text-align: left !important;
+  width: 100%;
 }
 
 .sidebar-section-trigger > span:not(.sidebar-section-count),
 .sidebar-folder-trigger > span:not(.sidebar-section-count),
 .sidebar-action-row > span:not(.sidebar-action-count),
-.sidebar-item-row > span:not(.sidebar-action-count) {
-  text-align: left;
+.sidebar-item-row > span:not(.sidebar-action-count),
+.sidebar-agent-row span {
+  text-align: left !important;
 }
 
 .sidebar-section-label,
 .sidebar-action-label,
 .sidebar-item-label {
-  flex: 0 1 auto !important;
+  flex: 1 1 auto !important;
   margin-right: auto;
   text-align: left !important;
 }

@@ -233,17 +233,21 @@ export function Sidebar({
     return (
       <aside
         data-sidebar-panel
-        className="m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-hidden rounded-xl border border-border bg-card py-2 text-card-foreground shadow-xl"
+        className="m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-hidden rounded-xl border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
       >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
           <PanelLeft />
         </Button>
         <Separator />
+        <SidebarRailButton icon={<Layers3 />} title="Switch workspace" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
+        <SidebarRailButton icon={<Plus />} title="Create workspace" onClick={onCreateWorkspace} />
+        <SidebarRailButton icon={<Settings />} title="Workspace settings" onClick={onOpenSettings} />
+        <Separator />
         <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
         <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadSessions.length} onClick={() => revealSection('threads')} />
         <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
         <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
-        <SidebarRailButton icon={<Bot />} title="Messages" count={directMessageTargets.length} onClick={() => revealSection('messages')} />
+        <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
         <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
         {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
         {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
@@ -292,17 +296,17 @@ export function Sidebar({
     <aside
       ref={sidebarRef}
       data-sidebar-panel
-      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl"
+      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card/45 text-card-foreground shadow-xl"
       style={{ width: sidebarWidth }}
     >
       <div className="px-2 pt-2 pb-3">
-        <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-sm">
+        <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
             <PanelLeftClose />
           </Button>
           <button
             type="button"
-            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
             onClick={onOpenWorkspaceGrid || onCreateWorkspace}
             aria-label="Switch workspace"
           >
@@ -465,12 +469,12 @@ export function Sidebar({
               ))}
             </SidebarSection>
             <SidebarSection
-              id="messages"
-              label="Messages"
+              id="direct-messages"
+              label="Direct messages"
               icon={<Bot />}
               count={directMessageTargets.length}
-              open={openSections.has('messages')}
-              onOpenChange={open => toggleSection('messages', open)}
+              open={openSections.has('direct-messages')}
+              onOpenChange={open => toggleSection('direct-messages', open)}
             >
               {directMessageTargets.slice(0, 8).map(agent => (
                 <DirectAgentRow
@@ -785,10 +789,10 @@ function DirectAgentRow({
   const profileEnabled = Boolean(agent.agentId || handle);
 
   return (
-    <div className="sidebar-agent-row group flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground">
+    <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-w-0 flex-1 items-center justify-start gap-2 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onMessage}
       >
         <span className="relative flex size-7 shrink-0 items-center justify-center">
@@ -863,10 +867,10 @@ function SidebarRailButton({
       className="sidebar-rail-button relative"
       onClick={onClick}
       aria-label={title}
-      title={typeof count === 'number' ? `${title} (${count})` : title}
+      title={typeof count === 'number' && count > 0 ? `${title} (${count})` : title}
     >
       {icon}
-      {typeof count === 'number' && (
+      {typeof count === 'number' && count > 0 && (
         <span className="sidebar-rail-count">{formatCount(count)}</span>
       )}
     </Button>
@@ -899,7 +903,7 @@ function ActionTile({
     >
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="sidebar-action-label min-w-0 truncate text-left">{label}</span>
-      {typeof count === 'number' && (
+      {typeof count === 'number' && count > 0 && (
         <span className="sidebar-action-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
           {formatCount(count)}
         </span>
