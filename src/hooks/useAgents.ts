@@ -11,6 +11,12 @@ export interface CreateAgentInput {
   model?: string;
 }
 
+type AgentChangePayload = {
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE';
+  new?: WorkspaceAgent;
+  old?: WorkspaceAgent;
+};
+
 export function useAgents(workspaceId: string | null, userId?: string) {
   const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +51,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workspace_agents', filter: `workspace_id=eq.${workspaceId}` },
-        (payload) => {
+        (payload: AgentChangePayload) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new as WorkspaceAgent;
             setAgents(prev => prev.some(a => a.id === row.id) ? prev : [...prev, row]);
