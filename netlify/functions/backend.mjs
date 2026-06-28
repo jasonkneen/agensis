@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getDatabase } from '@netlify/database';
+import { getUser } from '@netlify/identity';
 
 const ALLOWED_TABLES = new Set([
   'app_users',
@@ -57,6 +58,15 @@ function verifyPassword(password, passwordHash) {
   const [salt, storedHash] = passwordHash.split(':');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+}
+
+function getAuthSecret() {
+  return process.env.AUTH_SECRET || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL || 'netlify-preview-auth-secret';
+}
+
+function issueToken(userId) {
+  const sig = crypto.createHmac('sha256', getAuthSecret()).update(String(userId)).digest('base64url');
+  return `${userId}.${sig}`;
 }
 
 function quoteIdent(value) {
@@ -155,7 +165,8 @@ async function handleAuth(pathname, req) {
       'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
       [email, createPasswordHash(password)],
     );
-    return json({ data: { user: rows[0] }, error: null });
+    const user = rows[0];
+    return json({ data: { user, token: issueToken(user.id) }, error: null });
   }
 
   const rows = await query('select id, email, password_hash, created_at from app_users where email = $1 limit 1', [email]);
@@ -163,7 +174,22 @@ async function handleAuth(pathname, req) {
   if (!user || !verifyPassword(password, user.password_hash)) {
     return jsonError(401, new Error('Invalid email or password'));
   }
-  return json({ data: { user: { id: user.id, email: user.email, created_at: user.created_at } }, error: null });
+  const sessionUser = { id: user.id, email: user.email, created_at: user.created_at };
+  return json({ data: { user: sessionUser, token: issueToken(sessionUser.id) }, error: null });
+}
+
+async function handleOAuthAuth() {
+  const identityUser = await getUser();
+  const email = String(identityUser?.email || '').trim().toLowerCase();
+  if (!email) return jsonError(401, new Error('Social login was not completed'));
+
+  const existing = await query('select id, email, created_at from app_users where email = $1 limit 1', [email]);
+  const user = existing[0] || (await query(
+    'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
+    [email, `oauth:netlify:${identityUser.id}`],
+  ))[0];
+
+  return json({ data: { user, token: issueToken(user.id) }, error: null });
 }
 
 async function handleDb(pathname, req) {
@@ -312,6 +338,9 @@ async function route(req) {
   }
   if (req.method === 'POST' && (pathname === '/backend/auth/signup' || pathname === '/backend/auth/signin')) {
     return handleAuth(pathname, req);
+  }
+  if (req.method === 'POST' && pathname === '/backend/auth/oauth') {
+    return handleOAuthAuth();
   }
   if (req.method === 'POST' && pathname === '/backend/rpc/lookup_user_by_email') {
     const body = await readBody(req);

@@ -460,6 +460,24 @@ export const backendClient: any = {
         error: null,
       };
     },
+    async signInWithOAuthSession() {
+      const result = await postJson<{ user: SessionLike['user']; token: string }>('/backend/auth/oauth', {});
+      if (result.error || !result.data?.user) {
+        return {
+          data: { user: null, session: null },
+          error: result.error,
+        };
+      }
+      const session: SessionLike = {
+        access_token: result.data.token,
+        user: result.data.user,
+      };
+      setStoredSession(session, 'SIGNED_IN');
+      return {
+        data: { user: session.user, session },
+        error: null,
+      };
+    },
     async signOut() {
       setStoredSession(null, 'SIGNED_OUT');
       return { error: null };

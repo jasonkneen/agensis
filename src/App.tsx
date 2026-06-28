@@ -54,7 +54,7 @@ const SIDEBAR_KEY = 'hatch_sidebar_collapsed';
 const CANVAS_BACKGROUNDS = [bg1, bg2, bg3, bg4, bg5];
 
 export default function App() {
-  const { user, loading: authLoading, signIn, signUp, signOut } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1');
@@ -486,7 +486,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthPage onSignIn={signIn} onSignUp={signUp} />;
+    return <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />;
   }
 
   return (
