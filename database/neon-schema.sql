@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   git_root text DEFAULT '',
   git_remote text DEFAULT '',
   background_opacity numeric DEFAULT 0.42,
+  background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()

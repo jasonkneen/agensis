@@ -1,20 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Check,
   Eye,
   EyeOff,
   FolderOpen,
+  Image as ImageIcon,
   Info,
   KeyRound,
   Palette,
   Settings as SettingsIcon,
   Sparkles,
+  Upload,
   Wrench,
 } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
 import { AI_MODELS, type Workspace } from '../../types';
 import { getSettings, setSetting } from '../../lib/settings';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -76,7 +79,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
-      <DialogContent className="grid max-h-[calc(100svh-2rem)] overflow-hidden p-0 sm:max-w-3xl">
+      <DialogContent className="settings-dialog grid max-h-[calc(100svh-1.5rem)] overflow-hidden p-0 sm:max-w-5xl">
         <DialogHeader className="border-b border-border p-4 pr-12">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>{activeTab?.label}</DialogDescription>
@@ -96,7 +99,7 @@ export function SettingsDialog({
               </Button>
             ))}
           </nav>
-          <ScrollArea className="h-[28rem] min-w-0">
+          <ScrollArea className="h-[34rem] min-w-0">
             <div className="p-4">
               {tab === 'general' && (
                 <GeneralPanel
@@ -227,6 +230,8 @@ function AppearancePanel({
   onThemeChange: (mode: ThemeMode) => void;
 }) {
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? 0.42) * 100));
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const backgroundImage = workspace?.background_image || '';
   const modes: Array<{ id: ThemeMode; label: string }> = [
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
@@ -240,6 +245,24 @@ function AppearancePanel({
   useEffect(() => {
     setBackgroundOpacity(Math.round((workspace?.background_opacity ?? 0.42) * 100));
   }, [workspace?.id, workspace?.background_opacity]);
+
+  const updateBackgroundImage = (nextImage: string) => {
+    if (!workspace) return;
+    onUpdateWorkspace(workspace.id, { background_image: nextImage });
+  };
+
+  const handleUploadBackground = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || !workspace) return;
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') {
+        onUpdateWorkspace(workspace.id, { background_image: reader.result });
+      }
+    });
+    reader.readAsDataURL(file);
+  };
 
   return (
     <FieldGroup>
@@ -261,6 +284,57 @@ function AppearancePanel({
           ))}
         </ToggleGroup>
         <FieldDescription>System follows your OS setting. TinyWorld and Neo provide separate light and dark control palettes.</FieldDescription>
+      </Field>
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Workspace background</FieldLabel>
+          <Button type="button" variant="outline" size="sm" onClick={() => updateBackgroundImage('')} disabled={!workspace || !backgroundImage}>
+            Auto
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {WORKSPACE_BACKGROUNDS.map(background => {
+            const selected = backgroundImage === background.src;
+            return (
+              <button
+                key={background.id}
+                type="button"
+                className={`group relative overflow-hidden rounded-md border p-1 text-left transition-colors ${
+                  selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
+                }`}
+                onClick={() => updateBackgroundImage(background.src)}
+                disabled={!workspace}
+              >
+                <img src={background.src} alt="" className="h-20 w-full rounded object-cover" />
+                <span className="mt-1 flex items-center justify-between gap-2 px-1 text-xs font-medium">
+                  <span className="truncate">{background.label}</span>
+                  {selected && <Check className="size-3.5 text-primary" />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {backgroundImage && !WORKSPACE_BACKGROUNDS.some(background => background.src === backgroundImage) && (
+          <div className="flex items-center gap-2 rounded-md border bg-muted/40 p-2 text-sm">
+            <ImageIcon className="size-4 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate">Custom upload selected</span>
+            <Check className="size-4 text-primary" />
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="secondary" size="sm" onClick={() => uploadInputRef.current?.click()} disabled={!workspace}>
+            <Upload data-icon="inline-start" />
+            Upload
+          </Button>
+          <input
+            ref={uploadInputRef}
+            className="hidden"
+            type="file"
+            accept="image/*"
+            onChange={handleUploadBackground}
+          />
+        </div>
+        <FieldDescription>Pick a bundled workspace image or upload a local image for this workspace.</FieldDescription>
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">

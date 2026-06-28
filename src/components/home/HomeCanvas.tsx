@@ -6,11 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
 import { cn } from '@/lib/utils';
-import bg1 from '../../../images/download-21.jpg';
-import bg2 from '../../../images/download-22.jpg';
-import bg3 from '../../../images/download-24.jpg';
-import bg4 from '../../../images/download-25.jpg';
-import bg5 from '../../../images/download-26.jpg';
+import { WORKSPACE_BACKGROUND_IMAGES } from '@/lib/backgrounds';
 
 interface HomeCanvasProps {
   documents: Document[];
@@ -20,9 +16,8 @@ interface HomeCanvasProps {
   onOpenNewChat: () => void;
   workspaceName: string;
   backgroundOpacity?: number;
+  backgroundImage?: string | null;
 }
-
-const BACKGROUND_IMAGES = [bg1, bg2, bg3, bg4, bg5];
 
 const suggestions = [
   'Summarize my documents',
@@ -37,6 +32,7 @@ export function HomeCanvas({
   onSendMessage,
   workspaceName,
   backgroundOpacity = 0.42,
+  backgroundImage,
 }: HomeCanvasProps) {
   const [input, setInput] = useState('');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
@@ -44,13 +40,14 @@ export function HomeCanvas({
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const backgroundImage = useMemo(() => {
+  const fallbackBackgroundImage = useMemo(() => {
     let hash = 0;
     for (let index = 0; index < workspaceName.length; index++) {
       hash = ((hash << 5) - hash + workspaceName.charCodeAt(index)) | 0;
     }
-    return BACKGROUND_IMAGES[Math.abs(hash) % BACKGROUND_IMAGES.length];
+    return WORKSPACE_BACKGROUND_IMAGES[Math.abs(hash) % WORKSPACE_BACKGROUND_IMAGES.length];
   }, [workspaceName]);
+  const visibleBackgroundImage = backgroundImage || fallbackBackgroundImage;
 
   const filteredDocs = documents.filter(d => d.title.toLowerCase().includes(docPickerQuery.toLowerCase()));
   const canSend = input.trim().length > 0;
@@ -122,7 +119,7 @@ export function HomeCanvas({
   return (
     <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-6">
       <img
-        src={backgroundImage}
+        src={visibleBackgroundImage}
         alt=""
         className="pointer-events-none absolute inset-0 size-full object-cover"
         style={{ opacity: backgroundOpacity }}
@@ -130,7 +127,7 @@ export function HomeCanvas({
       <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
 
       <div className="pointer-events-auto relative z-10 flex w-full max-w-3xl flex-col items-center gap-5">
-        <h1 className="text-center text-3xl font-semibold leading-tight text-foreground">What's on your mind?</h1>
+        <h1 className="text-center text-3xl font-semibold leading-tight text-white [text-shadow:0_2px_16px_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.65)]">What's on your mind?</h1>
 
         <div className="relative w-full">
           {showDocPicker && filteredDocs.length > 0 && (

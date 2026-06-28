@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Archive,
   Bot,
   ChevronDown,
   CornerDownRight,
@@ -18,7 +17,6 @@ import {
   Search,
   Send,
   Sparkles,
-  Star,
   Trash2,
   UserPlus,
   Users,
@@ -76,7 +74,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -151,6 +148,8 @@ type ProjectFileEntry = {
 };
 
 type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'is_favorite' | 'archived_at' | 'participants'>;
+
+const CHANNEL_META_COLUMNS = '*';
 
 type DisplayParticipant = ChannelParticipant & {
   connected?: boolean;
@@ -400,7 +399,7 @@ export function ChatWindowContent({
         if (inferredSessionId) {
           const { data } = await backendClient
             .from<ChannelSessionMeta>('chat_sessions')
-            .select('id,title,is_favorite,archived_at,participants')
+            .select(CHANNEL_META_COLUMNS)
             .eq('id', inferredSessionId)
             .maybeSingle();
           if (!cancelled) {
@@ -417,7 +416,7 @@ export function ChatWindowContent({
 
         const { data } = await backendClient
           .from<ChannelSessionMeta[]>('chat_sessions')
-          .select('id,title,is_favorite,archived_at,participants')
+          .select(CHANNEL_META_COLUMNS)
           .eq('workspace_id', workspaceId)
           .eq('title', channelTitle)
           .order('updated_at', { ascending: false })
@@ -496,9 +495,6 @@ export function ChatWindowContent({
     return Array.from(map.values()).slice(0, 6);
   }, [agentConnections, agents, persistedParticipants, presenceUsers, visibleMessages]);
 
-  const channelIsFavorite = Boolean(channelMeta?.is_favorite);
-  const channelIsArchived = Boolean(channelMeta?.archived_at);
-
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
     if (channelMeta?.id) return channelMeta;
     if (inferredSessionId) {
@@ -513,7 +509,7 @@ export function ChatWindowContent({
     if (!workspaceId || !channelTitle) return null;
     const { data } = await backendClient
       .from<ChannelSessionMeta[]>('chat_sessions')
-      .select('id,title,is_favorite,archived_at,participants')
+      .select(CHANNEL_META_COLUMNS)
       .eq('workspace_id', workspaceId)
       .eq('title', channelTitle)
       .order('updated_at', { ascending: false })
@@ -533,23 +529,15 @@ export function ChatWindowContent({
       .from<ChannelSessionMeta>('chat_sessions')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', session.id)
-      .select('id,title,is_favorite,archived_at,participants')
+      .select(CHANNEL_META_COLUMNS)
       .single();
     if (error || !data) {
       setChannelActionStatus(error?.message || 'Could not save channel changes.');
       return null;
     }
-    const next = normalizeChannelSessionMeta(data);
+    const next = normalizeChannelSessionMeta({ ...session, ...updates, ...data });
     setChannelMeta(next);
     return next;
-  };
-
-  const handleToggleFavorite = () => {
-    void persistChannelUpdates({ is_favorite: !channelIsFavorite });
-  };
-
-  const handleToggleArchive = () => {
-    void persistChannelUpdates({ archived_at: channelIsArchived ? null : new Date().toISOString() });
   };
 
   const handleOpenParticipantsDialog = () => {
@@ -709,20 +697,10 @@ export function ChatWindowContent({
                 <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
                   <Hash data-icon="inline-start" />
                   <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
-                  {channelIsFavorite && <Star className="size-3 fill-current text-amber-500" />}
                   <ChevronDown className="size-3" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-72">
-                <DropdownMenuItem
-                  onSelect={event => {
-                    event.preventDefault();
-                    handleToggleFavorite();
-                  }}
-                >
-                  <Star data-icon="inline-start" fill={channelIsFavorite ? 'currentColor' : 'none'} />
-                  {channelIsFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
                     handleOpenParticipantsDialog();
@@ -730,16 +708,6 @@ export function ChatWindowContent({
                 >
                   <UserPlus data-icon="inline-start" />
                   Add people or agents
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={event => {
-                    event.preventDefault();
-                    handleToggleArchive();
-                  }}
-                >
-                  <Archive data-icon="inline-start" />
-                  {channelIsArchived ? 'Unarchive channel' : 'Archive channel'}
                 </DropdownMenuItem>
                 {channelActionStatus && (
                   <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
@@ -1507,10 +1475,41 @@ function buildParticipantCandidates(
     });
   });
 
-  return Array.from(map.values()).sort((a, b) => {
+  return dedupeParticipantCandidates(Array.from(map.values())).sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'user' ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+}
+
+function dedupeParticipantCandidates(candidates: ParticipantCandidate[]): ParticipantCandidate[] {
+  const byKey = new Map<string, ParticipantCandidate>();
+  candidates.forEach(candidate => {
+    const key = participantCandidateKey(candidate);
+    const previous = byKey.get(key);
+    if (!previous || participantCandidateRank(candidate) > participantCandidateRank(previous)) {
+      byKey.set(key, { ...previous, ...candidate });
+    }
+  });
+  return Array.from(byKey.values());
+}
+
+function participantCandidateKey(candidate: ParticipantCandidate): string {
+  if (candidate.kind === 'user') {
+    return candidate.user_id ? `user:${candidate.user_id}` : candidate.id;
+  }
+  const handle = stringValue(candidate.handle).toLowerCase();
+  if (handle) return `agent:${handle}`;
+  const name = stringValue(candidate.name).toLowerCase();
+  return name ? `agent-name:${name}` : candidate.id;
+}
+
+function participantCandidateRank(candidate: ParticipantCandidate): number {
+  let rank = 0;
+  if (candidate.connected) rank += 8;
+  if (candidate.agent_id || candidate.user_id) rank += 4;
+  if (candidate.handle) rank += 2;
+  if (candidate.subtitle) rank += 1;
+  return rank;
 }
 
 function toPersistedParticipant(participant: ParticipantCandidate): ChannelParticipant {

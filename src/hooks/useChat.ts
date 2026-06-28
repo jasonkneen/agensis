@@ -94,7 +94,7 @@ export function useChat(workspaceId: string | null) {
     if (!navigator.onLine) return null;
     const { data } = await backendClient
       .from('chat_sessions')
-      .insert({ workspace_id: workspaceId, title: 'New Channel', model, is_favorite: false, participants: [] })
+      .insert({ workspace_id: workspaceId, title: 'New Channel', model })
       .select()
       .single();
     if (data) {

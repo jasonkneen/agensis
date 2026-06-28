@@ -11,6 +11,7 @@ export interface CanvasLayer {
   git_root?: string;
   git_remote?: string;
   background_opacity?: number | null;
+  background_image?: string | null;
   version?: number;
 }
 
@@ -25,7 +26,7 @@ function activeStorageKey(workspaceId: string) {
 }
 
 function defaultLayers(): CanvasLayer[] {
-  return [{ id: BASE_LAYER_ID, name: 'Workspace 1', minimized: false, background_opacity: 0.42, version: 1 }];
+  return [{ id: BASE_LAYER_ID, name: 'Workspace 1', minimized: false, background_opacity: 0.42, background_image: '', version: 1 }];
 }
 
 function loadLayers(workspaceId: string | null): CanvasLayer[] {
@@ -36,11 +37,12 @@ function loadLayers(workspaceId: string | null): CanvasLayer[] {
     const parsed = JSON.parse(raw) as CanvasLayer[];
     if (!Array.isArray(parsed) || parsed.length === 0) return defaultLayers();
     if (!parsed.some(layer => layer.id === BASE_LAYER_ID)) {
-      return [{ id: BASE_LAYER_ID, name: 'Workspace 1', minimized: true, background_opacity: 0.42, version: 1 }, ...parsed];
+      return [{ id: BASE_LAYER_ID, name: 'Workspace 1', minimized: true, background_opacity: 0.42, background_image: '', version: 1 }, ...parsed];
     }
     return parsed.map(layer => ({
       ...layer,
       background_opacity: layer.background_opacity ?? 0.42,
+      background_image: layer.background_image ?? '',
       version: layer.version ?? 1,
     }));
   } catch {
@@ -104,7 +106,7 @@ export function useCanvasLayers(workspaceId: string | null) {
       const nextNumber = prev.length + 1;
       return [
         ...prev.map(layer => layer.id === activeLayerId ? { ...layer, minimized: true } : layer),
-        { id: nextId, name: name?.trim() || `Workspace ${nextNumber}`, minimized: false, background_opacity: 0.42, version: 1 },
+        { id: nextId, name: name?.trim() || `Workspace ${nextNumber}`, minimized: false, background_opacity: 0.42, background_image: '', version: 1 },
       ];
     });
     setActiveLayerId(nextId);

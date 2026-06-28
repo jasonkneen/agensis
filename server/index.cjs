@@ -458,6 +458,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_remote text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.42;
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_image text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';

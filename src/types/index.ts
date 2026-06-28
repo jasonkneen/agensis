@@ -10,6 +10,7 @@ export interface Workspace {
   git_root?: string;
   git_remote?: string;
   background_opacity?: number | null;
+  background_image?: string | null;
   version?: number;
   created_at: string;
   updated_at: string;

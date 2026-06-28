@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -35,11 +35,16 @@ import {
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card, CardContent } from './components/ui/card';
-import { Checkbox } from './components/ui/checkbox';
-import { Label } from './components/ui/label';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu';
 import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { cn } from './lib/utils';
 import { getSetting } from './lib/settings';
 import { useAuth } from './hooks/useAuth';
@@ -64,22 +69,18 @@ import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState } from './lib/canvasApps';
+import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
 import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
-import bg1 from '../images/download-21.jpg';
-import bg2 from '../images/download-22.jpg';
-import bg3 from '../images/download-24.jpg';
-import bg4 from '../images/download-25.jpg';
-import bg5 from '../images/download-26.jpg';
 
 const TOUR_KEY = 'hatch_tour_complete';
 const SIDEBAR_KEY = 'hatch_sidebar_collapsed';
 const PRESENCE_VISIBILITY_KEY = 'hatch_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'hatch_presence_favorites';
-const CANVAS_BACKGROUNDS = [bg1, bg2, bg3, bg4, bg5];
+const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
 
 type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
 type WorkspaceContextCounts = {
@@ -176,47 +177,93 @@ function formatContextTitle(counts: WorkspaceContextCounts) {
   ].join(', ');
 }
 
-function ContextCountChips({ counts, enabled }: { counts: WorkspaceContextCounts; enabled: boolean }) {
-  if (!enabled) {
-    return (
-      <Badge variant="secondary" className="ml-auto text-xs">
-        Context off
-      </Badge>
-    );
-  }
+const CONTEXT_COUNT_ITEMS: Array<{
+  key: keyof WorkspaceContextCounts;
+  label: string;
+  icon: React.ReactNode;
+}> = [
+  { key: 'docs', label: 'Documents', icon: <FileText /> },
+  { key: 'facts', label: 'Memory', icon: <Brain /> },
+  { key: 'tasks', label: 'Tasks', icon: <CheckCircle2 /> },
+  { key: 'agents', label: 'AI agents', icon: <Bot /> },
+  { key: 'skills', label: 'Skills', icon: <Sparkles /> },
+  { key: 'commands', label: 'Commands', icon: <Command /> },
+  { key: 'tools', label: 'Tools', icon: <Wrench /> },
+  { key: 'webhooks', label: 'Webhooks', icon: <Activity /> },
+];
 
-  const items = [
-    { key: 'docs', label: 'Documents', count: counts.docs, icon: <FileText /> },
-    { key: 'facts', label: 'Memory facts', count: counts.facts, icon: <Brain /> },
-    { key: 'tasks', label: 'Open tasks', count: counts.tasks, icon: <CheckCircle2 /> },
-    { key: 'agents', label: 'Agents', count: counts.agents, icon: <Bot /> },
-    { key: 'skills', label: 'Skills', count: counts.skills, icon: <Sparkles /> },
-    { key: 'commands', label: 'Commands', count: counts.commands, icon: <Command /> },
-    { key: 'tools', label: 'Tools', count: counts.tools, icon: <Wrench /> },
-  ];
+function KnowledgeContextControl({
+  counts,
+  enabled,
+  title,
+  onToggle,
+}: {
+  counts: WorkspaceContextCounts;
+  enabled: boolean;
+  title: string;
+  onToggle: () => void;
+}) {
+  const [enabledKeys, setEnabledKeys] = useState<Set<keyof WorkspaceContextCounts>>(
+    () => new Set(CONTEXT_COUNT_ITEMS.map(item => item.key)),
+  );
+  const activeTotal = enabled
+    ? CONTEXT_COUNT_ITEMS
+        .filter(item => enabledKeys.has(item.key))
+        .reduce((total, item) => total + counts[item.key], 0)
+    : 0;
+
+  const setItemEnabled = (key: keyof WorkspaceContextCounts, checked: boolean) => {
+    setEnabledKeys(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   return (
-    <TooltipProvider>
-      <div className="context-count-chips flex min-w-0 items-center gap-1 overflow-x-auto">
-        {items.map(item => (
-          <Tooltip key={item.key}>
-            <TooltipTrigger asChild>
-              <Badge
-                variant="secondary"
-                className="context-count-chip h-6 gap-1 px-1.5 text-xs"
-                aria-label={`${item.count} ${item.label}`}
-              >
-                {item.icon}
-                <span>{item.count}</span>
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {item.label}
-            </TooltipContent>
-          </Tooltip>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant={enabled ? 'secondary' : 'outline'}
+          size="sm"
+          className="knowledge-context-trigger h-7 shrink-0 gap-1.5 rounded-full px-2.5 text-xs"
+          title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
+        >
+          <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
+          <span>Knowledge</span>
+          <Badge variant="outline" className="h-5 rounded-full px-1.5 text-[10px]">
+            {activeTotal}
+          </Badge>
+          <ChevronDown className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>Knowledge</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem
+          checked={enabled}
+          onCheckedChange={checked => {
+            if (Boolean(checked) !== enabled) onToggle();
+          }}
+        >
+          Use workspace knowledge
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        {CONTEXT_COUNT_ITEMS.map(item => (
+          <DropdownMenuCheckboxItem
+            key={item.key}
+            checked={enabledKeys.has(item.key)}
+            disabled={!enabled}
+            onCheckedChange={checked => setItemEnabled(item.key, Boolean(checked))}
+          >
+            {item.icon}
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            <span className="ml-auto text-xs text-muted-foreground">{counts[item.key]}</span>
+          </DropdownMenuCheckboxItem>
         ))}
-      </div>
-    </TooltipProvider>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -523,6 +570,7 @@ export default function App() {
       git_root: settingsLayer.git_root ?? '',
       git_remote: settingsLayer.git_remote ?? '',
       background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? 0.42,
+      background_image: settingsLayer.background_image ?? activeWorkspace.background_image ?? '',
     };
   }, [activeWorkspace, settingsLayer]);
   const openLayerSettings = useCallback((layerId = activeLayerId) => {
@@ -539,6 +587,7 @@ export default function App() {
     if (updates.git_root !== undefined) layerUpdates.git_root = updates.git_root;
     if (updates.git_remote !== undefined) layerUpdates.git_remote = updates.git_remote;
     if (updates.background_opacity !== undefined) layerUpdates.background_opacity = updates.background_opacity;
+    if (updates.background_image !== undefined) layerUpdates.background_image = updates.background_image;
     updateLayer(id, layerUpdates);
   }, [updateLayer]);
 
@@ -954,13 +1003,6 @@ export default function App() {
               onFocusUser={setFocusedPresenceUserId}
               onOpenRemoteWindow={handleOpenPresenceWindow}
             />
-            <PresenceFocusChips
-              users={workspacePresenceUsers}
-              favoriteIds={presenceFavorites}
-              focusedUserId={focusedPresenceUserId}
-              onFocusUser={setFocusedPresenceUserId}
-              onToggleFavorite={togglePresenceFavorite}
-            />
 
             <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
 
@@ -995,6 +1037,7 @@ export default function App() {
                 selectedAgent={selectedAgent}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
+                backgroundImage={viewedLayer.background_image || activeWorkspace?.background_image || ''}
                 contextCounts={contextCounts}
                 contextCountsTitle={contextCountsTitle}
                 onSelectAgent={setSelectedAgent}
@@ -1238,6 +1281,7 @@ function CanvasLayerScene({
   selectedAgent,
   getPresenceMode,
   backgroundOpacity,
+  backgroundImage,
   contextCounts,
   contextCountsTitle,
   onSelectAgent,
@@ -1303,6 +1347,7 @@ function CanvasLayerScene({
   selectedAgent: WorkspaceAgent | null;
   getPresenceMode: (id?: string | null) => PresenceVisibilityMode;
   backgroundOpacity: number;
+  backgroundImage?: string | null;
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
@@ -1357,6 +1402,7 @@ function CanvasLayerScene({
         onOpenNewChat={onNewChat}
         workspaceName={workspaceName}
         backgroundOpacity={backgroundOpacity}
+        backgroundImage={backgroundImage}
       />
 
       {windows.filter(win => !win.minimized).map(win => {
@@ -1401,19 +1447,12 @@ function CanvasLayerScene({
                   workspaceId={workspaceId}
                   uploadedFiles={uploadedFiles}
                   contextControls={(
-                    <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
-                      <Label className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-secondary px-2 text-xs font-medium text-secondary-foreground">
-                        <Checkbox
-                          checked={useWorkspaceCtx}
-                          onCheckedChange={() => onToggleWorkspaceCtx()}
-                          className="size-4 shrink-0"
-                        />
-                        <span className="truncate leading-none">Knowledge</span>
-                      </Label>
-                      <div className="min-w-0" title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}>
-                        <ContextCountChips counts={contextCounts} enabled={useWorkspaceCtx} />
-                      </div>
-                    </div>
+                    <KnowledgeContextControl
+                      counts={contextCounts}
+                      enabled={useWorkspaceCtx}
+                      title={contextCountsTitle}
+                      onToggle={onToggleWorkspaceCtx}
+                    />
                   )}
                   onSendMessage={(content, model, mf, docs) => {
                     if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
@@ -1718,15 +1757,19 @@ function WorkspacePresenceAvatars({
 
   const visibleUsers = users.slice(0, 5);
   const overflow = users.length - visibleUsers.length;
+  const favorites = users.filter(user => favoriteIds.includes(user.id));
+  const focused = users.find(user => user.id === focusedUserId);
+  const chipUsers = focused && !favorites.find(user => user.id === focused.id) ? [focused, ...favorites] : favorites;
+  const showFocusControls = chipUsers.length > 0 || Boolean(focusedUserId);
   const modeOptions: Array<{ value: PresenceVisibilityMode; label: string }> = [
     { value: 'visible', label: 'Visible' },
     { value: 'dimmed', label: 'Dim' },
     { value: 'hidden', label: 'Muted' },
   ];
   return (
-    <div data-presence-panel className="absolute top-3.5 right-3.5 z-[11000] flex items-start gap-2">
+    <div data-presence-panel className="absolute top-3.5 left-1/2 z-[11000] flex -translate-x-1/2 flex-col items-center gap-2">
       {expanded && (
-        <div className="w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
+        <div className="order-2 w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>
@@ -1845,96 +1888,78 @@ function WorkspacePresenceAvatars({
           </div>
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => setExpanded(prev => !prev)}
-        className="flex items-center rounded-full border bg-popover/90 p-1.5 text-left shadow-md backdrop-blur transition-colors hover:bg-popover"
-        aria-expanded={expanded}
-        aria-label={`${users.length} shared participants`}
-        title={`${users.length} shared participants`}
-      >
-        <AvatarGroup>
-          {visibleUsers.map((person, index) => {
-            const mode = getMode(person.id);
-            return (
-              <Avatar
-                key={person.id}
-                size="sm"
-                title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
-                className={cn(
-                  index > 0 && '-ml-2',
-                  mode === 'dimmed' && 'opacity-45 saturate-50',
-                  mode === 'hidden' && 'opacity-25 saturate-0',
-                )}
-              >
-            <AvatarFallback className="text-[10px] font-bold">
-                  {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-                {(person.isCurrentUser || person.kind === 'agent') && (
-                  <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
-                )}
-              </Avatar>
-            );
-          })}
-          {overflow > 0 && (
-            <AvatarGroupCount title={`${overflow} more users`} className="-ml-2 size-6 text-[10px]">
-              +{overflow}
-            </AvatarGroupCount>
-          )}
-        </AvatarGroup>
-      </button>
-    </div>
-  );
-}
-
-function PresenceFocusChips({
-  users,
-  favoriteIds,
-  focusedUserId,
-  onFocusUser,
-  onToggleFavorite,
-}: {
-  users: WorkspacePresenceUser[];
-  favoriteIds: string[];
-  focusedUserId: string | null;
-  onFocusUser: (id: string | null) => void;
-  onToggleFavorite: (id: string) => void;
-}) {
-  const favorites = users.filter(user => favoriteIds.includes(user.id));
-  const focused = users.find(user => user.id === focusedUserId);
-  const chipUsers = focused && !favorites.find(user => user.id === focused.id) ? [focused, ...favorites] : favorites;
-  if (chipUsers.length === 0) return null;
-
-  return (
-    <div className="absolute top-3.5 left-1/2 z-[84] flex -translate-x-1/2 items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
-      <Button
-        type="button"
-        variant={focusedUserId ? 'outline' : 'default'}
-        size="sm"
-        className="h-7 rounded-full px-3 text-xs"
-        onClick={() => onFocusUser(null)}
-      >
-        All
-      </Button>
-      {chipUsers.map(person => (
-        <Button
-          key={person.id}
+      <div className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
+        <button
           type="button"
-          variant={focusedUserId === person.id ? 'default' : 'outline'}
-          size="sm"
-          className="h-7 max-w-40 rounded-full px-2 text-xs"
-          onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
-          onDoubleClick={() => onToggleFavorite(person.id)}
-          title="Double-click to remove from favorites"
+          onClick={() => setExpanded(prev => !prev)}
+          className="presence-avatar-trigger flex items-center rounded-full p-0.5 text-left transition-colors hover:bg-muted/60"
+          aria-expanded={expanded}
+          aria-label={`${users.length} shared participants`}
+          title={`${users.length} shared participants`}
         >
-          <span
-            aria-hidden
-            className="size-2 rounded-full"
-            style={{ backgroundColor: person.color }}
-          />
-          <span className="truncate">{person.name}</span>
-        </Button>
-      ))}
+          <AvatarGroup className="presence-avatar-group">
+            {visibleUsers.map(person => {
+              const mode = getMode(person.id);
+              return (
+                <Avatar
+                  key={person.id}
+                  size="sm"
+                  title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
+                  className={cn(
+                    mode === 'dimmed' && 'opacity-45 saturate-50',
+                    mode === 'hidden' && 'opacity-25 saturate-0',
+                  )}
+                >
+                  <AvatarFallback className="text-[10px] font-bold">
+                    {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                  {(person.isCurrentUser || person.kind === 'agent') && (
+                    <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
+                  )}
+                </Avatar>
+              );
+            })}
+            {overflow > 0 && (
+              <AvatarGroupCount title={`${overflow} more users`} className="presence-avatar-overflow size-6 text-[10px]">
+                +{overflow}
+              </AvatarGroupCount>
+            )}
+          </AvatarGroup>
+        </button>
+        {showFocusControls && (
+          <>
+            <div className="mx-1 h-6 w-px bg-border" aria-hidden />
+            <Button
+              type="button"
+              variant={focusedUserId ? 'outline' : 'default'}
+              size="sm"
+              className="h-8 rounded-full px-3 text-xs"
+              onClick={() => onFocusUser(null)}
+            >
+              All
+            </Button>
+            {chipUsers.map(person => (
+              <Button
+                key={person.id}
+                type="button"
+                variant={focusedUserId === person.id ? 'default' : 'outline'}
+                size="sm"
+                className="h-8 max-w-40 rounded-full px-2 text-xs"
+                onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
+                onDoubleClick={() => onToggleFavorite(person.id)}
+                title="Double-click to remove from favorites"
+              >
+                <span
+                  aria-hidden
+                  className="size-2 rounded-full"
+                  style={{ backgroundColor: person.color }}
+                />
+                <span className="truncate">{person.name}</span>
+              </Button>
+            ))}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -24,7 +24,7 @@ function applyTheme(mode: ThemeMode) {
   const bg = family === 'tinyworld'
     ? (scheme === 'dark' ? '#181714' : '#f4ede0')
     : family === 'neo'
-      ? (scheme === 'dark' ? '#3a1414' : '#fff6d6')
+      ? (scheme === 'dark' ? '#141414' : '#fff9df')
       : (scheme === 'dark' ? '#0c0c0c' : '#f8f8f8');
   document.documentElement.style.background = bg;
   const meta = document.querySelector('meta[name="theme-color"]');

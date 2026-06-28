@@ -208,98 +208,141 @@
   --ring: #6fa4ed;
 }
 
-:root[data-ui-theme="neo"][data-theme="light"] {
-  --neo-shadow-x: 4px;
-  --neo-shadow-y: 4px;
+/* ============================================================
+   Neo-brutalist theme — standardised system
+   A single ink token drives every hard border and offset shadow;
+   the offset scale is colour-agnostic, so light/dark swap the ink
+   automatically. Mirrors the --tw-* token structure of tinyworld.
+   ============================================================ */
+:root[data-ui-theme="neo"] {
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 12px;
+
+  /* Hard offset scale — colour resolves from --neo-shadow-ink (per scheme).
+     Shadow ink is decoupled from the border ink so dark mode keeps a crisp
+     bright border but a quieter, recessive shadow instead of white glare. */
+  --neo-shadow-xs: 2px 2px 0 var(--neo-shadow-ink);   /* chips, list items  */
+  --neo-shadow-sm: 3px 3px 0 var(--neo-shadow-ink);   /* controls, inputs   */
+  --neo-shadow-md: 5px 5px 0 var(--neo-shadow-ink);   /* cards, dialogs     */
+  --neo-shadow-lg: 7px 7px 0 var(--neo-shadow-ink);   /* floating, hero     */
+
+  /* Press distance — matches the resting offset of interactive controls
+     so a hovered/active control sits flush where its shadow was. */
+  --neo-shadow-x: 3px;
+  --neo-shadow-y: 3px;
+
+  /* Generic app shadow tokens resolve to the neo scale. */
+  --shadow-sm: var(--neo-shadow-sm);
+  --shadow-md: var(--neo-shadow-md);
+  --shadow-lg: var(--neo-shadow-lg);
+  --shadow-xl: var(--neo-shadow-lg);
+}
+
+:root[data-ui-theme="neo"] body {
+  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+}
+
+:root[data-ui-theme="neo"] h1,
+:root[data-ui-theme="neo"] h2,
+:root[data-ui-theme="neo"] h3 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+:root[data-ui-theme="neo"][data-theme="light"] {
+  --neo-ink: #0a0a0a;
+  --neo-shadow-ink: #0a0a0a;
+
   --canvas-base: #fff9df;
   --canvas-elevated: #ffffff;
   --canvas-raised: #fff1a6;
   --canvas-overlay: #ffffff;
-  --border: #090909;
-  --border-subtle: #090909;
-  --border-strong: #090909;
-  --text-primary: #090909;
+
+  --border: var(--neo-ink);
+  --border-subtle: color-mix(in srgb, var(--neo-ink) 14%, transparent);
+  --border-strong: var(--neo-ink);
+
+  --text-primary: #0a0a0a;
   --text-secondary: #2d2d2d;
   --text-muted: #595959;
+
   --accent: #ff4bc4;
   --accent-hover: #ec31b3;
   --accent-subtle: rgba(255, 75, 196, 0.14);
-  --accent-border: #090909;
+  --accent-border: var(--neo-ink);
+
   --success: #00c875;
   --warning: #f5d95f;
   --error: #ff3b30;
-  --shadow-sm: var(--neo-shadow-x) var(--neo-shadow-y) 0 #090909;
-  --shadow-md: 5px 5px 0 #090909;
-  --shadow-lg: 7px 7px 0 #090909;
+
   --background: #fff9df;
-  --foreground: #090909;
+  --foreground: #0a0a0a;
   --card: #ffffff;
-  --card-foreground: #090909;
+  --card-foreground: #0a0a0a;
   --popover: #ffffff;
-  --popover-foreground: #090909;
+  --popover-foreground: #0a0a0a;
   --primary: #ff4bc4;
-  --primary-foreground: #090909;
+  --primary-foreground: #0a0a0a;
   --secondary: #fff1a6;
-  --secondary-foreground: #090909;
+  --secondary-foreground: #0a0a0a;
   --muted: #fff5ca;
   --muted-foreground: #2d2d2d;
   --sh-accent: #00d1ff;
-  --sh-accent-foreground: #090909;
-  --sh-border: #090909;
-  --input: #090909;
-  --ring: #090909;
+  --sh-accent-foreground: #0a0a0a;
+  --sh-border: var(--neo-ink);
+  --input: var(--neo-ink);
+  --ring: var(--neo-ink);
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] {
-  --neo-shadow-x: 4px;
-  --neo-shadow-y: 4px;
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --canvas-base: #111111;
-  --canvas-elevated: #1f1f1f;
-  --canvas-raised: #242424;
+  --neo-ink: #f4efe4;
+  /* Recessive warm taupe — visible on #141414/#1e1e1e, but quieter than the
+     bright border so the offset reads as a shadow, not a white echo. */
+  --neo-shadow-ink: #6b6258;
+
+  --canvas-base: #141414;
+  --canvas-elevated: #1e1e1e;
+  --canvas-raised: #272727;
   --canvas-overlay: #1b1b1b;
-  --border: #050505;
-  --border-subtle: #050505;
-  --border-strong: #050505;
+
+  --border: var(--neo-ink);
+  --border-subtle: color-mix(in srgb, var(--neo-ink) 16%, transparent);
+  --border-strong: var(--neo-ink);
+
   --text-primary: #f7f1ec;
-  --text-secondary: #d2cbc4;
-  --text-muted: #9b938b;
-  --accent: #ff5f63;
-  --accent-hover: #ff7477;
-  --accent-subtle: rgba(255, 95, 99, 0.2);
-  --accent-border: #050505;
-  --success: #00e38a;
+  --text-secondary: #cfc7bd;
+  --text-muted: #968d82;
+
+  --accent: #ff5fbf;
+  --accent-hover: #ff7ccb;
+  --accent-subtle: rgba(255, 95, 191, 0.2);
+  --accent-border: var(--neo-ink);
+
+  --success: #00e08a;
   --warning: #ffd166;
   --error: #ff5f63;
-  --shadow-sm: var(--neo-shadow-x) var(--neo-shadow-y) 0 #050505;
-  --shadow-md: 5px 5px 0 #050505;
-  --shadow-lg: 7px 7px 0 #050505;
-  --background: #111111;
+
+  --background: #141414;
   --foreground: #f7f1ec;
-  --card: #1f1f1f;
+  --card: #1e1e1e;
   --card-foreground: #f7f1ec;
-  --popover: #1f1f1f;
+  --popover: #1e1e1e;
   --popover-foreground: #f7f1ec;
-  --primary: #ff5f63;
-  --primary-foreground: #050505;
-  --secondary: #2a2a2a;
+  --primary: #ff5fbf;
+  --primary-foreground: #0a0a0a;
+  --secondary: #272727;
   --secondary-foreground: #f7f1ec;
-  --muted: #272727;
-  --muted-foreground: #d2cbc4;
-  --sh-accent: #ff5f63;
-  --sh-accent-foreground: #090909;
-  --sh-border: #050505;
-  --input: #050505;
-  --ring: #ff5f63;
+  --muted: #222222;
+  --muted-foreground: #cfc7bd;
+  --sh-accent: #34d6f5;
+  --sh-accent-foreground: #0a0a0a;
+  --sh-border: var(--neo-ink);
+  --input: var(--neo-ink);
+  --ring: var(--neo-ink);
   --home-bg-image-opacity: 0.34;
-  --home-bg-overlay: linear-gradient(to bottom, rgba(17,17,17,0.08) 0%, rgba(17,17,17,0.3) 68%, var(--canvas-base) 100%);
+  --home-bg-overlay: linear-gradient(to bottom, rgba(20,20,20,0.08) 0%, rgba(20,20,20,0.3) 68%, var(--canvas-base) 100%);
 }
 
 :root[data-ui-theme="tinyworld"] body {
@@ -326,14 +369,14 @@
   --tw-control-fill: rgba(31, 39, 55, 0.7);
   --tw-control-hover: rgba(45, 57, 80, 0.84);
   --tw-control-inset: rgba(255, 255, 255, 0.1);
-  --tw-control-bevel: rgba(0, 0, 0, 0.32);
+  --tw-control-bevel: rgba(0, 0, 0, 0.42);
   --tw-control-shadow: 0 2px 5px -2px rgba(0, 0, 0, 0.58);
   --tw-control-ring: rgba(152, 185, 255, 0.44);
   --tw-accent-outline: #9ec4ff;
   --tw-accent-fill: rgba(45, 74, 124, 0.72);
   --tw-accent-hover: rgba(62, 96, 154, 0.86);
   --tw-gold-outline: #f0c468;
-  --tw-gold-fill: rgba(92, 62, 28, 0.78);
+  --tw-gold-fill: rgba(118, 79, 28, 0.82);
 }
 
 :root[data-ui-theme="tinyworld"] [data-slot="input-group"],
@@ -437,6 +480,20 @@
     var(--tw-control-shadow) !important;
 }
 
+:root[data-ui-theme="tinyworld"] .knowledge-context-trigger,
+:root[data-ui-theme="tinyworld"] .channel-header [data-slot="badge"],
+:root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
+  border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
+  color: var(--tw-gold-outline) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.36), transparent 45%),
+    var(--tw-gold-fill) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
+    var(--tw-control-shadow) !important;
+}
+
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-search {
   border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
@@ -484,25 +541,29 @@
     var(--tw-control-shadow);
 }
 
-:root[data-ui-theme="neo"] [data-slot="button"]:not([data-size^="icon"]):not([data-size="xs"]):not([data-size="sm"]),
+:root[data-ui-theme="neo"] [data-slot="button"]:not([data-size^="icon"]):not([data-size="xs"]):not([data-size="sm"]) {
+  border-width: 2px;
+  box-shadow: var(--neo-shadow-sm);
+}
+
 :root[data-ui-theme="neo"] [data-slot="card"],
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"] {
   border-width: 2px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--neo-shadow-md);
 }
 
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="outline"],
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="muted"] {
   border-width: 2px;
-  box-shadow: 2px 2px 0 var(--border);
+  box-shadow: var(--neo-shadow-xs);
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-size^="icon"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="xs"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="sm"] {
   border-width: 2px;
-  box-shadow: 3px 3px 0 var(--border);
+  box-shadow: var(--neo-shadow-sm);
   transform: none;
 }
 
@@ -528,6 +589,7 @@
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"] {
+  border-color: var(--border);
   background: var(--card);
 }
 
@@ -545,7 +607,7 @@
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"][data-size="sm"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"][data-size="sm"] {
-  box-shadow: 3px 3px 0 var(--border);
+  box-shadow: var(--neo-shadow-sm);
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group"],
@@ -559,7 +621,7 @@
 
 :root[data-ui-theme="neo"] [data-slot="toggle-group-item"] {
   border-width: 2px;
-  box-shadow: 3px 3px 0 var(--border);
+  box-shadow: var(--neo-shadow-sm);
   border-radius: 999px;
   background: var(--card);
 }
@@ -600,7 +662,7 @@
 :root[data-ui-theme="neo"] .doc-toolbar [data-slot="button"][data-variant="ghost"]:hover {
   border-color: var(--border);
   background: var(--secondary);
-  box-shadow: 2px 2px 0 var(--border);
+  box-shadow: var(--neo-shadow-xs);
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group-control"] {
@@ -619,9 +681,10 @@
 }
 
 :root[data-ui-theme="neo"] .sidebar-action-row {
+  border-width: 2px !important;
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 3px 3px 0 var(--border) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
   border-radius: 10px !important;
   margin-bottom: 2px;
 }
@@ -636,9 +699,10 @@
 }
 
 :root[data-ui-theme="neo"] .sidebar-search {
+  border-width: 2px !important;
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 3px 3px 0 var(--border) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
   border-radius: 10px !important;
 }
 
@@ -646,7 +710,7 @@
   border-width: 2px;
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 3px 3px 0 var(--border) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-workspace-pill [data-slot="button"] {
@@ -758,6 +822,12 @@
   background: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
+/* Neo uses bold ink for --border; soften the dense section guide-line so
+   it reads as a divider, not a hard rule. */
+:root[data-ui-theme="neo"] .sidebar-section-content::before {
+  background: var(--border-subtle);
+}
+
 .sidebar-action-row {
   gap: 0.45rem;
 }
@@ -856,7 +926,7 @@
 :root[data-ui-theme="neo"] .context-count-chip {
   border-color: var(--border) !important;
   background: var(--card) !important;
-  box-shadow: 2px 2px 0 var(--border);
+  box-shadow: var(--neo-shadow-xs);
 }
 
 :root[data-ui-theme="neo"] [data-floating-window] > div:first-child {
@@ -887,20 +957,21 @@
 :root[data-ui-theme="neo"] .settings-nav-row {
   border-color: transparent !important;
   background: transparent !important;
-  box-shadow: inset 0 -2px 0 var(--border) !important;
-  border-radius: 0 !important;
+  box-shadow: none !important;
+  border-radius: 999px !important;
   justify-content: flex-start;
 }
 
 :root[data-ui-theme="neo"] .settings-nav-row[data-variant="secondary"] {
+  border-width: 2px !important;
   border-color: var(--border) !important;
   background: var(--secondary) !important;
-  box-shadow: 3px 3px 0 var(--border) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
   border-radius: 999px !important;
 }
 
 :root[data-ui-theme="neo"] .home-suggestion-pill {
-  box-shadow: 3px 3px 0 var(--border) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
 }
 
 :root[data-ui-theme="neo"] [data-floating-window] {
@@ -951,6 +1022,24 @@
 :root[data-ui-theme="neo"] .canvas-toolbar,
 :root[data-ui-theme="tinyworld"] .canvas-toolbar {
   align-items: center;
+}
+
+.channel-header > div {
+  align-items: center;
+}
+
+.channel-header [data-slot="button"],
+.channel-header [data-slot="badge"],
+.presence-top-row [data-slot="button"],
+.theme-toggle [data-slot="toggle-group-item"] {
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.theme-toggle [data-slot="toggle-group-item"] {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 :root[data-ui-theme="neo"] .canvas-toolbar [data-slot="toggle-group-item"],
@@ -1661,4 +1750,69 @@ body {
   html {
     @apply font-sans;
   }
+}
+
+.presence-avatar-group {
+  gap: 0;
+  isolation: isolate;
+  transition: gap 150ms ease;
+}
+
+.presence-avatar-group [data-slot="avatar"],
+.presence-avatar-group [data-slot="avatar-group-count"] {
+  transition: margin-inline-start 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.presence-avatar-group [data-slot="avatar"] + [data-slot="avatar"],
+.presence-avatar-group [data-slot="avatar"] + [data-slot="avatar-group-count"] {
+  margin-inline-start: -0.35rem;
+}
+
+.presence-avatar-group [data-slot="avatar"]:nth-child(1) {
+  z-index: 5;
+}
+
+.presence-avatar-group [data-slot="avatar"]:nth-child(2) {
+  z-index: 4;
+}
+
+.presence-avatar-group [data-slot="avatar"]:nth-child(3) {
+  z-index: 3;
+}
+
+.presence-avatar-group [data-slot="avatar"]:nth-child(4) {
+  z-index: 2;
+}
+
+.presence-avatar-group [data-slot="avatar"]:nth-child(5) {
+  z-index: 1;
+}
+
+.presence-top-row:hover .presence-avatar-group [data-slot="avatar"] + [data-slot="avatar"],
+.presence-top-row:hover .presence-avatar-group [data-slot="avatar"] + [data-slot="avatar-group-count"] {
+  margin-inline-start: 0.22rem;
+}
+
+.presence-top-row:hover .presence-avatar-group [data-slot="avatar"],
+.presence-top-row:hover .presence-avatar-group [data-slot="avatar-group-count"] {
+  transform: translateY(-1px);
+}
+
+.settings-dialog {
+  box-shadow:
+    0 32px 90px -36px rgba(0, 0, 0, 0.38),
+    0 10px 28px -18px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+[data-sidebar-panel],
+.sidebar-item-row,
+.channel-header,
+.channel-side-panel,
+.activity-row,
+.task-row,
+.presence-top-row,
+.canvas-toolbar,
+[data-floating-window] {
+  user-select: none;
 }

@@ -1506,7 +1506,7 @@ function TextEditor({
 
 function DrawFAB({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
-    <div className="absolute right-4 bottom-4 z-[600]">
+    <div className="absolute right-4 bottom-[5.5rem] z-[600]">
       <Button
         type="button"
         variant={active ? 'destructive' : 'default'}
