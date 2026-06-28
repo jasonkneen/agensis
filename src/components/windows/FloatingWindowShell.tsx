@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Copy, Eye, EyeOff, Lock, Maximize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
+import { Copy, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -46,9 +46,10 @@ export function FloatingWindowShell({
   const resizeRef = useRef<{ startX: number; startY: number; winW: number; winH: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const isMaximized = Boolean(win.maximized);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
-    if (!canControl) return;
+    if (!canControl || isMaximized) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
@@ -102,10 +103,10 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, onFocus, onUpdate, canControl]);
+  }, [win.id, win.x, win.y, onFocus, onUpdate, canControl, isMaximized]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    if (!canControl) return;
+    if (!canControl || isMaximized) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
@@ -159,18 +160,36 @@ export function FloatingWindowShell({
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.width, win.height, onFocus, onUpdate, canControl]);
+  }, [win.id, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
     onFocus(win.id);
+    if (win.maximized) {
+      const restoreBounds = win.restoreBounds || {
+        x: win.x,
+        y: win.y,
+        width: win.width,
+        height: win.height,
+      };
+      onUpdate(win.id, {
+        ...restoreBounds,
+        maximized: false,
+        restoreBounds: undefined,
+      });
+      return;
+    }
+
     onUpdate(win.id, {
-      x: 24,
-      y: 24,
-      width: Math.max(360, window.innerWidth - 72),
-      height: Math.max(300, window.innerHeight - 96),
+      maximized: true,
+      restoreBounds: {
+        x: win.x,
+        y: win.y,
+        width: win.width,
+        height: win.height,
+      },
     });
-  }, [win.id, onFocus, onUpdate, canControl]);
+  }, [win.id, win.x, win.y, win.width, win.height, win.maximized, win.restoreBounds, onFocus, onUpdate, canControl]);
 
   if (win.minimized) return null;
 
@@ -179,14 +198,21 @@ export function FloatingWindowShell({
   const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
-
-  return (
-    <div
-      ref={shellRef}
-      data-floating-window
-      onMouseDown={() => onFocus(win.id)}
-      className="absolute flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl"
-      style={{
+  const shellStyle: React.CSSProperties = isMaximized
+    ? {
+        position: 'absolute',
+        left: 8,
+        top: 8,
+        width: 'calc(100% - 16px)',
+        height: 'calc(100% - 16px)',
+        zIndex: win.zIndex,
+        opacity: isDimmed ? dimmedOpacity : 1,
+        filter: isDimmed ? 'saturate(0.55)' : undefined,
+        userSelect: isDragging || isResizing ? 'none' : 'auto',
+        transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+      }
+    : {
+        position: 'absolute',
         left: win.x,
         top: win.y,
         width: win.width,
@@ -196,7 +222,15 @@ export function FloatingWindowShell({
         filter: isDimmed ? 'saturate(0.55)' : undefined,
         userSelect: isDragging || isResizing ? 'none' : 'auto',
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
-      }}
+      };
+
+  return (
+    <div
+      ref={shellRef}
+      data-floating-window
+      onMouseDown={() => onFocus(win.id)}
+      className="flex flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-xl"
+      style={shellStyle}
     >
       <div
         onMouseDown={handleDragStart}
@@ -290,8 +324,8 @@ export function FloatingWindowShell({
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
-                  <Maximize2 />
-                  Maximize
+                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                  {isMaximized ? 'Restore' : 'Maximize'}
                 </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
@@ -314,9 +348,9 @@ export function FloatingWindowShell({
             size="icon-xs"
             onClick={handleMaximize}
             disabled={!canControl}
-            aria-label="Maximize"
+            aria-label={isMaximized ? 'Restore' : 'Maximize'}
           >
-            <Maximize2 />
+            {isMaximized ? <Minimize2 /> : <Maximize2 />}
           </Button>
           <Button
             type="button"
@@ -343,21 +377,23 @@ export function FloatingWindowShell({
         ) : children}
       </div>
 
-      <div
-        onMouseDown={handleResizeStart}
-        className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
-      >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 10 10"
-          className="absolute right-1 bottom-1 opacity-30"
+      {!isMaximized && (
+        <div
+          onMouseDown={handleResizeStart}
+          className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
         >
-          <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
-          <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
-          <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      </div>
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            className="absolute right-1 bottom-1 opacity-30"
+          >
+            <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
+            <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
+            <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
+          </svg>
+        </div>
+      )}
     </div>
   );
 }

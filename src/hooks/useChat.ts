@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { backendClient, getBackendBaseUrl, apiAuthHeaders } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import type { ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -52,6 +52,39 @@ export function useChat(workspaceId: string | null) {
     if (activeSession) fetchMessages(activeSession.id);
     else setMessages([]);
   }, [activeSession, fetchMessages]);
+
+  useEffect(() => {
+    if (!activeSession?.id) return;
+    const sessionId = activeSession.id;
+    const channel = backendClient
+      .channel(`messages:${sessionId}`)
+      .on(
+        'db_changes',
+        { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${sessionId}` },
+        (payload: { eventType?: string; new?: Message; old?: Partial<Message> }) => {
+          if (payload.eventType === 'INSERT') {
+            const row = payload.new;
+            if (!row) return;
+            setMessages(prev => {
+              if (prev.some(message => message.id === row.id)) return prev;
+              return [...prev, row].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const row = payload.new;
+            if (!row) return;
+            setMessages(prev => prev.map(message => message.id === row.id ? row : message));
+          } else if (payload.eventType === 'DELETE') {
+            const row = payload.old;
+            if (!row?.id) return;
+            setMessages(prev => prev.filter(message => message.id !== row.id));
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      backendClient.removeChannel(channel);
+    };
+  }, [activeSession?.id]);
 
   const createSession = useCallback(async (model = 'auto') => {
     if (!workspaceId) return null;
@@ -169,6 +202,29 @@ export function useChat(workspaceId: string | null) {
       setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
     }
 
+    if (workspaceId && /(^|\s)@[a-zA-Z0-9_.-]{1,64}\b/.test(content)) {
+      const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...apiAuthHeaders(),
+        },
+        body: JSON.stringify({
+          workspaceId,
+          sessionId: session.id,
+          messageId: userMsg.id,
+          content,
+          threadParentId: threadParentId ?? null,
+        }),
+      }).catch(() => null);
+      const dispatchPayload = dispatchResponse
+        ? await dispatchResponse.json().catch(() => null)
+        : null;
+      if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
+        return;
+      }
+    }
+
     setStreaming(true);
 
     const assistantMsgId = crypto.randomUUID();
@@ -183,8 +239,6 @@ export function useChat(workspaceId: string | null) {
     setMessages(prev => [...prev, placeholderMsg]);
 
     try {
-      const backendBase = getBackendBaseUrl();
-
       const memoryContext = memoryFacts && memoryFacts.length > 0
         ? memoryFacts.map(f => `[${f.category}] ${f.fact}`).join('\n')
         : null;
@@ -208,13 +262,14 @@ export function useChat(workspaceId: string | null) {
         model: agent.model,
       } : null;
 
-      const response = await fetch(`${backendBase}/backend/ai-chat`, {
+      const response = await fetch(apiUrl('/backend/ai-chat'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...apiAuthHeaders(),
         },
         body: JSON.stringify({
+          workspaceId,
           messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: m.content })),
           model: agent?.model || model,
           memory: memoryContext,
@@ -226,7 +281,7 @@ export function useChat(workspaceId: string | null) {
 
       if (!response.ok || !response.body) {
         const errData = await response.json().catch(() => ({}));
-        const errMsg = errData.error || 'Failed to connect to AI service';
+        const errMsg = errorMessage(errData.error || errData.message || 'Failed to connect to AI service');
         setMessages(prev => prev.map(m =>
           m.id === assistantMsgId ? { ...m, content: errMsg } : m
         ));
@@ -280,15 +335,15 @@ export function useChat(workspaceId: string | null) {
         if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
         await backendClient.from('messages').insert(assistantInsert);
       }
-    } catch {
-      const errMsg = 'Something went wrong. Please try again.';
+    } catch (error) {
+      const errMsg = errorMessage(error || 'Something went wrong. Please try again.');
       setMessages(prev => prev.map(m =>
         m.id === assistantMsgId ? { ...m, content: errMsg } : m
       ));
     } finally {
       setStreaming(false);
     }
-  }, [activeSession, messages]);
+  }, [activeSession, messages, workspaceId]);
 
   const deleteSession = useCallback(async (id: string) => {
     await backendClient.from('chat_sessions').delete().eq('id', id);
@@ -318,4 +373,15 @@ export function useChat(workspaceId: string | null) {
     sendMessage,
     deleteSession,
   };
+}
+
+function errorMessage(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const record = value as { message?: unknown; detail?: unknown; code?: unknown };
+    if (typeof record.message === 'string') return record.message;
+    if (typeof record.detail === 'string') return record.detail;
+    if (typeof record.code === 'string') return record.code;
+  }
+  return 'Something went wrong. Please try again.';
 }

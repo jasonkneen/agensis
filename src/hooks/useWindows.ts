@@ -75,6 +75,13 @@ export function useWindows() {
         height: size.height,
         zIndex: nextZIndex,
         minimized: false,
+        maximized: true,
+        restoreBounds: {
+          x: pos.x,
+          y: pos.y,
+          width: size.width,
+          height: size.height,
+        },
         canvasId: opts?.canvasId,
         sessionId: opts?.sessionId,
         documentId: opts?.documentId,

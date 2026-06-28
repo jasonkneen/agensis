@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
 
+CREATE TABLE IF NOT EXISTS workspace_secrets (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  key text NOT NULL,
+  value text NOT NULL DEFAULT '',
+  updated_by uuid,
+  updated_at timestamptz DEFAULT now(),
+  PRIMARY KEY (workspace_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
+
 CREATE TABLE IF NOT EXISTS documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -112,7 +123,7 @@ CREATE TABLE IF NOT EXISTS workspace_members (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id uuid NOT NULL,
-  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'editor', 'viewer')),
+  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'admin', 'editor', 'commenter', 'viewer')),
   invited_by uuid,
   created_at timestamptz DEFAULT now(),
   UNIQUE (workspace_id, user_id)

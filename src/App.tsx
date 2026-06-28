@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -39,6 +39,7 @@ import { Checkbox } from './components/ui/checkbox';
 import { Label } from './components/ui/label';
 import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { cn } from './lib/utils';
 import { getSetting } from './lib/settings';
 import { useAuth } from './hooks/useAuth';
@@ -60,11 +61,12 @@ import { useActivity } from './hooks/useActivity';
 import { useWorkspaceContext } from './hooks/useWorkspaceContext';
 import { useAgents } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
+import { useAgentConnections } from './hooks/useAgentConnections';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState } from './lib/canvasApps';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage } from './types';
+import type { AgentConnection, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 import bg1 from '../images/download-21.jpg';
@@ -94,6 +96,8 @@ type WorkspacePresenceUser = {
   id: string;
   name: string;
   color: string;
+  kind?: 'user' | 'agent';
+  status?: string;
   isCurrentUser?: boolean;
   activityItems?: string[];
   windows?: FloatingWindow[];
@@ -159,18 +163,6 @@ function buildContextCounts(
   };
 }
 
-function formatContextCounts(counts: WorkspaceContextCounts) {
-  return [
-    countLabel(counts.docs, 'doc'),
-    countLabel(counts.facts, 'fact'),
-    countLabel(counts.tasks, 'task'),
-    countLabel(counts.agents, 'agent'),
-    countLabel(counts.skills, 'skill'),
-    countLabel(counts.commands, 'cmd', 'cmds'),
-    countLabel(counts.tools, 'tool'),
-  ].join(' / ');
-}
-
 function formatContextTitle(counts: WorkspaceContextCounts) {
   return [
     countLabel(counts.docs, 'document'),
@@ -182,6 +174,50 @@ function formatContextTitle(counts: WorkspaceContextCounts) {
     countLabel(counts.tools, 'tool'),
     countLabel(counts.webhooks, 'enabled webhook'),
   ].join(', ');
+}
+
+function ContextCountChips({ counts, enabled }: { counts: WorkspaceContextCounts; enabled: boolean }) {
+  if (!enabled) {
+    return (
+      <Badge variant="secondary" className="ml-auto text-xs">
+        Context off
+      </Badge>
+    );
+  }
+
+  const items = [
+    { key: 'docs', label: 'Documents', count: counts.docs, icon: <FileText /> },
+    { key: 'facts', label: 'Memory facts', count: counts.facts, icon: <Brain /> },
+    { key: 'tasks', label: 'Open tasks', count: counts.tasks, icon: <CheckCircle2 /> },
+    { key: 'agents', label: 'Agents', count: counts.agents, icon: <Bot /> },
+    { key: 'skills', label: 'Skills', count: counts.skills, icon: <Sparkles /> },
+    { key: 'commands', label: 'Commands', count: counts.commands, icon: <Command /> },
+    { key: 'tools', label: 'Tools', count: counts.tools, icon: <Wrench /> },
+  ];
+
+  return (
+    <TooltipProvider>
+      <div className="context-count-chips ml-auto flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto">
+        {items.map(item => (
+          <Tooltip key={item.key}>
+            <TooltipTrigger asChild>
+              <Badge
+                variant="secondary"
+                className="context-count-chip h-6 gap-1 px-1.5 text-xs"
+                aria-label={`${item.count} ${item.label}`}
+              >
+                {item.icon}
+                <span>{item.count}</span>
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {item.label}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    </TooltipProvider>
+  );
 }
 
 function buildCanvasAppletCreationBrief(workspaceName: string) {
@@ -315,8 +351,27 @@ export default function App() {
         windows: visibleWindows,
       });
     });
+    agentConnections
+      .filter(connection => connection.status !== 'offline')
+      .forEach(connection => {
+        const agent = agents.find(item => item.id === connection.agent_id);
+        const id = `agent:${connection.agent_id || connection.id}`;
+        byId.set(id, {
+          id,
+          name: agent?.name || connection.name || connection.handle,
+          color: colorFromSeed(id),
+          kind: 'agent',
+          status: connection.status,
+          activityItems: [
+            connection.status === 'busy' ? 'Running a job' : 'Connected daemon',
+            connection.host ? `Host: ${connection.host}` : '',
+            connection.cwd ? `Folder: ${connection.cwd}` : '',
+          ].filter(Boolean).slice(0, 3),
+          windows: [],
+        });
+      });
     return Array.from(byId.values());
-  }, [cursors, documents, itemPresence.remotePresenceUsers, sessions, user]);
+  }, [agentConnections, agents, cursors, documents, itemPresence.remotePresenceUsers, sessions, user]);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
     const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';
@@ -386,6 +441,9 @@ export default function App() {
     createWebhook: createAgentWebhook,
     updateWebhook: updateAgentWebhook,
   } = useAgentWebhooks(activeWorkspaceId || null);
+  const {
+    connections: agentConnections,
+  } = useAgentConnections(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
   const [systemCapabilities, setSystemCapabilities] = useState<SystemCapabilities | null>(null);
@@ -418,7 +476,6 @@ export default function App() {
     () => buildContextCounts(documents, facts, tasks, agents, agentWebhooks, systemCapabilities),
     [documents, facts, tasks, agents, agentWebhooks, systemCapabilities],
   );
-  const contextCountsLabel = useMemo(() => formatContextCounts(contextCounts), [contextCounts]);
   const contextCountsTitle = useMemo(() => formatContextTitle(contextCounts), [contextCounts]);
 
   const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
@@ -840,9 +897,11 @@ export default function App() {
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
         workspace={activeWorkspace}
+        activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
         collapsed={sidebarCollapsed}
         onToggleCollapse={handleToggleSidebar}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        onOpenWorkspaceGrid={handleOpenCanvasGrid}
         onNewChat={handleNewChat}
         onNewDocument={handleNewDocument}
         onUploadFile={() => {}}
@@ -885,12 +944,6 @@ export default function App() {
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
           >
-            <CanvasGridButton
-              activeLayerName={viewedLayer.name}
-              onClick={handleOpenCanvasGrid}
-              onOpenSettings={() => openLayerSettings(viewedLayerId)}
-            />
-
             <WorkspacePresenceAvatars
               users={workspacePresenceUsers}
               getMode={getPresenceMode}
@@ -939,7 +992,7 @@ export default function App() {
                 selectedAgent={selectedAgent}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
-                contextCountsLabel={contextCountsLabel}
+                contextCounts={contextCounts}
                 contextCountsTitle={contextCountsTitle}
                 onSelectAgent={setSelectedAgent}
                 onCreateAgent={createAgent}
@@ -1179,7 +1232,7 @@ function CanvasLayerScene({
   selectedAgent,
   getPresenceMode,
   backgroundOpacity,
-  contextCountsLabel,
+  contextCounts,
   contextCountsTitle,
   onSelectAgent,
   onCreateAgent,
@@ -1241,7 +1294,7 @@ function CanvasLayerScene({
   selectedAgent: WorkspaceAgent | null;
   getPresenceMode: (id?: string | null) => PresenceVisibilityMode;
   backgroundOpacity: number;
-  contextCountsLabel: string;
+  contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
   onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string }) => void;
@@ -1329,13 +1382,9 @@ function CanvasLayerScene({
                     />
                     <span className="truncate text-xs leading-none">Use workspace knowledge</span>
                   </Label>
-                  <Badge
-                    variant="secondary"
-                    title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}
-                    className="ml-auto max-w-[70%] truncate text-xs"
-                  >
-                    {useWorkspaceCtx ? contextCountsLabel : 'Context off'}
-                  </Badge>
+                  <div title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}>
+                    <ContextCountChips counts={contextCounts} enabled={useWorkspaceCtx} />
+                  </div>
                 </div>
                 <div className="min-h-0 flex-1">
                   {canControlWindow ? (
@@ -1363,6 +1412,7 @@ function CanvasLayerScene({
                         if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
                         onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
                       }}
+                      channelTitle={winSession?.title || win.title}
                     />
                   ) : (
                     <ReadOnlyChatWindowContent
@@ -1525,6 +1575,7 @@ function CanvasLayerScene({
               <AgentsWindowContent
                 agents={agents}
                 webhooks={agentWebhooks}
+                connections={agentConnections}
                 onCreateAgent={onCreateAgent}
                 onUpdateAgent={onUpdateAgent}
                 onDeleteAgent={onDeleteAgent}
@@ -1636,6 +1687,8 @@ function WorkspacePresenceAvatars({
 
   const visibleUsers = users.slice(0, 5);
   const overflow = users.length - visibleUsers.length;
+  const userCount = users.filter(user => user.kind !== 'agent').length;
+  const agentCount = users.filter(user => user.kind === 'agent').length;
   const modeOptions: Array<{ value: PresenceVisibilityMode; label: string }> = [
     { value: 'visible', label: 'Visible' },
     { value: 'dimmed', label: 'Dim' },
@@ -1647,8 +1700,8 @@ function WorkspacePresenceAvatars({
         <div className="w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
-              <div className="text-sm font-semibold">Shared users</div>
-              <div className="text-[11px] text-muted-foreground">View activity, focus a user, or share your windows</div>
+              <div className="text-sm font-semibold">Shared users and agents</div>
+              <div className="text-[11px] text-muted-foreground">View activity, focus a participant, or share your windows</div>
             </div>
             <Badge variant="secondary">{users.length}</Badge>
           </div>
@@ -1675,17 +1728,22 @@ function WorkspacePresenceAvatars({
                     )}
                   >
                     <AvatarFallback className="text-[10px] font-bold">
-                      {(person.name || '?').slice(0, 2).toUpperCase()}
+                      {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
                     </AvatarFallback>
-                    {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
+                    {(person.isCurrentUser || person.kind === 'agent') && (
+                      <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
+                    )}
                   </Avatar>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-sm font-medium">{person.name}</span>
                       {person.isCurrentUser && <Badge variant="outline">You</Badge>}
+                      {person.kind === 'agent' && <Badge variant="secondary">@agent</Badge>}
                     </div>
                     <div className="text-[11px] text-muted-foreground">
-                      {person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
+                      {person.kind === 'agent'
+                        ? person.status === 'busy' ? 'Daemon running' : 'Daemon connected'
+                        : person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
                     </div>
                     {person.activityItems && person.activityItems.length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
@@ -1779,10 +1837,12 @@ function WorkspacePresenceAvatars({
                   mode === 'hidden' && 'opacity-25 saturate-0',
                 )}
               >
-                <AvatarFallback className="text-[10px] font-bold">
-                  {(person.name || '?').slice(0, 2).toUpperCase()}
+            <AvatarFallback className="text-[10px] font-bold">
+                  {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
                 </AvatarFallback>
-                {person.isCurrentUser && <AvatarBadge className="bg-green-500" />}
+                {(person.isCurrentUser || person.kind === 'agent') && (
+                  <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
+                )}
               </Avatar>
             );
           })}
@@ -1794,10 +1854,10 @@ function WorkspacePresenceAvatars({
         </AvatarGroup>
         <div className="flex min-w-0 flex-col">
           <span className="text-[11px] font-semibold leading-tight text-foreground">
-            {users.length === 1 ? 'Just you' : `${users.length} here now`}
+            {userCount === 1 && agentCount === 0 ? 'Just you' : `${userCount} users / ${agentCount} agents`}
           </span>
           <span className="text-[10px] leading-tight text-muted-foreground">
-            Shared users
+            Shared participants
           </span>
         </div>
       </button>
@@ -1853,42 +1913,6 @@ function PresenceFocusChips({
           <span className="truncate">{person.name}</span>
         </Button>
       ))}
-    </div>
-  );
-}
-
-function CanvasGridButton({
-  activeLayerName,
-  onClick,
-  onOpenSettings,
-}: {
-  activeLayerName: string;
-  onClick: () => void;
-  onOpenSettings: () => void;
-}) {
-  return (
-    <div className="absolute top-3.5 left-3.5 z-[80] flex items-center gap-1 rounded-md border bg-popover/95 p-1 shadow-md backdrop-blur">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={onClick}
-        title="Show all canvases"
-        className="h-8 px-2"
-      >
-        <Layers3 data-icon="inline-start" className="size-4" />
-        <span>{activeLayerName}</span>
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        onClick={onOpenSettings}
-        title="Workspace settings"
-        aria-label="Workspace settings"
-      >
-        <Settings />
-      </Button>
     </div>
   );
 }

@@ -18,7 +18,17 @@ export interface CreateAgentInput {
   instructions?: string;
   tools?: string[];
   skills?: string[];
+  handle?: string;
   model?: string;
+}
+
+function agentHandle(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'agent';
 }
 
 export function useAgents(workspaceId: string | null, userId?: string) {
@@ -90,6 +100,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       instructions: input.instructions ?? '',
       tools: input.tools ?? [],
       skills: input.skills ?? [],
+      handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
     });
     if (data) {

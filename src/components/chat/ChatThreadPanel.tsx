@@ -40,6 +40,7 @@ interface ChatThreadPanelProps {
   streaming: boolean;
   onSendReply: (content: string, model: string) => void;
   onClose: () => void;
+  embedded?: boolean;
 }
 
 export function ChatThreadPanel({
@@ -48,6 +49,7 @@ export function ChatThreadPanel({
   streaming,
   onSendReply,
   onClose,
+  embedded = false,
 }: ChatThreadPanelProps) {
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState('auto');
@@ -69,7 +71,7 @@ export function ChatThreadPanel({
   };
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card text-card-foreground">
+    <aside className={embedded ? 'flex h-full min-w-0 flex-1 flex-col bg-card text-card-foreground' : 'flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card text-card-foreground'}>
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <CornerDownRight className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Thread</span>
@@ -164,9 +166,10 @@ function ThreadBubble({
   isParent?: boolean;
 }) {
   const isUser = msg.role === 'user';
-  const content = isParent && msg.content.length > 220
-    ? `${msg.content.slice(0, 220)}...`
-    : msg.content;
+  const rawContent = safeMessageText(msg.content);
+  const content = isParent && rawContent.length > 220
+    ? `${rawContent.slice(0, 220)}...`
+    : rawContent;
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
 
@@ -193,4 +196,21 @@ function ThreadBubble({
       </MessageContent>
     </Message>
   );
+}
+
+function safeMessageText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    const record = value as { message?: unknown; content?: unknown; text?: unknown; error?: unknown };
+    for (const key of ['message', 'content', 'text', 'error'] as const) {
+      if (typeof record[key] === 'string') return record[key] as string;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value);
 }

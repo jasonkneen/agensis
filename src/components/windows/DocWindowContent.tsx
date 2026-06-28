@@ -159,11 +159,12 @@ function stripHtml(value: string) {
   return tmp.textContent || tmp.innerText || '';
 }
 
-async function runDocAI(prompt: string, title: string, docHtml: string) {
+async function runDocAI(prompt: string, title: string, docHtml: string, workspaceId?: string) {
   const response = await fetch(apiUrl('/backend/ai-chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
     body: JSON.stringify({
+      workspaceId,
       model: 'auto',
       messages: [{ role: 'user', content: prompt }],
       documents: `--- Document: ${title} ---\n${stripHtml(docHtml).slice(0, 12000)}`,
@@ -474,7 +475,7 @@ export function DocWindowContent({
         runButton.disabled = true;
         answer.textContent = 'Thinking...';
         try {
-          answer.textContent = await runDocAI(prompt, title, el.innerHTML);
+          answer.textContent = await runDocAI(prompt, title, el.innerHTML, workspaceId || doc.workspace_id);
         } catch (error) {
           answer.textContent = error instanceof Error ? error.message : 'AI request failed.';
         } finally {
@@ -598,7 +599,7 @@ export function DocWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-2">
+      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-2">
         {TOOLBAR.map((item, idx) => (
           item.divider ? (
             <Separator key={idx} orientation="vertical" className="mx-1 h-5" />
@@ -702,7 +703,7 @@ export function DocWindowContent({
             value={title}
             onChange={handleTitleChange}
             placeholder="Untitled"
-            className="mb-3 h-auto border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
+            className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
           />
           <div
             ref={contentRef}

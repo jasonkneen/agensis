@@ -45,6 +45,10 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   thread_parent_id?: string | null;
+  sender_kind?: string | null;
+  sender_id?: string | null;
+  sender_name?: string | null;
+  pinned?: boolean;
   created_at: string;
 }
 
@@ -201,6 +205,13 @@ export interface FloatingWindow {
   height: number;
   zIndex: number;
   minimized: boolean;
+  maximized?: boolean;
+  restoreBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   canvasId?: string;
   sessionId?: string;
   documentId?: string;
@@ -256,10 +267,26 @@ export interface WorkspaceAgent {
   instructions?: string;
   tools?: string[];
   skills?: string[];
+  handle?: string | null;
   model: string;
   version?: number;
   created_by: string | null;
   created_at: string;
+  updated_at: string;
+}
+
+export interface AgentConnection {
+  id: string;
+  workspace_id: string;
+  agent_id: string | null;
+  name: string;
+  handle: string;
+  host: string;
+  cwd: string;
+  status: 'online' | 'offline' | 'busy';
+  metadata: Record<string, unknown>;
+  connected_at: string;
+  last_seen_at: string;
   updated_at: string;
 }
 

@@ -40,6 +40,14 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 
+const ROLE_LABELS: Record<string, string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  editor: 'Editor',
+  commenter: 'Commenter',
+  viewer: 'Viewer',
+};
+
 interface ShareDialogProps {
   open: boolean;
   onClose: () => void;
@@ -182,7 +190,7 @@ function PersonRow({
   onChangeRole: (role: 'editor' | 'viewer') => void;
 }) {
   const initial = (email[0] || 'U').toUpperCase();
-  const displayRole = role === 'owner' ? 'Owner' : role === 'editor' ? 'Editor' : 'Viewer';
+  const displayRole = ROLE_LABELS[role] || 'Viewer';
 
   return (
     <Item variant="default" size="sm">

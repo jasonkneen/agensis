@@ -5,11 +5,13 @@ export interface WorkspaceMember {
   id: string;
   workspace_id: string;
   user_id: string;
-  role: 'owner' | 'editor' | 'viewer';
+  role: WorkspaceMemberRole;
   invited_by: string | null;
   created_at: string;
   email?: string;
 }
+
+export type WorkspaceMemberRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer';
 
 export function useSharing(workspaceId: string | null, currentUserId: string | undefined) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
@@ -106,7 +108,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     setMembers(prev => prev.filter(m => m.id !== memberId));
   }, []);
 
-  const updateMemberRole = useCallback(async (memberId: string, role: 'editor' | 'viewer') => {
+  const updateMemberRole = useCallback(async (memberId: string, role: Extract<WorkspaceMemberRole, 'editor' | 'viewer'>) => {
     await backendClient
       .from('workspace_members')
       .update({ role })

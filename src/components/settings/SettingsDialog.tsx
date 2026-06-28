@@ -116,7 +116,7 @@ export function SettingsDialog({
               )}
               {tab === 'ai' && <AIPanel />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
-              {tab === 'secrets' && <SecretsPanel />}
+              {tab === 'secrets' && <SecretsPanel workspace={workspace} />}
               {tab === 'about' && <AboutPanel />}
             </div>
           </ScrollArea>
@@ -428,9 +428,10 @@ interface SecretKeyInfo {
   key: string;
   configured: boolean;
   preview: string;
+  scope?: 'workspace' | 'app' | 'unset';
 }
 
-function SecretsPanel() {
+function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
   const [keys, setKeys] = useState<SecretKeyInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [reveal, setReveal] = useState<Record<string, boolean>>({});
@@ -440,10 +441,15 @@ function SecretsPanel() {
   const [savedAt, setSavedAt] = useState(0);
 
   const load = useCallback(async () => {
+    if (!workspace?.id) {
+      setKeys([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl('/backend/settings/secrets'), { headers: apiAuthHeaders() });
+      const res = await fetch(apiUrl(`/backend/settings/secrets?workspaceId=${encodeURIComponent(workspace.id)}`), { headers: apiAuthHeaders() });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
       setKeys(json.data?.keys || []);
@@ -452,7 +458,7 @@ function SecretsPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspace?.id]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -468,7 +474,7 @@ function SecretsPanel() {
       const res = await fetch(apiUrl('/backend/settings/secrets'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ workspaceId: workspace?.id, ...payload }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
@@ -484,6 +490,7 @@ function SecretsPanel() {
   };
 
   const labelFor = (key: string) => key === 'ANTHROPIC_API_KEY' ? 'Anthropic API key' : key;
+  const scopeLabel = (scope?: string) => scope === 'workspace' ? 'Workspace key' : scope === 'app' ? 'Using app fallback' : 'Not configured';
   const hasDrafts = Object.values(drafts).some(value => value && value.length > 0);
 
   if (loading) {
@@ -498,7 +505,7 @@ function SecretsPanel() {
   return (
     <FieldGroup>
       <FieldDescription>
-        Keys are stored in the workspace database and never in the browser. Leave a field blank to keep the current value.
+        Owner/admin only. Keys are stored for this workspace and never in the browser. Leave a field blank to keep the current value.
       </FieldDescription>
 
       {keys.map(item => (
@@ -524,7 +531,7 @@ function SecretsPanel() {
             </InputGroupAddon>
           </InputGroup>
           <FieldDescription>
-            {item.configured ? `Currently set - ${item.preview}` : 'Not configured'}
+            {item.configured ? `${scopeLabel(item.scope)} - ${item.preview}` : scopeLabel(item.scope)}
           </FieldDescription>
         </Field>
       ))}

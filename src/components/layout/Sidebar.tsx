@@ -9,6 +9,7 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  Layers3,
   LayoutTemplate,
   LogOut,
   MessageSquare,
@@ -52,9 +53,11 @@ const MAX_SIDEBAR_WIDTH = 380;
 
 interface SidebarProps {
   workspace: Workspace | null;
+  activeLayerName?: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpenCommandPalette: () => void;
+  onOpenWorkspaceGrid?: () => void;
   onNewChat: () => void;
   onNewDocument: () => void;
   onUploadFile: () => void;
@@ -84,9 +87,11 @@ interface SidebarProps {
 
 export function Sidebar({
   workspace,
+  activeLayerName,
   collapsed,
   onToggleCollapse,
   onOpenCommandPalette,
+  onOpenWorkspaceGrid,
   onNewChat,
   onNewDocument,
   onUploadFile,
@@ -104,6 +109,7 @@ export function Sidebar({
   openTaskCount = 0,
   recents,
   sessions,
+  floatingWindows,
   documentPresence = {},
   chatPresence = {},
   themeMode,
@@ -132,6 +138,8 @@ export function Sidebar({
     folder,
     documents: recents.filter(doc => (doc.folder || 'General') === folder),
   }));
+  const openWindowTypes = new Set(floatingWindows.filter(win => !win.minimized).map(win => win.type));
+  const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
   const toggleSection = (id: string, open: boolean) => {
     setClosedSections(prev => {
@@ -192,15 +200,41 @@ export function Sidebar({
       className="relative flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-card text-card-foreground"
       style={{ width: sidebarWidth }}
     >
-      <div className="flex items-center gap-2 p-2">
+      <div className="flex items-center gap-2 px-2 pt-2 pb-1">
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
           <PanelLeftClose />
         </Button>
+        <div className="sidebar-workspace-pill flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-sm">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="min-w-0 flex-1 justify-start px-2"
+            onClick={onOpenWorkspaceGrid}
+            title="Show all workspaces"
+          >
+            <Layers3 data-icon="inline-start" />
+            <span className="truncate">{workspaceLabel}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onOpenSettings}
+            aria-label="Workspace settings"
+            title="Workspace settings"
+          >
+            <Settings />
+          </Button>
+        </div>
+      </div>
+
+      <div className="px-2 pb-2">
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="sidebar-search min-w-0 flex-1 justify-start text-muted-foreground"
+          className="sidebar-search min-w-0 w-full justify-start text-muted-foreground"
           onClick={onOpenCommandPalette}
         >
           <Search data-icon="inline-start" />
@@ -209,14 +243,14 @@ export function Sidebar({
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-2">
-        <ActionRow icon={<Sparkles />} label="Chat with AI" onClick={onNewChat} />
-        <ActionRow icon={<FileText />} label="Write a document" onClick={onNewDocument} />
+        <ActionRow icon={<Sparkles />} label="Chat with AI" active={openWindowTypes.has('chat')} onClick={onNewChat} />
+        <ActionRow icon={<FileText />} label="Write a document" active={openWindowTypes.has('document')} onClick={onNewDocument} />
         <ActionRow icon={<Paperclip />} label="Upload a file" onClick={onUploadFile} />
         <ActionRow icon={<FolderPlus />} label="Create a workspace" onClick={onCreateWorkspace} />
-        <ActionRow icon={<Brain />} label="Memory" onClick={onOpenMemory} />
-        {onOpenTasks && <ActionRow icon={<CheckCircle2 />} label={openTaskCount > 0 ? `Tasks / ${openTaskCount}` : 'Tasks'} onClick={onOpenTasks} />}
-        {onOpenActivity && <ActionRow icon={<Activity />} label="Activity" onClick={onOpenActivity} />}
-        {onOpenAgents && <ActionRow icon={<Bot />} label="AI Agents" onClick={onOpenAgents} />}
+        <ActionRow icon={<Brain />} label="Memory" active={openWindowTypes.has('memory')} onClick={onOpenMemory} />
+        {onOpenTasks && <ActionRow icon={<CheckCircle2 />} label={openTaskCount > 0 ? `Tasks / ${openTaskCount}` : 'Tasks'} active={openWindowTypes.has('tasks')} onClick={onOpenTasks} />}
+        {onOpenActivity && <ActionRow icon={<Activity />} label="Activity" active={openWindowTypes.has('activity')} onClick={onOpenActivity} />}
+        {onOpenAgents && <ActionRow icon={<Bot />} label="AI Agents" active={openWindowTypes.has('agents')} onClick={onOpenAgents} />}
         {onOpenTemplates && <ActionRow icon={<LayoutTemplate />} label="Canvas Apps" onClick={onOpenTemplates} />}
       </nav>
 
@@ -235,6 +269,7 @@ export function Sidebar({
                 key={group.folder}
                 id={`chats:${group.folder}`}
                 label={group.folder === 'General' ? 'Chats' : group.folder}
+                icon={group.folder === 'General' ? <MessageSquare /> : <Folder />}
                 count={group.sessions.length}
                 open={!closedSections.has(`chats:${group.folder}`)}
                 onOpenChange={open => toggleSection(`chats:${group.folder}`, open)}
@@ -255,6 +290,7 @@ export function Sidebar({
               <SidebarSection
                 id="archived"
                 label="Archived"
+                icon={<Archive />}
                 count={archivedSessions.length}
                 open={!closedSections.has('archived')}
                 onOpenChange={open => toggleSection('archived', open)}
@@ -277,6 +313,7 @@ export function Sidebar({
                 key={`docs-${group.folder}`}
                 id={`docs:${group.folder}`}
                 label={group.folder === 'General' ? 'Documents' : `Documents / ${group.folder}`}
+                icon={group.folder === 'General' ? <FileText /> : <Folder />}
                 count={group.documents.length}
                 open={!closedSections.has(`docs:${group.folder}`)}
                 onOpenChange={open => toggleSection(`docs:${group.folder}`, open)}
@@ -333,9 +370,16 @@ function IconButton({ icon, title, onClick }: { icon: React.ReactNode; title: st
   );
 }
 
-function ActionRow({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function ActionRow({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
   return (
-    <Button type="button" variant="ghost" size="sm" className="sidebar-action-row w-full justify-start" onClick={onClick}>
+    <Button
+      type="button"
+      variant={active ? 'secondary' : 'ghost'}
+      size="sm"
+      className="sidebar-action-row w-full justify-start"
+      data-active={active ? 'true' : undefined}
+      onClick={onClick}
+    >
       {icon}
       <span className="truncate">{label}</span>
     </Button>
@@ -345,6 +389,7 @@ function ActionRow({ icon, label, onClick }: { icon: React.ReactNode; label: str
 function SidebarSection({
   id,
   label,
+  icon,
   count,
   open,
   onOpenChange,
@@ -352,6 +397,7 @@ function SidebarSection({
 }: {
   id: string;
   label: string;
+  icon: React.ReactNode;
   count: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -366,13 +412,16 @@ function SidebarSection({
           aria-controls={`${id}-content`}
         >
           <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
+            {icon}
+          </span>
           <span className="min-w-0 flex-1 truncate">{label}</span>
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
             {count}
           </span>
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent id={`${id}-content`} className="pt-1">
+      <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-4">
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -443,7 +492,7 @@ function SessionRow({
       <ContextMenuTrigger asChild>
         <div>
           <ItemRow
-            icon={archived ? <Archive /> : <MessageSquare />}
+            icon={<MessageSquare />}
             label={session.title}
             onClick={onOpen}
             kind="session"

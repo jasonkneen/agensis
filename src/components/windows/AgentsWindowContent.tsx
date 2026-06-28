@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Bot, Copy, Link2, Pencil, Plus, Power, Save, Trash2, X } from 'lucide-react';
-import { AI_MODELS, type AgentWebhook, type WorkspaceAgent } from '../../types';
-import { apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { Bot, Check, Copy, Link2, Monitor, Pencil, Plus, Power, Save, Terminal, Trash2, X } from 'lucide-react';
+import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent } from '../../types';
+import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,6 +35,7 @@ import { Textarea } from '@/components/ui/textarea';
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
   webhooks: AgentWebhook[];
+  connections?: AgentConnection[];
   onCreateAgent: (input: {
     name: string;
     avatar?: string;
@@ -44,6 +45,7 @@ interface AgentsWindowContentProps {
     instructions?: string;
     tools?: string[];
     skills?: string[];
+    handle?: string;
     model?: string;
   }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
@@ -57,6 +59,7 @@ const DEFAULT_AGENT_AVATAR = 'AI';
 export function AgentsWindowContent({
   agents,
   webhooks,
+  connections = [],
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
@@ -66,6 +69,7 @@ export function AgentsWindowContent({
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
+  const [newHandle, setNewHandle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newSystemPrompt, setNewSystemPrompt] = useState('');
   const [newSoul, setNewSoul] = useState('');
@@ -82,10 +86,11 @@ export function AgentsWindowContent({
   }, []);
 
   const handleCreate = () => {
-    if (!newName.trim() || !newSystemPrompt.trim()) return;
+    if (!newName.trim()) return;
     onCreateAgent({
       name: newName.trim(),
       avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
+      handle: newHandle.trim() || agentHandle(newName),
       description: newDescription.trim(),
       system_prompt: newSystemPrompt.trim(),
       soul: newSoul.trim(),
@@ -96,6 +101,7 @@ export function AgentsWindowContent({
     });
     setNewName('');
     setNewAvatar(DEFAULT_AGENT_AVATAR);
+    setNewHandle('');
     setNewDescription('');
     setNewSystemPrompt('');
     setNewSoul('');
@@ -138,6 +144,7 @@ export function AgentsWindowContent({
           <AgentForm
             name={newName}
             avatar={newAvatar}
+            handle={newHandle}
             description={newDescription}
             systemPrompt={newSystemPrompt}
             soul={newSoul}
@@ -148,6 +155,7 @@ export function AgentsWindowContent({
             capabilities={capabilities}
             onNameChange={setNewName}
             onAvatarChange={setNewAvatar}
+            onHandleChange={setNewHandle}
             onDescriptionChange={setNewDescription}
             onSystemPromptChange={setNewSystemPrompt}
             onSoulChange={setNewSoul}
@@ -171,7 +179,7 @@ export function AgentsWindowContent({
                 <Bot />
               </EmptyMedia>
               <EmptyTitle>No agents yet</EmptyTitle>
-              <EmptyDescription>Create an agent to add reusable AI tools to this workspace.</EmptyDescription>
+              <EmptyDescription>Create an agent, copy its connection command, and run it where the daemon should execute.</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
@@ -192,6 +200,7 @@ export function AgentsWindowContent({
                 onCancelDelete={() => setConfirmDeleteId(null)}
                 capabilities={capabilities}
                 webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
+                connections={connections.filter(connection => connection.agent_id === agent.id)}
                 onCreateWebhook={() => onCreateWebhook({ agent_id: agent.id, name: `${agent.name} webhook` })}
                 onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
               />
@@ -206,6 +215,7 @@ export function AgentsWindowContent({
 function AgentForm({
   name,
   avatar,
+  handle,
   description,
   systemPrompt,
   soul,
@@ -216,6 +226,7 @@ function AgentForm({
   capabilities,
   onNameChange,
   onAvatarChange,
+  onHandleChange,
   onDescriptionChange,
   onSystemPromptChange,
   onSoulChange,
@@ -230,6 +241,7 @@ function AgentForm({
 }: {
   name: string;
   avatar: string;
+  handle: string;
   description: string;
   systemPrompt: string;
   soul: string;
@@ -240,6 +252,7 @@ function AgentForm({
   capabilities: SystemCapabilities | null;
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
+  onHandleChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
   onSoulChange: (value: string) => void;
@@ -253,11 +266,11 @@ function AgentForm({
   submitIcon: React.ReactNode;
 }) {
   const options = modelOptions(model);
-  const canSubmit = Boolean(name.trim() && systemPrompt.trim());
+  const canSubmit = Boolean(name.trim());
 
   return (
     <FieldGroup className="gap-3">
-      <div className="grid grid-cols-[3rem_1fr] gap-2">
+      <div className="grid grid-cols-[3rem_1fr_10rem] gap-2">
         <Field>
           <FieldLabel htmlFor="agent-avatar">Avatar</FieldLabel>
           <Input
@@ -274,6 +287,15 @@ function AgentForm({
             value={name}
             onChange={e => onNameChange(e.target.value)}
             placeholder="Agent name"
+          />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="agent-handle">Handle</FieldLabel>
+          <Input
+            id="agent-handle"
+            value={handle}
+            onChange={e => onHandleChange(e.target.value)}
+            placeholder={`@${agentHandle(name || 'agent')}`}
           />
         </Field>
       </div>
@@ -294,7 +316,7 @@ function AgentForm({
           id="agent-system-prompt"
           value={systemPrompt}
           onChange={e => onSystemPromptChange(e.target.value)}
-          placeholder="System prompt"
+          placeholder="Optional system prompt"
           rows={4}
         />
       </Field>
@@ -397,6 +419,7 @@ function AgentRow({
   onCancelDelete,
   capabilities,
   webhooks,
+  connections,
   onCreateWebhook,
   onToggleWebhook,
 }: {
@@ -410,11 +433,13 @@ function AgentRow({
   onCancelDelete: () => void;
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
+  connections: AgentConnection[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
   const [editName, setEditName] = useState(agent.name);
   const [editAvatar, setEditAvatar] = useState(agent.avatar || DEFAULT_AGENT_AVATAR);
+  const [editHandle, setEditHandle] = useState(agent.handle || agentHandle(agent.name));
   const [editDescription, setEditDescription] = useState(agent.description || '');
   const [editSystemPrompt, setEditSystemPrompt] = useState(agent.system_prompt || '');
   const [editSoul, setEditSoul] = useState(agent.soul || '');
@@ -423,11 +448,15 @@ function AgentRow({
   const [editSkills, setEditSkills] = useState(joinList(agent.skills));
   const [editModel, setEditModel] = useState(agent.model || 'auto');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
+  const [connectionCommand, setConnectionCommand] = useState('');
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+  const activeConnections = connections.filter(connection => connection.status !== 'offline');
 
   const handleSave = () => {
     onSave({
       name: editName.trim(),
       avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
+      handle: editHandle.trim() || agentHandle(editName),
       description: editDescription.trim(),
       system_prompt: editSystemPrompt.trim(),
       soul: editSoul.trim(),
@@ -447,6 +476,31 @@ function AgentRow({
     }
   };
 
+  const handleConnectionCommand = async () => {
+    try {
+      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...apiAuthHeaders(),
+        },
+        body: JSON.stringify({
+          handle: editHandle || agent.handle || agentHandle(agent.name),
+          baseUrl: typeof window === 'undefined' ? undefined : window.location.origin,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      const command = payload?.data?.localCommand || payload?.data?.command || '';
+      if (!response.ok || !command) return;
+      setConnectionCommand(command);
+      await navigator.clipboard?.writeText(command);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1600);
+    } catch {
+      // Copy affordance stays idle; the backend error is not useful inline here.
+    }
+  };
+
   if (isEditing) {
     return (
       <Item variant="outline" className="items-stretch">
@@ -454,6 +508,7 @@ function AgentRow({
           <AgentForm
             name={editName}
             avatar={editAvatar}
+            handle={editHandle}
             description={editDescription}
             systemPrompt={editSystemPrompt}
             soul={editSoul}
@@ -464,6 +519,7 @@ function AgentRow({
             capabilities={capabilities}
             onNameChange={setEditName}
             onAvatarChange={setEditAvatar}
+            onHandleChange={setEditHandle}
             onDescriptionChange={setEditDescription}
             onSystemPromptChange={setEditSystemPrompt}
             onSoulChange={setEditSoul}
@@ -497,12 +553,41 @@ function AgentRow({
         ) : (
           <ItemDescription>No description</ItemDescription>
         )}
-        <div>
+        <div className="flex flex-wrap gap-1">
+          <Badge variant="outline">@{agent.handle || agentHandle(agent.name)}</Badge>
           <Badge variant="secondary">{displayModel(agent.model)}</Badge>
-          {(agent.tools || []).slice(0, 3).map(tool => (
-            <Badge key={tool} variant="outline" className="ml-1">{tool}</Badge>
-          ))}
+          <Badge variant={activeConnections.length > 0 ? 'default' : 'secondary'}>
+            {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
+          </Badge>
+          {(agent.tools || []).slice(0, 3).map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
         </div>
+        {activeConnections.length > 0 && (
+          <div className="mt-2 flex flex-col gap-1">
+            {activeConnections.slice(0, 3).map(connection => (
+              <div key={connection.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+                <Monitor className="size-3 shrink-0" />
+                <span className="font-medium text-foreground">{connection.status}</span>
+                <span className="truncate">{connection.host || 'daemon'}</span>
+                {connection.cwd && <span className="truncate opacity-75">{connection.cwd}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        {connectionCommand && (
+          <div className="mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
+            <Terminal className="size-3 shrink-0" />
+            <code className="min-w-0 flex-1 truncate">{connectionCommand}</code>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => void navigator.clipboard?.writeText(connectionCommand)}
+              aria-label={`Copy connection command for ${agent.name}`}
+            >
+              <Copy />
+            </Button>
+          </div>
+        )}
         {webhooks.length > 0 && (
           <div className="mt-2 flex flex-col gap-1.5">
             {webhooks.map(webhook => {
@@ -540,6 +625,16 @@ function AgentRow({
         )}
       </ItemContent>
       <ItemActions className="ml-auto">
+        <Button
+          type="button"
+          variant={copyState === 'copied' ? 'secondary' : 'outline'}
+          size="sm"
+          onClick={handleConnectionCommand}
+          aria-label={`Copy connection command for ${agent.name}`}
+        >
+          {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
+          {copyState === 'copied' ? 'Copied' : 'Connect'}
+        </Button>
         <Button
           type="button"
           variant="ghost"
@@ -591,6 +686,15 @@ function addToken(value: string, token: string) {
   const next = new Set(splitList(value));
   next.add(token);
   return Array.from(next).join(', ');
+}
+
+function agentHandle(value: string) {
+  return String(value || 'agent')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'agent';
 }
 
 function webhookUrl(token: string) {

@@ -30,6 +30,8 @@ const ALLOWED_TABLES = new Set([
   'document_versions',
   'workspace_agents',
   'agent_webhooks',
+  'agent_connections',
+  'agent_jobs',
   'activity_events',
 ]);
 
@@ -46,11 +48,13 @@ const VERSIONED_TABLES = new Set([
   'task_comments',
   'workspace_agents',
   'agent_webhooks',
+  'agent_jobs',
 ]);
 
 let envLoaded = false;
 let db;
 let websocketClients = new Set();
+const connectedAgents = new Map();
 
 function applyEnvFile(envPath) {
   if (!fs.existsSync(envPath)) return false;
@@ -94,8 +98,8 @@ function maskSecret(value) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
-// Settings are persisted in the app_settings table (DB), not .env — so they
-// work on serverless deploys with a read-only filesystem.
+// Global settings are persisted in app_settings. Workspace-managed secrets live
+// in workspace_secrets so member roles can gate reads/writes per workspace.
 async function getSettingValue(key) {
   const rows = await getDb().unsafe('select value from app_settings where key = $1 limit 1', [key]);
   return rows[0]?.value || '';
@@ -109,18 +113,46 @@ async function setSettingValue(key, value) {
   );
 }
 
+async function getWorkspaceSecretValue(workspaceId, key) {
+  if (!workspaceId) return '';
+  const rows = await getDb().unsafe(
+    'select value from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
+    [workspaceId, key],
+  );
+  return rows[0]?.value || '';
+}
+
+async function setWorkspaceSecretValue(workspaceId, key, value, userId) {
+  await getDb().unsafe(
+    `insert into workspace_secrets (workspace_id, key, value, updated_by, updated_at)
+     values ($1, $2, $3, $4, now())
+     on conflict (workspace_id, key)
+     do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [workspaceId, key, value, userId || null],
+  );
+}
+
 // Resolve a managed secret: DB value first, then env var as a fallback (so an
 // ANTHROPIC_API_KEY set via the host environment still works out of the box).
-async function resolveSecret(key) {
+async function resolveSecret(key, workspaceId = null) {
   loadEnvFile();
+  const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
+  if (workspaceValue) return workspaceValue;
   const dbValue = await getSettingValue(key).catch(() => '');
   return dbValue || process.env[key] || '';
 }
 
-async function listManagedSecrets() {
+async function listManagedSecrets(workspaceId = null) {
   return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
-    const value = await resolveSecret(key);
-    return { key, configured: !!value, preview: maskSecret(value) };
+    const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
+    const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
+    const value = workspaceValue || fallbackValue;
+    return {
+      key,
+      configured: !!value,
+      preview: maskSecret(value),
+      scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+    };
   }));
 }
 
@@ -196,20 +228,43 @@ const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'activity_events', 'workspace_members',
+  'agent_connections', 'agent_jobs', 'activity_events', 'workspace_members',
 ]);
 
-const WORKSPACE_MUTATION_TABLES = new Set([
-  'documents', 'chat_sessions', 'messages', 'memory_facts', 'uploaded_files',
-  'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
-  'task_comments', 'document_versions', 'workspace_agents',
-  'activity_events',
-]);
+const WORKSPACE_ROLE_CAPABILITIES = {
+  owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
+  admin: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
+  editor: new Set(['read', 'write', 'comment', 'run_agents']),
+  commenter: new Set(['read', 'comment']),
+  viewer: new Set(['read']),
+};
 
-const WORKSPACE_MANAGEMENT_TABLES = new Set([
-  'workspace_members',
-  'agent_webhooks',
-]);
+const DEFAULT_TABLE_ACCESS = {
+  select: 'read',
+  insert: 'write',
+  update: 'write',
+  delete: 'write',
+};
+
+const DB_TABLE_ACCESS = {
+  documents: DEFAULT_TABLE_ACCESS,
+  chat_sessions: DEFAULT_TABLE_ACCESS,
+  messages: DEFAULT_TABLE_ACCESS,
+  memory_facts: DEFAULT_TABLE_ACCESS,
+  uploaded_files: DEFAULT_TABLE_ACCESS,
+  canvas_groups: DEFAULT_TABLE_ACCESS,
+  canvas_objects: DEFAULT_TABLE_ACCESS,
+  tasks: DEFAULT_TABLE_ACCESS,
+  document_versions: DEFAULT_TABLE_ACCESS,
+  workspace_agents: DEFAULT_TABLE_ACCESS,
+  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+  activity_events: DEFAULT_TABLE_ACCESS,
+  document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+  task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+  workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+  agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+};
 
 function findFilterValue(filters, column) {
   if (!Array.isArray(filters)) return undefined;
@@ -284,12 +339,21 @@ async function getWorkspaceRole(userId, workspaceId) {
   return memberRows[0]?.role || null;
 }
 
+function roleHasWorkspaceCapability(role, capability) {
+  return Boolean(WORKSPACE_ROLE_CAPABILITIES[role]?.has(capability));
+}
+
 function canMutateWorkspace(role) {
-  return role === 'owner' || role === 'admin' || role === 'editor';
+  return roleHasWorkspaceCapability(role, 'write');
 }
 
 function canManageWorkspace(role) {
-  return role === 'owner' || role === 'admin';
+  return roleHasWorkspaceCapability(role, 'manage');
+}
+
+function capabilityForDbOperation(table, action) {
+  const access = DB_TABLE_ACCESS[table];
+  return access?.[action] || (action === 'select' ? 'read' : 'write');
 }
 
 function forbidden(message) {
@@ -307,11 +371,20 @@ function badRequest(message) {
 async function enforceWorkspaceRole(userId, workspaceId, mode) {
   const role = await getWorkspaceRole(userId, workspaceId);
   if (!role) throw forbidden('You do not have access to this workspace');
-  if (mode === 'manage' && !canManageWorkspace(role)) {
-    throw forbidden('You do not have permission to manage this workspace');
-  }
-  if (mode === 'write' && !canMutateWorkspace(role)) {
-    throw forbidden('You do not have permission to change this workspace');
+  if (!roleHasWorkspaceCapability(role, mode)) {
+    if (mode === 'manage') {
+      throw forbidden('You do not have permission to manage this workspace');
+    }
+    if (mode === 'write') {
+      throw forbidden('You do not have permission to change this workspace');
+    }
+    if (mode === 'comment') {
+      throw forbidden('You do not have permission to comment in this workspace');
+    }
+    if (mode === 'run_agents') {
+      throw forbidden('You do not have permission to run agents in this workspace');
+    }
+    throw forbidden('You do not have permission to access this workspace');
   }
 }
 
@@ -351,13 +424,7 @@ async function enforceDbOperationAccess(userId, table, action, payload) {
 
   if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
-  const mode = action === 'select'
-    ? 'read'
-    : WORKSPACE_MANAGEMENT_TABLES.has(table)
-      ? 'manage'
-      : WORKSPACE_MUTATION_TABLES.has(table) || table === 'messages'
-        ? 'write'
-        : 'read';
+  const mode = capabilityForDbOperation(table, action);
 
   for (const row of operationRows(payload.values)) {
     if (!row || typeof row !== 'object') continue;
@@ -378,9 +445,9 @@ function getDatabaseUrl() {
   return process.env.DATABASE_URL;
 }
 
-function getAnthropicApiKey() {
+function getAnthropicApiKey(workspaceId = null) {
   // DB-stored key first (set via Settings → Secret keys), env var as fallback.
-  return resolveSecret('ANTHROPIC_API_KEY');
+  return resolveSecret('ANTHROPIC_API_KEY', workspaceId);
 }
 
 async function ensureRuntimeSchema() {
@@ -407,7 +474,11 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
+    CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
 
     CREATE TABLE IF NOT EXISTS agent_webhooks (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -424,6 +495,52 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
+    CREATE TABLE IF NOT EXISTS agent_connections (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Agent',
+      handle text NOT NULL DEFAULT '',
+      host text DEFAULT '',
+      cwd text DEFAULT '',
+      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
+      metadata jsonb DEFAULT '{}'::jsonb,
+      connected_at timestamptz DEFAULT now(),
+      last_seen_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status);
+
+    CREATE TABLE IF NOT EXISTS agent_jobs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      connection_id uuid REFERENCES agent_connections(id) ON DELETE SET NULL,
+      session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+      created_by uuid,
+      prompt text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'error', 'cancelled')),
+      response text DEFAULT '',
+      error text DEFAULT '',
+      metadata jsonb DEFAULT '{}'::jsonb,
+      started_at timestamptz,
+      finished_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_workspace_id ON agent_jobs(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_agent_id ON agent_jobs(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_session_id ON agent_jobs(session_id);
+
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
+
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -432,6 +549,23 @@ async function ensureRuntimeSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+  `);
+  await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS workspace_secrets (
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      key text NOT NULL,
+      value text NOT NULL DEFAULT '',
+      updated_by uuid,
+      updated_at timestamptz DEFAULT now(),
+      PRIMARY KEY (workspace_id, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
+  `);
+  await db.unsafe(`
+    ALTER TABLE workspace_members DROP CONSTRAINT IF EXISTS workspace_members_role_check;
+    ALTER TABLE workspace_members
+      ADD CONSTRAINT workspace_members_role_check
+      CHECK (role IN ('owner', 'admin', 'editor', 'commenter', 'viewer'));
   `);
   await db.unsafe(`
     DO $$
@@ -540,6 +674,10 @@ function jsonError(res, status, error) {
   res.status(status).json({ data: null, error: mapDbError(error) });
 }
 
+function workspaceIdFromSettingsRequest(req) {
+  return String(req.query?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || '').trim();
+}
+
 function createPasswordHash(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -564,8 +702,242 @@ function resolveAnthropicModel(model) {
   return allowed.has(model) ? model : 'claude-fable-5';
 }
 
-async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext }) {
-  const apiKey = await getAnthropicApiKey();
+function slugHandle(value) {
+  return String(value || 'agent')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'agent';
+}
+
+function hashAgentToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function createAgentConnectToken() {
+  return `hca_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function normalizeBaseUrl(value) {
+  return String(value || '').trim().replace(/\/$/, '');
+}
+
+function requestBaseUrl(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const proto = forwardedProto || req.protocol || 'http';
+  const host = forwardedHost || req.get('host') || `127.0.0.1:${DEFAULT_PORT}`;
+  return `${proto}://${host}`;
+}
+
+function shellQuote(value) {
+  const text = String(value || '');
+  if (/^[A-Za-z0-9_/:.,=@%+-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle }) {
+  const agentBin = path.resolve(__dirname, '..', 'agent', 'hilos-agent', 'bin', 'hilos-agent.mjs');
+  const localCommand = [
+    'node',
+    shellQuote(agentBin),
+    'hatch',
+    '--url',
+    shellQuote(baseUrl),
+    '--token',
+    shellQuote(token),
+    '--workspace',
+    shellQuote(workspaceId),
+    '--agent',
+    shellQuote(agentId),
+    '--handle',
+    shellQuote(handle),
+  ].join(' ');
+  const portableCommand = [
+    'hilos-agent',
+    'hatch',
+    '--url',
+    shellQuote(baseUrl),
+    '--token',
+    shellQuote(token),
+    '--workspace',
+    shellQuote(workspaceId),
+    '--agent',
+    shellQuote(agentId),
+    '--handle',
+    shellQuote(handle),
+  ].join(' ');
+  return { localCommand, portableCommand };
+}
+
+async function verifyAgentConnectToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const rows = await getDb().unsafe(
+    `select id, workspace_id, name, avatar, description, system_prompt, soul, instructions, tools, skills, model, handle
+     from workspace_agents
+     where connect_token_hash = $1
+     limit 1`,
+    [hashAgentToken(token)],
+  );
+  const agent = rows[0];
+  if (!agent) return null;
+  return {
+    agentId: agent.id,
+    workspaceId: agent.workspace_id,
+    name: agent.name,
+    handle: agent.handle || slugHandle(agent.name),
+    agent,
+  };
+}
+
+function agentTokenFromWsRequest(req) {
+  try {
+    const url = new URL(req.url || '', 'http://localhost');
+    return url.searchParams.get('agentToken') || '';
+  } catch {
+    return '';
+  }
+}
+
+function publicAgentConnection(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    agent_id: row.agent_id,
+    name: row.name,
+    handle: row.handle,
+    host: row.host,
+    cwd: row.cwd,
+    status: row.status,
+    metadata: row.metadata || {},
+    connected_at: row.connected_at,
+    last_seen_at: row.last_seen_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function findConnectedAgent(workspaceId, agentId, handle) {
+  const wantedHandle = slugHandle(handle);
+  for (const entry of connectedAgents.values()) {
+    if (entry.workspaceId !== workspaceId) continue;
+    if (entry.ws?.readyState !== 1) continue;
+    if (agentId && entry.agentId === agentId) return entry;
+    if (wantedHandle && slugHandle(entry.handle) === wantedHandle) return entry;
+  }
+  return null;
+}
+
+function firstAgentMention(content) {
+  const match = String(content || '').match(/(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/);
+  return match ? slugHandle(match[2]) : '';
+}
+
+async function markAgentConnectionOffline(ws) {
+  const connectionId = ws.agentConnectionId;
+  if (!connectionId) return;
+  connectedAgents.delete(connectionId);
+  try {
+    const rows = await getDb().unsafe(
+      `update agent_connections
+       set status = 'offline', updated_at = now(), last_seen_at = now()
+       where id = $1
+       returning *`,
+      [connectionId],
+    );
+    notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+  } catch {
+    // best effort during socket close
+  }
+}
+
+async function registerAgentConnection(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth) throw forbidden('Agent token is required');
+  const workspaceId = String(message.workspaceId || auth.workspaceId || '');
+  const agentId = String(message.agentId || auth.agentId || '');
+  if (workspaceId !== auth.workspaceId || agentId !== auth.agentId) {
+    throw forbidden('Agent token does not match this workspace');
+  }
+  const handle = slugHandle(message.handle || auth.handle || auth.name);
+  const name = String(message.name || auth.name || handle).trim() || handle;
+  const host = String(message.host || '').slice(0, 180);
+  const cwd = String(message.cwd || '').slice(0, 500);
+  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+  const connectionId = crypto.randomUUID();
+
+  const rows = await getDb().unsafe(
+    `insert into agent_connections (id, workspace_id, agent_id, name, handle, host, cwd, status, metadata, connected_at, last_seen_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, 'online', $8::jsonb, now(), now(), now())
+     returning *`,
+    [connectionId, workspaceId, agentId, name, handle, host, cwd, JSON.stringify(metadata)],
+  );
+  const connection = publicAgentConnection(rows[0]);
+  ws.agentConnectionId = connectionId;
+  ws.agentId = agentId;
+  ws.workspaceId = workspaceId;
+  connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name });
+  notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
+  sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
+}
+
+async function updateAgentHeartbeat(ws, metadata = {}) {
+  const connectionId = ws.agentConnectionId;
+  if (!connectionId) throw forbidden('Agent is not registered');
+  const rows = await getDb().unsafe(
+    `update agent_connections
+     set status = $2, metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb, last_seen_at = now(), updated_at = now()
+     where id = $1
+     returning *`,
+    [connectionId, metadata.busy ? 'busy' : 'online', JSON.stringify(metadata || {})],
+  );
+  notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+}
+
+async function handleAgentJobResult(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+  const jobId = String(message.jobId || '');
+  if (!jobId) throw badRequest('jobId is required');
+  const rows = await getDb().unsafe(
+    `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+    [jobId, auth.agentId, auth.workspaceId],
+  );
+  const job = rows[0];
+  if (!job) throw forbidden('Agent job not found');
+  const errorText = String(message.error || '').trim();
+  const responseText = String(message.response || '').trim();
+  const status = errorText ? 'error' : 'done';
+  const updatedRows = await getDb().unsafe(
+    `update agent_jobs
+     set status = $2, response = $3, error = $4, finished_at = now(), updated_at = now()
+     where id = $1
+     returning *`,
+    [jobId, status, responseText, errorText],
+  );
+  notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+
+  const handle = job.agent_handle || auth.handle || slugHandle(job.agent_name);
+  const content = errorText
+    ? `@${handle} failed: ${errorText}`
+    : (responseText || `@${handle} finished without output.`);
+  const messageRows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
+     values ($1, 'assistant', $2, 'agent', $3, $4)
+     returning *`,
+    [job.session_id, content, String(job.agent_id || ''), job.agent_name || auth.name || handle],
+  );
+  notifyDbSubscribers('messages', 'INSERT', messageRows);
+  await updateAgentHeartbeat(ws, { busy: false }).catch(() => {});
+}
+
+async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
+  const apiKey = await getAnthropicApiKey(workspaceId);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -923,7 +1295,7 @@ function workspaceIdFromRealtimeChannel(channel) {
   if (typeof channel !== 'string') return null;
   const [prefix, workspaceId, ...rest] = channel.split(':');
   if (rest.length > 0 || !workspaceId) return null;
-  if (!['canvas', 'cursors', 'item-presence'].includes(prefix)) return null;
+  if (!['canvas', 'cursors', 'item-presence', 'agent-presence'].includes(prefix)) return null;
   return workspaceId;
 }
 
@@ -968,11 +1340,13 @@ function attachRealtime(server) {
 
   wss.on('connection', async (ws, req) => {
     const userId = await verifyToken(tokenFromWsRequest(req));
-    if (!userId) {
+    const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req));
+    if (!userId && !agentAuth) {
       ws.close(1008, 'Authentication required');
       return;
     }
     ws.userId = userId;
+    ws.agentAuth = agentAuth;
     ws.subscriptions = [];
     websocketClients.add(ws);
 
@@ -996,6 +1370,19 @@ function attachRealtime(server) {
         if (message.action === 'broadcast') {
           await authorizeRealtimeBroadcast(ws.userId, message.channel);
           relayBroadcast(message.channel, message.event, message.payload);
+          return;
+        }
+        if (message.action === 'agent_register') {
+          await registerAgentConnection(ws, message);
+          return;
+        }
+        if (message.action === 'agent_heartbeat') {
+          await updateAgentHeartbeat(ws, message.metadata || {});
+          return;
+        }
+        if (message.action === 'agent_job_result') {
+          await handleAgentJobResult(ws, message);
+          return;
         }
       } catch (error) {
         sendWs(ws, { type: 'error', message: error?.message || 'Realtime request rejected' });
@@ -1004,6 +1391,7 @@ function attachRealtime(server) {
 
     ws.on('close', () => {
       websocketClients.delete(ws);
+      void markAgentConnectionOffline(ws);
     });
   });
 
@@ -1018,18 +1406,15 @@ function createApp() {
     console.warn('[backend] runtime schema migration failed:', error.message || error);
   });
 
-  // NOTE: Auth enforcement (requireAuth gate + workspace membership checks) was
-  // reverted — it denied legitimate access for existing users/data and broke
-  // the app. Tokens are still issued on signin/signup and sent by the client,
-  // but endpoints do not yet enforce them. Re-introduce enforcement carefully
-  // with a logged-in test pass before re-enabling. See enforceWorkspaceAccess.
+  // Auth is enforced at the route boundary and again per workspace-scoped
+  // operation. Keep this server-side; client filters are only UX hints.
 
   app.get('/backend/health', async (_req, res) => {
     try {
       await getDb().unsafe('select 1');
       res.json({ ok: true });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1038,7 +1423,7 @@ function createApp() {
       const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
       res.json({ data: await detectCapabilities(workspacePath), error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1113,6 +1498,161 @@ function createApp() {
     }
   });
 
+  app.get('/backend/agents/connections', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.query.workspaceId || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const rows = await getDb().unsafe(
+        `select *
+         from agent_connections
+         where workspace_id = $1
+           and last_seen_at > now() - interval '24 hours'
+         order by status = 'online' desc, status = 'busy' desc, last_seen_at desc`,
+        [workspaceId],
+      );
+      res.json({ data: rows.map(publicAgentConnection), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/agents/:id/connection-command', requireAuth, async (req, res) => {
+    try {
+      const agentId = String(req.params.id || '').trim();
+      const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+      const agent = rows[0];
+      if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+      await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
+      const token = createAgentConnectToken();
+      const handle = slugHandle(req.body?.handle || agent.handle || agent.name);
+      const updateRows = await getDb().unsafe(
+        `update workspace_agents
+         set handle = $2, connect_token_hash = $3, updated_at = now(), version = coalesce(version, 0) + 1
+         where id = $1
+         returning *`,
+        [agentId, handle, hashAgentToken(token)],
+      );
+      notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
+      const baseUrl = normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
+      const commands = agentConnectionCommand({
+        baseUrl,
+        token,
+        workspaceId: agent.workspace_id,
+        agentId,
+        handle,
+      });
+      res.json({
+        data: {
+          agent: updateRows[0],
+          handle,
+          token,
+          command: commands.localCommand,
+          localCommand: commands.localCommand,
+          portableCommand: commands.portableCommand,
+          baseUrl,
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
+    try {
+      const { workspaceId, sessionId, messageId, content, threadParentId } = req.body || {};
+      if (!workspaceId || !sessionId || !content) {
+        return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
+      }
+      await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
+      const sessionRows = await getDb().unsafe('select id, workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
+      if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
+        return jsonError(res, 404, new Error('Channel not found'));
+      }
+      const handle = firstAgentMention(content);
+      if (!handle) {
+        return res.json({ data: { dispatched: false, reason: 'no_agent_mention' }, error: null });
+      }
+      const agents = await getDb().unsafe(
+        `select *
+         from workspace_agents
+         where workspace_id = $1
+         order by created_at asc`,
+        [workspaceId],
+      );
+      const agent = agents.find((row) => {
+        const rowHandle = slugHandle(row.handle || row.name);
+        return rowHandle === handle || slugHandle(row.name) === handle;
+      });
+      if (!agent) {
+        return res.json({ data: { dispatched: false, reason: 'agent_not_found', handle }, error: null });
+      }
+      const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
+      if (!connection) {
+        const assistantRows = await getDb().unsafe(
+          `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+           values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+           returning *`,
+          [
+            sessionId,
+            `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
+            threadParentId || null,
+            String(agent.id),
+            agent.name,
+          ],
+        );
+        notifyDbSubscribers('messages', 'INSERT', assistantRows);
+        return res.json({ data: { dispatched: true, connected: false, agent, handle }, error: null });
+      }
+
+      const jobRows = await getDb().unsafe(
+        `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, message_id, created_by, prompt, status, started_at, metadata)
+         values ($1, $2, $3, $4, $5, $6, $7, 'running', now(), $8::jsonb)
+         returning *`,
+        [
+          workspaceId,
+          agent.id,
+          connection.connectionId,
+          sessionId,
+          messageId || null,
+          req.userId,
+          String(content),
+          JSON.stringify({ handle, threadParentId: threadParentId || null }),
+        ],
+      );
+      notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+      await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => {});
+      sendWs(connection.ws, {
+        type: 'agent_job',
+        job: {
+          id: jobRows[0].id,
+          workspaceId,
+          sessionId,
+          messageId: messageId || null,
+          threadParentId: threadParentId || null,
+          prompt: String(content),
+          handle,
+          agent: {
+            id: agent.id,
+            name: agent.name,
+            handle: agent.handle || handle,
+            description: agent.description || '',
+            system_prompt: agent.system_prompt || '',
+            soul: agent.soul || '',
+            instructions: agent.instructions || '',
+            tools: agent.tools || [],
+            skills: agent.skills || [],
+            model: agent.model || 'auto',
+          },
+        },
+      });
+      res.json({ data: { dispatched: true, connected: true, agent, handle, job: jobRows[0] }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/webhooks/:token', async (req, res) => {
     try {
       const token = String(req.params.token || '');
@@ -1154,6 +1694,7 @@ function createApp() {
           memory: null,
           documents: null,
           workspaceContext: { triggeredBy: 'webhook', webhook: webhook.name },
+          workspaceId: webhook.workspace_id,
           agentContext: webhook.agent_id ? {
             name: webhook.agent_name,
             systemPrompt: webhook.system_prompt,
@@ -1337,16 +1878,22 @@ function createApp() {
 
   app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
-      const keys = await listManagedSecrets();
+      const workspaceId = workspaceIdFromSettingsRequest(req);
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const keys = await listManagedSecrets(workspaceId);
       res.json({ data: { keys }, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
   app.post('/backend/settings/secrets', requireAuth, async (req, res) => {
     try {
       const body = req.body || {};
+      const workspaceId = workspaceIdFromSettingsRequest(req);
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const updates = {};
       for (const key of MANAGED_SECRET_KEYS) {
         // Only apply keys that were explicitly provided. An empty string
@@ -1357,21 +1904,22 @@ function createApp() {
         return jsonError(res, 400, new Error('No managed keys provided'));
       }
       for (const [key, value] of Object.entries(updates)) {
-        await setSettingValue(key, value);
+        await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
       }
-      const keys = await listManagedSecrets();
+      const keys = await listManagedSecrets(workspaceId);
       res.json({ data: { keys }, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
   app.post('/backend/ai-chat', requireAuth, async (req, res) => {
     try {
-      const apiKey = await getAnthropicApiKey();
+      const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = req.body || {};
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
+      const apiKey = await getAnthropicApiKey(workspaceId);
       if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
-
-      const { messages, model, memory, documents, workspaceContext, agentContext } = req.body || {};
       const resolvedModel = resolveAnthropicModel(model);
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1430,7 +1978,7 @@ function createApp() {
       }
       res.end();
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1455,4 +2003,37 @@ if (require.main === module) {
   startBackendServer();
 }
 
-module.exports = { startBackendServer };
+function setTestDb(nextDb) {
+  db = nextDb;
+  cachedAuthSecret = null;
+}
+
+function resetTestState() {
+  db = undefined;
+  cachedAuthSecret = null;
+  websocketClients = new Set();
+  envLoaded = false;
+}
+
+module.exports = {
+  startBackendServer,
+  createApp,
+  __test: {
+    appendWorkspaceAccessClause,
+    authorizeRealtimeBinding,
+    authorizeRealtimeBroadcast,
+    buildWhereClause,
+    capabilityForDbOperation,
+    canManageWorkspace,
+    canMutateWorkspace,
+    enforceDbOperationAccess,
+    enforceWorkspaceRole,
+    getWorkspaceRole,
+    issueToken,
+    resetTestState,
+    roleHasWorkspaceCapability,
+    setTestDb,
+    verifyToken,
+    workspaceIdFromRealtimeChannel,
+  },
+};
