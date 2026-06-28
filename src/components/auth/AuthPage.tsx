@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, Github, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
+import { ArrowRight, GitBranch, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -145,7 +145,7 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
                 {oauthProvider === 'github' ? (
                   <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
                 ) : (
-                  <Github size={16} />
+                  <GitBranch size={16} />
                 )}
                 GitHub
               </button>
