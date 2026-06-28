@@ -19,6 +19,7 @@ const ALLOWED_TABLES = new Set([
   'document_versions',
   'workspace_agents',
   'agent_webhooks',
+  'agent_connections',
   'activity_events',
 ]);
 
