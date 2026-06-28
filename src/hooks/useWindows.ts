@@ -144,28 +144,6 @@ function getComplementaryTile(edge: TileEdge): WindowBounds {
   return { x: 0, y: 0, width: fullWidth, height: Math.max(1, fullHeight - halfHeight) };
 }
 
-function restoreOpenedWindow(win: FloatingWindow) {
-  const viewport = getWorkspaceViewportSize();
-  const isFullViewport = win.maximized
-    || win.width >= viewport.width - 24
-    || win.height >= viewport.height - 24;
-  const fallbackSize = getDefaultRestoreSize(win.type);
-  const fallbackPosition = getSpawnPosition([], fallbackSize);
-  const source = win.maximized && win.restoreBounds
-    ? win.restoreBounds
-    : isFullViewport
-    ? { ...fallbackPosition, ...fallbackSize }
-    : (win.restoreBounds || { x: win.x, y: win.y, width: win.width, height: win.height });
-  const next = clampToViewport(source);
-  return {
-    ...win,
-    ...next,
-    minimized: false,
-    maximized: false,
-    restoreBounds: next,
-  };
-}
-
 function applyWindowBoundsUpdate(win: FloatingWindow, updates: Partial<FloatingWindow>): FloatingWindow {
   const merged: FloatingWindow = { ...win, ...updates };
   const hasBoundsUpdate = updates.x !== undefined

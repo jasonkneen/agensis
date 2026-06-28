@@ -794,7 +794,7 @@
 }
 
 [data-sidebar-panel] {
-  --sidebar-panel-opacity: 92%;
+  --sidebar-panel-opacity: 78%;
   position: relative;
   z-index: 40;
   background: color-mix(in srgb, var(--card) var(--sidebar-panel-opacity), transparent) !important;
@@ -806,11 +806,11 @@
 }
 
 :root[data-theme="dark"] [data-sidebar-panel] {
-  --sidebar-panel-opacity: 88%;
+  --sidebar-panel-opacity: 74%;
 }
 
 :root[data-ui-theme="tinyworld"] [data-sidebar-panel] {
-  --sidebar-panel-opacity: 86%;
+  --sidebar-panel-opacity: 68%;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
@@ -887,6 +887,14 @@
 .sidebar-action-row > span:not(.sidebar-action-count),
 .sidebar-item-row > span:not(.sidebar-action-count) {
   text-align: left;
+}
+
+.sidebar-section-label,
+.sidebar-action-label,
+.sidebar-item-label {
+  flex: 0 1 auto !important;
+  margin-right: auto;
+  text-align: left !important;
 }
 
 .sidebar-section-count,
