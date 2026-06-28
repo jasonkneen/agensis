@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowRight, Lock, Mail, Sparkles } from 'lucide-react';
+import { ArrowRight, Github, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,15 +10,17 @@ import { Spinner } from '@/components/ui/spinner';
 interface AuthPageProps {
   onSignIn: (email: string, password: string) => Promise<{ error: string | null }>;
   onSignUp: (email: string, password: string) => Promise<{ error: string | null }>;
+  onOAuthSignIn: (provider: 'google' | 'github') => Promise<{ error: string | null }>;
 }
 
-export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
+export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [oauthProvider, setOauthProvider] = useState<'google' | 'github' | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -58,6 +60,16 @@ export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
     setConfirmPassword('');
   };
 
+  const handleOAuth = async (provider: 'google' | 'github') => {
+    setError('');
+    setOauthProvider(provider);
+    const result = await onOAuthSignIn(provider);
+    if (result.error) {
+      setOauthProvider(null);
+      setError(result.error);
+    }
+  };
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="flex w-full max-w-md flex-col gap-6">
@@ -80,6 +92,80 @@ export function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
             <CardTitle>{mode === 'signin' ? 'Sign in' : 'Sign up'}</CardTitle>
           </CardHeader>
           <CardContent>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => handleOAuth('google')}
+                disabled={submitting || oauthProvider !== null}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  minHeight: '42px',
+                  padding: '10px 12px',
+                  background: 'var(--canvas-elevated)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {oauthProvider === 'google' ? (
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <span style={{ fontWeight: 700, fontSize: '16px', lineHeight: 1 }}>G</span>
+                )}
+                Google
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOAuth('github')}
+                disabled={submitting || oauthProvider !== null}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  minHeight: '42px',
+                  padding: '10px 12px',
+                  background: 'var(--canvas-elevated)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {oauthProvider === 'github' ? (
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <Github size={16} />
+                )}
+                GitHub
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto 1fr',
+                alignItems: 'center',
+                gap: '12px',
+                color: 'var(--text-muted)',
+                fontSize: '12px',
+              }}
+            >
+              <span style={{ height: '1px', background: 'var(--border)' }} />
+              <span>or</span>
+              <span style={{ height: '1px', background: 'var(--border)' }} />
+            </div>
+
             <form onSubmit={handleSubmit}>
               <FieldGroup>
                 <Field>

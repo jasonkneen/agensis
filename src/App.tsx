@@ -331,7 +331,7 @@ First ask one concise question if the applet idea is missing. If I provide a spe
 }
 
 export default function App() {
-  const { user, loading: authLoading, signIn, signUp, signOut } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1');
@@ -1016,7 +1016,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <AuthPage onSignIn={signIn} onSignUp={signUp} />;
+    return <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />;
   }
 
   return (
