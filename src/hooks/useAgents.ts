@@ -33,12 +33,6 @@ function agentHandle(value: string) {
     .slice(0, 40) || 'agent';
 }
 
-type AgentChangePayload = {
-  eventType: 'INSERT' | 'UPDATE' | 'DELETE';
-  new?: WorkspaceAgent;
-  old?: WorkspaceAgent;
-};
-
 export function useAgents(workspaceId: string | null, userId?: string) {
   const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
   const [loading, setLoading] = useState(true);

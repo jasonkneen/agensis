@@ -78,6 +78,7 @@ type BackendClient = {
     onAuthStateChange(callback: (event: string, session: SessionLike | null) => void): { data: { subscription: { unsubscribe(): void } } };
     signUp(input: { email: string; password: string }): Promise<{ data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null }>;
     signInWithPassword(input: { email: string; password: string }): Promise<{ data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null }>;
+    signInWithOAuthSession(): Promise<{ data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null }>;
     signOut(): Promise<{ error: null }>;
   };
 };
@@ -96,7 +97,11 @@ function getWsUrl() {
   if (BACKEND_BASE) {
     return withToken(`${BACKEND_BASE.replace(/^http/, 'ws')}/backend/ws`);
   }
-  return withToken('ws://127.0.0.1:3142/backend/ws');
+  if (typeof window !== 'undefined') {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return withToken(`${wsProtocol}//${window.location.host}/backend/ws`);
+  }
+  return withToken('/backend/ws');
 }
 
 function getStoredSession(): SessionLike | null {
