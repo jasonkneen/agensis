@@ -19,6 +19,12 @@ ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
 ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
 ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
 ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
+ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
 
 CREATE TABLE IF NOT EXISTS agent_webhooks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

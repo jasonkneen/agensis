@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   title text NOT NULL DEFAULT 'New Chat',
   model text DEFAULT 'auto',
   folder text DEFAULT 'General',
+  is_favorite boolean NOT NULL DEFAULT false,
+  participants jsonb NOT NULL DEFAULT '[]'::jsonb,
   archived_at timestamptz,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
@@ -78,6 +80,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace_id ON chat_sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
 
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -227,14 +230,19 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name text NOT NULL,
-  avatar text NOT NULL DEFAULT '🤖',
+  avatar text NOT NULL DEFAULT 'AI',
+  openpet_avatar_id text DEFAULT '',
   description text DEFAULT '',
   system_prompt text NOT NULL DEFAULT '',
   soul text DEFAULT '',
   instructions text DEFAULT '',
   tools jsonb DEFAULT '[]'::jsonb,
   skills jsonb DEFAULT '[]'::jsonb,
+  handle text DEFAULT '',
+  connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
+  run_mode text NOT NULL DEFAULT 'builtin',
+  permission_mode text NOT NULL DEFAULT 'default',
   version integer NOT NULL DEFAULT 1,
   created_by uuid,
   created_at timestamptz DEFAULT now(),

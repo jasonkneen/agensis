@@ -33,11 +33,24 @@ export interface ChatSession {
   title: string;
   model: string;
   folder?: string | null;
+  is_favorite?: boolean;
+  participants?: ChannelParticipant[] | null;
   archived_at?: string | null;
   version?: number;
   created_at: string;
   updated_at: string;
 }
+
+export type ChannelParticipant = {
+  id: string;
+  name: string;
+  kind: 'user' | 'agent';
+  status?: string | null;
+  handle?: string | null;
+  user_id?: string | null;
+  agent_id?: string | null;
+  added_at?: string | null;
+};
 
 export interface Message {
   id: string;
@@ -238,12 +251,13 @@ export type AIModel = {
 };
 
 export const AI_MODELS: AIModel[] = [
-  { id: 'auto', label: 'Auto', description: 'Uses the recommended default model' },
-  { id: 'claude-fable-5', label: 'Claude Fable 5', description: 'Generally available default' },
+  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Most capable model' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Balanced performance' },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', description: 'Fastest model' },
 ];
+
+export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';
 
 export interface DocumentVersion {
   id: string;
@@ -261,6 +275,7 @@ export interface WorkspaceAgent {
   workspace_id: string;
   name: string;
   avatar: string;
+  openpet_avatar_id?: string | null;
   description: string;
   system_prompt: string;
   soul?: string;
@@ -269,6 +284,8 @@ export interface WorkspaceAgent {
   skills?: string[];
   handle?: string | null;
   model: string;
+  run_mode?: 'builtin' | 'daemon';
+  permission_mode?: AgentPermissionMode;
   version?: number;
   created_by: string | null;
   created_at: string;
@@ -321,8 +338,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   },
   {
     id: 2,
-    title: 'Link documents in chats.',
-    body: 'Type @ in any chat message to reference and link a document directly into your conversation.',
+    title: 'Link documents in channels.',
+    body: 'Type @ in any channel post to reference and link a document directly.',
     target: 'chat-input',
     placement: 'top',
   },

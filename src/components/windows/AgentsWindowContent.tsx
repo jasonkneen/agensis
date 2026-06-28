@@ -31,6 +31,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
+import { fetchFeaturedOpenPets, isImageAvatar, type OpenPet } from '../../lib/openpets';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -39,6 +40,7 @@ interface AgentsWindowContentProps {
   onCreateAgent: (input: {
     name: string;
     avatar?: string;
+    openpet_avatar_id?: string | null;
     description?: string;
     system_prompt: string;
     soul?: string;
@@ -47,6 +49,7 @@ interface AgentsWindowContentProps {
     skills?: string[];
     handle?: string;
     model?: string;
+    run_mode?: 'builtin' | 'daemon';
   }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
@@ -69,6 +72,7 @@ export function AgentsWindowContent({
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
+  const [newOpenPetAvatarId, setNewOpenPetAvatarId] = useState('');
   const [newHandle, setNewHandle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newSystemPrompt, setNewSystemPrompt] = useState('');
@@ -77,6 +81,7 @@ export function AgentsWindowContent({
   const [newTools, setNewTools] = useState('');
   const [newSkills, setNewSkills] = useState('');
   const [newModel, setNewModel] = useState('auto');
+  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon'>('builtin');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -90,6 +95,7 @@ export function AgentsWindowContent({
     onCreateAgent({
       name: newName.trim(),
       avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
+      openpet_avatar_id: newOpenPetAvatarId,
       handle: newHandle.trim() || agentHandle(newName),
       description: newDescription.trim(),
       system_prompt: newSystemPrompt.trim(),
@@ -98,9 +104,11 @@ export function AgentsWindowContent({
       tools: splitList(newTools),
       skills: splitList(newSkills),
       model: newModel,
+      run_mode: newRunMode,
     });
     setNewName('');
     setNewAvatar(DEFAULT_AGENT_AVATAR);
+    setNewOpenPetAvatarId('');
     setNewHandle('');
     setNewDescription('');
     setNewSystemPrompt('');
@@ -109,6 +117,7 @@ export function AgentsWindowContent({
     setNewTools('');
     setNewSkills('');
     setNewModel('auto');
+    setNewRunMode('builtin');
     setShowCreate(false);
   };
 
@@ -144,6 +153,7 @@ export function AgentsWindowContent({
           <AgentForm
             name={newName}
             avatar={newAvatar}
+            openPetAvatarId={newOpenPetAvatarId}
             handle={newHandle}
             description={newDescription}
             systemPrompt={newSystemPrompt}
@@ -152,9 +162,17 @@ export function AgentsWindowContent({
             tools={newTools}
             skills={newSkills}
             model={newModel}
+            runMode={newRunMode}
             capabilities={capabilities}
             onNameChange={setNewName}
-            onAvatarChange={setNewAvatar}
+            onAvatarChange={(value) => {
+              setNewAvatar(value);
+              setNewOpenPetAvatarId('');
+            }}
+            onOpenPetAvatarChange={(pet) => {
+              setNewAvatar(pet.thumbnail);
+              setNewOpenPetAvatarId(pet.id);
+            }}
             onHandleChange={setNewHandle}
             onDescriptionChange={setNewDescription}
             onSystemPromptChange={setNewSystemPrompt}
@@ -163,6 +181,7 @@ export function AgentsWindowContent({
             onToolsChange={setNewTools}
             onSkillsChange={setNewSkills}
             onModelChange={setNewModel}
+            onRunModeChange={setNewRunMode}
             onCancel={() => setShowCreate(false)}
             onSubmit={handleCreate}
             submitLabel="Create"
@@ -215,6 +234,7 @@ export function AgentsWindowContent({
 function AgentForm({
   name,
   avatar,
+  openPetAvatarId,
   handle,
   description,
   systemPrompt,
@@ -223,9 +243,11 @@ function AgentForm({
   tools,
   skills,
   model,
+  runMode,
   capabilities,
   onNameChange,
   onAvatarChange,
+  onOpenPetAvatarChange,
   onHandleChange,
   onDescriptionChange,
   onSystemPromptChange,
@@ -234,6 +256,7 @@ function AgentForm({
   onToolsChange,
   onSkillsChange,
   onModelChange,
+  onRunModeChange,
   onCancel,
   onSubmit,
   submitLabel,
@@ -241,6 +264,7 @@ function AgentForm({
 }: {
   name: string;
   avatar: string;
+  openPetAvatarId: string;
   handle: string;
   description: string;
   systemPrompt: string;
@@ -249,9 +273,11 @@ function AgentForm({
   tools: string;
   skills: string;
   model: string;
+  runMode: 'builtin' | 'daemon';
   capabilities: SystemCapabilities | null;
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
+  onOpenPetAvatarChange: (pet: OpenPet) => void;
   onHandleChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -260,6 +286,7 @@ function AgentForm({
   onToolsChange: (value: string) => void;
   onSkillsChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onRunModeChange: (value: 'builtin' | 'daemon') => void;
   onCancel: () => void;
   onSubmit: () => void;
   submitLabel: string;
@@ -267,6 +294,19 @@ function AgentForm({
 }) {
   const options = modelOptions(model);
   const canSubmit = Boolean(name.trim());
+  const [openPets, setOpenPets] = useState<OpenPet[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchFeaturedOpenPets().then(pets => {
+      if (!cancelled) setOpenPets(pets);
+    }).catch(() => {
+      if (!cancelled) setOpenPets([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <FieldGroup className="gap-3">
@@ -299,6 +339,29 @@ function AgentForm({
           />
         </Field>
       </div>
+
+      {openPets.length > 0 && (
+        <Field>
+          <FieldLabel>OpenPets avatar</FieldLabel>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(3.5rem,1fr))] gap-2">
+            {openPets.slice(0, 18).map(pet => (
+              <button
+                key={pet.id}
+                type="button"
+                className={[
+                  'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition',
+                  openPetAvatarId === pet.id ? 'border-primary ring-2 ring-primary/40' : 'border-border hover:border-primary/60',
+                ].join(' ')}
+                onClick={() => onOpenPetAvatarChange(pet)}
+                title={pet.displayName}
+                aria-label={`Use ${pet.displayName} OpenPets avatar`}
+              >
+                <img src={pet.thumbnail} alt="" className="size-full object-contain" loading="lazy" />
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
 
       <Field>
         <FieldLabel htmlFor="agent-description">Description</FieldLabel>
@@ -380,13 +443,23 @@ function AgentForm({
         )}
       </Field>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <NativeSelect
+          value={runMode}
+          onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
+          size="sm"
+          className="max-w-48"
+          aria-label="Agent runtime"
+        >
+          <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
+          <NativeSelectOption value="daemon">Remote daemon</NativeSelectOption>
+        </NativeSelect>
         <NativeSelect
           value={model}
           onChange={e => onModelChange(e.target.value)}
           size="sm"
           className="max-w-56"
-          aria-label="Agent model"
+          aria-label="Built-in agent model"
         >
           {options.map(option => (
             <NativeSelectOption key={option.id} value={option.id}>
@@ -439,6 +512,7 @@ function AgentRow({
 }) {
   const [editName, setEditName] = useState(agent.name);
   const [editAvatar, setEditAvatar] = useState(agent.avatar || DEFAULT_AGENT_AVATAR);
+  const [editOpenPetAvatarId, setEditOpenPetAvatarId] = useState(agent.openpet_avatar_id || '');
   const [editHandle, setEditHandle] = useState(agent.handle || agentHandle(agent.name));
   const [editDescription, setEditDescription] = useState(agent.description || '');
   const [editSystemPrompt, setEditSystemPrompt] = useState(agent.system_prompt || '');
@@ -447,6 +521,7 @@ function AgentRow({
   const [editTools, setEditTools] = useState(joinList(agent.tools));
   const [editSkills, setEditSkills] = useState(joinList(agent.skills));
   const [editModel, setEditModel] = useState(agent.model || 'auto');
+  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [connectionCommand, setConnectionCommand] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
@@ -456,6 +531,7 @@ function AgentRow({
     onSave({
       name: editName.trim(),
       avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
+      openpet_avatar_id: editOpenPetAvatarId,
       handle: editHandle.trim() || agentHandle(editName),
       description: editDescription.trim(),
       system_prompt: editSystemPrompt.trim(),
@@ -464,6 +540,7 @@ function AgentRow({
       tools: splitList(editTools),
       skills: splitList(editSkills),
       model: editModel,
+      run_mode: editRunMode,
     });
   };
 
@@ -493,6 +570,7 @@ function AgentRow({
       const command = payload?.data?.localCommand || payload?.data?.command || '';
       if (!response.ok || !command) return;
       setConnectionCommand(command);
+      setEditRunMode('daemon');
       await navigator.clipboard?.writeText(command);
       setCopyState('copied');
       window.setTimeout(() => setCopyState('idle'), 1600);
@@ -508,6 +586,7 @@ function AgentRow({
           <AgentForm
             name={editName}
             avatar={editAvatar}
+            openPetAvatarId={editOpenPetAvatarId}
             handle={editHandle}
             description={editDescription}
             systemPrompt={editSystemPrompt}
@@ -516,9 +595,17 @@ function AgentRow({
             tools={editTools}
             skills={editSkills}
             model={editModel}
+            runMode={editRunMode}
             capabilities={capabilities}
             onNameChange={setEditName}
-            onAvatarChange={setEditAvatar}
+            onAvatarChange={(value) => {
+              setEditAvatar(value);
+              setEditOpenPetAvatarId('');
+            }}
+            onOpenPetAvatarChange={(pet) => {
+              setEditAvatar(pet.thumbnail);
+              setEditOpenPetAvatarId(pet.id);
+            }}
             onHandleChange={setEditHandle}
             onDescriptionChange={setEditDescription}
             onSystemPromptChange={setEditSystemPrompt}
@@ -527,6 +614,7 @@ function AgentRow({
             onToolsChange={setEditTools}
             onSkillsChange={setEditSkills}
             onModelChange={setEditModel}
+            onRunModeChange={setEditRunMode}
             onCancel={onCancelEdit}
             onSubmit={handleSave}
             submitLabel="Save"
@@ -543,8 +631,12 @@ function AgentRow({
       className="hover:bg-muted/50"
       onMouseEnter={onCancelDelete}
     >
-      <ItemMedia className="size-9 rounded-full bg-muted text-base">
-        {agent.avatar || DEFAULT_AGENT_AVATAR}
+      <ItemMedia className="size-9 overflow-hidden rounded-full bg-muted text-base">
+        {isImageAvatar(agent.avatar) ? (
+          <img src={agent.avatar} alt="" className="size-full object-cover" loading="lazy" />
+        ) : (
+          agent.avatar || DEFAULT_AGENT_AVATAR
+        )}
       </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="max-w-full truncate">{agent.name}</ItemTitle>
@@ -555,6 +647,9 @@ function AgentRow({
         )}
         <div className="flex flex-wrap gap-1">
           <Badge variant="outline">@{agent.handle || agentHandle(agent.name)}</Badge>
+          <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'secondary'}>
+            {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
+          </Badge>
           <Badge variant="secondary">{displayModel(agent.model)}</Badge>
           <Badge variant={activeConnections.length > 0 ? 'default' : 'secondary'}>
             {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}

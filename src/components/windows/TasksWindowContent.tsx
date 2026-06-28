@@ -79,6 +79,8 @@ const PRIORITY_LABELS: Record<TaskPriority, string> = {
   urgent: 'Urgent',
 };
 
+type AssignmentFilter = 'all' | 'mine' | 'others';
+
 export function TasksWindowContent({
   tasks,
   members,
@@ -93,7 +95,7 @@ export function TasksWindowContent({
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
-  const [filter, setFilter] = useState<'open' | 'all' | 'mine'>('open');
+  const [filter, setFilter] = useState<AssignmentFilter>('all');
 
   const childrenMap = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -107,14 +109,16 @@ export function TasksWindowContent({
 
   const filteredTopLevel = useMemo(() => {
     const topLevel = tasks.filter(task => !task.parent_id);
-    if (filter === 'open') return topLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled');
+    const me = currentUserId || members.find(member => member.email === currentUserEmail)?.user_id || '';
     if (filter === 'mine') {
-      const me = members.find(member => member.email === currentUserEmail);
       if (!me) return [];
-      return topLevel.filter(task => task.assignee_id === me.user_id);
+      return topLevel.filter(task => task.assignee_id === me);
+    }
+    if (filter === 'others') {
+      return topLevel.filter(task => task.assignee_id && task.assignee_id !== me);
     }
     return topLevel;
-  }, [tasks, filter, members, currentUserEmail]);
+  }, [tasks, filter, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -145,27 +149,27 @@ export function TasksWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
+      <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <ToggleGroup
           type="single"
           size="sm"
           variant="outline"
           value={filter}
           onValueChange={value => {
-            if (value) setFilter(value as 'open' | 'all' | 'mine');
+            if (value) setFilter(value as AssignmentFilter);
           }}
         >
-          <ToggleGroupItem value="open">Open</ToggleGroupItem>
-          <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
           <ToggleGroupItem value="all">All</ToggleGroupItem>
+          <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
+          <ToggleGroupItem value="others" title="Assigned to other workspace members">Others</ToggleGroupItem>
         </ToggleGroup>
         <div className="flex-1" />
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
 
       <div className="shrink-0 border-b border-border bg-card p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-56 flex-1">
+        <div className="task-add-row gap-2">
+          <div className="min-w-0">
             <Input
               value={newTitle}
               onChange={e => setNewTitle(e.target.value)}
@@ -173,12 +177,14 @@ export function TasksWindowContent({
                 if (e.key === 'Enter') handleAdd();
               }}
               placeholder="Add a task..."
+              className="task-title-input"
             />
           </div>
           <NativeSelect
             value={newPriority}
             onChange={e => setNewPriority(e.target.value as TaskPriority)}
             size="sm"
+            className="w-32"
             aria-label="Priority"
           >
             {(Object.keys(PRIORITY_LABELS) as TaskPriority[]).map(priority => (
@@ -190,7 +196,7 @@ export function TasksWindowContent({
               value={newAssignee}
               onChange={e => setNewAssignee(e.target.value)}
               size="sm"
-              className="max-w-40"
+              className="w-40 max-w-full"
               aria-label="Assignee"
             >
               <NativeSelectOption value="">Unassigned</NativeSelectOption>
@@ -294,7 +300,7 @@ function TaskRow({
 
   return (
     <div className="flex flex-col">
-      <Item variant="default" className="items-start hover:bg-muted/50">
+      <Item variant="outline" className="task-row items-start">
         <ItemActions className="gap-1 pt-0.5">
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
             {expanded ? <ChevronDown /> : <ChevronRight />}
@@ -344,7 +350,7 @@ function TaskRow({
               onChange={e => onChangeAssignee(e.target.value || null)}
               onClick={e => e.stopPropagation()}
               size="sm"
-              className="max-w-32"
+              className="w-32"
               aria-label="Assign task"
             >
               <NativeSelectOption value="">Unassigned</NativeSelectOption>
@@ -360,6 +366,7 @@ function TaskRow({
             onChange={e => onChangeStatus(e.target.value as TaskStatus)}
             onClick={e => e.stopPropagation()}
             size="sm"
+            className="w-32"
             aria-label="Task status"
           >
             {(Object.keys(STATUS_LABELS) as TaskStatus[]).map(status => (
@@ -421,7 +428,7 @@ function TaskDetail({
   };
 
   return (
-    <div className="ml-9 flex flex-col gap-4 border-l border-border py-3 pr-2 pl-4">
+    <div className="task-detail ml-9 flex flex-col gap-4 border-l py-3 pr-2 pl-4">
       <section className="flex flex-col gap-2">
         <Marker>
           <MarkerIcon>
@@ -434,7 +441,7 @@ function TaskDetail({
             {subtasks.map(subtask => {
               const subDone = subtask.status === 'done';
               return (
-                <Item key={subtask.id} size="xs" variant="muted">
+                <Item key={subtask.id} size="xs" variant="muted" className="task-subtask-row">
                   <Button type="button" variant="ghost" size="icon-xs" onClick={() => onToggleSubtask(subtask)} aria-label="Toggle subtask">
                     {subDone ? <CheckCircle2 /> : <Circle />}
                   </Button>
@@ -453,7 +460,7 @@ function TaskDetail({
             })}
           </ItemGroup>
         )}
-        <InputGroup>
+        <InputGroup className="task-input-group">
           <InputGroupAddon>
             <CornerDownRight />
           </InputGroupAddon>
@@ -483,7 +490,7 @@ function TaskDetail({
         {comments.length > 0 && (
           <ItemGroup className="gap-1">
             {comments.map(comment => (
-              <Item key={comment.id} size="xs" variant="muted">
+              <Item key={comment.id} size="xs" variant="muted" className="task-comment-row">
                 <ItemMedia className="size-2 rounded-full bg-primary" />
                 <ItemContent className="min-w-0">
                   <ItemTitle className="max-w-full whitespace-normal font-normal">{comment.content}</ItemTitle>
@@ -497,7 +504,7 @@ function TaskDetail({
             ))}
           </ItemGroup>
         )}
-        <InputGroup>
+        <InputGroup className="task-input-group">
           <InputGroupInput
             value={commentInput}
             onChange={e => setCommentInput(e.target.value)}

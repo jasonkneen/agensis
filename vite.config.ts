@@ -18,6 +18,7 @@ export default defineConfig({
       '/backend': {
         target: 'http://127.0.0.1:3142',
         changeOrigin: true,
+        ws: true,
       },
     },
   },

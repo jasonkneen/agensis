@@ -138,7 +138,12 @@ export function Sidebar({
     folder,
     documents: recents.filter(doc => (doc.folder || 'General') === folder),
   }));
-  const openWindowTypes = new Set(floatingWindows.filter(win => !win.minimized).map(win => win.type));
+  const focusedWindow = floatingWindows
+    .filter(win => !win.minimized)
+    .reduce<FloatingWindow | null>((topWindow, win) => (
+      !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
+    ), null);
+  const focusedWindowType = focusedWindow?.type;
   const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
   const toggleSection = (id: string, open: boolean) => {
@@ -152,13 +157,16 @@ export function Sidebar({
 
   if (collapsed) {
     return (
-      <aside className="flex h-full w-[52px] shrink-0 flex-col items-center gap-1 border-r border-border bg-card py-2">
+      <aside
+        data-sidebar-panel
+        className="m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-hidden rounded-xl border border-border bg-card py-2 text-card-foreground shadow-xl"
+      >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
           <PanelLeft />
         </Button>
         <Separator />
         <IconButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
-        <IconButton icon={<Sparkles />} title="New Chat" onClick={onNewChat} />
+        <IconButton icon={<Sparkles />} title="New Channel" onClick={onNewChat} />
         <IconButton icon={<FileText />} title="New Document" onClick={onNewDocument} />
         {onOpenTasks && <IconButton icon={<CheckCircle2 />} title={`Tasks${openTaskCount ? ` (${openTaskCount})` : ''}`} onClick={onOpenTasks} />}
         {onOpenActivity && <IconButton icon={<Activity />} title="Activity" onClick={onOpenActivity} />}
@@ -197,14 +205,14 @@ export function Sidebar({
   return (
     <aside
       data-sidebar-panel
-      className="relative flex h-full shrink-0 flex-col overflow-hidden border-r border-border bg-card text-card-foreground"
+      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl"
       style={{ width: sidebarWidth }}
     >
-      <div className="flex items-center gap-2 px-2 pt-2 pb-1">
-        <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
-          <PanelLeftClose />
-        </Button>
-        <div className="sidebar-workspace-pill flex min-w-0 flex-1 items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-sm">
+      <div className="px-2 pt-2 pb-3">
+        <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/95 p-1 shadow-sm">
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+            <PanelLeftClose />
+          </Button>
           <Button
             type="button"
             variant="ghost"
@@ -243,14 +251,14 @@ export function Sidebar({
       </div>
 
       <nav className="flex flex-col gap-1 px-2 pb-2">
-        <ActionRow icon={<Sparkles />} label="Chat with AI" active={openWindowTypes.has('chat')} onClick={onNewChat} />
-        <ActionRow icon={<FileText />} label="Write a document" active={openWindowTypes.has('document')} onClick={onNewDocument} />
+        <ActionRow icon={<Sparkles />} label="Open channel" active={focusedWindowType === 'chat'} onClick={onNewChat} />
+        <ActionRow icon={<FileText />} label="Write a document" active={focusedWindowType === 'document'} onClick={onNewDocument} />
         <ActionRow icon={<Paperclip />} label="Upload a file" onClick={onUploadFile} />
         <ActionRow icon={<FolderPlus />} label="Create a workspace" onClick={onCreateWorkspace} />
-        <ActionRow icon={<Brain />} label="Memory" active={openWindowTypes.has('memory')} onClick={onOpenMemory} />
-        {onOpenTasks && <ActionRow icon={<CheckCircle2 />} label={openTaskCount > 0 ? `Tasks / ${openTaskCount}` : 'Tasks'} active={openWindowTypes.has('tasks')} onClick={onOpenTasks} />}
-        {onOpenActivity && <ActionRow icon={<Activity />} label="Activity" active={openWindowTypes.has('activity')} onClick={onOpenActivity} />}
-        {onOpenAgents && <ActionRow icon={<Bot />} label="AI Agents" active={openWindowTypes.has('agents')} onClick={onOpenAgents} />}
+        <ActionRow icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+        {onOpenTasks && <ActionRow icon={<CheckCircle2 />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
+        {onOpenActivity && <ActionRow icon={<Activity />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
+        {onOpenAgents && <ActionRow icon={<Bot />} label="AI Agents" active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
         {onOpenTemplates && <ActionRow icon={<LayoutTemplate />} label="Canvas Apps" onClick={onOpenTemplates} />}
       </nav>
 
@@ -259,7 +267,7 @@ export function Sidebar({
           <Empty className="min-h-40 border-0 p-4">
             <EmptyHeader>
               <EmptyTitle>No items yet</EmptyTitle>
-              <EmptyDescription>Create your first document or chat.</EmptyDescription>
+              <EmptyDescription>Create your first document or channel.</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
@@ -268,7 +276,7 @@ export function Sidebar({
               <SidebarSection
                 key={group.folder}
                 id={`chats:${group.folder}`}
-                label={group.folder === 'General' ? 'Chats' : group.folder}
+                label={group.folder === 'General' ? 'Channels' : group.folder}
                 icon={group.folder === 'General' ? <MessageSquare /> : <Folder />}
                 count={group.sessions.length}
                 open={!closedSections.has(`chats:${group.folder}`)}
@@ -370,7 +378,19 @@ function IconButton({ icon, title, onClick }: { icon: React.ReactNode; title: st
   );
 }
 
-function ActionRow({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+function ActionRow({
+  icon,
+  label,
+  count,
+  active = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count?: number;
+  active?: boolean;
+  onClick: () => void;
+}) {
   return (
     <Button
       type="button"
@@ -382,6 +402,11 @@ function ActionRow({ icon, label, active = false, onClick }: { icon: React.React
     >
       {icon}
       <span className="truncate">{label}</span>
+      {typeof count === 'number' && count > 0 && (
+        <span className="sidebar-action-count ml-auto rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] leading-none text-primary">
+          {count}
+        </span>
+      )}
     </Button>
   );
 }
@@ -421,7 +446,7 @@ function SidebarSection({
           </span>
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-4">
+      <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -449,7 +474,9 @@ function ItemRow({
       className={`sidebar-item-row sidebar-item-row-${kind} w-full justify-start text-muted-foreground`}
       onClick={onClick}
     >
-      {icon}
+      <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
+        {icon}
+      </span>
       <span className="truncate">{label}</span>
       {presenceUsers.length > 0 && (
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
@@ -492,7 +519,7 @@ function SessionRow({
       <ContextMenuTrigger asChild>
         <div>
           <ItemRow
-            icon={<MessageSquare />}
+            icon={archived ? <Archive /> : <MessageSquare />}
             label={session.title}
             onClick={onOpen}
             kind="session"
@@ -518,7 +545,7 @@ function SessionRow({
         </ContextMenuSub>
         <ContextMenuItem onSelect={onArchive}>
           {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
-          {archived ? 'Unarchive chat' : 'Archive chat'}
+          {archived ? 'Unarchive channel' : 'Archive channel'}
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

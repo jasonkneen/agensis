@@ -81,7 +81,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: 'action-new-chat',
         type: 'action' as const,
-        label: 'New Chat',
+        label: 'New Channel',
         icon: <Plus data-icon="inline-start" className="size-4" />,
         badge: 'Action',
         onSelect: () => {
@@ -174,7 +174,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         type: 'chat' as const,
         label: session.title,
         icon: <MessageSquare data-icon="inline-start" className="size-4" />,
-        badge: 'Chat',
+        badge: 'Channel',
         onSelect: () => {
           onSessionOpen(session);
           onClose();
@@ -239,7 +239,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     const actionItems = filteredResults.filter(r => r.type === 'action');
 
     if (docItems.length > 0) groups.push({ label: 'Documents', items: docItems });
-    if (chatItems.length > 0) groups.push({ label: 'Chats', items: chatItems });
+    if (chatItems.length > 0) groups.push({ label: 'Channels', items: chatItems });
     if (taskItems.length > 0) groups.push({ label: 'Tasks', items: taskItems });
     if (memoryItems.length > 0) groups.push({ label: 'Memory', items: memoryItems });
     if (actionItems.length > 0) groups.push({ label: 'Actions', items: actionItems });
@@ -258,11 +258,11 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         if (!nextOpen) onClose();
       }}
       title="Command Palette"
-      description="Search documents, chats, memory, tasks, and actions."
+      description="Search documents, channels, memory, tasks, and actions."
       className="top-[15vh] w-[calc(100vw-2rem)] max-w-xl translate-y-0"
     >
       <Command shouldFilter={false}>
-        <CommandInput value={query} onValueChange={setQuery} placeholder="Search documents, chats, memory..." />
+        <CommandInput value={query} onValueChange={setQuery} placeholder="Search documents, channels, memory..." />
         <CommandList className="max-h-[400px]">
           <CommandEmpty>No results</CommandEmpty>
           {groupedResults.map(group => (

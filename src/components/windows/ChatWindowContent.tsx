@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   Bot,
@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Mic,
   Paperclip,
+  Pencil,
   Pin,
   Plus,
   RotateCcw,
@@ -18,21 +19,25 @@ import {
   Send,
   Sparkles,
   Star,
-  User,
+  Trash2,
   UserPlus,
   Users,
   X,
 } from 'lucide-react';
-import { ModelSelector } from '../chat/ModelSelector';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { apiAuthHeaders, apiUrl, backendClient } from '../../lib/backendClient';
 import type {
   CanvasGroup,
   CanvasObject,
+  ChannelParticipant,
+  ChatSession,
   Document,
   MemoryFact,
   Message as ChatMessage,
+  AgentConnection,
+  UploadedFile,
   WorkspaceAgent,
 } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -47,10 +52,6 @@ import {
   AttachmentMedia,
   AttachmentTitle,
 } from '@/components/ui/attachment';
-import {
-  Bubble,
-  BubbleContent,
-} from '@/components/ui/bubble';
 import {
   Command,
   CommandEmpty,
@@ -71,15 +72,13 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from '@/components/ui/input-group';
-import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
 import {
-  Message,
-  MessageAvatar,
-  MessageContent,
-  MessageFooter,
-  MessageGroup,
-  MessageHeader,
-} from '@/components/ui/message';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -88,10 +87,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from '@/components/ui/native-select';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Dialog,
@@ -111,6 +106,8 @@ interface ChatWindowContentProps {
   memoryFacts: MemoryFact[];
   documents: Document[];
   agents?: WorkspaceAgent[];
+  agentConnections?: AgentConnection[];
+  presenceUsers?: ChannelPresenceUser[];
   selectedAgent?: WorkspaceAgent | null;
   onSelectAgent?: (agent: WorkspaceAgent | null) => void;
   canvasGroups?: CanvasGroup[];
@@ -121,7 +118,39 @@ interface ChatWindowContentProps {
   onSendThreadReply?: (content: string, model: string) => void;
   readOnly?: boolean;
   channelTitle?: string;
+  workspaceId?: string | null;
+  uploadedFiles?: UploadedFile[];
+  contextControls?: React.ReactNode;
 }
+
+type ChannelPresenceUser = {
+  id: string;
+  name: string;
+  kind?: 'user' | 'agent';
+  status?: string;
+  isCurrentUser?: boolean;
+};
+
+type ProjectFileEntry = {
+  path: string;
+  name: string;
+  size: number;
+  mtime: string;
+  kind: 'file';
+};
+
+type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'is_favorite' | 'archived_at' | 'participants'>;
+
+type DisplayParticipant = ChannelParticipant & {
+  connected?: boolean;
+};
+
+type ParticipantCandidate = ChannelParticipant & {
+  subtitle?: string;
+  connected?: boolean;
+};
+
+type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 
 export function ChatWindowContent({
   messages,
@@ -133,8 +162,8 @@ export function ChatWindowContent({
   memoryFacts,
   documents,
   agents = [],
-  selectedAgent,
-  onSelectAgent,
+  agentConnections = [],
+  presenceUsers = [],
   canvasGroups = [],
   canvasObjects = [],
   onSendMessage,
@@ -143,9 +172,11 @@ export function ChatWindowContent({
   onSendThreadReply,
   readOnly = false,
   channelTitle = 'general',
+  workspaceId = null,
+  uploadedFiles = [],
+  contextControls,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState('auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
@@ -157,14 +188,32 @@ export function ChatWindowContent({
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<'thread' | 'files' | 'pins' | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
+  const [channelMeta, setChannelMeta] = useState<ChannelSessionMeta | null>(null);
+  const [channelActionStatus, setChannelActionStatus] = useState('');
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<Set<string>>(() => new Set());
+  const [messageOverrides, setMessageOverrides] = useState<MessageOverrides>({});
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
+  const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
   const [panelWidth, setPanelWidth] = useState(360);
+  const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
+  const [projectRoot, setProjectRoot] = useState('');
+  const [projectFilesLoading, setProjectFilesLoading] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const filteredDocs = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
     return documents.filter(d => d.title.toLowerCase().includes(q));
   }, [documents, docPickerQuery]);
+
+  const filteredAgents = useMemo(() => {
+    const q = docPickerQuery.toLowerCase();
+    return agents.filter(agent => {
+      const handle = agentHandle(agent);
+      return agent.name.toLowerCase().includes(q) || handle.includes(q);
+    });
+  }, [agents, docPickerQuery]);
 
   const filteredGroups = useMemo(() => {
     const q = groupPickerQuery.toLowerCase();
@@ -189,10 +238,23 @@ export function ChatWindowContent({
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
-    onSendMessage(content, selectedAgent?.model || selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
+    inputRef.current?.focus();
+  };
+
+  const handleAgentSelect = (agent: WorkspaceAgent) => {
+    const handle = agentHandle(agent);
+    const selectionEnd = inputRef.current?.selectionStart || input.length;
+    const before = input.slice(0, Math.max(0, atStartPos));
+    const after = input.slice(selectionEnd);
+    const suffix = after.startsWith(' ') || after.length === 0 ? after : ` ${after}`;
+    setInput(`${before}@${handle} ${suffix}`.replace(/\s+$/, ' '));
+    setShowDocPicker(false);
+    setDocPickerQuery('');
+    setAtStartPos(-1);
     inputRef.current?.focus();
   };
 
@@ -296,24 +358,297 @@ export function ChatWindowContent({
     }
   };
 
-  const displayMessages = topLevelMessages ?? messages;
-  const parentMessage = activeThreadId ? messages.find(m => m.id === activeThreadId) : null;
-  const pinnedMessages = messages.filter(message => message.pinned);
+  const visibleMessages = useMemo(() => applyMessageOverrides(messages, messageOverrides), [messages, messageOverrides]);
+  const displayMessages = useMemo(
+    () => applyMessageOverrides(topLevelMessages ?? messages, messageOverrides),
+    [messages, messageOverrides, topLevelMessages],
+  );
+  const visibleThreadMessages = useMemo(
+    () => applyMessageOverrides(threadMessages, messageOverrides),
+    [messageOverrides, threadMessages],
+  );
+  const parentMessage = activeThreadId ? visibleMessages.find(m => m.id === activeThreadId) : null;
+  const pinnedMessages = visibleMessages.filter(message => message.pinned);
+  const inferredSessionId = useMemo(() => (
+    messages[0]?.session_id ||
+    topLevelMessages?.[0]?.session_id ||
+    threadMessages[0]?.session_id ||
+    null
+  ), [messages, threadMessages, topLevelMessages]);
+
+  useEffect(() => {
+    if (!inferredSessionId && (!workspaceId || !channelTitle)) {
+      setChannelMeta(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadChannelMeta = async () => {
+      try {
+        if (inferredSessionId) {
+          const { data } = await backendClient
+            .from<ChannelSessionMeta>('chat_sessions')
+            .select('id,title,is_favorite,archived_at,participants')
+            .eq('id', inferredSessionId)
+            .maybeSingle();
+          if (!cancelled) {
+            setChannelMeta(data ? normalizeChannelSessionMeta(data) : {
+              id: inferredSessionId,
+              title: channelTitle || 'general',
+              is_favorite: false,
+              archived_at: null,
+              participants: [],
+            });
+          }
+          return;
+        }
+
+        const { data } = await backendClient
+          .from<ChannelSessionMeta[]>('chat_sessions')
+          .select('id,title,is_favorite,archived_at,participants')
+          .eq('workspace_id', workspaceId)
+          .eq('title', channelTitle)
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        const row = Array.isArray(data) ? data[0] : null;
+        if (!cancelled) setChannelMeta(row ? normalizeChannelSessionMeta(row) : null);
+      } catch {
+        if (!cancelled && inferredSessionId) {
+          setChannelMeta({
+            id: inferredSessionId,
+            title: channelTitle || 'general',
+            is_favorite: false,
+            archived_at: null,
+            participants: [],
+          });
+        }
+      }
+    };
+
+    void loadChannelMeta();
+    return () => {
+      cancelled = true;
+    };
+  }, [channelTitle, inferredSessionId, workspaceId]);
+
+  const persistedParticipants = useMemo(
+    () => normalizeChannelParticipants(channelMeta?.participants),
+    [channelMeta?.participants],
+  );
+
+  const participantCandidates = useMemo(
+    () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants, visibleMessages),
+    [agentConnections, agents, persistedParticipants, presenceUsers, visibleMessages],
+  );
+
   const participants = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; kind: 'user' | 'agent' }>();
-    messages.forEach(message => {
+    const map = new Map<string, DisplayParticipant>();
+    persistedParticipants.forEach(participant => {
+      map.set(participant.id, withLiveParticipantStatus(participant, agents, agentConnections));
+    });
+    presenceUsers.forEach(participant => {
+      const id = participant.kind === 'agent' ? `agent:${participant.id}` : `user:${participant.id}`;
+      map.set(id, {
+        id,
+        name: participant.isCurrentUser ? 'You' : participant.name,
+        kind: participant.kind === 'agent' ? 'agent' : 'user',
+        status: participant.status,
+        user_id: participant.kind === 'agent' ? null : participant.id,
+        agent_id: participant.kind === 'agent' ? participant.id : null,
+        connected: Boolean(participant.status && participant.status !== 'offline'),
+      });
+    });
+    visibleMessages.forEach(message => {
       if (message.sender_kind === 'agent' || message.role === 'assistant') {
-        const id = message.sender_id || 'hatch-ai';
-        map.set(id, { id, name: message.sender_name || 'Hatch AI', kind: 'agent' });
+        const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:hatch-ai';
+        if (!map.has(id)) {
+          map.set(id, {
+            id,
+            name: message.sender_name || 'Hatch AI',
+            kind: 'agent',
+            agent_id: message.sender_id || null,
+          });
+        }
       } else {
-        const id = message.sender_id || 'you';
-        map.set(id, { id, name: message.sender_name || 'You', kind: 'user' });
+        const id = message.sender_id ? `user:${message.sender_id}` : 'user:you';
+        if (!map.has(id)) {
+          map.set(id, {
+            id,
+            name: message.sender_name || 'You',
+            kind: 'user',
+            user_id: message.sender_id || null,
+          });
+        }
       }
     });
-    agents.forEach(agent => map.set(`agent:${agent.id}`, { id: `agent:${agent.id}`, name: agent.name, kind: 'agent' }));
     return Array.from(map.values()).slice(0, 6);
-  }, [agents, messages]);
+  }, [agentConnections, agents, persistedParticipants, presenceUsers, visibleMessages]);
+
+  const channelIsFavorite = Boolean(channelMeta?.is_favorite);
+  const channelIsArchived = Boolean(channelMeta?.archived_at);
+
+  const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
+    if (channelMeta?.id) return channelMeta;
+    if (inferredSessionId) {
+      return {
+        id: inferredSessionId,
+        title: channelTitle || 'general',
+        is_favorite: false,
+        archived_at: null,
+        participants: [],
+      };
+    }
+    if (!workspaceId || !channelTitle) return null;
+    const { data } = await backendClient
+      .from<ChannelSessionMeta[]>('chat_sessions')
+      .select('id,title,is_favorite,archived_at,participants')
+      .eq('workspace_id', workspaceId)
+      .eq('title', channelTitle)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    const row = Array.isArray(data) ? data[0] : null;
+    return row ? normalizeChannelSessionMeta(row) : null;
+  };
+
+  const persistChannelUpdates = async (updates: Partial<ChannelSessionMeta>) => {
+    setChannelActionStatus('');
+    const session = await findChannelSession();
+    if (!session?.id) {
+      setChannelActionStatus('Save unavailable until this channel exists.');
+      return null;
+    }
+    const { data, error } = await backendClient
+      .from<ChannelSessionMeta>('chat_sessions')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', session.id)
+      .select('id,title,is_favorite,archived_at,participants')
+      .single();
+    if (error || !data) {
+      setChannelActionStatus(error?.message || 'Could not save channel changes.');
+      return null;
+    }
+    const next = normalizeChannelSessionMeta(data);
+    setChannelMeta(next);
+    return next;
+  };
+
+  const handleToggleFavorite = () => {
+    void persistChannelUpdates({ is_favorite: !channelIsFavorite });
+  };
+
+  const handleToggleArchive = () => {
+    void persistChannelUpdates({ archived_at: channelIsArchived ? null : new Date().toISOString() });
+  };
+
+  const handleOpenParticipantsDialog = () => {
+    const selected = new Set<string>();
+    const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
+    saved.forEach(participant => selected.add(participant.id));
+    setSelectedParticipantIds(selected);
+    setAddParticipantsOpen(true);
+  };
+
+  const handleToggleParticipant = (participantId: string) => {
+    setSelectedParticipantIds(prev => {
+      const next = new Set(prev);
+      if (next.has(participantId)) next.delete(participantId);
+      else next.add(participantId);
+      return next;
+    });
+  };
+
+  const handleSaveParticipants = async () => {
+    const selected = participantCandidates
+      .filter(participant => selectedParticipantIds.has(participant.id))
+      .map(toPersistedParticipant);
+    const saved = await persistChannelUpdates({ participants: selected });
+    if (saved) setAddParticipantsOpen(false);
+  };
+
+  const setMessageOverride = (messageId: string, patch: Partial<ChatMessage> & { deleted?: boolean }) => {
+    setMessageOverrides(prev => ({
+      ...prev,
+      [messageId]: { ...prev[messageId], ...patch },
+    }));
+  };
+
+  const handleTogglePin = async (message: ChatMessage) => {
+    const nextPinned = !message.pinned;
+    setMessageOverride(message.id, { pinned: nextPinned });
+    setMessageActionBusy(message.id);
+    const { error } = await backendClient
+      .from('messages')
+      .update({ pinned: nextPinned })
+      .eq('id', message.id);
+    if (error) setMessageOverride(message.id, { pinned: message.pinned });
+    setMessageActionBusy(null);
+  };
+
+  const handleStartEdit = (message: ChatMessage) => {
+    setEditingMessageId(message.id);
+    setEditingContent(safeMessageText(message.content));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingContent('');
+  };
+
+  const handleSaveEdit = async () => {
+    const messageId = editingMessageId;
+    const nextContent = editingContent.trim();
+    if (!messageId || !nextContent) return;
+    const previous = visibleMessages.find(message => message.id === messageId);
+    setMessageOverride(messageId, { content: nextContent });
+    setMessageActionBusy(messageId);
+    const { error } = await backendClient
+      .from('messages')
+      .update({ content: nextContent })
+      .eq('id', messageId);
+    if (error && previous) setMessageOverride(messageId, { content: previous.content });
+    setMessageActionBusy(null);
+    setEditingMessageId(null);
+    setEditingContent('');
+  };
+
+  const handleDeleteMessage = async (message: ChatMessage) => {
+    if (typeof window !== 'undefined' && !window.confirm('Delete this channel post?')) return;
+    setMessageOverride(message.id, { deleted: true });
+    setMessageActionBusy(message.id);
+    const { error } = await backendClient
+      .from('messages')
+      .delete()
+      .eq('id', message.id);
+    if (error) setMessageOverride(message.id, { deleted: false });
+    setMessageActionBusy(null);
+  };
   const catchUpSummary = useMemo(() => buildCatchUpSummary(displayMessages, channelTitle), [displayMessages, channelTitle]);
+  useEffect(() => {
+    if (sidePanel !== 'files' || !workspaceId) return;
+    let cancelled = false;
+    setProjectFilesLoading(true);
+    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/project-files`), {
+      headers: apiAuthHeaders(),
+    })
+      .then(response => response.json())
+      .then(payload => {
+        if (cancelled) return;
+        setProjectFiles(Array.isArray(payload?.data?.files) ? payload.data.files : []);
+        setProjectRoot(typeof payload?.data?.root === 'string' ? payload.data.root : '');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectFiles([]);
+          setProjectRoot('');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setProjectFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sidePanel, workspaceId]);
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -343,20 +678,74 @@ export function ChatWindowContent({
   };
 
   return (
-    <div className="flex h-full min-w-0 overflow-hidden bg-background text-foreground">
+    <div className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="channel-header relative shrink-0 border-b border-border bg-card">
-          <div className="flex h-11 items-center gap-2 px-3">
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setDetailsOpen(prev => !prev)}>
-              <Hash data-icon="inline-start" />
-              <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
-              <ChevronDown className="size-3" />
-            </Button>
+        <div className="channel-header relative z-20 shrink-0 border-b border-border">
+          <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
+                  <Hash data-icon="inline-start" />
+                  <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
+                  {channelIsFavorite && <Star className="size-3 fill-current text-amber-500" />}
+                  <ChevronDown className="size-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-72">
+                <DropdownMenuItem
+                  onSelect={event => {
+                    event.preventDefault();
+                    handleToggleFavorite();
+                  }}
+                >
+                  <Star data-icon="inline-start" fill={channelIsFavorite ? 'currentColor' : 'none'} />
+                  {channelIsFavorite ? 'Remove from favorites' : 'Add to favorites'}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    handleOpenParticipantsDialog();
+                  }}
+                >
+                  <UserPlus data-icon="inline-start" />
+                  Add people or agents
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={event => {
+                    event.preventDefault();
+                    handleToggleArchive();
+                  }}
+                >
+                  <Archive data-icon="inline-start" />
+                  {channelIsArchived ? 'Unarchive channel' : 'Archive channel'}
+                </DropdownMenuItem>
+                {channelActionStatus && (
+                  <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button type="button" variant="ghost" size="sm" className="h-8 px-2">
               <Link2 data-icon="inline-start" />
               Connect
             </Button>
-            <div className="flex-1" />
+            <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)}>
+              <MessageSquare data-icon="inline-start" />
+              Messages
+            </Button>
+            <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')}>
+              <Paperclip data-icon="inline-start" />
+              Files
+            </Button>
+            <Button type="button" variant={sidePanel === 'pins' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('pins')}>
+              <Pin data-icon="inline-start" />
+              Pins
+            </Button>
+            <div className="min-w-2 flex-1" />
+            {contextControls && (
+              <div className="flex min-w-0 max-w-[40vw] shrink overflow-x-auto text-xs text-muted-foreground">
+                {contextControls}
+              </div>
+            )}
             <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
               <RotateCcw data-icon="inline-start" />
               Catch up
@@ -365,10 +754,11 @@ export function ChatWindowContent({
               {participants.slice(0, 3).map(participant => (
                 <span
                   key={participant.id}
-                  className="flex size-6 items-center justify-center rounded-full bg-muted text-[10px] font-semibold"
-                  title={participant.name}
+                  className="relative flex size-6 items-center justify-center rounded-full bg-muted text-[10px] font-semibold"
+                  title={[participant.name, participant.status].filter(Boolean).join(' - ')}
                 >
                   {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
+                  {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
                 </span>
               ))}
               <Badge variant="secondary" className="h-6 gap-1">
@@ -376,58 +766,44 @@ export function ChatWindowContent({
                 {participants.length}
               </Badge>
             </div>
-          </div>
-          <div className="flex h-9 items-center gap-1 border-t border-border px-3">
-            <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2" onClick={() => setSidePanel(null)}>
-              <MessageSquare data-icon="inline-start" />
-              Messages
-            </Button>
-            <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2" onClick={() => setSidePanel('files')}>
-              <Paperclip data-icon="inline-start" />
-              Files
-            </Button>
-            <Button type="button" variant={sidePanel === 'pins' ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2" onClick={() => setSidePanel('pins')}>
-              <Pin data-icon="inline-start" />
-              Pins
-            </Button>
-            <div className="flex-1" />
             <Button type="button" variant="ghost" size="icon-xs" aria-label="Search channel">
               <Search />
             </Button>
           </div>
-          {detailsOpen && (
-            <div className="absolute z-[95] ml-3 mt-1 w-72 overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-xl">
-              <Button type="button" variant="ghost" className="w-full justify-start" size="sm"><Star data-icon="inline-start" />Add to favorites</Button>
-              <Button type="button" variant="ghost" className="w-full justify-start" size="sm"><UserPlus data-icon="inline-start" />Add people or agents</Button>
-              <Button type="button" variant="ghost" className="w-full justify-start" size="sm"><FileText data-icon="inline-start" />Edit channel</Button>
-              <Button type="button" variant="ghost" className="w-full justify-start" size="sm"><Archive data-icon="inline-start" />Archive channel</Button>
-            </div>
-          )}
         </div>
         <MessageScrollerProvider autoScroll={autoScroll}>
-          <MessageScroller className="flex-1">
+          <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
-              <MessageScrollerContent className="min-h-full gap-3 p-3">
+              <MessageScrollerContent className="min-h-full gap-0 py-2">
                 {displayMessages.length === 0 ? (
                   <Empty className="min-h-full border-0">
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
                         <Sparkles />
                       </EmptyMedia>
-                      <EmptyTitle>Ready to chat</EmptyTitle>
+                      <EmptyTitle>Channel is open</EmptyTitle>
                       <EmptyDescription>
-                        Type a message below to start the conversation.
+                        Post a message below to start this channel.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : (
-                  <MessageGroup className="gap-3">
+                  <div className="flex min-w-0 flex-col">
                     {displayMessages.map((msg, idx) => (
                       <MessageScrollerItem key={msg.id} scrollAnchor={idx === displayMessages.length - 1}>
                         <ChatMessageBubble
                           msg={msg}
                           isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
+                          isEditing={editingMessageId === msg.id}
+                          editingContent={editingContent}
+                          actionBusy={messageActionBusy === msg.id}
+                          onTogglePin={() => void handleTogglePin(msg)}
+                          onStartEdit={() => handleStartEdit(msg)}
+                          onCancelEdit={handleCancelEdit}
+                          onChangeEdit={setEditingContent}
+                          onSaveEdit={() => void handleSaveEdit()}
+                          onDelete={() => void handleDeleteMessage(msg)}
                           onOpenThread={onOpenThread ? () => {
                             onOpenThread(msg.id);
                             openThread();
@@ -435,7 +811,7 @@ export function ChatWindowContent({
                         />
                       </MessageScrollerItem>
                     ))}
-                  </MessageGroup>
+                  </div>
                 )}
               </MessageScrollerContent>
             </MessageScrollerViewport>
@@ -448,7 +824,7 @@ export function ChatWindowContent({
             Read-only workspace instance
           </div>
         ) : (
-        <div className="border-t border-border bg-card p-2">
+        <div className="channel-composer border-t border-border p-2">
           {(linkedDocs.length > 0 || linkedGroups.length > 0) && (
             <AttachmentGroup className="mb-2">
               {linkedDocs.map(doc => (
@@ -496,7 +872,22 @@ export function ChatWindowContent({
             {showDocPicker && (
               <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-56 rounded-xl border border-border shadow-lg">
                 <CommandList>
-                  <CommandEmpty>No documents found.</CommandEmpty>
+                  <CommandEmpty>No agents or documents found.</CommandEmpty>
+                  {filteredAgents.length > 0 && (
+                    <CommandGroup heading="Agents">
+                      {filteredAgents.map(agent => (
+                        <CommandItem
+                          key={agent.id}
+                          value={`${agent.name} ${agentHandle(agent)}`}
+                          onSelect={() => handleAgentSelect(agent)}
+                        >
+                          <Bot />
+                          <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                          <span className="text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
                   <CommandGroup heading="Documents">
                     {filteredDocs.map(doc => (
                       <CommandItem
@@ -545,7 +936,7 @@ export function ChatWindowContent({
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={`Message #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
+                placeholder={`Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
                 disabled={streaming}
                 rows={1}
                 className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
@@ -563,37 +954,9 @@ export function ChatWindowContent({
                   <InputGroupButton size="icon-xs" aria-label="Voice input">
                     <Mic />
                   </InputGroupButton>
-                  <Marker className="ml-1 hidden max-w-28 sm:flex">
-                    <MarkerIcon>
-                      <Sparkles />
-                    </MarkerIcon>
-                    <MarkerContent>
-                      {selectedAgent ? selectedAgent.name : 'Hatch AI'}
-                    </MarkerContent>
-                  </Marker>
                 </div>
 
-                <div className="flex min-w-0 items-center gap-2">
-                  {agents.length > 0 && onSelectAgent && (
-                    <NativeSelect
-                      value={selectedAgent?.id || ''}
-                      onChange={e => {
-                        const agent = agents.find(a => a.id === e.target.value) || null;
-                        onSelectAgent(agent);
-                      }}
-                      title="Select AI agent"
-                      size="sm"
-                      className="max-w-32"
-                    >
-                      <NativeSelectOption value="">Hatch AI</NativeSelectOption>
-                      {agents.map(agent => (
-                        <NativeSelectOption key={agent.id} value={agent.id}>
-                          {agent.name}
-                        </NativeSelectOption>
-                      ))}
-                    </NativeSelect>
-                  )}
-                  <ModelSelector value={selectedAgent?.model || selectedModel} onChange={setSelectedModel} />
+                <div className="flex min-w-0 items-center gap-1">
                   <Button
                     type="button"
                     size="icon-sm"
@@ -613,7 +976,7 @@ export function ChatWindowContent({
 
       {!readOnly && sidePanel && (
         <aside
-          className="relative flex h-full shrink-0 flex-col border-l border-border bg-card text-card-foreground"
+          className="channel-side-panel relative flex h-full shrink-0 flex-col border-l border-border text-card-foreground"
           style={{ width: panelWidth }}
         >
           <div
@@ -624,7 +987,7 @@ export function ChatWindowContent({
           {sidePanel === 'thread' && activeThreadId && parentMessage && onSendThreadReply ? (
             <ChatThreadPanel
               parentMessage={parentMessage}
-              threadMessages={threadMessages}
+              threadMessages={visibleThreadMessages}
               streaming={streaming}
               onSendReply={onSendThreadReply}
               onClose={closeSidePanel}
@@ -634,6 +997,10 @@ export function ChatWindowContent({
             <ChannelSidePanel
               type={sidePanel}
               pinnedMessages={pinnedMessages}
+              uploadedFiles={uploadedFiles}
+              projectFiles={projectFiles}
+              projectRoot={projectRoot}
+              loading={projectFilesLoading}
               onClose={closeSidePanel}
             />
           )}
@@ -644,11 +1011,74 @@ export function ChatWindowContent({
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Catch up on #{channelTitle || 'general'}</DialogTitle>
-            <DialogDescription>AI summary based on visible channel messages.</DialogDescription>
+            <DialogDescription>Channel summary based on visible posts.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm leading-relaxed text-foreground">{catchUpSummary}</p>
             <div className="text-xs text-muted-foreground">May miss nuance. Refresh after new activity.</div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={addParticipantsOpen} onOpenChange={setAddParticipantsOpen}>
+        <DialogContent className="max-h-[calc(100svh-2rem)] max-w-lg overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Add people or agents</DialogTitle>
+            <DialogDescription>Participants for #{channelTitle || 'general'}.</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 space-y-4 overflow-auto pr-1">
+            {(['user', 'agent'] as const).map(kind => {
+              const candidates = participantCandidates.filter(participant => participant.kind === kind);
+              if (candidates.length === 0) return null;
+              return (
+                <div key={kind} className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {kind === 'user' ? 'People' : 'Agents'}
+                  </div>
+                  <div className="space-y-1">
+                    {candidates.map(participant => {
+                      const selected = selectedParticipantIds.has(participant.id);
+                      return (
+                        <button
+                          key={participant.id}
+                          type="button"
+                          className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                            selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
+                          }`}
+                          onClick={() => handleToggleParticipant(participant.id)}
+                        >
+                          <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
+                            {participant.kind === 'agent' ? <Bot className="size-4" /> : participant.name.slice(0, 2).toUpperCase()}
+                            {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-foreground">{participant.name}</span>
+                            {participant.subtitle && (
+                              <span className="block truncate text-xs text-muted-foreground">{participant.subtitle}</span>
+                            )}
+                          </span>
+                          <Badge variant={selected ? 'default' : 'outline'}>{selected ? 'Added' : 'Add'}</Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            {participantCandidates.length === 0 && (
+              <p className="text-sm text-muted-foreground">No people or agents are available.</p>
+            )}
+            {channelActionStatus && (
+              <p className="text-xs text-muted-foreground">{channelActionStatus}</p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 border-t pt-3">
+            <Button type="button" variant="ghost" onClick={() => setAddParticipantsOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void handleSaveParticipants()}>
+              Save
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -660,11 +1090,29 @@ function ChatMessageBubble({
   msg,
   isStreaming,
   replyCount,
+  isEditing,
+  editingContent,
+  actionBusy,
+  onTogglePin,
+  onStartEdit,
+  onCancelEdit,
+  onChangeEdit,
+  onSaveEdit,
+  onDelete,
   onOpenThread,
 }: {
   msg: ChatMessage;
   isStreaming?: boolean;
   replyCount?: number;
+  isEditing?: boolean;
+  editingContent?: string;
+  actionBusy?: boolean;
+  onTogglePin?: () => void;
+  onStartEdit?: () => void;
+  onCancelEdit?: () => void;
+  onChangeEdit?: (value: string) => void;
+  onSaveEdit?: () => void;
+  onDelete?: () => void;
   onOpenThread?: () => void;
 }) {
   const isUser = msg.role === 'user';
@@ -672,64 +1120,118 @@ function ChatMessageBubble({
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
   const senderName = msg.sender_name || (isUser ? 'You' : 'Hatch AI');
+  const initials = isUser ? 'YO' : (senderName.slice(0, 2).toUpperCase() || 'AI');
+  const createdAt = msg.created_at ? new Date(msg.created_at) : null;
+  const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
+    ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
 
   return (
-    <Message align={isUser ? 'end' : 'start'}>
-      <MessageAvatar className="size-8">
-        {isUser ? <User className="size-4" /> : <Bot className="size-4" />}
-      </MessageAvatar>
-      <MessageContent>
-        <MessageHeader>{senderName}</MessageHeader>
-        <Bubble variant={isUser ? 'default' : 'muted'} align={isUser ? 'end' : 'start'}>
-          <BubbleContent>
+    <div className="group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40">
+      <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold text-muted-foreground">
+        {msg.sender_kind === 'agent' || msg.role === 'assistant' ? <Bot className="size-4" /> : initials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-semibold text-foreground">{senderName}</span>
+          {timeLabel && <span className="shrink-0 text-xs text-muted-foreground">{timeLabel}</span>}
+        </div>
+        {isEditing ? (
+          <div className="mt-2 max-w-4xl space-y-2">
+            <textarea
+              value={editingContent ?? ''}
+              onChange={event => onChangeEdit?.(event.target.value)}
+              className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed text-foreground outline-none focus:border-ring"
+              autoFocus
+            />
+            <div className="flex items-center gap-2">
+              <Button type="button" size="xs" onClick={onSaveEdit} disabled={actionBusy || !(editingContent ?? '').trim()}>
+                Save
+              </Button>
+              <Button type="button" variant="ghost" size="xs" onClick={onCancelEdit} disabled={actionBusy}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
             {displayContent ? (
               <MarkdownContent content={displayContent} />
             ) : isStreaming ? (
               <span className="flex items-center gap-2 text-muted-foreground">
-                <Spinner />
+                <Spinner className="size-3" />
                 Thinking
               </span>
-            ) : null}
+            ) : (
+              <span className="text-muted-foreground">Message content is unavailable.</span>
+            )}
             {artifact && <ChatArtifact artifact={artifact} />}
-          </BubbleContent>
-        </Bubble>
+          </div>
+        )}
         {isStreaming && msg.content && (
-          <MessageFooter>
+          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
             <Spinner className="size-3" />
             Streaming
-          </MessageFooter>
+          </div>
         )}
-        {onOpenThread && msg.content && !isStreaming && (
-          <MessageFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              size="xs"
-              onClick={onOpenThread}
-            >
-              <CornerDownRight data-icon="inline-start" />
-              {replyCount ? `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}` : 'Reply'}
-            </Button>
-          </MessageFooter>
+        {replyCount && onOpenThread ? (
+          <button
+            type="button"
+            className="mt-1 inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={onOpenThread}
+          >
+            <CornerDownRight className="size-3" />
+            {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+          </button>
+        ) : null}
+      </div>
+      <div className="absolute top-2 right-3 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
+        {onOpenThread && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
+            <CornerDownRight />
+          </Button>
         )}
-      </MessageContent>
-    </Message>
+        {onTogglePin && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onTogglePin} disabled={actionBusy} aria-label={msg.pinned ? 'Unpin post' : 'Pin post'} title={msg.pinned ? 'Unpin post' : 'Pin post'}>
+            <Pin fill={msg.pinned ? 'currentColor' : 'none'} />
+          </Button>
+        )}
+        {onStartEdit && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onStartEdit} disabled={actionBusy || isStreaming} aria-label="Edit post" title="Edit post">
+            <Pencil />
+          </Button>
+        )}
+        {onDelete && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} disabled={actionBusy} aria-label="Delete post" title="Delete post">
+            <Trash2 />
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
 function ChannelSidePanel({
   type,
   pinnedMessages,
+  uploadedFiles,
+  projectFiles,
+  projectRoot,
+  loading,
   onClose,
 }: {
   type: 'files' | 'pins' | 'thread';
   pinnedMessages: ChatMessage[];
+  uploadedFiles: UploadedFile[];
+  projectFiles: ProjectFileEntry[];
+  projectRoot: string;
+  loading: boolean;
   onClose: () => void;
 }) {
   const isPins = type === 'pins';
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         {isPins ? <Pin className="size-4 text-muted-foreground" /> : <Paperclip className="size-4 text-muted-foreground" />}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {isPins ? 'Pinned messages' : 'Files'}
@@ -752,12 +1254,193 @@ function ChannelSidePanel({
           ) : (
             <p className="text-sm text-muted-foreground">No pinned messages yet.</p>
           )
+        ) : loading ? (
+          <p className="text-sm text-muted-foreground">Loading files...</p>
+        ) : uploadedFiles.length > 0 || projectFiles.length > 0 ? (
+          <div className="space-y-4">
+            {uploadedFiles.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploaded</div>
+                {uploadedFiles.map(file => (
+                  <div key={file.id} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-sm">
+                    <Paperclip className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                    <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {projectFiles.length > 0 && (
+              <div className="space-y-2">
+                <div className="min-w-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Workspace folder
+                  {projectRoot && <span className="ml-1 normal-case tracking-normal">({projectRoot})</span>}
+                </div>
+                {projectFiles.map(file => (
+                  <div key={file.path} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40">
+                    <FileText className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate" title={file.path}>{file.path}</span>
+                    <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
-          <p className="text-sm text-muted-foreground">Nothing shared yet.</p>
+          <p className="text-sm text-muted-foreground">No workspace or uploaded files found.</p>
         )}
       </div>
     </div>
   );
+}
+
+function applyMessageOverrides(messages: ChatMessage[], overrides: MessageOverrides): ChatMessage[] {
+  return messages
+    .map(message => ({ ...message, ...overrides[message.id] }))
+    .filter(message => !overrides[message.id]?.deleted);
+}
+
+function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMeta {
+  return {
+    ...meta,
+    is_favorite: Boolean(meta.is_favorite),
+    archived_at: meta.archived_at ?? null,
+    participants: normalizeChannelParticipants(meta.participants),
+  };
+}
+
+function normalizeChannelParticipants(value: unknown): ChannelParticipant[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Record<string, unknown>;
+    const kind: ChannelParticipant['kind'] = record.kind === 'agent' ? 'agent' : 'user';
+    const entityId = stringValue(kind === 'agent' ? record.agent_id : record.user_id) || stringValue(record.id);
+    const id = entityId.includes(':') ? entityId : `${kind}:${entityId || crypto.randomUUID()}`;
+    const name = stringValue(record.name) || (kind === 'agent' ? 'Agent' : 'Person');
+    return [{
+      id,
+      name,
+      kind,
+      status: stringValue(record.status) || null,
+      handle: stringValue(record.handle) || null,
+      user_id: kind === 'user' ? (stringValue(record.user_id) || id.replace(/^user:/, '')) : null,
+      agent_id: kind === 'agent' ? (stringValue(record.agent_id) || id.replace(/^agent:/, '')) : null,
+      added_at: stringValue(record.added_at) || null,
+    }];
+  });
+}
+
+function withLiveParticipantStatus(
+  participant: ChannelParticipant,
+  agents: WorkspaceAgent[],
+  agentConnections: AgentConnection[],
+): DisplayParticipant {
+  if (participant.kind !== 'agent') return participant;
+  const agentId = participant.agent_id || participant.id.replace(/^agent:/, '');
+  const agent = agents.find(item => item.id === agentId);
+  const connection = agentConnections.find(item => item.agent_id === agentId && item.status !== 'offline');
+  return {
+    ...participant,
+    name: participant.name || agent?.name || 'Agent',
+    status: connection?.status || participant.status || agent?.run_mode || 'built-in',
+    connected: Boolean(connection),
+  };
+}
+
+function buildParticipantCandidates(
+  presenceUsers: ChannelPresenceUser[],
+  agents: WorkspaceAgent[],
+  agentConnections: AgentConnection[],
+  persistedParticipants: ChannelParticipant[],
+  messages: ChatMessage[],
+): ParticipantCandidate[] {
+  const map = new Map<string, ParticipantCandidate>();
+
+  persistedParticipants.forEach(participant => {
+    const live = withLiveParticipantStatus(participant, agents, agentConnections);
+    map.set(live.id, {
+      ...live,
+      subtitle: live.kind === 'agent'
+        ? [live.handle ? `@${live.handle}` : null, live.status].filter(Boolean).join(' - ')
+        : live.status || undefined,
+    });
+  });
+
+  presenceUsers.forEach(participant => {
+    const kind: ChannelParticipant['kind'] = participant.kind === 'agent' ? 'agent' : 'user';
+    const id = kind === 'agent' ? `agent:${participant.id}` : `user:${participant.id}`;
+    map.set(id, {
+      id,
+      name: participant.isCurrentUser ? 'You' : participant.name,
+      kind,
+      status: participant.status || null,
+      user_id: kind === 'user' ? participant.id : null,
+      agent_id: kind === 'agent' ? participant.id : null,
+      subtitle: participant.status || undefined,
+      connected: Boolean(participant.status && participant.status !== 'offline'),
+    });
+  });
+
+  messages.forEach(message => {
+    if (message.sender_kind === 'agent' || message.role === 'assistant') {
+      const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:hatch-ai';
+      if (!map.has(id)) {
+        map.set(id, {
+          id,
+          name: message.sender_name || 'Hatch AI',
+          kind: 'agent',
+          agent_id: message.sender_id || null,
+          user_id: null,
+        });
+      }
+      return;
+    }
+    const id = message.sender_id ? `user:${message.sender_id}` : 'user:you';
+    if (!map.has(id)) {
+      map.set(id, {
+        id,
+        name: message.sender_name || 'You',
+        kind: 'user',
+        user_id: message.sender_id || null,
+        agent_id: null,
+      });
+    }
+  });
+
+  agents.forEach(agent => {
+    const connection = agentConnections.find(item => item.agent_id === agent.id && item.status !== 'offline');
+    const handle = agentHandle(agent);
+    map.set(`agent:${agent.id}`, {
+      id: `agent:${agent.id}`,
+      name: agent.name,
+      kind: 'agent',
+      agent_id: agent.id,
+      user_id: null,
+      handle,
+      status: connection?.status || agent.run_mode || 'built-in',
+      subtitle: [`@${handle}`, connection?.status || agent.run_mode || 'built-in'].filter(Boolean).join(' - '),
+      connected: Boolean(connection),
+    });
+  });
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'user' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function toPersistedParticipant(participant: ParticipantCandidate): ChannelParticipant {
+  return {
+    id: participant.id,
+    name: participant.name,
+    kind: participant.kind,
+    status: participant.status || null,
+    handle: participant.handle || null,
+    user_id: participant.user_id || null,
+    agent_id: participant.agent_id || null,
+    added_at: new Date().toISOString(),
+  };
 }
 
 function buildCatchUpSummary(messages: ChatMessage[], channelTitle: string) {
@@ -776,19 +1459,52 @@ function buildCatchUpSummary(messages: ChatMessage[], channelTitle: string) {
   return `Recent activity in #${channelTitle || 'general'} includes ${userMessages} user message${userMessages === 1 ? '' : 's'} and ${agentMessages} assistant or agent response${agentMessages === 1 ? '' : 's'}.${mentionText} Latest: ${safeMessageText(last.content).slice(0, 180)}`;
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function safeMessageText(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return value === '[object Object]' ? 'Message content is unavailable.' : value;
   if (value == null) return '';
+  if (Array.isArray(value)) {
+    return value
+      .map(item => safeMessageText(item))
+      .filter(Boolean)
+      .join('\n');
+  }
   if (typeof value === 'object') {
-    const record = value as { message?: unknown; content?: unknown; text?: unknown; error?: unknown };
-    for (const key of ['message', 'content', 'text', 'error'] as const) {
-      if (typeof record[key] === 'string') return record[key] as string;
+    const record = value as Record<string, unknown>;
+    for (const key of ['text', 'message', 'content', 'response', 'output', 'result', 'error', 'data'] as const) {
+      const text = safeMessageText(record[key]);
+      if (text) return text;
     }
     try {
-      return JSON.stringify(value);
+      const json = JSON.stringify(value);
+      return json && json !== '{}' ? json : 'Message content is unavailable.';
     } catch {
-      return '';
+      return 'Message content is unavailable.';
     }
   }
   return String(value);
+}
+
+function agentHandle(agent: WorkspaceAgent): string {
+  return String(agent.handle || agent.name || 'agent')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'agent';
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value >= 10 || idx === 0 ? Math.round(value) : value.toFixed(1)} ${units[idx]}`;
 }

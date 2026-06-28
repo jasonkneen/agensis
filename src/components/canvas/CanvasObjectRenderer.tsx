@@ -166,6 +166,7 @@ function AppletObject({
   const appId = parsed.appId || obj.file_name || 'applet';
   const appDefinition = CANVAS_APPS.find(app => app.id === appId);
   const appletHtml = appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
+  const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 
   const sendInit = () => {
     iframeRef.current?.contentWindow?.postMessage({
@@ -264,7 +265,7 @@ function AppletObject({
         ref={iframeRef}
         data-canvas-applet-frame
         title={obj.file_name || 'Canvas applet'}
-        srcDoc={appletHtml}
+        srcDoc={themedAppletHtml}
         sandbox="allow-forms allow-modals allow-popups allow-scripts"
         style={{
           width: '100%',
@@ -319,6 +320,53 @@ function AppletObject({
       )}
     </div>
   );
+}
+
+const APPLET_THEME_TOKEN_NAMES: Record<string, string> = {
+  background: '--background',
+  foreground: '--foreground',
+  card: '--card',
+  cardForeground: '--card-foreground',
+  popover: '--popover',
+  primary: '--primary',
+  primaryForeground: '--primary-foreground',
+  secondary: '--secondary',
+  muted: '--muted',
+  mutedForeground: '--muted-foreground',
+  border: '--border',
+  canvasBase: '--canvas-base',
+  canvasElevated: '--canvas-elevated',
+  canvasRaised: '--canvas-raised',
+  canvasOverlay: '--canvas-overlay',
+  textPrimary: '--text-primary',
+  textSecondary: '--text-secondary',
+  textMuted: '--text-muted',
+  accent: '--accent',
+  accentHover: '--accent-hover',
+  shadowSm: '--shadow-sm',
+  shadowMd: '--shadow-md',
+  shadowLg: '--shadow-lg',
+};
+
+function injectAppletHostTheme(html: string, theme: ReturnType<typeof readAppletTheme>) {
+  if (!theme?.tokens) return html;
+  const declarations = Object.entries(theme.tokens)
+    .flatMap(([key, value]) => {
+      const safeValue = sanitizeCssValue(value);
+      if (!safeValue) return [];
+      const cssName = APPLET_THEME_TOKEN_NAMES[key];
+      const hatchName = `--hatch-${key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)}`;
+      return cssName ? [`${cssName}: ${safeValue};`, `${hatchName}: ${safeValue};`] : [`${hatchName}: ${safeValue};`];
+    })
+    .join('');
+  const colorScheme = theme.scheme === 'dark' ? 'dark' : 'light';
+  const styleTag = `<style data-hatch-host-theme>:root{color-scheme:${colorScheme};${declarations}}</style>`;
+  if (html.includes('</head>')) return html.replace('</head>', `${styleTag}</head>`);
+  return `${styleTag}${html}`;
+}
+
+function sanitizeCssValue(value: string) {
+  return value.replace(/[<>{};]/g, '').trim();
 }
 
 function readAppletTheme() {

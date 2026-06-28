@@ -40,7 +40,7 @@ export function useChat(workspaceId: string | null) {
         .order('created_at', { ascending: true });
       return data;
     });
-    if (data) setMessages(data);
+    if (data) setMessages(data.map(normalizeMessage));
     setLoading(false);
   }, []);
 
@@ -66,13 +66,16 @@ export function useChat(workspaceId: string | null) {
             const row = payload.new;
             if (!row) return;
             setMessages(prev => {
-              if (prev.some(message => message.id === row.id)) return prev;
-              return [...prev, row].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+              const normalized = normalizeMessage(row);
+              const next = prev.some(message => message.id === row.id)
+                ? prev.map(message => message.id === row.id ? { ...message, ...normalized } : message)
+                : [...prev, normalized];
+              return next.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
             });
           } else if (payload.eventType === 'UPDATE') {
             const row = payload.new;
             if (!row) return;
-            setMessages(prev => prev.map(message => message.id === row.id ? row : message));
+            setMessages(prev => prev.map(message => message.id === row.id ? normalizeMessage(row) : message));
           } else if (payload.eventType === 'DELETE') {
             const row = payload.old;
             if (!row?.id) return;
@@ -91,7 +94,7 @@ export function useChat(workspaceId: string | null) {
     if (!navigator.onLine) return null;
     const { data } = await backendClient
       .from('chat_sessions')
-      .insert({ workspace_id: workspaceId, title: 'New Chat', model })
+      .insert({ workspace_id: workspaceId, title: 'New Channel', model, is_favorite: false, participants: [] })
       .select()
       .single();
     if (data) {
@@ -190,7 +193,7 @@ export function useChat(workspaceId: string | null) {
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
     await backendClient.from('messages').insert(insertPayload);
 
-    if (session.title === 'New Chat' && !threadParentId) {
+    if ((session.title === 'New Chat' || session.title === 'New Channel') && !threadParentId) {
       const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
       await backendClient
         .from('chat_sessions')
@@ -202,7 +205,23 @@ export function useChat(workspaceId: string | null) {
       setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
     }
 
-    if (workspaceId && /(^|\s)@[a-zA-Z0-9_.-]{1,64}\b/.test(content)) {
+    const memoryContext = memoryFacts && memoryFacts.length > 0
+      ? memoryFacts.map(f => `[${f.category}] ${f.fact}`).join('\n')
+      : null;
+
+    const docContext = linkedDocuments && linkedDocuments.length > 0
+      ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
+      : null;
+
+    const contextMessages = threadParentId
+      ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
+      : activeSession?.id === session.id ? messages : [];
+
+    const hasMention = Boolean(firstAgentMention(content));
+    const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
+    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget));
+
+    if (shouldRouteToAgent) {
       const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
         method: 'POST',
         headers: {
@@ -215,6 +234,10 @@ export function useChat(workspaceId: string | null) {
           messageId: userMsg.id,
           content,
           threadParentId: threadParentId ?? null,
+          messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
+          memory: memoryContext,
+          documents: docContext,
+          workspaceContext: workspaceContext ?? null,
         }),
       }).catch(() => null);
       const dispatchPayload = dispatchResponse
@@ -223,6 +246,11 @@ export function useChat(workspaceId: string | null) {
       if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
         return;
       }
+      return;
+    }
+
+    if (!agent || workspaceId) {
+      return;
     }
 
     setStreaming(true);
@@ -239,19 +267,6 @@ export function useChat(workspaceId: string | null) {
     setMessages(prev => [...prev, placeholderMsg]);
 
     try {
-      const memoryContext = memoryFacts && memoryFacts.length > 0
-        ? memoryFacts.map(f => `[${f.category}] ${f.fact}`).join('\n')
-        : null;
-
-      const docContext = linkedDocuments && linkedDocuments.length > 0
-        ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
-        : null;
-
-      // For thread replies, only send thread context
-      const contextMessages = threadParentId
-        ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
-        : activeSession?.id === session.id ? messages : [];
-
       const agentContext = agent ? {
         name: agent.name,
         systemPrompt: agent.system_prompt,
@@ -270,7 +285,7 @@ export function useChat(workspaceId: string | null) {
         },
         body: JSON.stringify({
           workspaceId,
-          messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: m.content })),
+          messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
           model: agent?.model || model,
           memory: memoryContext,
           documents: docContext,
@@ -311,7 +326,13 @@ export function useChat(workspaceId: string | null) {
             if (data === '[DONE]') continue;
             try {
               const parsed = JSON.parse(data);
-              const delta = parsed.delta?.text || parsed.choices?.[0]?.delta?.content || '';
+              const delta = messageText(
+                parsed.delta?.text ??
+                parsed.choices?.[0]?.delta?.content ??
+                parsed.text ??
+                parsed.content ??
+                parsed.message,
+              );
               if (delta) {
                 fullContent += delta;
                 setMessages(prev => prev.map(m =>
@@ -375,6 +396,18 @@ export function useChat(workspaceId: string | null) {
   };
 }
 
+function firstAgentMention(content: unknown): string {
+  const match = messageText(content).match(/(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/);
+  return match ? match[2].toLowerCase() : '';
+}
+
+function hasAgentTargetInThread(threadMessages: Message[]): boolean {
+  return threadMessages.some(message => {
+    if (message.sender_kind === 'agent' && message.sender_id) return true;
+    return Boolean(firstAgentMention(message.content));
+  });
+}
+
 function errorMessage(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value && typeof value === 'object') {
@@ -384,4 +417,40 @@ function errorMessage(value: unknown): string {
     if (typeof record.code === 'string') return record.code;
   }
   return 'Something went wrong. Please try again.';
+}
+
+function normalizeMessage(message: Message): Message {
+  return {
+    ...message,
+    content: messageText(message.content),
+  };
+}
+
+function messageText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value === '[object Object]' ? 'Response could not be rendered as text.' : value;
+  }
+  if (value == null) return '';
+  if (Array.isArray(value)) return value.map(messageText).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    const record = value as {
+      text?: unknown;
+      content?: unknown;
+      message?: unknown;
+      error?: unknown;
+      delta?: unknown;
+      output?: unknown;
+      response?: unknown;
+    };
+    for (const key of ['text', 'content', 'message', 'error', 'delta', 'output', 'response'] as const) {
+      const text = messageText(record[key]);
+      if (text) return text;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return 'Response could not be rendered as text.';
+    }
+  }
+  return String(value);
 }

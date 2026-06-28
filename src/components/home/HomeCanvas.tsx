@@ -1,7 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { FileText, Mic, Plus, Send, X } from 'lucide-react';
-import { ModelSelector } from '../chat/ModelSelector';
-import { getSetting } from '../../lib/settings';
 import type { Document, MemoryFact } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,7 +39,6 @@ export function HomeCanvas({
   backgroundOpacity = 0.42,
 }: HomeCanvasProps) {
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState(() => getSetting('ai_default_model'));
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [docPickerQuery, setDocPickerQuery] = useState('');
@@ -60,7 +57,7 @@ export function HomeCanvas({
 
   const handleSend = () => {
     if (!canSend) return;
-    onSendMessage(input.trim(), selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    onSendMessage(input.trim(), 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
   };
@@ -165,7 +162,7 @@ export function HomeCanvas({
                     onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
                     title="Remove document"
                   >
-                    <X data-icon="inline-start" className="size-2.5" />
+                    <X className="size-2.5" />
                   </Button>
                 </Badge>
               ))}
@@ -178,32 +175,29 @@ export function HomeCanvas({
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Chat with AI..."
+              placeholder="Message the workspace..."
               rows={2}
               className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed"
             />
             <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
               <div className="flex shrink-0 items-center gap-1">
                 <InputGroupButton title="Attach" size="icon-sm">
-                  <Plus data-icon="inline-start" className="size-4" />
+                  <Plus className="size-4" />
                 </InputGroupButton>
                 <InputGroupButton title="Voice" size="icon-sm">
-                  <Mic data-icon="inline-start" className="size-4" />
+                  <Mic className="size-4" />
                 </InputGroupButton>
               </div>
-              <div className="flex min-w-0 items-center gap-2">
-                <ModelSelector value={selectedModel} onChange={setSelectedModel} />
-                <InputGroupButton
-                  onClick={handleSend}
-                  disabled={!canSend}
-                  title="Send"
-                  size="icon-sm"
-                  variant="default"
-                  className="rounded-full"
-                >
-                  <Send data-icon="inline-start" className="size-4" />
-                </InputGroupButton>
-              </div>
+              <InputGroupButton
+                onClick={handleSend}
+                disabled={!canSend}
+                title="Send"
+                size="icon-sm"
+                variant="default"
+                className="rounded-full"
+              >
+                <Send className="size-4" />
+              </InputGroupButton>
             </InputGroupAddon>
           </InputGroup>
         </div>

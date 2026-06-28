@@ -66,7 +66,7 @@ import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState } from './lib/canvasApps';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { AgentConnection, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage } from './types';
+import type { Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 import bg1 from '../images/download-21.jpg';
@@ -197,7 +197,7 @@ function ContextCountChips({ counts, enabled }: { counts: WorkspaceContextCounts
 
   return (
     <TooltipProvider>
-      <div className="context-count-chips ml-auto flex min-w-0 shrink-0 items-center gap-1 overflow-x-auto">
+      <div className="context-count-chips flex min-w-0 items-center gap-1 overflow-x-auto">
         {items.map(item => (
           <Tooltip key={item.key}>
             <TooltipTrigger asChild>
@@ -289,7 +289,7 @@ export default function App() {
   } = useChat(activeWorkspaceId);
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
-  const { uploadFiles } = useFiles(activeWorkspaceId);
+  const { files: uploadedFiles, uploadFiles } = useFiles(activeWorkspaceId);
   const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
   const { mode: themeMode, setTheme } = useTheme();
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
@@ -309,6 +309,15 @@ export default function App() {
     user?.email || undefined,
     'all',
   );
+  const {
+    agents,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+  } = useAgents(activeWorkspaceId || null, user?.id);
+  const {
+    connections: agentConnections,
+  } = useAgentConnections(activeWorkspaceId || null);
   const workspacePresenceUsers = useMemo<WorkspacePresenceUser[]>(() => {
     const byId = new Map<string, WorkspacePresenceUser>();
     if (user) {
@@ -339,7 +348,7 @@ export default function App() {
             return doc ? `Doc: ${doc.title}` : 'Document';
           }
           const session = sessions.find(s => s.id === item.itemId);
-          return session ? `Chat: ${session.title}` : 'Chat';
+          return session ? `Channel: ${session.title}` : 'Channel';
         })
         .slice(0, 4);
       byId.set(remote.userId, {
@@ -431,19 +440,10 @@ export default function App() {
   );
 
   const {
-    agents,
-    createAgent,
-    updateAgent,
-    deleteAgent,
-  } = useAgents(activeWorkspaceId || null, user?.id);
-  const {
     webhooks: agentWebhooks,
     createWebhook: createAgentWebhook,
     updateWebhook: updateAgentWebhook,
   } = useAgentWebhooks(activeWorkspaceId || null);
-  const {
-    connections: agentConnections,
-  } = useAgentConnections(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
   const [systemCapabilities, setSystemCapabilities] = useState<SystemCapabilities | null>(null);
@@ -808,7 +808,7 @@ export default function App() {
   ) => {
     const session = await createSession();
     if (session) {
-      openWindow('chat', { title: content.slice(0, 30) || 'New Chat', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+      openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
       setTimeout(() => {
         wrappedSendMessage(content, model, memFacts, docs, null, session);
       }, 100);
@@ -989,6 +989,9 @@ export default function App() {
                 activityLoading={activityLoading}
                 agents={agents}
                 agentWebhooks={agentWebhooks}
+                agentConnections={agentConnections}
+                presenceUsers={workspacePresenceUsers}
+                uploadedFiles={uploadedFiles}
                 selectedAgent={selectedAgent}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
@@ -1229,6 +1232,9 @@ function CanvasLayerScene({
   activityLoading,
   agents,
   agentWebhooks,
+  agentConnections,
+  presenceUsers,
+  uploadedFiles,
   selectedAgent,
   getPresenceMode,
   backgroundOpacity,
@@ -1291,13 +1297,16 @@ function CanvasLayerScene({
   activityLoading: boolean;
   agents: WorkspaceAgent[];
   agentWebhooks: AgentWebhook[];
+  agentConnections: AgentConnection[];
+  presenceUsers: WorkspacePresenceUser[];
+  uploadedFiles: UploadedFile[];
   selectedAgent: WorkspaceAgent | null;
   getPresenceMode: (id?: string | null) => PresenceVisibilityMode;
   backgroundOpacity: number;
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string }) => void;
+  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string; run_mode?: 'builtin' | 'daemon' }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
@@ -1372,59 +1381,66 @@ function CanvasLayerScene({
               titleIcon={<MessageSquare size={13} />}
               breadcrumb={workspaceName}
             >
-              <div className="flex h-full flex-col">
-                <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-3 text-xs text-muted-foreground">
-                  <Label className="min-w-0 flex-1 cursor-pointer font-normal">
-                    <Checkbox
-                      checked={useWorkspaceCtx}
-                      onCheckedChange={() => onToggleWorkspaceCtx()}
-                      className="size-4 shrink-0"
-                    />
-                    <span className="truncate text-xs leading-none">Use workspace knowledge</span>
-                  </Label>
-                  <div title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}>
-                    <ContextCountChips counts={contextCounts} enabled={useWorkspaceCtx} />
-                  </div>
-                </div>
-                <div className="min-h-0 flex-1">
-                  {canControlWindow ? (
-                    <ChatWindowContent
-                      messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
-                      topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
-                      threadMessages={threadMessages}
-                      threadReplyCounts={threadReplyCounts}
-                      activeThreadId={activeThreadId}
-                      streaming={activeSession?.id === win.sessionId ? streaming : false}
-                      memoryFacts={facts}
-                      documents={documents}
-                      agents={agents}
-                      selectedAgent={selectedAgent}
-                      onSelectAgent={onSelectAgent}
-                      canvasGroups={canvasGroups}
-                      canvasObjects={canvasObjects}
-                      onSendMessage={(content, model, mf, docs) => {
-                        if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                        onSendMessage(content, model, mf, docs, null, winSession || null);
-                      }}
-                      onOpenThread={onOpenThread}
-                      onCloseThread={onCloseThread}
-                      onSendThreadReply={(content, model) => {
-                        if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                        onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
-                      }}
-                      channelTitle={winSession?.title || win.title}
-                    />
-                  ) : (
-                    <ReadOnlyChatWindowContent
-                      sessionId={win.sessionId || null}
-                      memoryFacts={facts}
-                      documents={documents}
-                      canvasGroups={canvasGroups}
-                      canvasObjects={canvasObjects}
-                    />
+              {canControlWindow ? (
+                <ChatWindowContent
+                  messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
+                  topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
+                  threadMessages={threadMessages}
+                  threadReplyCounts={threadReplyCounts}
+                  activeThreadId={activeThreadId}
+                  streaming={activeSession?.id === win.sessionId ? streaming : false}
+                  memoryFacts={facts}
+                  documents={documents}
+                  agents={agents}
+                  agentConnections={agentConnections}
+                  presenceUsers={presenceUsers}
+                  selectedAgent={selectedAgent}
+                  onSelectAgent={onSelectAgent}
+                  canvasGroups={canvasGroups}
+                  canvasObjects={canvasObjects}
+                  workspaceId={workspaceId}
+                  uploadedFiles={uploadedFiles}
+                  contextControls={(
+                    <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+                      <Label className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-full bg-secondary px-2 text-xs font-medium text-secondary-foreground">
+                        <Checkbox
+                          checked={useWorkspaceCtx}
+                          onCheckedChange={() => onToggleWorkspaceCtx()}
+                          className="size-4 shrink-0"
+                        />
+                        <span className="truncate leading-none">Knowledge</span>
+                      </Label>
+                      <div className="min-w-0" title={useWorkspaceCtx ? `Workspace context includes ${contextCountsTitle}` : 'Workspace context is off'}>
+                        <ContextCountChips counts={contextCounts} enabled={useWorkspaceCtx} />
+                      </div>
+                    </div>
                   )}
-                </div>
-              </div>
+                  onSendMessage={(content, model, mf, docs) => {
+                    if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
+                    onSendMessage(content, model, mf, docs, null, winSession || null);
+                  }}
+                  onOpenThread={onOpenThread}
+                  onCloseThread={onCloseThread}
+                  onSendThreadReply={(content, model) => {
+                    if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
+                    onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
+                  }}
+                  channelTitle={winSession?.title || win.title}
+                />
+              ) : (
+                <ReadOnlyChatWindowContent
+                  sessionId={win.sessionId || null}
+                  memoryFacts={facts}
+                  documents={documents}
+                  canvasGroups={canvasGroups}
+                  canvasObjects={canvasObjects}
+                  workspaceId={workspaceId}
+                  agents={agents}
+                  agentConnections={agentConnections}
+                  presenceUsers={presenceUsers}
+                  uploadedFiles={uploadedFiles}
+                />
+              )}
             </FloatingWindowShell>
           );
         }
@@ -1598,12 +1614,22 @@ function ReadOnlyChatWindowContent({
   documents,
   canvasGroups,
   canvasObjects,
+  workspaceId,
+  agents = [],
+  agentConnections = [],
+  presenceUsers = [],
+  uploadedFiles,
 }: {
   sessionId: string | null;
   memoryFacts: MemoryFact[];
   documents: Document[];
   canvasGroups: CanvasGroup[];
   canvasObjects: CanvasObject[];
+  workspaceId: string;
+  agents?: WorkspaceAgent[];
+  agentConnections?: AgentConnection[];
+  presenceUsers?: WorkspacePresenceUser[];
+  uploadedFiles: UploadedFile[];
 }) {
   const [remoteMessages, setRemoteMessages] = useState<ChatMessage[]>([]);
 
@@ -1635,8 +1661,13 @@ function ReadOnlyChatWindowContent({
       streaming={false}
       memoryFacts={memoryFacts}
       documents={documents}
+      agents={agents}
+      agentConnections={agentConnections}
+      presenceUsers={presenceUsers}
       canvasGroups={canvasGroups}
       canvasObjects={canvasObjects}
+      workspaceId={workspaceId}
+      uploadedFiles={uploadedFiles}
       onSendMessage={() => {}}
       readOnly
     />
@@ -1653,7 +1684,7 @@ function colorFromSeed(seed: string): string {
 }
 
 function windowLabel(win: FloatingWindow): string {
-  if (win.type === 'chat') return `Chat: ${win.title}`;
+  if (win.type === 'chat') return `Channel: ${win.title}`;
   if (win.type === 'document') return `Doc: ${win.title}`;
   if (win.type === 'memory') return 'Memory';
   if (win.type === 'tasks') return 'Tasks';

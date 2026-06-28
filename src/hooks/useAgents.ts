@@ -12,6 +12,7 @@ type AgentRealtimePayload = {
 export interface CreateAgentInput {
   name: string;
   avatar?: string;
+  openpet_avatar_id?: string | null;
   description?: string;
   system_prompt: string;
   soul?: string;
@@ -20,6 +21,7 @@ export interface CreateAgentInput {
   skills?: string[];
   handle?: string;
   model?: string;
+  run_mode?: 'builtin' | 'daemon';
 }
 
 function agentHandle(value: string) {
@@ -93,7 +95,8 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       workspace_id: workspaceId,
       created_by: userId ?? null,
       name: input.name,
-      avatar: input.avatar ?? '🤖',
+      avatar: input.avatar ?? 'AI',
+      openpet_avatar_id: input.openpet_avatar_id ?? '',
       description: input.description ?? '',
       system_prompt: input.system_prompt,
       soul: input.soul ?? '',
@@ -102,6 +105,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       skills: input.skills ?? [],
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
+      run_mode: input.run_mode ?? 'builtin',
     });
     if (data) {
       const agent = data as unknown as WorkspaceAgent;

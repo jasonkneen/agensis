@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name text NOT NULL,
-  avatar text NOT NULL DEFAULT '🤖',
+  avatar text NOT NULL DEFAULT 'AI',
   description text DEFAULT '',
   system_prompt text NOT NULL DEFAULT '',
   model text NOT NULL DEFAULT 'auto',

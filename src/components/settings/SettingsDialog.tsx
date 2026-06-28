@@ -270,7 +270,7 @@ function AppearancePanel({
         <Slider
           value={[backgroundOpacity]}
           min={10}
-          max={80}
+          max={100}
           step={1}
           onValueChange={value => setBackgroundOpacity(value[0] ?? backgroundOpacity)}
           onValueCommit={value => {

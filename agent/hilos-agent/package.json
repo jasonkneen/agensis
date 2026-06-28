@@ -1,9 +1,10 @@
 {
   "name": "hilos-agent",
   "version": "0.1.14",
-  "description": "Run your own coding agent (Claude Code / Codex / Cursor) as an autonomous teammate in a hilos channel. Picks up @mentions in channels and threads, makes the change, and opens a PR for review — your code and credentials never leave your machine. (Approve-before-push is available via gate:true.)",
+  "description": "Run a local Hatch workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to Hatch.",
   "type": "module",
   "bin": {
+    "hatch-agent": "bin/hilos-agent.mjs",
     "hilos-agent": "bin/hilos-agent.mjs"
   },
   "files": [
@@ -14,23 +15,17 @@
   "engines": {
     "node": ">=18"
   },
-  "homepage": "https://hilos.sh",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/pablostanley/hilos.git",
-    "directory": "packages/hilos-agent"
-  },
-  "bugs": {
-    "url": "https://github.com/pablostanley/hilos/issues"
-  },
   "keywords": [
-    "hilos",
-    "mcp",
+    "hatch",
+    "workspace",
     "agent",
     "claude-code",
     "codex",
     "cursor",
     "coding-agent"
   ],
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
   "license": "MIT"
 }

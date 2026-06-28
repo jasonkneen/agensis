@@ -13,6 +13,7 @@ const { WebSocketServer } = require('ws');
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
+const DEFAULT_AI_MODEL = process.env.HATCH_DEFAULT_AI_MODEL || 'claude-opus-4-8';
 const ALLOWED_TABLES = new Set([
   'app_users',
   'workspaces',
@@ -48,7 +49,6 @@ const VERSIONED_TABLES = new Set([
   'task_comments',
   'workspace_agents',
   'agent_webhooks',
-  'agent_jobs',
 ]);
 
 let envLoaded = false;
@@ -475,8 +475,12 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
 
@@ -692,14 +696,28 @@ function verifyPassword(password, passwordHash) {
 }
 
 function resolveAnthropicModel(model) {
-  if (!model || model === 'auto') return 'claude-fable-5';
-  const allowed = new Set([
-    'claude-fable-5',
-    'claude-opus-4-8',
-    'claude-sonnet-4-6',
-    'claude-haiku-4-5',
-  ]);
-  return allowed.has(model) ? model : 'claude-fable-5';
+  const value = String(model || '').trim();
+  if (!value || value === 'auto' || value === 'claude-fable-5') return DEFAULT_AI_MODEL;
+  return value;
+}
+
+function normalizeAgentPermissionMode(value) {
+  const mode = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (['yolo', 'no_sandbox', 'danger', 'danger_full_access', 'dangerously_skip_permissions'].includes(mode)) return 'yolo';
+  if (['accept_edits', 'acceptedits', 'auto_approve', 'auto_approve_edits'].includes(mode)) return 'accept_edits';
+  return 'default';
+}
+
+function agentPermissionFlags(permissionMode) {
+  return normalizeAgentPermissionMode(permissionMode) === 'yolo' ? ['--no-sandbox', '--yolo'] : [];
+}
+
+function formatElapsedMs(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function slugHandle(value) {
@@ -737,8 +755,14 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle }) {
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, model, permissionMode }) {
   const agentBin = path.resolve(__dirname, '..', 'agent', 'hilos-agent', 'bin', 'hilos-agent.mjs');
+  const resolvedModel = resolveAnthropicModel(model);
+  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
+  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
+  if (resolvedPermissionMode === 'yolo') {
+    commandPermissionArgs.push('--no-sandbox');
+  }
   const localCommand = [
     'node',
     shellQuote(agentBin),
@@ -753,9 +777,12 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle }
     shellQuote(agentId),
     '--handle',
     shellQuote(handle),
+    '--model',
+    shellQuote(resolvedModel),
+    ...commandPermissionArgs,
   ].join(' ');
   const portableCommand = [
-    'hilos-agent',
+    'hatch-agent',
     'hatch',
     '--url',
     shellQuote(baseUrl),
@@ -767,6 +794,9 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle }
     shellQuote(agentId),
     '--handle',
     shellQuote(handle),
+    '--model',
+    shellQuote(resolvedModel),
+    ...commandPermissionArgs,
   ].join(' ');
   return { localCommand, portableCommand };
 }
@@ -774,7 +804,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle }
 async function verifyAgentConnectToken(token) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, description, system_prompt, soul, instructions, tools, skills, model, handle
+    `select id, workspace_id, name, avatar, openpet_avatar_id, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -787,7 +817,7 @@ async function verifyAgentConnectToken(token) {
     workspaceId: agent.workspace_id,
     name: agent.name,
     handle: agent.handle || slugHandle(agent.name),
-    agent,
+    agent: agentRuntimePayload(agent),
   };
 }
 
@@ -811,11 +841,34 @@ function publicAgentConnection(row) {
     host: row.host,
     cwd: row.cwd,
     status: row.status,
-    metadata: row.metadata || {},
+    metadata: parseJsonObject(row.metadata),
     connected_at: row.connected_at,
     last_seen_at: row.last_seen_at,
     updated_at: row.updated_at,
   };
+}
+
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function findConnectedAgent(workspaceId, agentId, handle) {
@@ -829,9 +882,107 @@ function findConnectedAgent(workspaceId, agentId, handle) {
   return null;
 }
 
+function agentRuntimePayload(agent) {
+  if (!agent) return null;
+  const permissionMode = normalizeAgentPermissionMode(agent.permission_mode || agent.permissionMode);
+  return {
+    id: agent.id,
+    workspace_id: agent.workspace_id,
+    name: agent.name,
+    avatar: agent.avatar || 'AI',
+    openpet_avatar_id: agent.openpet_avatar_id || '',
+    handle: agent.handle || slugHandle(agent.name),
+    description: agent.description || '',
+    system_prompt: agent.system_prompt || '',
+    soul: agent.soul || '',
+    instructions: agent.instructions || '',
+    tools: parseJsonArray(agent.tools),
+    skills: parseJsonArray(agent.skills),
+    model: resolveAnthropicModel(agent.model),
+    run_mode: agent.run_mode === 'daemon' ? 'daemon' : 'builtin',
+    permissionMode,
+    permission_mode: permissionMode,
+    permissionFlags: agentPermissionFlags(permissionMode),
+    version: Number(agent.version || 0),
+  };
+}
+
+function refreshConnectedAgentConfigs(eventType, rows) {
+  if (!['INSERT', 'UPDATE'].includes(eventType)) return;
+  for (const row of rows || []) {
+    const agent = agentRuntimePayload(row);
+    if (!agent?.id || !agent.workspace_id) continue;
+    for (const entry of connectedAgents.values()) {
+      if (String(entry.agentId) !== String(agent.id)) continue;
+      if (String(entry.workspaceId) !== String(agent.workspace_id)) continue;
+      entry.handle = agent.handle;
+      entry.name = agent.name;
+      entry.agent = agent;
+      if (entry.ws?.agentAuth) {
+        entry.ws.agentAuth = {
+          ...entry.ws.agentAuth,
+          name: agent.name,
+          handle: agent.handle,
+          agent,
+        };
+      }
+      sendWs(entry.ws, { type: 'agent_config', agent });
+    }
+  }
+}
+
 function firstAgentMention(content) {
   const match = String(content || '').match(/(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/);
   return match ? slugHandle(match[2]) : '';
+}
+
+function validUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+}
+
+async function inferThreadAgentTarget(sessionId, threadParentId) {
+  if (!sessionId || !threadParentId) return null;
+  const rows = await getDb().unsafe(
+    `select id, sender_kind, sender_id, sender_name, content, created_at
+     from messages
+     where session_id = $1
+       and (id = $2 or thread_parent_id = $2)
+     order by created_at desc`,
+    [sessionId, threadParentId],
+  );
+  for (const row of rows) {
+    if (row.sender_kind === 'agent' && validUuid(row.sender_id)) {
+      return { agentId: String(row.sender_id), handle: slugHandle(row.sender_name || '') };
+    }
+  }
+  for (const row of rows) {
+    const handle = firstAgentMention(row.content);
+    if (handle) return { agentId: '', handle };
+  }
+  return null;
+}
+
+function agentContextFromRow(agent) {
+  if (!agent) return null;
+  return {
+    id: agent.id,
+    name: agent.name,
+    handle: agent.handle || slugHandle(agent.name),
+    description: agent.description || '',
+    systemPrompt: agent.system_prompt || '',
+    soul: agent.soul || '',
+    instructions: agent.instructions || '',
+    tools: parseJsonArray(agent.tools),
+    skills: parseJsonArray(agent.skills),
+    model: resolveAnthropicModel(agent.model),
+    permissionMode: normalizeAgentPermissionMode(agent.permission_mode),
+  };
+}
+
+function agentLiveMessageContent(message) {
+  const text = textFromValue(message?.content ?? message?.response ?? message?.text).trim();
+  if (text) return text;
+  return `Thinking ${formatElapsedMs(message?.elapsedMs)}`;
 }
 
 async function markAgentConnectionOffline(ws) {
@@ -864,7 +1015,7 @@ async function registerAgentConnection(ws, message) {
   const name = String(message.name || auth.name || handle).trim() || handle;
   const host = String(message.host || '').slice(0, 180);
   const cwd = String(message.cwd || '').slice(0, 500);
-  const metadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+  const metadata = parseJsonObject(message.metadata);
   const connectionId = crypto.randomUUID();
 
   const rows = await getDb().unsafe(
@@ -877,7 +1028,7 @@ async function registerAgentConnection(ws, message) {
   ws.agentConnectionId = connectionId;
   ws.agentId = agentId;
   ws.workspaceId = workspaceId;
-  connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name });
+  connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, agent: auth.agent });
   notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
   sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
 }
@@ -910,8 +1061,8 @@ async function handleAgentJobResult(ws, message) {
   );
   const job = rows[0];
   if (!job) throw forbidden('Agent job not found');
-  const errorText = String(message.error || '').trim();
-  const responseText = String(message.response || '').trim();
+  const errorText = textFromValue(message.error).trim();
+  const responseText = textFromValue(message.response).trim();
   const status = errorText ? 'error' : 'done';
   const updatedRows = await getDb().unsafe(
     `update agent_jobs
@@ -926,14 +1077,80 @@ async function handleAgentJobResult(ws, message) {
   const content = errorText
     ? `@${handle} failed: ${errorText}`
     : (responseText || `@${handle} finished without output.`);
-  const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
-     values ($1, 'assistant', $2, 'agent', $3, $4)
-     returning *`,
-    [job.session_id, content, String(job.agent_id || ''), job.agent_name || auth.name || handle],
-  );
-  notifyDbSubscribers('messages', 'INSERT', messageRows);
+  const jobMetadata = parseJsonObject(job.metadata);
+  const threadParentId = jobMetadata.threadParentId || null;
+  const responseMessageId = jobMetadata.responseMessageId || null;
+  if (responseMessageId) {
+    const messageRows = await getDb().unsafe(
+      `update messages
+       set content = $2,
+           sender_kind = 'agent',
+           sender_id = $3,
+           sender_name = $4
+       where id = $1 and session_id = $5
+       returning *`,
+      [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || handle, job.session_id],
+    );
+    if (messageRows.length > 0) {
+      notifyDbSubscribers('messages', 'UPDATE', messageRows);
+    }
+  } else {
+    const messageRows = await getDb().unsafe(
+      `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+       returning *`,
+      [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || handle],
+    );
+    notifyDbSubscribers('messages', 'INSERT', messageRows);
+  }
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => {});
+}
+
+async function handleAgentJobDelta(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+  const jobId = String(message.jobId || '');
+  if (!jobId) throw badRequest('jobId is required');
+  const rows = await getDb().unsafe(
+    `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+    [jobId, auth.agentId, auth.workspaceId],
+  );
+  const job = rows[0];
+  if (!job) throw forbidden('Agent job not found');
+  const metadata = parseJsonObject(job.metadata);
+  const responseMessageId = metadata.responseMessageId || null;
+  if (!responseMessageId) return;
+  const content = agentLiveMessageContent(message);
+  const updatedRows = await getDb().unsafe(
+    `update messages
+     set content = $2,
+         sender_kind = 'agent',
+         sender_id = $3,
+         sender_name = $4
+     where id = $1 and session_id = $5
+     returning *`,
+    [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', job.session_id],
+  );
+  if (updatedRows.length > 0) {
+    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
+  }
+  await getDb().unsafe(
+    `update agent_jobs
+     set response = $2,
+         updated_at = now(),
+         metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb
+     where id = $1`,
+    [
+      jobId,
+      textFromValue(message.content ?? message.response ?? '').trim(),
+      JSON.stringify({ lastDeltaAt: new Date().toISOString(), elapsedMs: Number(message.elapsedMs || 0) }),
+    ],
+  );
+  await updateAgentHeartbeat(ws, { busy: true }).catch(() => {});
 }
 
 async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
@@ -989,6 +1206,97 @@ function resolveStoragePath(storagePath) {
     throw new Error('Invalid storage path');
   }
   return fullPath;
+}
+
+const PROJECT_FILE_IGNORE_DIRS = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+  'dist',
+  'build',
+  '.next',
+  '.nuxt',
+  'out',
+  'coverage',
+  '.hatch_uploads',
+  'release',
+  '.cache',
+  '.turbo',
+]);
+
+function workspaceProjectRoot(workspace) {
+  const candidate = String(workspace?.git_root || workspace?.local_path || '').trim();
+  if (!candidate) return '';
+  const resolved = path.resolve(candidate);
+  try {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
+    return resolved;
+  } catch {
+    return '';
+  }
+}
+
+function listProjectFiles(root, maxFiles = 300) {
+  const files = [];
+  const queue = [''];
+  while (queue.length > 0 && files.length < maxFiles) {
+    const relativeDir = queue.shift();
+    const absoluteDir = path.join(root, relativeDir || '');
+    let entries = [];
+    try {
+      entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries
+      .filter(entry => !entry.name.startsWith('.') || entry.name === '.env.example')
+      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+      .forEach(entry => {
+        if (files.length >= maxFiles) return;
+        const rel = path.join(relativeDir || '', entry.name);
+        if (entry.isDirectory()) {
+          if (!PROJECT_FILE_IGNORE_DIRS.has(entry.name)) queue.push(rel);
+          return;
+        }
+        if (!entry.isFile()) return;
+        const fullPath = path.join(root, rel);
+        try {
+          const stat = fs.statSync(fullPath);
+          files.push({
+            path: rel.split(path.sep).join('/'),
+            name: entry.name,
+            size: stat.size,
+            mtime: stat.mtime.toISOString(),
+            kind: 'file',
+          });
+        } catch {
+          // ignore files that disappear while listing
+        }
+      });
+  }
+  return files;
+}
+
+function textFromValue(value) {
+  if (typeof value === 'string') {
+    return value === '[object Object]' ? '' : value;
+  }
+  if (value == null) return '';
+  if (Array.isArray(value)) return value.map(textFromValue).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    const keys = ['text', 'content', 'message', 'response', 'output', 'stdout', 'stderr', 'error'];
+    for (const key of keys) {
+      const text = textFromValue(value[key]);
+      if (text) return text;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value);
 }
 
 function resolveCommandPath(command) {
@@ -1247,6 +1555,10 @@ function notifyDbSubscribers(table, eventType, rows) {
   const rowList = Array.isArray(rows) ? rows : [];
   if (rowList.length === 0) return;
 
+  if (table === 'workspace_agents') {
+    refreshConnectedAgentConfigs(eventType, rowList);
+  }
+
   for (const ws of websocketClients) {
     const subscriptions = ws.subscriptions || [];
     for (const subscription of subscriptions) {
@@ -1338,20 +1650,28 @@ async function authorizeRealtimeBroadcast(userId, channel) {
 function attachRealtime(server) {
   const wss = new WebSocketServer({ server, path: '/backend/ws' });
 
-  wss.on('connection', async (ws, req) => {
-    const userId = await verifyToken(tokenFromWsRequest(req));
-    const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req));
-    if (!userId && !agentAuth) {
-      ws.close(1008, 'Authentication required');
-      return;
-    }
-    ws.userId = userId;
-    ws.agentAuth = agentAuth;
+  wss.on('connection', (ws, req) => {
     ws.subscriptions = [];
-    websocketClients.add(ws);
+    const authReady = (async () => {
+      const userId = await verifyToken(tokenFromWsRequest(req));
+      const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req));
+      if (!userId && !agentAuth) {
+        ws.close(1008, 'Authentication required');
+        return false;
+      }
+      ws.userId = userId;
+      ws.agentAuth = agentAuth;
+      websocketClients.add(ws);
+      return true;
+    })().catch(() => {
+      ws.close(1008, 'Authentication failed');
+      return false;
+    });
 
     ws.on('message', async (raw) => {
       try {
+        const authenticated = await authReady;
+        if (!authenticated) return;
         const message = JSON.parse(String(raw || '{}'));
         if (message.action === 'subscribe') {
           const binding = { channel: message.channel, ...(message.binding || {}) };
@@ -1382,6 +1702,10 @@ function attachRealtime(server) {
         }
         if (message.action === 'agent_job_result') {
           await handleAgentJobResult(ws, message);
+          return;
+        }
+        if (message.action === 'agent_job_delta') {
+          await handleAgentJobDelta(ws, message);
           return;
         }
       } catch (error) {
@@ -1432,7 +1756,7 @@ function createApp() {
       const inspected = await inspectProjectPath(req.body?.path || '');
       res.json({ data: inspected, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1459,7 +1783,7 @@ function createApp() {
       notifyDbSubscribers('uploaded_files', 'INSERT', rows);
       res.json({ data: rows[0], error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1479,11 +1803,43 @@ function createApp() {
     }
   });
 
+  app.get('/backend/workspaces/:id/project-files', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const rows = await getDb().unsafe(
+        'select id, local_path, git_root from workspaces where id = $1 limit 1',
+        [workspaceId],
+      );
+      const workspace = rows[0];
+      if (!workspace) return jsonError(res, 404, new Error('Workspace not found'));
+      const root = workspaceProjectRoot(workspace);
+      if (!root) return res.json({ data: { root: '', files: [] }, error: null });
+      res.json({
+        data: {
+          root,
+          files: listProjectFiles(root),
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agent-webhooks', requireAuth, async (req, res) => {
     try {
       const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
       if (!workspaceId || !name) return jsonError(res, 400, new Error('workspace_id and name are required'));
       await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      if (agentId) {
+        const agentRows = await getDb().unsafe(
+          'select id from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+          [agentId, workspaceId],
+        );
+        if (!agentRows[0]) return jsonError(res, 404, new Error('Agent not found in this workspace'));
+      }
       const token = crypto.randomBytes(32).toString('base64url');
       const rows = await getDb().unsafe(
         `insert into agent_webhooks (workspace_id, agent_id, name, token)
@@ -1494,7 +1850,7 @@ function createApp() {
       notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
       res.json({ data: rows[0], error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
@@ -1526,12 +1882,20 @@ function createApp() {
       await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
       const token = createAgentConnectToken();
       const handle = slugHandle(req.body?.handle || agent.handle || agent.name);
+      const model = resolveAnthropicModel(req.body?.model || agent.model);
+      const permissionMode = normalizeAgentPermissionMode(req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode);
       const updateRows = await getDb().unsafe(
         `update workspace_agents
-         set handle = $2, connect_token_hash = $3, updated_at = now(), version = coalesce(version, 0) + 1
+         set handle = $2,
+             connect_token_hash = $3,
+             run_mode = 'daemon',
+             model = $4,
+             permission_mode = $5,
+             updated_at = now(),
+             version = coalesce(version, 0) + 1
          where id = $1
          returning *`,
-        [agentId, handle, hashAgentToken(token)],
+        [agentId, handle, hashAgentToken(token), model, permissionMode],
       );
       notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
       const baseUrl = normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
@@ -1541,6 +1905,8 @@ function createApp() {
         workspaceId: agent.workspace_id,
         agentId,
         handle,
+        model: updateRows[0]?.model || agent.model,
+        permissionMode: updateRows[0]?.permission_mode || agent.permission_mode,
       });
       res.json({
         data: {
@@ -1551,6 +1917,10 @@ function createApp() {
           localCommand: commands.localCommand,
           portableCommand: commands.portableCommand,
           baseUrl,
+          model,
+          permissionMode,
+          permission_mode: permissionMode,
+          permissionFlags: agentPermissionFlags(permissionMode),
         },
         error: null,
       });
@@ -1561,7 +1931,7 @@ function createApp() {
 
   app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
     try {
-      const { workspaceId, sessionId, messageId, content, threadParentId } = req.body || {};
+      const { workspaceId, sessionId, messageId, content, threadParentId, messages, memory, documents, workspaceContext } = req.body || {};
       if (!workspaceId || !sessionId || !content) {
         return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
       }
@@ -1570,10 +1940,10 @@ function createApp() {
       if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
         return jsonError(res, 404, new Error('Channel not found'));
       }
-      const handle = firstAgentMention(content);
-      if (!handle) {
-        return res.json({ data: { dispatched: false, reason: 'no_agent_mention' }, error: null });
-      }
+      const explicitHandle = firstAgentMention(content);
+      const threadTarget = !explicitHandle && threadParentId
+        ? await inferThreadAgentTarget(sessionId, threadParentId)
+        : null;
       const agents = await getDb().unsafe(
         `select *
          from workspace_agents
@@ -1581,13 +1951,99 @@ function createApp() {
          order by created_at asc`,
         [workspaceId],
       );
+      const wantedHandle = explicitHandle || threadTarget?.handle || '';
+      const wantedAgentId = threadTarget?.agentId || '';
+      if (!wantedHandle && !wantedAgentId) {
+        return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_thread_agent' }, error: null });
+      }
       const agent = agents.find((row) => {
         const rowHandle = slugHandle(row.handle || row.name);
-        return rowHandle === handle || slugHandle(row.name) === handle;
+        return (wantedAgentId && String(row.id) === wantedAgentId)
+          || (wantedHandle && (rowHandle === wantedHandle || slugHandle(row.name) === wantedHandle));
       });
       if (!agent) {
-        return res.json({ data: { dispatched: false, reason: 'agent_not_found', handle }, error: null });
+        return res.json({ data: { dispatched: false, reason: 'agent_not_found', handle: wantedHandle, agentId: wantedAgentId }, error: null });
       }
+      const handle = slugHandle(agent.handle || agent.name || wantedHandle);
+      const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
+      if (runMode === 'builtin') {
+        const jobRows = await getDb().unsafe(
+          `insert into agent_jobs (workspace_id, agent_id, session_id, message_id, created_by, prompt, status, started_at, metadata)
+           values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
+           returning *`,
+          [
+            workspaceId,
+            agent.id,
+            sessionId,
+            messageId || null,
+            req.userId,
+            String(content),
+            JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin', inferredFromThread: !explicitHandle && Boolean(threadTarget) }),
+          ],
+        );
+        notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+
+        try {
+          const responseText = await runAnthropicCompletion({
+            model: resolveAnthropicModel(agent.model),
+            messages: Array.isArray(messages) && messages.length > 0
+              ? messages.map((m) => ({ role: m.role, content: textFromValue(m.content) }))
+              : [{ role: 'user', content: String(content) }],
+            memory,
+            documents,
+            workspaceContext,
+            agentContext: agentContextFromRow(agent),
+            workspaceId,
+          });
+          const updatedRows = await getDb().unsafe(
+            `update agent_jobs
+             set status = 'done', response = $2, finished_at = now(), updated_at = now()
+             where id = $1
+             returning *`,
+            [jobRows[0].id, responseText],
+          );
+          notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+          const messageRows = await getDb().unsafe(
+            `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+             values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+             returning *`,
+            [
+              sessionId,
+              responseText || `@${handle} finished without output.`,
+              threadParentId || null,
+              String(agent.id),
+              agent.name,
+            ],
+          );
+          notifyDbSubscribers('messages', 'INSERT', messageRows);
+          return res.json({ data: { dispatched: true, connected: false, mode: 'builtin', agent, handle, job: updatedRows[0], message: messageRows[0] }, error: null });
+        } catch (error) {
+          const errorText = error?.message || 'Built-in agent failed';
+          const updatedRows = await getDb().unsafe(
+            `update agent_jobs
+             set status = 'error', error = $2, finished_at = now(), updated_at = now()
+             where id = $1
+             returning *`,
+            [jobRows[0].id, errorText],
+          );
+          notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+          const messageRows = await getDb().unsafe(
+            `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+             values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+             returning *`,
+            [
+              sessionId,
+              `@${handle} failed: ${errorText}`,
+              threadParentId || null,
+              String(agent.id),
+              agent.name,
+            ],
+          );
+          notifyDbSubscribers('messages', 'INSERT', messageRows);
+          return res.json({ data: { dispatched: true, connected: false, mode: 'builtin', agent, handle, job: updatedRows[0], message: messageRows[0] }, error: null });
+        }
+      }
+
       const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
       if (!connection) {
         const assistantRows = await getDb().unsafe(
@@ -1603,8 +2059,24 @@ function createApp() {
           ],
         );
         notifyDbSubscribers('messages', 'INSERT', assistantRows);
-        return res.json({ data: { dispatched: true, connected: false, agent, handle }, error: null });
+        return res.json({ data: { dispatched: true, connected: false, mode: 'daemon', agent, handle }, error: null });
       }
+
+      const responseMessageId = crypto.randomUUID();
+      const pendingMessageRows = await getDb().unsafe(
+        `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
+         returning *`,
+        [
+          responseMessageId,
+          sessionId,
+          'Thinking 0s',
+          threadParentId || null,
+          String(agent.id),
+          agent.name,
+        ],
+      );
+      notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
       const jobRows = await getDb().unsafe(
         `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, message_id, created_by, prompt, status, started_at, metadata)
@@ -1618,11 +2090,17 @@ function createApp() {
           messageId || null,
           req.userId,
           String(content),
-          JSON.stringify({ handle, threadParentId: threadParentId || null }),
+          JSON.stringify({
+            handle,
+            threadParentId: threadParentId || null,
+            responseMessageId,
+            inferredFromThread: !explicitHandle && Boolean(threadTarget),
+          }),
         ],
       );
       notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
       await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => {});
+      const agentPayload = agentRuntimePayload(agent);
       sendWs(connection.ws, {
         type: 'agent_job',
         job: {
@@ -1633,21 +2111,15 @@ function createApp() {
           threadParentId: threadParentId || null,
           prompt: String(content),
           handle,
-          agent: {
-            id: agent.id,
-            name: agent.name,
-            handle: agent.handle || handle,
-            description: agent.description || '',
-            system_prompt: agent.system_prompt || '',
-            soul: agent.soul || '',
-            instructions: agent.instructions || '',
-            tools: agent.tools || [],
-            skills: agent.skills || [],
-            model: agent.model || 'auto',
-          },
+          model: agentPayload.model,
+          permissionMode: agentPayload.permissionMode,
+          permission_mode: agentPayload.permission_mode,
+          permissionFlags: agentPayload.permissionFlags,
+          agent: agentPayload,
+          responseMessageId,
         },
       });
-      res.json({ data: { dispatched: true, connected: true, agent, handle, job: jobRows[0] }, error: null });
+      res.json({ data: { dispatched: true, connected: true, mode: 'daemon', agent, handle, job: jobRows[0] }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -1657,7 +2129,18 @@ function createApp() {
     try {
       const token = String(req.params.token || '');
       const rows = await getDb().unsafe(
-        `select w.*, a.name as agent_name, a.system_prompt, a.model, a.soul, a.instructions, a.tools, a.skills
+        `select w.*,
+                a.id as agent_row_id,
+                a.name as agent_name,
+                a.handle as agent_handle,
+                a.description as agent_description,
+                a.system_prompt,
+                a.model,
+                a.soul,
+                a.instructions,
+                a.tools,
+                a.skills,
+                a.permission_mode
          from agent_webhooks w
          left join workspace_agents a on a.id = w.agent_id
          where w.token = $1 and w.enabled = true
@@ -1696,12 +2179,17 @@ function createApp() {
           workspaceContext: { triggeredBy: 'webhook', webhook: webhook.name },
           workspaceId: webhook.workspace_id,
           agentContext: webhook.agent_id ? {
+            id: webhook.agent_row_id,
             name: webhook.agent_name,
+            handle: webhook.agent_handle || slugHandle(webhook.agent_name || ''),
+            description: webhook.agent_description || '',
             systemPrompt: webhook.system_prompt,
             soul: webhook.soul,
             instructions: webhook.instructions,
-            tools: Array.isArray(webhook.tools) ? webhook.tools : [],
-            skills: Array.isArray(webhook.skills) ? webhook.skills : [],
+            tools: parseJsonArray(webhook.tools),
+            skills: parseJsonArray(webhook.skills),
+            model: resolveAnthropicModel(webhook.model),
+            permissionMode: normalizeAgentPermissionMode(webhook.permission_mode),
           } : null,
         });
         const assistantRows = await getDb().unsafe(

@@ -1,11 +1,9 @@
 import { useRef, useState } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
-import { ModelSelector } from './ModelSelector';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import type { Message as ChatMessage } from '../../types';
 import { Button } from '@/components/ui/button';
-import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import {
   Empty,
   EmptyDescription,
@@ -17,13 +15,6 @@ import {
   InputGroupAddon,
   InputGroupTextarea,
 } from '@/components/ui/input-group';
-import {
-  Message,
-  MessageAvatar,
-  MessageContent,
-  MessageGroup,
-  MessageHeader,
-} from '@/components/ui/message';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -52,14 +43,13 @@ export function ChatThreadPanel({
   embedded = false,
 }: ChatThreadPanelProps) {
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const replies = threadMessages.filter(m => m.id !== parentMessage.id);
 
   const handleSend = () => {
     if (!input.trim() || streaming) return;
-    onSendReply(input.trim(), selectedModel);
+    onSendReply(input.trim(), 'auto');
     setInput('');
     inputRef.current?.focus();
   };
@@ -71,8 +61,8 @@ export function ChatThreadPanel({
   };
 
   return (
-    <aside className={embedded ? 'flex h-full min-w-0 flex-1 flex-col bg-card text-card-foreground' : 'flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card text-card-foreground'}>
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+    <aside className={embedded ? 'channel-side-panel flex h-full min-w-0 flex-1 flex-col text-card-foreground' : 'channel-side-panel flex h-full w-[320px] shrink-0 flex-col border-l border-border text-card-foreground'}>
+      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <CornerDownRight className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Thread</span>
         <span className="text-xs text-muted-foreground">
@@ -88,7 +78,7 @@ export function ChatThreadPanel({
       </div>
 
       <MessageScrollerProvider autoScroll={autoScroll}>
-        <MessageScroller className="flex-1">
+        <MessageScroller className="channel-message-surface flex-1">
           <MessageScrollerViewport onScroll={handleScrollerScroll}>
             <MessageScrollerContent className="min-h-full gap-3 p-3">
               {replies.length === 0 ? (
@@ -99,7 +89,7 @@ export function ChatThreadPanel({
                   </EmptyHeader>
                 </Empty>
               ) : (
-                <MessageGroup className="gap-3">
+                <div className="flex min-w-0 flex-col gap-1">
                   {replies.map((msg, idx) => (
                     <MessageScrollerItem key={msg.id} scrollAnchor={idx === replies.length - 1}>
                       <ThreadBubble
@@ -108,7 +98,7 @@ export function ChatThreadPanel({
                       />
                     </MessageScrollerItem>
                   ))}
-                </MessageGroup>
+                </div>
               )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
@@ -116,7 +106,7 @@ export function ChatThreadPanel({
         </MessageScroller>
       </MessageScrollerProvider>
 
-      <div className="shrink-0 border-t border-border p-3">
+      <div className="channel-composer shrink-0 border-t border-border p-3">
         <InputGroup className="h-auto flex-col items-stretch">
           <InputGroupTextarea
             ref={inputRef}
@@ -138,8 +128,8 @@ export function ChatThreadPanel({
               el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
             }}
           />
-          <InputGroupAddon align="block-end" className="justify-end border-t">
-            <ModelSelector value={selectedModel} onChange={setSelectedModel} />
+          <InputGroupAddon align="block-end" className="min-h-10 justify-between gap-2 border-t px-2 py-1.5">
+            <div className="text-xs text-muted-foreground">@mention agents in the channel</div>
             <Button
               type="button"
               size="icon-sm"
@@ -172,44 +162,58 @@ function ThreadBubble({
     : rawContent;
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
+  const senderName = msg.sender_name || (isUser ? 'You' : 'Hatch AI');
+  const createdAt = msg.created_at ? new Date(msg.created_at) : null;
+  const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
+    ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
 
   return (
-    <Message align={isUser ? 'end' : 'start'} className={isParent ? 'opacity-80' : undefined}>
-      <MessageAvatar className="size-7">
+    <div className={`flex min-w-0 gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 ${isParent ? 'opacity-80' : ''}`}>
+      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
         {isUser ? <User className="size-3.5" /> : <Bot className="size-3.5" />}
-      </MessageAvatar>
-      <MessageContent>
-        {!isUser && <MessageHeader>Hatch AI</MessageHeader>}
-        <Bubble variant={isUser ? 'default' : isParent ? 'outline' : 'muted'} align={isUser ? 'end' : 'start'}>
-          <BubbleContent className="text-xs">
-            {displayContent ? (
-              <MarkdownContent content={displayContent} compact />
-            ) : isStreaming ? (
-              <span className="flex items-center gap-2 text-muted-foreground">
-                <Spinner className="size-3" />
-                Thinking
-              </span>
-            ) : null}
-            {artifact && <ChatArtifact artifact={artifact} />}
-          </BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="truncate text-xs font-semibold text-foreground">{senderName}</span>
+          {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+        </div>
+        <div className="mt-0.5 text-xs leading-relaxed text-foreground">
+          {displayContent ? (
+            <MarkdownContent content={displayContent} compact />
+          ) : isStreaming ? (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Spinner className="size-3" />
+              Thinking
+            </span>
+          ) : null}
+          {artifact && <ChatArtifact artifact={artifact} />}
+        </div>
+      </div>
+    </div>
   );
 }
 
 function safeMessageText(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return value === '[object Object]' ? 'Message content is unavailable.' : value;
   if (value == null) return '';
+  if (Array.isArray(value)) {
+    return value
+      .map(item => safeMessageText(item))
+      .filter(Boolean)
+      .join('\n');
+  }
   if (typeof value === 'object') {
-    const record = value as { message?: unknown; content?: unknown; text?: unknown; error?: unknown };
-    for (const key of ['message', 'content', 'text', 'error'] as const) {
-      if (typeof record[key] === 'string') return record[key] as string;
+    const record = value as Record<string, unknown>;
+    for (const key of ['text', 'message', 'content', 'response', 'output', 'result', 'error', 'data'] as const) {
+      const text = safeMessageText(record[key]);
+      if (text) return text;
     }
     try {
-      return JSON.stringify(value);
+      const json = JSON.stringify(value);
+      return json && json !== '{}' ? json : 'Message content is unavailable.';
     } catch {
-      return '';
+      return 'Message content is unavailable.';
     }
   }
   return String(value);
