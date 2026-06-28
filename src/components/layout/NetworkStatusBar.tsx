@@ -1,4 +1,18 @@
-import { WifiOff, RefreshCw, Check, AlertCircle } from 'lucide-react';
+import { AlertCircle, Check, RefreshCw, WifiOff } from 'lucide-react';
+import { useState } from 'react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface NetworkStatusBarProps {
   online: boolean;
@@ -9,110 +23,94 @@ interface NetworkStatusBarProps {
   onClearQueue: () => void;
 }
 
-const buttonStyle = {
-  border: 'none',
-  borderRadius: 'var(--radius-sm)',
-  color: 'var(--text-inverse)',
-  fontSize: '11px',
-  fontWeight: 600,
-  padding: '2px 8px',
-  cursor: 'pointer',
-} as const;
-
 export function NetworkStatusBar({ online, syncing, pendingCount, syncError, onSync, onClearQueue }: NetworkStatusBarProps) {
+  const [confirmClear, setConfirmClear] = useState(false);
   if (online && pendingCount === 0 && !syncError) return null;
 
+  const isError = !online || Boolean(syncError);
+  const isWarning = online && !syncError && (syncing || pendingCount > 0);
+
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      padding: '6px 16px',
-      background: !online
-        ? 'var(--error-subtle)'
-        : syncError
-          ? 'var(--error-subtle)'
-          : (pendingCount > 0 ? 'var(--warning-subtle)' : 'var(--success-subtle)'),
-      borderBottom: '1px solid var(--border-subtle)',
-      fontSize: '12px',
-      fontWeight: 500,
-      transition: 'all 300ms ease',
-      flexWrap: 'wrap',
-    }}>
+    <>
+      <Alert
+        variant={isError ? 'destructive' : 'default'}
+        className={cn(
+          'flex items-center gap-2 rounded-none border-x-0 border-t-0 px-4 py-1.5 text-xs',
+          isWarning && 'border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
+          online && !syncError && pendingCount === 0 && 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400',
+        )}
+      >
       {!online ? (
-        <>
-          <WifiOff size={13} style={{ color: 'var(--error)' }} />
-          <span style={{ color: 'var(--error)' }}>
-            Offline — changes will sync when you reconnect
-          </span>
-        </>
+        <WifiOff data-icon="inline-start" className="size-3.5" />
       ) : syncError ? (
-        <>
-          <AlertCircle size={13} style={{ color: 'var(--error)' }} />
-          <span style={{ color: 'var(--error)' }}>
-            {syncError}
-            {pendingCount > 0 ? ` (${pendingCount} queued)` : ''}
-          </span>
-          <button
-            onClick={onSync}
-            style={{
-              ...buttonStyle,
-              marginLeft: '4px',
-              background: 'var(--error)',
-            }}
-          >
-            Retry sync
-          </button>
-          <button
-            onClick={() => {
-              if (window.confirm('Clear the offline sync queue? Unsynced local changes will be lost.')) {
-                onClearQueue();
-              }
-            }}
-            style={{
-              ...buttonStyle,
-              background: 'var(--text-secondary)',
-            }}
-          >
-            Clear queue
-          </button>
-        </>
+        <AlertCircle data-icon="inline-start" className="size-3.5" />
       ) : syncing ? (
-        <>
-          <RefreshCw
-            size={13}
-            style={{
-              color: 'var(--warning)',
-              animation: 'spin 1s linear infinite',
-            }}
-          />
-          <span style={{ color: 'var(--warning)' }}>
+        <RefreshCw data-icon="inline-start" className="size-3.5 animate-spin" />
+      ) : pendingCount > 0 ? (
+        <RefreshCw data-icon="inline-start" className="size-3.5" />
+      ) : (
+        <Check data-icon="inline-start" className="size-3.5" />
+      )}
+
+      <AlertDescription className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-xs text-current">
+        {!online ? (
+          <span>Offline - changes will sync when you reconnect</span>
+        ) : syncError ? (
+          <>
+            <span>
+              {syncError}
+              {pendingCount > 0 ? ` (${pendingCount} queued)` : ''}
+            </span>
+            <Button type="button" variant="outline" size="xs" onClick={onSync}>
+              Retry sync
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="xs"
+              onClick={() => setConfirmClear(true)}
+            >
+              Clear queue
+            </Button>
+          </>
+        ) : syncing ? (
+          <span>
             Syncing {pendingCount} pending change{pendingCount !== 1 ? 's' : ''}...
           </span>
-        </>
-      ) : pendingCount > 0 ? (
-        <>
-          <RefreshCw size={13} style={{ color: 'var(--warning)' }} />
-          <span style={{ color: 'var(--warning)' }}>
-            {pendingCount} change{pendingCount !== 1 ? 's' : ''} pending
-          </span>
-          <button
-            onClick={onSync}
-            style={{
-              ...buttonStyle,
-              marginLeft: '4px',
-              background: 'var(--warning)',
-            }}
-          >
-            Sync now
-          </button>
-        </>
-      ) : (
-        <>
-          <Check size={13} style={{ color: 'var(--success)' }} />
-          <span style={{ color: 'var(--success)' }}>All changes synced</span>
-        </>
-      )}
-    </div>
+        ) : pendingCount > 0 ? (
+          <>
+            <span>
+              {pendingCount} change{pendingCount !== 1 ? 's' : ''} pending
+            </span>
+            <Button type="button" variant="outline" size="xs" onClick={onSync}>
+              Sync now
+            </Button>
+          </>
+        ) : (
+          <span>All changes synced</span>
+        )}
+        </AlertDescription>
+      </Alert>
+      <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear the offline sync queue?</AlertDialogTitle>
+            <AlertDialogDescription>Unsynced local changes will be lost.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setConfirmClear(false);
+                onClearQueue();
+              }}
+            >
+              Clear queue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

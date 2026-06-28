@@ -1,27 +1,36 @@
 import { defineConfig } from 'vite';
+import path from 'node:path';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   // Use relative asset URLs so the same bundle works when served from a web
   // root and when loaded from disk inside the Electron desktop wrapper.
   base: './',
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   server: {
     proxy: {
       '/backend': {
         target: 'http://127.0.0.1:3142',
         changeOrigin: true,
+        ws: true,
       },
     },
   },
   plugins: [
     react(),
+    tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.svg', 'icon-512.svg'],
       manifest: {
-        name: 'Hatch — AI Workspace',
-        short_name: 'Hatch',
+        name: 'agensis — AI Workspace',
+        short_name: 'agensis',
         description: 'AI-powered workspace for documents, chat, and memory',
         theme_color: '#0c0c0c',
         background_color: '#0c0c0c',
@@ -78,7 +87,4 @@ export default defineConfig({
       },
     }),
   ],
-  optimizeDeps: {
-    exclude: ['lucide-react'],
-  },
 });

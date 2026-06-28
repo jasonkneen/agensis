@@ -11,7 +11,7 @@ const DEFAULTS: AppSettings = {
   ai_use_workspace_context: true,
 };
 
-const STORAGE_KEY = 'hatch_settings';
+const STORAGE_KEY = 'agensis_settings';
 
 function readAll(): AppSettings {
   try {

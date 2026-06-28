@@ -1,5 +1,21 @@
 import { useEffect, useState } from 'react';
-import { X, FolderPlus, Loader2 } from 'lucide-react';
+import { FolderPlus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 
 interface CreateWorkspaceDialogProps {
   open: boolean;
@@ -25,8 +41,6 @@ export function CreateWorkspaceDialog({
     setCreating(false);
   }, [open]);
 
-  if (!open) return null;
-
   const handleSubmit = async () => {
     if (!name.trim() || creating) return;
     setCreating(true);
@@ -42,85 +56,27 @@ export function CreateWorkspaceDialog({
   };
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 10001,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'rgba(0, 0, 0, 0.5)',
-        backdropFilter: 'blur(4px)',
-        padding: '20px',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: '460px',
-          background: 'var(--canvas-elevated)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-xl)',
-          boxShadow: 'var(--shadow-xl)',
-          overflow: 'hidden',
-        }}
-      >
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '20px 24px 16px',
-          borderBottom: '1px solid var(--border-subtle)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--accent-subtle)',
-              border: '1px solid var(--accent-border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--accent)',
-            }}>
-              <FolderPlus size={18} />
+    <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader className="pr-8">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <FolderPlus className="size-5" />
             </div>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                Create workspace
-              </h2>
-              <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                Create a new shared place for docs, chat, files, and canvas
-              </p>
+            <div className="min-w-0">
+              <DialogTitle>Create workspace</DialogTitle>
+              <DialogDescription>
+                Create a shared place for docs, chat, files, and canvas.
+              </DialogDescription>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              width: '32px',
-              height: '32px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'var(--canvas-raised)',
-              border: '1px solid var(--border)',
-              borderRadius: '50%',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-            }}
-          >
-            <X size={16} />
-          </button>
-        </div>
+        </DialogHeader>
 
-        <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>Name</span>
-            <input
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="workspace-name">Name</FieldLabel>
+            <Input
+              id="workspace-name"
               autoFocus
               value={name}
               onChange={e => setName(e.target.value)}
@@ -131,113 +87,44 @@ export function CreateWorkspaceDialog({
                   handleSubmit();
                 }
               }}
-              style={{
-                width: '100%',
-                padding: '11px 12px',
-                background: 'var(--canvas-raised)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                outline: 'none',
-                fontFamily: 'inherit',
-              }}
             />
-          </label>
+          </Field>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '84px 1fr', gap: '12px' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>Icon</span>
-              <input
+          <div className="grid grid-cols-[5.25rem_1fr] gap-3">
+            <Field>
+              <FieldLabel htmlFor="workspace-icon">Icon</FieldLabel>
+              <Input
+                id="workspace-icon"
                 value={icon}
                 onChange={e => setIcon(e.target.value)}
                 placeholder="🗂️"
                 maxLength={4}
-                style={{
-                  width: '100%',
-                  padding: '11px 12px',
-                  background: 'var(--canvas-raised)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '18px',
-                  outline: 'none',
-                  textAlign: 'center',
-                  fontFamily: 'inherit',
-                }}
+                className="text-center text-lg"
               />
-            </label>
+            </Field>
 
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>Description</span>
-              <input
+            <Field>
+              <FieldLabel htmlFor="workspace-description">Description</FieldLabel>
+              <Input
+                id="workspace-description"
                 value={description}
                 onChange={e => setDescription(e.target.value)}
                 placeholder="Optional"
-                style={{
-                  width: '100%',
-                  padding: '11px 12px',
-                  background: 'var(--canvas-raised)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  outline: 'none',
-                  fontFamily: 'inherit',
-                }}
               />
-            </label>
+            </Field>
           </div>
-        </div>
+        </FieldGroup>
 
-        <div style={{
-          padding: '16px 24px 20px',
-          borderTop: '1px solid var(--border-subtle)',
-          display: 'flex',
-          justifyContent: 'flex-end',
-          gap: '10px',
-        }}>
-          <button
-            onClick={onClose}
-            disabled={creating}
-            style={{
-              padding: '10px 14px',
-              background: 'var(--canvas-raised)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--text-primary)',
-              cursor: creating ? 'not-allowed' : 'pointer',
-              fontWeight: 600,
-              fontFamily: 'inherit',
-            }}
-          >
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={creating}>
             Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={!name.trim() || creating}
-            style={{
-              minWidth: '140px',
-              padding: '10px 14px',
-              background: 'var(--accent)',
-              border: 'none',
-              borderRadius: 'var(--radius-md)',
-              color: 'white',
-              cursor: !name.trim() || creating ? 'not-allowed' : 'pointer',
-              fontWeight: 600,
-              fontFamily: 'inherit',
-              opacity: !name.trim() || creating ? 0.6 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-            }}
-          >
-            {creating ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <FolderPlus size={14} />}
+          </Button>
+          <Button type="button" onClick={handleSubmit} disabled={!name.trim() || creating}>
+            {creating ? <Spinner data-icon="inline-start" /> : <FolderPlus data-icon="inline-start" />}
             Create workspace
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

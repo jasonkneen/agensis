@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef } from 'react';
 import { Upload } from 'lucide-react';
-import type { CanvasObject, CanvasObjectType } from '../../types';
+import type { CanvasObject, CanvasObjectType, UploadedFile } from '../../types';
+import { apiUrl } from '../../lib/backendClient';
 
 interface CanvasDropZoneProps {
   onAddObject: (type: CanvasObjectType, overrides?: Partial<CanvasObject>) => Promise<CanvasObject | null>;
-  onUploadFiles: (files: File[]) => void;
+  onUploadFiles: (files: File[]) => Promise<UploadedFile[]>;
   children: React.ReactNode;
 }
 
@@ -55,15 +56,18 @@ export function CanvasDropZone({ onAddObject, onUploadFiles, children }: CanvasD
     const dropX = rect ? ((e.clientX - rect.left) / rect.width) * 100 : 50;
     const dropY = rect ? ((e.clientY - rect.top) / rect.height) * 100 : 50;
 
-    const allFiles: File[] = [];
+    const uploadedFiles = await onUploadFiles(files);
+    const uploadByName = new Map(uploadedFiles.map(file => [`${file.name}:${file.size}:${file.type}`, file]));
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      const uploaded = uploadByName.get(`${file.name}:${file.size}:${file.type}`) || uploadedFiles.find(item => item.name === file.name);
       const offsetX = dropX + (i * 2);
       const offsetY = dropY + (i * 2);
+      const storedSrc = uploaded ? apiUrl(`/backend/files/${uploaded.id}/content`) : '';
 
       if (file.type.startsWith('image/')) {
-        const dataUrl = await fileToDataUrl(file);
+        const dataUrl = storedSrc || await fileToDataUrl(file);
         await onAddObject('image', {
           x: offsetX - 10,
           y: offsetY - 8,
@@ -76,7 +80,7 @@ export function CanvasDropZone({ onAddObject, onUploadFiles, children }: CanvasD
           stroke_width: 0,
         });
       } else if (file.type.startsWith('video/')) {
-        const dataUrl = await fileToDataUrl(file);
+        const dataUrl = storedSrc || await fileToDataUrl(file);
         await onAddObject('video', {
           x: offsetX - 12,
           y: offsetY - 8,
@@ -89,23 +93,20 @@ export function CanvasDropZone({ onAddObject, onUploadFiles, children }: CanvasD
           stroke_width: 0,
         });
       } else {
+        const isPreviewable = isPreviewableFile(file);
         await onAddObject('file', {
-          x: offsetX - 6,
-          y: offsetY - 4,
-          width: 12,
-          height: 8,
+          x: offsetX - (isPreviewable ? 16 : 7),
+          y: offsetY - (isPreviewable ? 12 : 5),
+          width: isPreviewable ? 32 : 14,
+          height: isPreviewable ? 24 : 10,
+          src: storedSrc,
           file_name: file.name,
+          text_content: file.type || file.name.split('.').pop() || 'file',
           fill: 'var(--canvas-raised)',
           stroke: 'var(--border)',
           stroke_width: 1,
         });
       }
-
-      allFiles.push(file);
-    }
-
-    if (allFiles.length > 0) {
-      onUploadFiles(allFiles);
     }
   }, [onAddObject, onUploadFiles]);
 
@@ -116,53 +117,27 @@ export function CanvasDropZone({ onAddObject, onUploadFiles, children }: CanvasD
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
-      style={{ position: 'relative', width: '100%', height: '100%' }}
+      className="relative size-full"
     >
       {children}
 
       {dragging && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          zIndex: 9000,
-          background: 'rgba(79, 156, 249, 0.08)',
-          border: '3px dashed var(--accent)',
-          borderRadius: 'var(--radius-lg)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-          pointerEvents: 'none',
-          backdropFilter: 'blur(4px)',
-        }}>
-          <div style={{
-            width: '56px',
-            height: '56px',
-            borderRadius: '50%',
-            background: 'var(--accent-subtle)',
-            border: '2px solid var(--accent-border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            <Upload size={24} style={{ color: 'var(--accent)' }} />
+        <div className="pointer-events-none absolute inset-0 z-[9000] flex flex-col items-center justify-center gap-3 rounded-lg border-[3px] border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+          <div className="flex size-14 items-center justify-center rounded-full border-2 border-primary/30 bg-primary/10 text-primary">
+            <Upload data-icon="inline-start" className="size-6" />
           </div>
-          <div style={{ textAlign: 'center' }}>
-            <p style={{
-              margin: '0 0 4px',
-              fontSize: '16px',
-              fontWeight: 600,
-              color: 'var(--accent)',
-            }}>Drop to add to canvas</p>
-            <p style={{
-              margin: 0,
-              fontSize: '13px',
-              color: 'var(--text-secondary)',
-            }}>Images, videos, and files will appear on the canvas</p>
+          <div className="text-center">
+            <p className="mb-1 text-base font-semibold text-primary">Drop to add to canvas</p>
+            <p className="text-sm text-muted-foreground">Images, videos, and files will appear on the canvas</p>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+function isPreviewableFile(file: File) {
+  return file.type.startsWith('text/')
+    || file.type === 'application/json'
+    || /\.(md|markdown|txt|json|csv|log|html|css|js|ts|tsx|jsx)$/i.test(file.name);
 }

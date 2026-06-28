@@ -3,12 +3,34 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { WorkspaceAgent } from '../types';
 
+type AgentRealtimePayload = {
+  eventType?: string;
+  new?: WorkspaceAgent;
+  old?: Partial<WorkspaceAgent>;
+};
+
 export interface CreateAgentInput {
   name: string;
   avatar?: string;
+  openpet_avatar_id?: string | null;
   description?: string;
   system_prompt: string;
+  soul?: string;
+  instructions?: string;
+  tools?: string[];
+  skills?: string[];
+  handle?: string;
   model?: string;
+  run_mode?: 'builtin' | 'daemon';
+}
+
+function agentHandle(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'agent';
 }
 
 type AgentChangePayload = {
@@ -49,17 +71,20 @@ export function useAgents(workspaceId: string | null, userId?: string) {
     const channel = backendClient
       .channel(`workspace_agents:${workspaceId}`)
       .on(
-        'postgres_changes',
+        'db_changes',
         { event: '*', schema: 'public', table: 'workspace_agents', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: AgentChangePayload) => {
+        (payload: AgentRealtimePayload) => {
           if (payload.eventType === 'INSERT') {
-            const row = payload.new as WorkspaceAgent;
+            const row = payload.new;
+            if (!row) return;
             setAgents(prev => prev.some(a => a.id === row.id) ? prev : [...prev, row]);
           } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as WorkspaceAgent;
+            const row = payload.new;
+            if (!row) return;
             setAgents(prev => prev.map(a => a.id === row.id ? row : a));
           } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as WorkspaceAgent;
+            const row = payload.old;
+            if (!row?.id) return;
             setAgents(prev => prev.filter(a => a.id !== row.id));
           }
         },
@@ -76,10 +101,17 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       workspace_id: workspaceId,
       created_by: userId ?? null,
       name: input.name,
-      avatar: input.avatar ?? '🤖',
+      avatar: input.avatar ?? 'AI',
+      openpet_avatar_id: input.openpet_avatar_id ?? '',
       description: input.description ?? '',
       system_prompt: input.system_prompt,
+      soul: input.soul ?? '',
+      instructions: input.instructions ?? '',
+      tools: input.tools ?? [],
+      skills: input.skills ?? [],
+      handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
+      run_mode: input.run_mode ?? 'builtin',
     });
     if (data) {
       const agent = data as unknown as WorkspaceAgent;

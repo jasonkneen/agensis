@@ -40,7 +40,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  if (!process.env.HATCH_BACKEND_EXTERNAL) {
+  if (!process.env.AGENSIS_BACKEND_EXTERNAL) {
     backendServer = startBackendServer();
   }
   createWindow();

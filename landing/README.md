@@ -1,6 +1,6 @@
-# Open Hatch — Landing page
+# agensis — Landing page
 
-Marketing site for Open Hatch. This is an independent Vite + React + TypeScript +
+Marketing site for agensis. This is an independent Vite + React + TypeScript +
 Tailwind project, kept in its own folder so it can be deployed separately from the
 app itself.
 

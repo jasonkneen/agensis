@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
-import type { Document, MemoryFact, Task, CanvasObject } from '../types';
+import type { SystemCapabilities } from '../lib/backendClient';
+import type { Document, MemoryFact, Task, CanvasObject, WorkspaceAgent, AgentWebhook } from '../types';
 
 export interface WorkspaceContextSnapshot {
   workspace: string;
@@ -7,6 +8,11 @@ export interface WorkspaceContextSnapshot {
   documents: string | null;
   tasks: string | null;
   canvas: string | null;
+  agents: string | null;
+  skills: string | null;
+  commands: string | null;
+  tools: string | null;
+  webhooks: string | null;
 }
 
 export interface WorkspaceContextSources {
@@ -15,6 +21,9 @@ export interface WorkspaceContextSources {
   memoryFacts: MemoryFact[];
   tasks: Task[];
   canvasObjects: CanvasObject[];
+  agents: WorkspaceAgent[];
+  agentWebhooks: AgentWebhook[];
+  capabilities: SystemCapabilities | null;
 }
 
 function stripHtml(html: string): string {
@@ -32,12 +41,20 @@ function truncate(text: string, max: number): string {
   return text.slice(0, max).trimEnd() + '…';
 }
 
+function uniqueList(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.map(value => value?.trim()).filter(Boolean) as string[]));
+}
+
+function formatVersion(version?: string | null) {
+  return version ? ` (${version})` : '';
+}
+
 /**
  * Aggregates workspace knowledge (docs, memory, tasks, canvas) into a
  * structured snapshot for injection into the AI chat system prompt.
  */
 export function useWorkspaceContext(sources: WorkspaceContextSources) {
-  const { workspaceName, documents, memoryFacts, tasks, canvasObjects } = sources;
+  const { workspaceName, documents, memoryFacts, tasks, canvasObjects, agents, agentWebhooks, capabilities } = sources;
 
   const buildSnapshot = useCallback((): WorkspaceContextSnapshot => {
     // Memory: all facts (capped for safety)
@@ -76,14 +93,66 @@ export function useWorkspaceContext(sources: WorkspaceContextSources) {
       .join('\n');
     const canvasContext = canvasText || null;
 
+    const agentContext = agents.length > 0
+      ? agents.slice(0, 12).map(agent => {
+          const details = [
+            agent.description ? truncate(agent.description, 180) : null,
+            agent.model ? `model: ${agent.model}` : null,
+            agent.tools?.length ? `tools: ${agent.tools.join(', ')}` : null,
+            agent.skills?.length ? `skills: ${agent.skills.join(', ')}` : null,
+          ].filter(Boolean);
+          return `- ${agent.name}${details.length ? ` - ${details.join('; ')}` : ''}`;
+        }).join('\n')
+      : null;
+
+    const agentSkillNames = uniqueList(agents.flatMap(agent => agent.skills || []));
+    const detectedSkillLibraries = capabilities?.skills
+      .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
+      .map(skill => `- ${skill.label}: ${skill.count} entries at ${skill.path}`) || [];
+    const skillContext = [...detectedSkillLibraries, ...agentSkillNames.map(skill => `- Selected by agents: ${skill}`)].join('\n') || null;
+
+    const availableClis = capabilities?.clis
+      .filter(cli => cli.available)
+      .map(cli => `- ${cli.label}: ${cli.command}${formatVersion(cli.version)}${cli.path ? ` at ${cli.path}` : ''}`) || [];
+    const commandLibraries = capabilities?.skills
+      .filter(skill => skill.available && skill.type === 'commands')
+      .map(skill => `- ${skill.label}: ${skill.count} commands at ${skill.path}`) || [];
+    const commandContext = [...availableClis, ...commandLibraries].join('\n') || null;
+
+    const agentToolNames = uniqueList(agents.flatMap(agent => agent.tools || []));
+    const availablePackages = capabilities?.packages
+      .filter(pkg => pkg.available)
+      .map(pkg => `- ${pkg.name}${formatVersion(pkg.version)}${pkg.path ? ` at ${pkg.path}` : ''}`) || [];
+    const codexAppServer = capabilities?.codexAppServer.available
+      ? [`- Codex app server: ${capabilities.codexAppServer.command} via ${capabilities.codexAppServer.transports.join(', ')}`]
+      : [];
+    const toolContext = [
+      ...availablePackages,
+      ...codexAppServer,
+      ...agentToolNames.map(tool => `- Selected by agents: ${tool}`),
+    ].join('\n') || null;
+
+    const webhookContext = agentWebhooks.length > 0
+      ? agentWebhooks.slice(0, 12).map(webhook => {
+          const agent = webhook.agent_id ? agents.find(item => item.id === webhook.agent_id) : null;
+          const status = webhook.enabled ? 'enabled' : 'disabled';
+          return `- ${webhook.name} (${status})${agent ? ` -> ${agent.name}` : ''}`;
+        }).join('\n')
+      : null;
+
     return {
       workspace: workspaceName,
       memory,
       documents: docContext,
       tasks: taskContext,
       canvas: canvasContext,
+      agents: agentContext,
+      skills: skillContext,
+      commands: commandContext,
+      tools: toolContext,
+      webhooks: webhookContext,
     };
-  }, [workspaceName, documents, memoryFacts, tasks, canvasObjects]);
+  }, [workspaceName, documents, memoryFacts, tasks, canvasObjects, agents, agentWebhooks, capabilities]);
 
   return { buildSnapshot };
 }

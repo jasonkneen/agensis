@@ -5,6 +5,13 @@ export interface Workspace {
   icon: string;
   user_id?: string | null;
   auto_share?: boolean;
+  local_path?: string;
+  project_kind?: string;
+  git_root?: string;
+  git_remote?: string;
+  background_opacity?: number | null;
+  background_image?: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -15,6 +22,8 @@ export interface Document {
   title: string;
   content: string;
   is_favorite: boolean;
+  folder?: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -24,9 +33,29 @@ export interface ChatSession {
   workspace_id: string;
   title: string;
   model: string;
+  folder?: string | null;
+  is_favorite?: boolean;
+  participants?: ChannelParticipant[] | null;
+  conversation_mode?: 'mention' | 'auto' | null;
+  max_agent_turns?: number | null;
+  auto_rounds?: number | null;
+  archived_at?: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
+
+export type ChannelParticipant = {
+  id: string;
+  name: string;
+  kind: 'user' | 'agent';
+  status?: string | null;
+  handle?: string | null;
+  user_id?: string | null;
+  agent_id?: string | null;
+  added_at?: string | null;
+  direct?: boolean | null;
+};
 
 export interface Message {
   id: string;
@@ -34,6 +63,10 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   thread_parent_id?: string | null;
+  sender_kind?: string | null;
+  sender_id?: string | null;
+  sender_name?: string | null;
+  pinned?: boolean;
   created_at: string;
 }
 
@@ -42,6 +75,7 @@ export interface MemoryFact {
   workspace_id: string;
   fact: string;
   category: string;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -53,10 +87,11 @@ export interface UploadedFile {
   size: number;
   type: string;
   storage_path: string;
+  version?: number;
   created_at: string;
 }
 
-export type CanvasObjectType = 'rect' | 'ellipse' | 'diamond' | 'arrow' | 'line' | 'pen' | 'text' | 'image' | 'video' | 'file' | 'sticky_note';
+export type CanvasObjectType = 'rect' | 'ellipse' | 'diamond' | 'arrow' | 'line' | 'pen' | 'text' | 'image' | 'video' | 'file' | 'applet' | 'sticky_note';
 
 export interface CanvasObject {
   id: string;
@@ -82,6 +117,7 @@ export interface CanvasObject {
   attached_to: string | null;
   font_size: number;
   layer_id: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -91,6 +127,7 @@ export interface CanvasGroup {
   workspace_id: string;
   name: string;
   color: string;
+  version?: number;
   created_by: string | null;
   created_at: string;
 }
@@ -119,6 +156,7 @@ export interface Task {
   source_type: TaskSourceType | null;
   source_id: string | null;
   completed_at: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -131,6 +169,7 @@ export interface TaskComment {
   parent_id: string | null;
   content: string;
   resolved: boolean;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -144,6 +183,7 @@ export interface DocumentComment {
   content: string;
   anchor_text: string;
   resolved: boolean;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -183,10 +223,24 @@ export interface FloatingWindow {
   height: number;
   zIndex: number;
   minimized: boolean;
+  maximized?: boolean;
+  restoreBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   canvasId?: string;
   sessionId?: string;
   documentId?: string;
+  ownerUserId?: string | null;
+  isPrivate?: boolean;
+  locked?: boolean;
+  shared?: boolean;
 }
+
+export type PresenceVisibilityMode = 'visible' | 'dimmed' | 'hidden';
+export type WorkspaceInstanceShareMode = 'off' | 'all' | 'selected';
 
 export interface ItemPresenceUser {
   userId: string;
@@ -202,11 +256,13 @@ export type AIModel = {
 };
 
 export const AI_MODELS: AIModel[] = [
-  { id: 'auto', label: 'Auto', description: 'Automatically selects the best model' },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', description: 'Most capable model' },
+  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Most capable model' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Balanced performance' },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', description: 'Fastest model' },
 ];
+
+export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';
 
 export interface DocumentVersion {
   id: string;
@@ -224,10 +280,47 @@ export interface WorkspaceAgent {
   workspace_id: string;
   name: string;
   avatar: string;
+  openpet_avatar_id?: string | null;
   description: string;
   system_prompt: string;
+  soul?: string;
+  instructions?: string;
+  tools?: string[];
+  skills?: string[];
+  handle?: string | null;
   model: string;
+  run_mode?: 'builtin' | 'daemon';
+  permission_mode?: AgentPermissionMode;
+  version?: number;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentConnection {
+  id: string;
+  workspace_id: string;
+  agent_id: string | null;
+  name: string;
+  handle: string;
+  host: string;
+  cwd: string;
+  status: 'online' | 'offline' | 'busy';
+  metadata: Record<string, unknown>;
+  connected_at: string;
+  last_seen_at: string;
+  updated_at: string;
+}
+
+export interface AgentWebhook {
+  id: string;
+  workspace_id: string;
+  agent_id: string | null;
+  name: string;
+  token: string;
+  enabled: boolean;
+  last_triggered_at: string | null;
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -250,8 +343,8 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   },
   {
     id: 2,
-    title: 'Link documents in chats.',
-    body: 'Type @ in any chat message to reference and link a document directly into your conversation.',
+    title: 'Link documents in channels.',
+    body: 'Type @ in any channel post to reference and link a document directly.',
     target: 'chat-input',
     placement: 'top',
   },

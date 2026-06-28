@@ -4,6 +4,7 @@ import { backendClient } from '../lib/backendClient';
 
 type User = { id: string; email?: string | null };
 type Session = { access_token: string; user: User };
+type SessionResponse = { data: { session: Session | null } };
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
@@ -42,7 +43,6 @@ export function useAuth() {
     }
 
     initializeAuth();
-
     const { data: { subscription } } = backendClient.auth.onAuthStateChange((_event: string, s: Session | null) => {
       setSession(s);
       setUser(s?.user ?? null);

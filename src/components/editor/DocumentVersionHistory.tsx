@@ -1,5 +1,11 @@
 import { History, RotateCcw, X } from 'lucide-react';
 import type { DocumentVersion } from '../../types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemHeader, ItemTitle } from '@/components/ui/item';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Spinner } from '@/components/ui/spinner';
 
 interface DocumentVersionHistoryProps {
   versions: DocumentVersion[];
@@ -40,166 +46,65 @@ export function DocumentVersionHistory({
   onClose,
 }: DocumentVersionHistoryProps) {
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      width: '280px',
-      borderLeft: '1px solid var(--border-subtle)',
-      background: 'var(--canvas-elevated)',
-      flexShrink: 0,
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '8px 12px',
-        borderBottom: '1px solid var(--border-subtle)',
-        flexShrink: 0,
-      }}>
-        <History size={13} style={{ color: 'var(--text-secondary)' }} />
-        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          Version History
-        </span>
+    <aside className="flex h-full w-[280px] shrink-0 flex-col border-l border-border/60 bg-background">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+        <History data-icon="inline-start" className="size-3.5 text-muted-foreground" />
+        <span className="text-xs font-semibold text-foreground">Version History</span>
         {versions.length > 0 && (
-          <span style={{
-            fontSize: '10px',
-            padding: '1px 6px',
-            background: 'var(--accent-subtle)',
-            color: 'var(--accent)',
-            borderRadius: '999px',
-            fontWeight: 600,
-          }}>
+          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
             {versions.length}
-          </span>
+          </Badge>
         )}
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={onClose}
-          title="Close version history"
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: 'var(--text-muted)',
-            display: 'flex',
-            padding: '2px',
-          }}
-        >
-          <X size={12} />
-        </button>
-      </div>
+        <div className="flex-1" />
+        <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} title="Close version history">
+          <X data-icon="inline-start" className="size-3" />
+        </Button>
+      </header>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 10px' }}>
-        {loading ? (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '24px 8px',
-          }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading...</span>
-          </div>
-        ) : versions.length === 0 ? (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            padding: '24px 8px',
-            textAlign: 'center',
-          }}>
-            <History size={22} style={{ color: 'var(--text-muted)', opacity: 0.35 }} />
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
-              No versions yet. Snapshots are created automatically as you edit.
-            </p>
-          </div>
-        ) : (
-          versions.map(version => (
-            <div
-              key={version.id}
-              style={{
-                marginBottom: '8px',
-                padding: '8px 10px',
-                background: 'var(--canvas-raised)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-md)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                <span style={{
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'var(--accent)',
-                  background: 'var(--accent-subtle)',
-                  padding: '1px 5px',
-                  borderRadius: '4px',
-                }}>
-                  v{version.version_number}
-                </span>
-                <span style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {version.title}
-                </span>
-                <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>
-                  {formatTime(version.created_at)}
-                </span>
-              </div>
-              {version.content && (
-                <p style={{
-                  fontSize: '11px',
-                  color: 'var(--text-muted)',
-                  margin: '0 0 6px 0',
-                  lineHeight: 1.4,
-                  wordBreak: 'break-word',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}>
-                  {contentPreview(version.content)}
-                </p>
-              )}
-              <button
-                onClick={() => onRestore(version)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  background: 'none',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-sm)',
-                  cursor: 'pointer',
-                  color: 'var(--text-secondary)',
-                  fontSize: '10px',
-                  padding: '3px 8px',
-                  transition: 'all var(--transition-fast)',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = 'var(--accent-subtle)';
-                  e.currentTarget.style.color = 'var(--accent)';
-                  e.currentTarget.style.borderColor = 'var(--accent-border)';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = 'none';
-                  e.currentTarget.style.color = 'var(--text-secondary)';
-                  e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                }}
-              >
-                <RotateCcw size={10} />
-                Restore
-              </button>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-2 p-2.5">
+          {loading ? (
+            <div className="flex min-h-40 items-center justify-center text-xs text-muted-foreground">
+              <Spinner className="mr-2 size-3.5" />
+              Loading...
             </div>
-          ))
-        )}
-      </div>
-    </div>
+          ) : versions.length === 0 ? (
+            <Empty className="min-h-40 border-0 p-4">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <History className="size-4" />
+                </EmptyMedia>
+                <EmptyDescription className="text-xs">
+                  No versions yet. Snapshots are created automatically as you edit.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            versions.map(version => (
+              <Item key={version.id} variant="muted" className="block p-2.5">
+                <ItemHeader className="mb-1 gap-2">
+                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                    v{version.version_number}
+                  </Badge>
+                  <ItemTitle className="min-w-0 flex-1 truncate text-[11px]">{version.title}</ItemTitle>
+                  <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(version.created_at)}</span>
+                </ItemHeader>
+                {version.content && (
+                  <ItemContent>
+                    <ItemDescription className="truncate text-[11px]">{contentPreview(version.content)}</ItemDescription>
+                  </ItemContent>
+                )}
+                <ItemActions className="mt-2">
+                  <Button type="button" variant="outline" size="xs" onClick={() => onRestore(version)}>
+                    <RotateCcw data-icon="inline-start" className="size-3" />
+                    Restore
+                  </Button>
+                </ItemActions>
+              </Item>
+            ))
+          )}
+        </div>
+      </ScrollArea>
+    </aside>
   );
 }

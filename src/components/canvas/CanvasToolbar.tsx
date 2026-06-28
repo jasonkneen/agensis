@@ -1,25 +1,51 @@
 import {
-  MousePointer2, Pencil, Square, Circle, Diamond,
-  Minus, ArrowRight, Type, Eraser, StickyNote
+  ArrowRight,
+  Circle,
+  Diamond,
+  Eraser,
+  Minus,
+  MousePointer2,
+  Pencil,
+  Square,
+  StickyNote,
+  Type,
 } from 'lucide-react';
 import type { CanvasTool } from '../../types';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
-const TOOLS: Array<{ id: CanvasTool; icon: React.ReactNode; label: string }> = [
-  { id: 'select', icon: <MousePointer2 size={16} />, label: 'Select' },
-  { id: 'pen', icon: <Pencil size={16} />, label: 'Pen' },
-  { id: 'rect', icon: <Square size={16} />, label: 'Rectangle' },
-  { id: 'ellipse', icon: <Circle size={16} />, label: 'Ellipse' },
-  { id: 'diamond', icon: <Diamond size={16} />, label: 'Diamond' },
-  { id: 'line', icon: <Minus size={16} />, label: 'Line' },
-  { id: 'arrow', icon: <ArrowRight size={16} />, label: 'Arrow' },
-  { id: 'text', icon: <Type size={16} />, label: 'Text' },
-  { id: 'sticky_note', icon: <StickyNote size={16} />, label: 'Sticky Note' },
-  { id: 'eraser', icon: <Eraser size={16} />, label: 'Eraser' },
+const TOOLS: Array<{ id: CanvasTool; icon: typeof MousePointer2; label: string }> = [
+  { id: 'select', icon: MousePointer2, label: 'Select' },
+  { id: 'pen', icon: Pencil, label: 'Pen' },
+  { id: 'rect', icon: Square, label: 'Rectangle' },
+  { id: 'ellipse', icon: Circle, label: 'Ellipse' },
+  { id: 'diamond', icon: Diamond, label: 'Diamond' },
+  { id: 'line', icon: Minus, label: 'Line' },
+  { id: 'arrow', icon: ArrowRight, label: 'Arrow' },
+  { id: 'text', icon: Type, label: 'Text' },
+  { id: 'sticky_note', icon: StickyNote, label: 'Sticky Note' },
+  { id: 'eraser', icon: Eraser, label: 'Eraser' },
 ];
 
 const PALETTE = [
-  '#1e293b', '#ef4444', '#f97316', '#eab308', '#22c55e',
-  '#06b6d4', '#3b82f6', '#ec4899', '#8b5cf6', '#ffffff',
+  { value: '#1e293b', className: 'bg-slate-800' },
+  { value: '#ef4444', className: 'bg-red-500' },
+  { value: '#f97316', className: 'bg-orange-500' },
+  { value: '#eab308', className: 'bg-yellow-500' },
+  { value: '#22c55e', className: 'bg-green-500' },
+  { value: '#06b6d4', className: 'bg-cyan-500' },
+  { value: '#3b82f6', className: 'bg-blue-500' },
+  { value: '#ec4899', className: 'bg-pink-500' },
+  { value: '#8b5cf6', className: 'bg-violet-500' },
+  { value: '#ffffff', className: 'bg-white' },
+];
+
+const STROKE_WIDTHS = [
+  { value: 2, className: 'h-0.5 w-3' },
+  { value: 4, className: 'h-1 w-4' },
+  { value: 8, className: 'h-2 w-6' },
 ];
 
 interface CanvasToolbarProps {
@@ -40,107 +66,73 @@ export function CanvasToolbar({
   onStrokeWidthChange,
 }: CanvasToolbarProps) {
   return (
-    <div style={{
-      position: 'absolute',
-      bottom: '16px',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      padding: '6px 10px',
-      background: 'var(--canvas-elevated)',
-      border: '1px solid var(--border)',
-      borderRadius: 'var(--radius-xl)',
-      boxShadow: 'var(--shadow-lg)',
-      zIndex: 600,
-      backdropFilter: 'blur(12px)',
-    }}>
-      {TOOLS.map(tool => (
-        <button
-          key={tool.id}
-          onClick={() => onToolChange(tool.id)}
-          title={tool.label}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '34px',
-            height: '34px',
-            borderRadius: 'var(--radius-md)',
-            border: 'none',
-            cursor: 'pointer',
-            background: activeTool === tool.id ? 'var(--accent-subtle)' : 'transparent',
-            color: activeTool === tool.id ? 'var(--accent)' : 'var(--text-secondary)',
-            transition: 'all var(--transition-fast)',
-          }}
-          onMouseEnter={e => {
-            if (activeTool !== tool.id) {
-              e.currentTarget.style.background = 'var(--canvas-raised)';
-            }
-          }}
-          onMouseLeave={e => {
-            if (activeTool !== tool.id) {
-              e.currentTarget.style.background = 'transparent';
-            }
-          }}
-        >
-          {tool.icon}
-        </button>
-      ))}
+    <div className="canvas-toolbar absolute bottom-4 left-1/2 z-[600] flex -translate-x-1/2 items-center gap-1.5 rounded-xl border bg-popover/95 px-2.5 py-1.5 text-popover-foreground shadow-lg backdrop-blur">
+      <ToggleGroup
+        type="single"
+        value={activeTool}
+        onValueChange={value => {
+          if (value) onToolChange(value as CanvasTool);
+        }}
+        size="sm"
+        spacing={1}
+        aria-label="Canvas tool"
+      >
+        {TOOLS.map(tool => {
+          const Icon = tool.icon;
+          return (
+            <ToggleGroupItem key={tool.id} value={tool.id} title={tool.label} aria-label={tool.label} className="min-w-8 px-0">
+              <Icon data-icon="inline-start" className="size-4" />
+            </ToggleGroupItem>
+          );
+        })}
+      </ToggleGroup>
 
-      <div style={{ width: '1px', height: '22px', background: 'var(--border-strong)', margin: '0 4px', flexShrink: 0 }} />
+      <Separator orientation="vertical" className="mx-1 h-6" />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+      <div className="flex items-center gap-1" aria-label="Stroke color">
         {PALETTE.map(color => (
-          <button
-            key={color}
-            onClick={() => onColorChange(color)}
-            title={color}
-            style={{
-              width: '20px',
-              height: '20px',
-              borderRadius: '50%',
-              border: activeColor === color ? '2px solid var(--accent)' : '2px solid var(--border)',
-              background: color,
-              cursor: 'pointer',
-              transition: 'transform var(--transition-fast)',
-              transform: activeColor === color ? 'scale(1.15)' : 'scale(1)',
-              flexShrink: 0,
-            }}
-          />
-        ))}
-      </div>
-
-      <div style={{ width: '1px', height: '22px', background: 'var(--border-strong)', margin: '0 4px', flexShrink: 0 }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-        {[2, 4, 8].map(w => (
-          <button
-            key={w}
-            onClick={() => onStrokeWidthChange(w)}
-            title={`${w}px`}
-            style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: 'var(--radius-sm)',
-              border: 'none',
-              background: strokeWidth === w ? 'var(--accent-subtle)' : 'transparent',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+          <Button
+            key={color.value}
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            title={color.value}
+            aria-label={color.value}
+            onClick={() => onColorChange(color.value)}
+            className={cn(
+              'rounded-full p-0 ring-offset-background',
+              activeColor === color.value && 'scale-110 ring-2 ring-primary ring-offset-2',
+            )}
           >
-            <div style={{
-              width: `${8 + w * 2}px`,
-              height: `${w}px`,
-              borderRadius: '2px',
-              background: strokeWidth === w ? 'var(--accent)' : 'var(--text-muted)',
-            }} />
-          </button>
+            <span className={cn('size-4 rounded-full border border-border', color.className)} />
+          </Button>
         ))}
       </div>
+
+      <Separator orientation="vertical" className="mx-1 h-6" />
+
+      <ToggleGroup
+        type="single"
+        value={String(strokeWidth)}
+        onValueChange={value => {
+          if (value) onStrokeWidthChange(Number(value));
+        }}
+        size="sm"
+        spacing={1}
+        aria-label="Stroke width"
+      >
+        {STROKE_WIDTHS.map(width => (
+          <ToggleGroupItem key={width.value} value={String(width.value)} title={`${width.value}px`} aria-label={`${width.value}px`} className="min-w-8 px-0">
+            <span
+              className={cn(
+                'rounded-full',
+                width.className,
+                strokeWidth === width.value ? 'bg-primary' : 'bg-muted-foreground',
+              )}
+            />
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
     </div>
   );
 }

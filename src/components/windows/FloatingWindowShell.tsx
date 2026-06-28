@@ -1,6 +1,189 @@
-import React, { useRef, useCallback, useState } from 'react';
-import { X, Minus, Maximize2, MoreHorizontal, Share2, Copy, Trash2 } from 'lucide-react';
-import type { FloatingWindow } from '../../types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Copy, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
+import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
+
+const SNAP_THRESHOLD = 44;
+const MIN_WINDOW_WIDTH = 320;
+const MIN_WINDOW_HEIGHT = 260;
+
+type WindowBounds = { x: number; y: number; width: number; height: number };
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clampDimension(value: number, min: number, max: number): number {
+  const ceiling = Math.max(1, Math.round(max));
+  const floor = Math.min(min, ceiling);
+  return Math.round(clampNumber(value, floor, ceiling));
+}
+
+function getShellViewport(shell: HTMLElement | null): { width: number; height: number; rect: DOMRect | null } {
+  const viewport = shell?.closest('[data-workspace-viewport]')
+    || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
+  const rect = viewport?.getBoundingClientRect() || null;
+  if (rect && rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height, rect };
+  }
+  const parent = shell?.offsetParent instanceof HTMLElement ? shell.offsetParent : null;
+  const parentRect = parent?.getBoundingClientRect() || null;
+  if (parentRect && parentRect.width > 0 && parentRect.height > 0) {
+    return { width: parentRect.width, height: parentRect.height, rect: parentRect };
+  }
+  if (typeof window !== 'undefined') {
+    return { width: window.innerWidth, height: window.innerHeight, rect: null };
+  }
+  return { width: 1024, height: 720, rect: null };
+}
+
+function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
+  const viewport = getShellViewport(shell);
+  const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, viewport.width);
+  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, viewport.height);
+  return {
+    x: Math.round(clampNumber(bounds.x, 0, Math.max(0, viewport.width - width))),
+    y: Math.round(clampNumber(bounds.y, 0, Math.max(0, viewport.height - height))),
+    width,
+    height,
+  };
+}
+
+function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow): WindowBounds {
+  return clampWindowBounds({
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+  }, shell);
+}
+
+function syncShellBounds(shell: HTMLElement, bounds: WindowBounds) {
+  shell.style.left = `${bounds.x}px`;
+  shell.style.top = `${bounds.y}px`;
+  shell.style.width = `${bounds.width}px`;
+  shell.style.height = `${bounds.height}px`;
+}
+
+function splitBounds(bounds: WindowBounds, edge: 'left' | 'right' | 'top' | 'bottom'): WindowBounds {
+  if (edge === 'left') {
+    return { x: bounds.x, y: bounds.y, width: Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width / 2)), height: bounds.height };
+  }
+  if (edge === 'right') {
+    const width = Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width / 2));
+    return { x: bounds.x + Math.max(0, bounds.width - width), y: bounds.y, width, height: bounds.height };
+  }
+  if (edge === 'top') {
+    return { x: bounds.x, y: bounds.y, width: bounds.width, height: Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height / 2)) };
+  }
+  const height = Math.max(MIN_WINDOW_HEIGHT, Math.round(bounds.height / 2));
+  return { x: bounds.x, y: bounds.y + Math.max(0, bounds.height - height), width: bounds.width, height };
+}
+
+function pointerInsideBounds(pointerX: number, pointerY: number, bounds: WindowBounds) {
+  return pointerX >= bounds.x
+    && pointerX <= bounds.x + bounds.width
+    && pointerY >= bounds.y
+    && pointerY <= bounds.y + bounds.height;
+}
+
+function nearestEdge(pointerX: number, pointerY: number, bounds: WindowBounds): 'left' | 'right' | 'top' | 'bottom' | null {
+  const distances: Array<{ edge: 'left' | 'right' | 'top' | 'bottom'; distance: number }> = [
+    { edge: 'left', distance: Math.abs(pointerX - bounds.x) },
+    { edge: 'right', distance: Math.abs(pointerX - (bounds.x + bounds.width)) },
+    { edge: 'top', distance: Math.abs(pointerY - bounds.y) },
+    { edge: 'bottom', distance: Math.abs(pointerY - (bounds.y + bounds.height)) },
+  ];
+  const nearest = distances.sort((a, b) => a.distance - b.distance)[0];
+  return nearest.distance <= SNAP_THRESHOLD ? nearest.edge : null;
+}
+
+function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: DOMRect | null): WindowBounds[] {
+  if (!shell || !viewportRect) return [];
+  const currentId = shell.dataset.floatingWindowId;
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-floating-window]'))
+    .filter(element => element.dataset.floatingWindowId !== currentId)
+    .map(element => {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.left - viewportRect.left,
+        y: rect.top - viewportRect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    })
+    .filter(bounds => bounds.width >= MIN_WINDOW_WIDTH && bounds.height >= MIN_WINDOW_HEIGHT);
+}
+
+function getSnapPreviewBounds(
+  clientX: number,
+  clientY: number,
+  shell: HTMLElement | null,
+): WindowBounds | null {
+  const viewport = getShellViewport(shell);
+  const rect = viewport.rect;
+  const pointerX = rect ? clientX - rect.left : clientX;
+  const pointerY = rect ? clientY - rect.top : clientY;
+
+  if (
+    pointerX < 0
+    || pointerY < 0
+    || pointerX > viewport.width
+    || pointerY > viewport.height
+  ) {
+    return null;
+  }
+
+  const workspaceBounds = { x: 0, y: 0, width: viewport.width, height: viewport.height };
+  const workspaceEdge = nearestEdge(pointerX, pointerY, workspaceBounds);
+  if (workspaceEdge) return clampWindowBounds(splitBounds(workspaceBounds, workspaceEdge), shell);
+
+  for (const bounds of getOtherWindowBounds(shell, rect)) {
+    if (!pointerInsideBounds(pointerX, pointerY, bounds)) continue;
+    const edge = nearestEdge(pointerX, pointerY, bounds);
+    if (edge) return clampWindowBounds(splitBounds(bounds, edge), shell);
+  }
+
+  return null;
+}
+
+function restoreBoundsForDrag(
+  clientX: number,
+  clientY: number,
+  shell: HTMLElement | null,
+  win: FloatingWindow,
+): WindowBounds {
+  const viewport = getShellViewport(shell);
+  const rect = viewport.rect;
+  const pointerX = rect ? clientX - rect.left : clientX;
+  const pointerY = rect ? clientY - rect.top : clientY;
+  const source = win.restoreBounds || {
+    x: win.x,
+    y: win.y,
+    width: Math.min(Math.max(MIN_WINDOW_WIDTH, Math.round(viewport.width * 0.62)), viewport.width),
+    height: Math.min(Math.max(MIN_WINDOW_HEIGHT, Math.round(viewport.height * 0.68)), viewport.height),
+  };
+  const sourceBounds = clampWindowBounds(source, shell);
+  const width = sourceBounds.width;
+  const height = sourceBounds.height;
+  const pointerRatio = viewport.width > 0 ? Math.min(0.86, Math.max(0.14, pointerX / viewport.width)) : 0.5;
+
+  return clampWindowBounds({
+    x: pointerX - width * pointerRatio,
+    y: Math.min(pointerY - 20, Math.max(0, viewport.height - height)),
+    width,
+    height,
+  }, shell);
+}
 
 interface FloatingWindowShellProps {
   window: FloatingWindow;
@@ -9,6 +192,9 @@ interface FloatingWindowShellProps {
   onUpdate: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimize: (id: string) => void;
   onShare?: () => void;
+  presenceMode?: PresenceVisibilityMode;
+  currentUserId?: string;
+  canControl?: boolean;
   titleIcon?: React.ReactNode;
   breadcrumb?: string;
   children: React.ReactNode;
@@ -21,25 +207,56 @@ export function FloatingWindowShell({
   onUpdate,
   onMinimize,
   onShare,
+  presenceMode = 'visible',
+  currentUserId,
+  canControl = true,
   titleIcon,
   breadcrumb,
   children,
 }: FloatingWindowShellProps) {
+  const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; winW: number; winH: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; winX: number; winY: number; winW: number; winH: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [snapPreview, setSnapPreview] = useState<WindowBounds | null>(null);
+  const isMaximized = Boolean(win.maximized);
+
+  useEffect(() => {
+    const syncBounds = () => {
+      const shell = shellRef.current;
+      if (!shell || isMaximized || isDragging || isResizing) return;
+      syncShellBounds(shell, getCurrentWindowBounds(shell, win));
+    };
+
+    syncBounds();
+
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const viewport = shellRef.current?.closest('[data-workspace-viewport]')
+      || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
+    if (!viewport) return undefined;
+
+    const observer = new ResizeObserver(syncBounds);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [win, isMaximized, isDragging, isResizing]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (!canControl) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
+    const startBounds = isMaximized
+      ? restoreBoundsForDrag(e.clientX, e.clientY, shellRef.current, win)
+      : getCurrentWindowBounds(shellRef.current, win);
+    if (shellRef.current) {
+      syncShellBounds(shellRef.current, startBounds);
+    }
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      winX: win.x,
-      winY: win.y,
+      winX: startBounds.x,
+      winY: startBounds.y,
     };
     setIsDragging(true);
 
@@ -47,311 +264,372 @@ export function FloatingWindowShell({
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
-      onUpdate(win.id, {
-        x: Math.max(0, dragRef.current.winX + dx),
-        y: Math.max(0, dragRef.current.winY + dy),
-      });
+      shellRef.current?.style.setProperty('transform', `translate3d(${dx}px, ${dy}px, 0)`);
+      setSnapPreview(getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current));
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      if (dragRef.current) {
+        const dx = ev.clientX - dragRef.current.startX;
+        const dy = ev.clientY - dragRef.current.startY;
+        const fallback = {
+          x: dragRef.current.winX + dx,
+          y: dragRef.current.winY + dy,
+          width: startBounds.width,
+          height: startBounds.height,
+        };
+        const next = getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current) || clampWindowBounds(fallback, shellRef.current);
+        if (shellRef.current) {
+          shellRef.current.style.left = `${next.x}px`;
+          shellRef.current.style.top = `${next.y}px`;
+          shellRef.current.style.width = `${next.width}px`;
+          shellRef.current.style.height = `${next.height}px`;
+          shellRef.current.style.removeProperty('transform');
+        }
+        onUpdate(win.id, {
+          ...next,
+          maximized: false,
+          restoreBounds: next,
+        });
+      }
       dragRef.current = null;
+      setSnapPreview(null);
       setIsDragging(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
+    };
+
+    const onCancel = () => {
+      shellRef.current?.style.removeProperty('transform');
+      dragRef.current = null;
+      setSnapPreview(null);
+      setIsDragging(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [win.id, win.x, win.y, onFocus, onUpdate]);
+    window.addEventListener('blur', onCancel);
+  }, [win, onFocus, onUpdate, canControl, isMaximized]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    if (!canControl || isMaximized) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
+    const startBounds = getCurrentWindowBounds(shellRef.current, win);
+    if (shellRef.current) {
+      syncShellBounds(shellRef.current, startBounds);
+    }
     resizeRef.current = {
       startX: e.clientX,
       startY: e.clientY,
-      winW: win.width,
-      winH: win.height,
+      winX: startBounds.x,
+      winY: startBounds.y,
+      winW: startBounds.width,
+      winH: startBounds.height,
     };
+    setSnapPreview(null);
     setIsResizing(true);
 
     const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current) return;
+      if (!resizeRef.current || !shellRef.current) return;
       const dx = ev.clientX - resizeRef.current.startX;
       const dy = ev.clientY - resizeRef.current.startY;
-      onUpdate(win.id, {
-        width: Math.max(300, resizeRef.current.winW + dx),
-        height: Math.max(250, resizeRef.current.winH + dy),
-      });
+      const next = clampWindowBounds({
+        x: resizeRef.current.winX,
+        y: resizeRef.current.winY,
+        width: resizeRef.current.winW + dx,
+        height: resizeRef.current.winH + dy,
+      }, shellRef.current);
+      syncShellBounds(shellRef.current, next);
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      if (resizeRef.current) {
+        const dx = ev.clientX - resizeRef.current.startX;
+        const dy = ev.clientY - resizeRef.current.startY;
+        const next = clampWindowBounds({
+          x: resizeRef.current.winX,
+          y: resizeRef.current.winY,
+          width: resizeRef.current.winW + dx,
+          height: resizeRef.current.winH + dy,
+        }, shellRef.current);
+        if (shellRef.current) {
+          syncShellBounds(shellRef.current, next);
+        }
+        onUpdate(win.id, { ...next, restoreBounds: next });
+      }
       resizeRef.current = null;
       setIsResizing(false);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
+    };
+
+    const onCancel = () => {
+      if (shellRef.current) {
+        syncShellBounds(shellRef.current, startBounds);
+      }
+      resizeRef.current = null;
+      setIsResizing(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onCancel);
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [win.id, win.width, win.height, onFocus, onUpdate]);
+    window.addEventListener('blur', onCancel);
+  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
+
+  const handleMaximize = useCallback(() => {
+    if (!canControl) return;
+    onFocus(win.id);
+    if (win.maximized) {
+      const restoreBounds = clampWindowBounds(win.restoreBounds || {
+        x: win.x,
+        y: win.y,
+        width: win.width,
+        height: win.height,
+      }, shellRef.current);
+      onUpdate(win.id, {
+        ...restoreBounds,
+        maximized: false,
+        restoreBounds: undefined,
+      });
+      return;
+    }
+
+    const currentBounds = getCurrentWindowBounds(shellRef.current, win);
+    onUpdate(win.id, {
+      maximized: true,
+      restoreBounds: currentBounds,
+    });
+  }, [win.id, win.x, win.y, win.width, win.height, win.maximized, win.restoreBounds, onFocus, onUpdate, canControl]);
 
   if (win.minimized) return null;
 
-  return (
-    <div
-      data-floating-window
-      onMouseDown={() => onFocus(win.id)}
-      style={{
+  const isDimmed = presenceMode === 'dimmed' || presenceMode === 'hidden';
+  const dimmedOpacity = presenceMode === 'hidden' ? 0.22 : 0.35;
+  const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
+  const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
+  const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
+  const displayBounds = getCurrentWindowBounds(shellRef.current, win);
+  const shellStyle: React.CSSProperties = isMaximized
+    ? {
         position: 'absolute',
-        left: win.x,
-        top: win.y,
-        width: win.width,
-        height: win.height,
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
         zIndex: win.zIndex,
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--canvas-elevated)',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        boxShadow: 'var(--shadow-xl)',
-        overflow: 'hidden',
+        opacity: isDimmed ? dimmedOpacity : 1,
+        filter: isDimmed ? 'saturate(0.55)' : undefined,
         userSelect: isDragging || isResizing ? 'none' : 'auto',
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
-      }}
-    >
+      }
+    : {
+        position: 'absolute',
+        left: displayBounds.x,
+        top: displayBounds.y,
+        width: displayBounds.width,
+        height: displayBounds.height,
+        zIndex: win.zIndex,
+        opacity: isDimmed ? dimmedOpacity : 1,
+        filter: isDimmed ? 'saturate(0.55)' : undefined,
+        userSelect: isDragging || isResizing ? 'none' : 'auto',
+        transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+      };
+
+  return (
+    <>
+      {isDragging && snapPreview && (
+        <div
+          className="pointer-events-none absolute rounded-lg border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
+          style={{
+            left: snapPreview.x,
+            top: snapPreview.y,
+            width: snapPreview.width,
+            height: snapPreview.height,
+            zIndex: win.zIndex + 1,
+          }}
+        />
+      )}
+      <div
+        ref={shellRef}
+        data-floating-window
+        data-floating-window-id={win.id}
+        onMouseDown={() => onFocus(win.id)}
+        className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/85 text-card-foreground shadow-xl backdrop-blur-xl"
+        style={shellStyle}
+      >
       <div
         onMouseDown={handleDragStart}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '8px 12px',
-          background: 'var(--canvas-elevated)',
-          borderBottom: '1px solid var(--border-subtle)',
-          cursor: 'grab',
-          flexShrink: 0,
-          minHeight: '40px',
-        }}
+        className={cn(
+          'flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card/80 px-3 backdrop-blur-xl',
+          canControl ? 'cursor-grab' : 'cursor-default',
+        )}
       >
         {titleIcon && (
-          <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-muted)', flexShrink: 0 }}>
+          <span className="flex shrink-0 items-center text-muted-foreground">
             {titleIcon}
           </span>
         )}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
           {breadcrumb && (
             <>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{breadcrumb}</span>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{'>'}</span>
+              <span className="truncate text-xs text-muted-foreground">{breadcrumb}</span>
+              <span className="text-xs text-muted-foreground">{'>'}</span>
             </>
           )}
-          <span style={{
-            fontSize: '12px',
-            fontWeight: 500,
-            color: 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}>
-            {win.title}
-          </span>
+          <span className="truncate text-xs font-medium">{win.title}</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-          <button
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant={win.isPrivate ? 'secondary' : 'outline'}
+            size="icon-xs"
+            onClick={() => {
+              if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
+            }}
+            disabled={!canTogglePrivacy}
+            aria-label={win.isPrivate ? 'Window privacy on' : 'Window privacy off'}
+            title={win.isPrivate ? 'Privacy on' : 'Privacy off'}
+          >
+            {win.isPrivate ? <EyeOff /> : <Eye />}
+          </Button>
+
+          <Button
+            type="button"
+            variant={win.locked ? 'secondary' : 'outline'}
+            size="icon-xs"
+            onClick={() => {
+              if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
+            }}
+            disabled={!canToggleLock}
+            aria-label={win.locked ? 'Window locked' : 'Window unlocked'}
+            title={win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
+          >
+            {win.locked ? <Lock /> : <Unlock />}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
             onClick={() => onMinimize(win.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Minimize"
+            disabled={!canControl}
+            aria-label="Minimize"
           >
-            <Minus size={13} />
-          </button>
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '24px',
-                height: '24px',
-                background: menuOpen ? 'var(--canvas-raised)' : 'none',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                color: menuOpen ? 'var(--text-primary)' : 'var(--text-muted)',
-                transition: 'all var(--transition-fast)',
-              }}
-              title="More"
-            >
-              <MoreHorizontal size={13} />
-            </button>
+            <Minus />
+          </Button>
 
-            {menuOpen && (
-              <>
-                <div
-                  style={{ position: 'fixed', inset: 0, zIndex: 100 }}
-                  onClick={() => setMenuOpen(false)}
-                />
-                <div style={{
-                  position: 'absolute',
-                  right: 0,
-                  top: '100%',
-                  marginTop: '4px',
-                  background: 'var(--canvas-overlay)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: 'var(--shadow-lg)',
-                  zIndex: 101,
-                  minWidth: '160px',
-                  overflow: 'hidden',
-                  animation: 'fadeSlideIn 0.15s ease forwards',
-                }}>
-                  <MenuButton
-                    icon={<Share2 size={13} />}
-                    label="Share..."
-                    onClick={() => { setMenuOpen(false); onShare?.(); }}
-                  />
-                  <MenuButton
-                    icon={<Copy size={13} />}
-                    label="Duplicate"
-                    onClick={() => setMenuOpen(false)}
-                  />
-                  <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-                  <MenuButton
-                    icon={<Maximize2 size={13} />}
-                    label="Maximize"
-                    onClick={() => setMenuOpen(false)}
-                  />
-                  <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-                  <MenuButton
-                    icon={<Trash2 size={13} />}
-                    label="Close window"
-                    onClick={() => { setMenuOpen(false); onClose(win.id); }}
-                    danger
-                  />
-                </div>
-              </>
-            )}
-          </div>
-          <button
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Maximize"
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  disabled={!onShare}
+                  onSelect={() => onShare?.()}
+                >
+                  <Share2 />
+                  Share
+                </DropdownMenuItem>
+                <DropdownMenuItem>
+                  <Copy />
+                  Duplicate
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!canControl}
+                  onSelect={() => onUpdate(win.id, { shared: !win.shared })}
+                >
+                  <Share2 />
+                  {win.shared ? 'Stop sharing this window' : 'Share this window'}
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
+                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                  {isMaximized ? 'Restore' : 'Maximize'}
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={!canControl}
+                  onSelect={() => onClose(win.id)}
+                >
+                  <Trash2 />
+                  Close window
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            onClick={handleMaximize}
+            disabled={!canControl}
+            aria-label={isMaximized ? 'Restore' : 'Maximize'}
           >
-            <Maximize2 size={12} />
-          </button>
-          <button
+            {isMaximized ? <Minimize2 /> : <Maximize2 />}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
             onClick={() => onClose(win.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '24px',
-              height: '24px',
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              cursor: 'pointer',
-              color: 'var(--text-muted)',
-              transition: 'all var(--transition-fast)',
-            }}
-            title="Close"
+            disabled={!canControl}
+            aria-label="Close"
           >
-            <X size={13} />
-          </button>
+            <X />
+          </Button>
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-        {children}
+      <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
+        {privacyBlanked ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
+            <EyeOff className="size-6 text-muted-foreground" />
+            <div className="text-sm font-medium">Private window</div>
+            <div className="max-w-64 text-xs text-muted-foreground">
+              This user has blanked the contents of this window.
+            </div>
+          </div>
+        ) : children}
       </div>
 
-      <div
-        onMouseDown={handleResizeStart}
-        style={{
-          position: 'absolute',
-          right: 0,
-          bottom: 0,
-          width: '16px',
-          height: '16px',
-          cursor: 'nwse-resize',
-          zIndex: 10,
-        }}
-      >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 10 10"
-          style={{ position: 'absolute', right: '3px', bottom: '3px', opacity: 0.3 }}
-        >
-          <line x1="9" y1="1" x2="1" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
-          <line x1="9" y1="4" x2="4" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
-          <line x1="9" y1="7" x2="7" y2="9" stroke="var(--text-muted)" strokeWidth="1" />
-        </svg>
+        {!isMaximized && (
+          <div
+            onMouseDown={handleResizeStart}
+            className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              className="absolute right-1 bottom-1 opacity-30"
+            >
+              <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
+              <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />
+              <line x1="9" y1="7" x2="7" y2="9" stroke="currentColor" strokeWidth="1" />
+            </svg>
+          </div>
+        )}
       </div>
-    </div>
-  );
-}
-
-function MenuButton({
-  icon,
-  label,
-  onClick,
-  danger = false,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        padding: '8px 12px',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-        color: danger ? 'var(--error)' : 'var(--text-primary)',
-        fontSize: '12px',
-        textAlign: 'left',
-        fontFamily: 'inherit',
-        transition: 'background var(--transition-fast)',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--canvas-raised)')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-    >
-      <span style={{ display: 'flex', color: danger ? 'var(--error)' : 'var(--text-muted)' }}>{icon}</span>
-      {label}
-    </button>
+    </>
   );
 }

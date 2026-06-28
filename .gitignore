@@ -23,3 +23,6 @@ build/icon.png
 *.sln
 *.sw?
 .env
+
+# Local Netlify folder
+.netlify

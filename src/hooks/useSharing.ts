@@ -5,11 +5,13 @@ export interface WorkspaceMember {
   id: string;
   workspace_id: string;
   user_id: string;
-  role: 'owner' | 'editor' | 'viewer';
+  role: WorkspaceMemberRole;
   invited_by: string | null;
   created_at: string;
   email?: string;
 }
+
+export type WorkspaceMemberRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer';
 
 export function useSharing(workspaceId: string | null, currentUserId: string | undefined) {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
@@ -21,7 +23,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     setLoading(true);
 
     const { data } = await backendClient
-      .from('workspace_members')
+      .from<WorkspaceMember[]>('workspace_members')
       .select('*')
       .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: true });
@@ -33,7 +35,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
   const fetchAutoShare = useCallback(async () => {
     if (!workspaceId) return;
     const { data } = await backendClient
-      .from('workspaces')
+      .from<{ auto_share?: boolean }>('workspaces')
       .select('auto_share')
       .eq('id', workspaceId)
       .maybeSingle();
@@ -66,7 +68,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     if (!workspaceId || !currentUserId) return { error: 'Not ready' };
 
     const { data: users, error: lookupErr } = await backendClient
-      .rpc('lookup_user_by_email', { lookup_email: email });
+      .rpc<Array<{ id: string }>>('lookup_user_by_email', { lookup_email: email });
 
     if (lookupErr || !users || users.length === 0) {
       return { error: 'No user found with that email address. They need to sign up first.' };
@@ -106,7 +108,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     setMembers(prev => prev.filter(m => m.id !== memberId));
   }, []);
 
-  const updateMemberRole = useCallback(async (memberId: string, role: 'editor' | 'viewer') => {
+  const updateMemberRole = useCallback(async (memberId: string, role: Extract<WorkspaceMemberRole, 'editor' | 'viewer'>) => {
     await backendClient
       .from('workspace_members')
       .update({ role })

@@ -3,11 +3,18 @@ import { backendClient } from '../lib/backendClient';
 import type { CanvasObject, CanvasObjectType, CanvasGroup } from '../types';
 
 type RealtimeChannel = {
-  on: (...args: any[]) => RealtimeChannel;
+  on: {
+    <T>(type: 'broadcast', config: { event: string }, callback: (message: BroadcastPayload<T>) => void): RealtimeChannel;
+    <T>(type: 'db_changes', config: { event: string; schema: string; table: string; filter?: string }, callback: (payload: DbChangePayload<T>) => void): RealtimeChannel;
+  };
   subscribe: (callback?: (status: string) => void) => RealtimeChannel;
   unsubscribe: () => Promise<unknown>;
-  send: (message: any) => Promise<unknown>;
+  send: (message: BroadcastSendMessage) => Promise<unknown>;
 };
+
+type BroadcastPayload<T> = { payload: T };
+type DbChangePayload<T> = { eventType?: string; new?: T; old?: Partial<T> };
+type BroadcastSendMessage = { type: 'broadcast'; event: string; payload: unknown };
 
 interface BroadcastCanvasObjectPayload {
   senderId?: string;
@@ -72,8 +79,8 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       .on(
         'broadcast',
         { event: 'object_upsert' },
-        ({ payload }: any) => {
-          const { senderId, object } = payload as BroadcastCanvasObjectPayload;
+        ({ payload }: BroadcastPayload<BroadcastCanvasObjectPayload>) => {
+          const { senderId, object } = payload;
           if (senderId && userId && senderId === userId) return;
           const normalized = { ...object, layer_id: object.layer_id || 'base' } as CanvasObject;
           setObjects(prev => {
@@ -88,8 +95,8 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       .on(
         'broadcast',
         { event: 'object_delete' },
-        ({ payload }: any) => {
-          const { senderId, id } = payload as BroadcastCanvasDeletePayload;
+        ({ payload }: BroadcastPayload<BroadcastCanvasDeletePayload>) => {
+          const { senderId, id } = payload;
           if (senderId && userId && senderId === userId) return;
           setObjects(prev => prev.filter(o => o.id !== id));
         }
@@ -97,8 +104,9 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       .on(
         'db_changes',
         { event: 'INSERT', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
-          const obj = { ...(payload.new as CanvasObject), layer_id: (payload.new as CanvasObject).layer_id || 'base' } as CanvasObject;
+        (payload: DbChangePayload<CanvasObject>) => {
+          if (!payload.new) return;
+          const obj = { ...payload.new, layer_id: payload.new.layer_id || 'base' } as CanvasObject;
           setObjects(prev => {
             if (prev.find(o => o.id === obj.id)) return prev;
             return [...prev, obj];
@@ -108,16 +116,18 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       .on(
         'db_changes',
         { event: 'UPDATE', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
-          const obj = { ...(payload.new as CanvasObject), layer_id: (payload.new as CanvasObject).layer_id || 'base' } as CanvasObject;
+        (payload: DbChangePayload<CanvasObject>) => {
+          if (!payload.new) return;
+          const obj = { ...payload.new, layer_id: payload.new.layer_id || 'base' } as CanvasObject;
           setObjects(prev => prev.map(o => o.id === obj.id ? { ...o, ...obj } : o));
         }
       )
       .on(
         'db_changes',
         { event: 'DELETE', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
-          const old = payload.old as { id: string };
+        (payload: DbChangePayload<CanvasObject>) => {
+          const old = payload.old as { id?: string } | undefined;
+          if (!old?.id) return;
           setObjects(prev => prev.filter(o => o.id !== old.id));
         }
       )
@@ -130,7 +140,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
             .select('*')
             .eq('workspace_id', workspaceId)
             .order('created_at', { ascending: true })
-            .then(({ data }: any) => {
+            .then(({ data }: { data: CanvasGroup[] | null }) => {
               if (data) setGroups(data as CanvasGroup[]);
             });
         }
@@ -215,7 +225,11 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       updated_at: new Date().toISOString(),
     } as CanvasObject;
 
-    setObjects(prev => prev.map(o => o.id === id ? nextObject : o));
+    setObjects(prev => {
+      const next = prev.map(o => o.id === id ? nextObject : o);
+      objectsRef.current = next;
+      return next;
+    });
 
     channelRef.current?.send({
       type: 'broadcast',
@@ -236,7 +250,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         .update({ ...updates, updated_at: new Date().toISOString() })
         .eq('id', id);
       delete pendingSaveTimersRef.current[id];
-    }, 60);
+    }, 180);
   }, [userId]);
 
   const deleteObject = useCallback(async (id: string) => {

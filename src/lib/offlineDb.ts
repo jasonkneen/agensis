@@ -1,4 +1,4 @@
-const DB_NAME = 'hatch_offline';
+const DB_NAME = 'agensis_offline';
 const DB_VERSION = 1;
 const QUEUE_STORE = 'sync_queue';
 const CACHE_STORE = 'data_cache';

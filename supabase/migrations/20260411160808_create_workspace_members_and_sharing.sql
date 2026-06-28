@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS workspace_members (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'editor', 'viewer')),
+  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('owner', 'admin', 'editor', 'commenter', 'viewer')),
   invited_by uuid REFERENCES auth.users(id),
   created_at timestamptz DEFAULT now(),
   UNIQUE (workspace_id, user_id)

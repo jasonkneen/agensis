@@ -1,4 +1,7 @@
 import { Component, type ReactNode } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 
 interface Props {
   children: ReactNode;
@@ -18,37 +21,28 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100vh',
-          background: '#0c0c0c',
-          color: '#f2f2f2',
-          fontFamily: "'Space Grotesk', sans-serif",
-          gap: '16px',
-        }}>
-          <p style={{ fontSize: '18px', fontWeight: 600 }}>Something went wrong</p>
-          <button
-            onClick={() => {
-              this.setState({ hasError: false });
-              window.location.reload();
-            }}
-            style={{
-              padding: '10px 20px',
-              background: '#4f9cf9',
-              border: 'none',
-              borderRadius: '10px',
-              color: 'white',
-              fontSize: '14px',
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Reload
-          </button>
-        </div>
+        <main className="flex min-h-screen items-center justify-center bg-background p-6">
+          <Empty className="max-w-md border-0">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <AlertTriangle className="size-4" />
+              </EmptyMedia>
+              <EmptyTitle>Something went wrong</EmptyTitle>
+              <EmptyDescription>The workspace hit an unexpected error.</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button
+                type="button"
+                onClick={() => {
+                  this.setState({ hasError: false });
+                  window.location.reload();
+                }}
+              >
+                Reload
+              </Button>
+            </EmptyContent>
+          </Empty>
+        </main>
       );
     }
 

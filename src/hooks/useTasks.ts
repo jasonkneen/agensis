@@ -3,6 +3,12 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
 
+type DbChangePayload<T> = {
+  eventType?: string;
+  new?: T;
+  old?: Partial<T>;
+};
+
 export interface CreateTaskInput {
   title: string;
   description?: string;
@@ -49,15 +55,18 @@ export function useTasks(workspaceId: string | null, userId?: string) {
       .on(
         'db_changes',
         { event: '*', schema: 'public', table: 'tasks', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: any) => {
+        (payload: DbChangePayload<Task>) => {
           if (payload.eventType === 'INSERT') {
-            const row = payload.new as Task;
+            const row = payload.new;
+            if (!row) return;
             setTasks(prev => prev.some(t => t.id === row.id) ? prev : [row, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as Task;
+            const row = payload.new;
+            if (!row) return;
             setTasks(prev => prev.map(t => t.id === row.id ? row : t));
           } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as Task;
+            const row = payload.old;
+            if (!row?.id) return;
             setTasks(prev => prev.filter(t => t.id !== row.id));
           }
         },

@@ -16,7 +16,25 @@ const ALLOWED_TABLES = new Set([
   'tasks',
   'document_comments',
   'task_comments',
+  'document_versions',
+  'workspace_agents',
+  'agent_webhooks',
   'activity_events',
+]);
+
+const VERSIONED_TABLES = new Set([
+  'workspaces',
+  'documents',
+  'chat_sessions',
+  'memory_facts',
+  'uploaded_files',
+  'canvas_groups',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'task_comments',
+  'workspace_agents',
+  'agent_webhooks',
 ]);
 
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
@@ -118,7 +136,7 @@ function buildOrderClause(orderBy) {
 
 function buildSystemPrompt(memory, documents, workspaceContext) {
   const sections = [
-    'You are Hatch AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
+    'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
     '',
     'Guidelines:',
     '- Be concise, warm, and thoughtful. Prefer markdown for structure.',
@@ -135,6 +153,11 @@ function buildSystemPrompt(memory, documents, workspaceContext) {
     if (workspaceContext.documents) wsBlocks.push(`# Key documents\n${workspaceContext.documents}`);
     if (workspaceContext.tasks) wsBlocks.push(`# Open tasks\n${workspaceContext.tasks}`);
     if (workspaceContext.canvas) wsBlocks.push(`# Canvas notes\n${workspaceContext.canvas}`);
+    if (workspaceContext.agents) wsBlocks.push(`# Workspace agents\n${workspaceContext.agents}`);
+    if (workspaceContext.skills) wsBlocks.push(`# Skill libraries\n${workspaceContext.skills}`);
+    if (workspaceContext.commands) wsBlocks.push(`# Commands and CLIs\n${workspaceContext.commands}`);
+    if (workspaceContext.tools) wsBlocks.push(`# Tools and SDKs\n${workspaceContext.tools}`);
+    if (workspaceContext.webhooks) wsBlocks.push(`# Agent webhooks\n${workspaceContext.webhooks}`);
     if (wsBlocks.length > 0) {
       sections.push('', '<workspace_context>', 'The following is a snapshot of the shared workspace you are assisting in. Use it to answer grounded questions, but do not dump it verbatim unless asked.', '', wsBlocks.join('\n\n'), '</workspace_context>');
     }
@@ -230,10 +253,14 @@ async function handleDb(pathname, req) {
     if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
 
     const params = [];
-    const setClause = Object.keys(values).map((column) => {
+    const setParts = Object.keys(values).map((column) => {
       params.push(values[column] ?? null);
       return `${quoteIdent(column)} = $${params.length}`;
-    }).join(', ');
+    });
+    if (VERSIONED_TABLES.has(table) && values.version == null) {
+      setParts.push('"version" = COALESCE("version", 0) + 1');
+    }
+    const setClause = setParts.join(', ');
     const where = buildWhereClause(filters, params);
     const result = await query(
       `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,

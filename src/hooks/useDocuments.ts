@@ -3,6 +3,18 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Document } from '../types';
 
+type RealtimeChannel = {
+  on: <T>(type: 'db_changes', config: { event: string; schema: string; table: string; filter?: string }, callback: (payload: DbChangePayload<T>) => void) => RealtimeChannel;
+  subscribe: () => RealtimeChannel;
+  unsubscribe: () => Promise<unknown>;
+};
+
+type DbChangePayload<T> = {
+  eventType?: string;
+  new?: T;
+  old?: Partial<T>;
+};
+
 export function useDocuments(workspaceId: string | null) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +39,42 @@ export function useDocuments(workspaceId: string | null) {
     fetchDocuments();
   }, [fetchDocuments]);
 
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    const channel = backendClient
+      .channel(`documents:${workspaceId}`)
+      .on(
+        'db_changes',
+        { event: '*', schema: 'public', table: 'documents', filter: `workspace_id=eq.${workspaceId}` },
+        (payload: DbChangePayload<Document>) => {
+          const eventType = payload.eventType;
+          if (eventType === 'DELETE') {
+            const oldDoc = payload.old;
+            if (oldDoc?.id) setDocuments(prev => prev.filter(doc => doc.id !== oldDoc.id));
+            return;
+          }
+
+          const nextDoc = payload.new;
+          if (!nextDoc?.id) return;
+          setDocuments(prev => {
+            const existingIndex = prev.findIndex(doc => doc.id === nextDoc.id);
+            if (existingIndex === -1) {
+              return [nextDoc, ...prev].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+            }
+            const next = [...prev];
+            next[existingIndex] = { ...next[existingIndex], ...nextDoc };
+            return next.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+          });
+        }
+      )
+      .subscribe() as RealtimeChannel;
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [workspaceId]);
+
   const createDocument = useCallback(async (title = 'Untitled') => {
     if (!workspaceId) return null;
     const data = await offlineInsert('documents', {
@@ -43,7 +91,7 @@ export function useDocuments(workspaceId: string | null) {
     return null;
   }, [workspaceId]);
 
-  const saveDocument = useCallback(async (id: string, updates: { title?: string; content?: string }) => {
+  const saveDocument = useCallback(async (id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     const result = await offlineUpdate('documents', id, {
       ...updates,
       updated_at: new Date().toISOString(),
@@ -54,7 +102,7 @@ export function useDocuments(workspaceId: string | null) {
     return result;
   }, []);
 
-  const autoSave = useCallback((id: string, updates: { title?: string; content?: string }) => {
+  const autoSave = useCallback((id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
       saveDocument(id, updates);

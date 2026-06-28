@@ -3,6 +3,12 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { DocumentComment } from '../types';
 
+type DbChangePayload<T> = {
+  eventType?: string;
+  new?: T;
+  old?: Partial<T>;
+};
+
 export interface CreateCommentInput {
   content: string;
   anchor_text?: string;
@@ -47,15 +53,18 @@ export function useDocumentComments(
       .on(
         'db_changes',
         { event: '*', schema: 'public', table: 'document_comments', filter: `document_id=eq.${documentId}` },
-        (payload: any) => {
+        (payload: DbChangePayload<DocumentComment>) => {
           if (payload.eventType === 'INSERT') {
-            const row = payload.new as DocumentComment;
+            const row = payload.new;
+            if (!row) return;
             setComments(prev => prev.some(c => c.id === row.id) ? prev : [...prev, row]);
           } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as DocumentComment;
+            const row = payload.new;
+            if (!row) return;
             setComments(prev => prev.map(c => c.id === row.id ? row : c));
           } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as DocumentComment;
+            const row = payload.old;
+            if (!row?.id) return;
             setComments(prev => prev.filter(c => c.id !== row.id));
           }
         },

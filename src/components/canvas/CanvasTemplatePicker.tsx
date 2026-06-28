@@ -1,211 +1,109 @@
-import { useEffect, useCallback } from 'react';
-import { X, LayoutTemplate } from 'lucide-react';
-import type { CanvasTemplate } from '../../lib/canvasTemplates';
-import { CANVAS_TEMPLATES } from '../../lib/canvasTemplates';
+import { LayoutTemplate, Plus } from 'lucide-react';
+import type { CanvasAppDefinition } from '../../lib/canvasApps';
+import { CANVAS_APPS } from '../../lib/canvasApps';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface CanvasTemplatePickerProps {
   open: boolean;
   onClose: () => void;
-  onApply: (template: CanvasTemplate) => void;
+  onCreateApp: (app: CanvasAppDefinition) => void;
+  onCreateCustomApp: () => void;
 }
 
-const CanvasTemplatePicker = ({ open, onClose, onApply }: CanvasTemplatePickerProps) => {
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    },
-    [onClose],
-  );
+const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }: CanvasTemplatePickerProps) => {
+  const handleCreateApp = (app: CanvasAppDefinition) => {
+    onCreateApp(app);
+    onClose();
+  };
 
-  useEffect(() => {
-    if (open) {
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
-    }
-  }, [open, handleKeyDown]);
-
-  if (!open) return null;
-
-  const handleApply = (template: CanvasTemplate) => {
-    onApply(template);
+  const handleCreateCustomApp = () => {
+    onCreateCustomApp();
     onClose();
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.6)',
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose();
       }}
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 640,
-          margin: '0 16px',
-          backgroundColor: 'var(--canvas-elevated)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border)',
-          boxShadow: 'var(--shadow-xl)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 20px',
-            borderBottom: '1px solid var(--border-subtle)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <LayoutTemplate
-              size={20}
-              style={{ color: 'var(--accent)', flexShrink: 0 }}
-            />
-            <span
-              style={{
-                fontSize: 16,
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-              }}
-            >
-              Start from a template
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 28,
-              height: 28,
-              border: 'none',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'transparent',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-            }}
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl p-0">
+        <DialogHeader className="border-b px-5 py-4">
+          <DialogTitle className="flex items-center gap-2">
+            <LayoutTemplate data-icon="inline-start" />
+            Canvas Apps
+          </DialogTitle>
+          <DialogDescription className="max-w-xl">
+            Add applets to the current canvas.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Template grid */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-            gap: 12,
-            padding: 20,
-            maxHeight: 420,
-            overflowY: 'auto',
-          }}
-        >
-          {CANVAS_TEMPLATES.map((template) => (
-            <div
-              key={template.id}
-              onClick={() => handleApply(template)}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                padding: 16,
-                borderRadius: 'var(--radius-md, 8px)',
-                border: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--canvas-raised)',
-                cursor: 'pointer',
-                transition: 'border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease',
-              }}
-              onMouseEnter={(e) => {
-                const el = e.currentTarget;
-                el.style.borderColor = 'var(--accent)';
-                el.style.boxShadow = '0 0 0 1px var(--accent)';
-                el.style.transform = 'translateY(-2px)';
-              }}
-              onMouseLeave={(e) => {
-                const el = e.currentTarget;
-                el.style.borderColor = 'var(--border-subtle)';
-                el.style.boxShadow = 'none';
-                el.style.transform = 'translateY(0)';
-              }}
-            >
-              <span style={{ fontSize: 28, lineHeight: 1 }}>{template.icon}</span>
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
+        <ScrollArea className="max-h-[min(62vh,520px)]">
+          <div className="p-5">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Card
+                role="button"
+                tabIndex={0}
+                size="sm"
+                className="cursor-pointer rounded-lg border-dashed transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                onClick={handleCreateCustomApp}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleCreateCustomApp();
+                  }
                 }}
               >
-                {template.name}
-              </span>
-              <span
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted)',
-                  lineHeight: 1.4,
-                }}
-              >
-                {template.description}
-              </span>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--text-muted)',
-                  marginTop: 'auto',
-                  paddingTop: 4,
-                }}
-              >
-                {template.objects.length} objects
-              </span>
+                <CardContent className="flex min-h-32 flex-col justify-between gap-4 p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-secondary text-secondary-foreground">
+                      <Plus className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-base font-semibold leading-snug text-foreground">New applet</div>
+                      <div className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                        Open an applet-builder chat with the right SDK brief.
+                      </div>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="w-fit text-xs">
+                    AI build brief
+                  </Badge>
+                </CardContent>
+              </Card>
+              {CANVAS_APPS.map(app => (
+                <Card
+                  key={app.id}
+                  role="button"
+                  tabIndex={0}
+                  size="sm"
+                  className="cursor-pointer rounded-lg transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  onClick={() => handleCreateApp(app)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleCreateApp(app);
+                    }
+                  }}
+                >
+                  <CardContent className="flex min-h-32 flex-col gap-3 p-4">
+                    <span className="text-base font-semibold leading-snug text-foreground">{app.name}</span>
+                    <span className="text-sm leading-relaxed text-muted-foreground">{app.description}</span>
+                    <Badge variant="secondary" className="mt-auto w-fit text-xs">
+                      HTML applet
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-          ))}
-        </div>
-
-        {/* Footer */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '10px 20px',
-            borderTop: '1px solid var(--border-subtle)',
-            fontSize: 11,
-            color: 'var(--text-muted)',
-          }}
-        >
-          <span>Click a template to add it to your canvas</span>
-          <kbd
-            style={{
-              padding: '2px 6px',
-              fontSize: 11,
-              fontFamily: 'inherit',
-              backgroundColor: 'var(--canvas-raised)',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-            }}
-          >
-            ESC
-          </kbd>
-        </div>
-      </div>
-    </div>
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
   );
 };
 
