@@ -15,6 +15,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   PanelLeftClose,
+  Plus,
   RotateCcw,
   Search,
   Settings,
@@ -112,6 +113,8 @@ export function Sidebar({
   collapsed,
   onToggleCollapse,
   onOpenCommandPalette,
+  onOpenWorkspaceGrid,
+  onCreateWorkspace,
   onDocumentOpen,
   onDocumentUpdate,
   onSessionOpen,
@@ -297,10 +300,21 @@ export function Sidebar({
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
             <PanelLeftClose />
           </Button>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-sm font-medium">
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onOpenWorkspaceGrid || onCreateWorkspace}
+            aria-label="Switch workspace"
+          >
             <Layers3 data-icon="inline-start" />
-            <span className="truncate">{workspaceLabel}</span>
-          </div>
+            <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
+          </button>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onCreateWorkspace} aria-label="Create workspace">
+            <Plus />
+          </Button>
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="Workspace settings">
+            <Settings />
+          </Button>
         </div>
       </div>
 
@@ -492,9 +506,6 @@ export function Sidebar({
             <div className="truncate text-xs font-medium">{userEmail}</div>
             <div className="truncate text-xs text-muted-foreground">{workspace?.name || 'Personal'}</div>
           </div>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="Settings">
-            <Settings className="size-4" />
-          </Button>
           <Button type="button" variant="ghost" size="icon-sm" onClick={onSignOut} aria-label="Sign out">
             <LogOut className="size-4" />
           </Button>
@@ -887,7 +898,7 @@ function ActionTile({
       onClick={onClick}
     >
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
-      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      <span className="sidebar-action-label min-w-0 truncate text-left">{label}</span>
       {typeof count === 'number' && (
         <span className="sidebar-action-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
           {formatCount(count)}
@@ -926,10 +937,12 @@ function SidebarSection({
           <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
             {icon}
           </span>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-            {formatCount(count)}
-          </span>
+          <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
+          {count > 0 && (
+            <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {formatCount(count)}
+            </span>
+          )}
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
@@ -964,10 +977,12 @@ function SidebarFolderGroup({
         >
           <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
           <Folder className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-            {formatCount(count)}
-          </span>
+          <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
+          {count > 0 && (
+            <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {formatCount(count)}
+            </span>
+          )}
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent id={`${id}-content`} className="pt-1 pl-5">
@@ -999,7 +1014,7 @@ function ItemRow({
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      <span className="sidebar-item-label min-w-0 truncate text-left">{label}</span>
       {presenceUsers.length > 0 && (
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {presenceUsers.slice(0, 3).map(person => (

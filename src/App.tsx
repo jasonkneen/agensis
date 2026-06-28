@@ -573,6 +573,7 @@ export default function App() {
   const focusedRemotePresence = itemPresence.remotePresenceUsers.find(remote => remote.userId === focusedPresenceUserId);
   const viewedLayerId = focusedRemotePresence?.activeLayerId || activeLayerId;
   const viewedLayer = layers.find(layer => layer.id === viewedLayerId) || activeLayer;
+  const workspaceBackdropImage = viewedLayer.background_image || activeWorkspace?.background_image || canvasGridBackground;
   const visibleCanvasObjects = canvasObjects.filter(
     obj => (obj.layer_id || 'base') === viewedLayerId,
   );
@@ -1019,7 +1020,13 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="relative flex h-screen overflow-hidden bg-background">
+      <img
+        src={workspaceBackdropImage}
+        alt=""
+        className="pointer-events-none absolute inset-0 z-0 size-full object-cover opacity-[var(--home-bg-image-opacity)]"
+      />
+      <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" />
       <Sidebar
         workspace={activeWorkspace}
         activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
@@ -1058,7 +1065,7 @@ export default function App() {
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
 
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
           online={online}
           syncing={syncing}
