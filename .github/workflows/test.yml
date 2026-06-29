@@ -1,0 +1,40 @@
+name: CI
+
+# Runs the full quality gate on every push to main and every pull request so
+# typecheck / lint / test regressions are caught before merge. (Release builds
+# live in release.yml and run only on version tags.)
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Typecheck, lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Backend tests (node:test)
+        run: npm test
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit

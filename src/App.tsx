@@ -270,7 +270,14 @@ function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const stored = localStorage.getItem(SIDEBAR_KEY);
+    // No saved preference yet → collapse by default on phone-width viewports,
+    // where a persistent sidebar would crowd out the workspace entirely. An
+    // explicit user toggle (persisted) always wins on later loads.
+    if (stored === null) return window.matchMedia('(max-width: 767px)').matches;
+    return stored === '1';
+  });
   const [presenceVisibility, setPresenceVisibility] = useState<PresenceVisibilityMap>(() => loadPresenceVisibility());
   const [presenceFavorites, setPresenceFavorites] = useState<string[]>(() => loadPresenceFavorites());
   const [focusedPresenceUserId, setFocusedPresenceUserId] = useState<string | null>(null);

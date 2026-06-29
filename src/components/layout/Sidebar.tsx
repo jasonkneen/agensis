@@ -267,12 +267,12 @@ export function Sidebar({
     );
   }
 
-  const handleResizeStart = (e: React.MouseEvent) => {
+  const handleResizeStart = (e: React.PointerEvent) => {
     e.preventDefault();
     resizeRef.current = { startX: e.clientX, startWidth: sidebarWidth };
     let latestWidth = sidebarWidth;
 
-    const handleMove = (event: MouseEvent) => {
+    const handleMove = (event: PointerEvent) => {
       if (!resizeRef.current) return;
       const next = resizeRef.current.startWidth + event.clientX - resizeRef.current.startX;
       latestWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next));
@@ -294,12 +294,12 @@ export function Sidebar({
       setSidebarWidth(latestWidth);
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(latestWidth)));
       resizeRef.current = null;
-      document.removeEventListener('mousemove', handleMove);
-      document.removeEventListener('mouseup', handleUp);
+      document.removeEventListener('pointermove', handleMove);
+      document.removeEventListener('pointerup', handleUp);
     };
 
-    document.addEventListener('mousemove', handleMove);
-    document.addEventListener('mouseup', handleUp);
+    document.addEventListener('pointermove', handleMove);
+    document.addEventListener('pointerup', handleUp);
   };
 
   return (
@@ -556,8 +556,8 @@ export function Sidebar({
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize sidebar"
-        className="absolute top-0 right-0 bottom-0 z-10 w-2 cursor-col-resize touch-none"
-        onMouseDown={handleResizeStart}
+        className="absolute top-0 right-0 bottom-0 z-10 w-3 cursor-col-resize touch-none"
+        onPointerDown={handleResizeStart}
       />
     </aside>
   );

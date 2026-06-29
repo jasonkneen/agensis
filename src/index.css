@@ -2824,3 +2824,11 @@ select {
 [data-slot="card"] {
   background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
 }
+
+/* Touch: canvas objects and their resize handles are dragged directly, so the
+   browser must not claim the gesture for panning/zooming. (The drawing surface
+   itself sets touch-action:none inline when a draw tool is active.) */
+[data-canvas-item],
+[data-resize-handle] {
+  touch-action: none;
+}

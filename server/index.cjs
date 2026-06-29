@@ -3444,7 +3444,19 @@ function createApp() {
       }
       res.end();
     } catch (error) {
-      jsonError(res, error.status || 500, error);
+      // Once the SSE headers/body have started flushing, the status line is
+      // already sent — calling jsonError() here would throw ERR_HTTP_HEADERS_SENT
+      // and leave the client with a truncated stream and no terminator. Emit the
+      // failure as an SSE frame followed by [DONE] so the client ends cleanly.
+      if (res.headersSent) {
+        try {
+          res.write(`data: ${JSON.stringify({ error: error?.message || 'AI stream failed' })}\n\n`);
+          res.write('data: [DONE]\n\n');
+        } catch { /* socket already gone */ }
+        res.end();
+      } else {
+        jsonError(res, error.status || 500, error);
+      }
     }
   });
 

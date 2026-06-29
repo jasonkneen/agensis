@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
@@ -12,6 +12,11 @@ export function useChat(workspaceId: string | null) {
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+
+  // Aborts the in-flight AI stream fetch if the hook unmounts mid-stream, so a
+  // disposed component never keeps the request alive or writes into dead state.
+  const streamAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => streamAbortRef.current?.abort(), []);
 
   const fetchSessions = useCallback(async () => {
     if (!workspaceId) return;
@@ -318,8 +323,11 @@ export function useChat(workspaceId: string | null) {
         model: model || 'auto',
       } : null;
 
+      const controller = new AbortController();
+      streamAbortRef.current = controller;
       const response = await fetch(apiUrl('/backend/ai-chat'), {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...apiAuthHeaders(),
@@ -397,6 +405,8 @@ export function useChat(workspaceId: string | null) {
         await backendClient.from('messages').insert(assistantInsert);
       }
     } catch (error) {
+      // Unmount aborted the stream — the component is gone, skip all state writes.
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       const errMsg = errorMessage(error || 'Something went wrong. Please try again.');
       setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: errMsg } : m));
     } finally {

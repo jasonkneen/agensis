@@ -271,7 +271,7 @@ export function FloatingWindowShell({
     return () => observer.disconnect();
   }, [win, isMaximized, isDragging, isResizing]);
 
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
+  const handleDragStart = useCallback((e: React.PointerEvent) => {
     if (!canControl) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
@@ -290,7 +290,7 @@ export function FloatingWindowShell({
     };
     setIsDragging(true);
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
@@ -298,7 +298,7 @@ export function FloatingWindowShell({
       setSnapPreview(getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current));
     };
 
-    const onUp = (ev: MouseEvent) => {
+    const onUp = (ev: PointerEvent) => {
       if (dragRef.current) {
         const dx = ev.clientX - dragRef.current.startX;
         const dy = ev.clientY - dragRef.current.startY;
@@ -325,8 +325,8 @@ export function FloatingWindowShell({
       dragRef.current = null;
       setSnapPreview(null);
       setIsDragging(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       window.removeEventListener('blur', onCancel);
     };
 
@@ -335,17 +335,17 @@ export function FloatingWindowShell({
       dragRef.current = null;
       setSnapPreview(null);
       setIsDragging(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       window.removeEventListener('blur', onCancel);
     };
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
   }, [win, onFocus, onUpdate, canControl, isMaximized]);
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+  const handleResizeStart = useCallback((e: React.PointerEvent) => {
     if (!canControl || isMaximized) return;
     e.preventDefault();
     e.stopPropagation();
@@ -365,7 +365,7 @@ export function FloatingWindowShell({
     setSnapPreview(null);
     setIsResizing(true);
 
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       if (!resizeRef.current || !shellRef.current) return;
       const dx = ev.clientX - resizeRef.current.startX;
       const dy = ev.clientY - resizeRef.current.startY;
@@ -378,7 +378,7 @@ export function FloatingWindowShell({
       syncShellBounds(shellRef.current, next);
     };
 
-    const onUp = (ev: MouseEvent) => {
+    const onUp = (ev: PointerEvent) => {
       if (resizeRef.current) {
         const dx = ev.clientX - resizeRef.current.startX;
         const dy = ev.clientY - resizeRef.current.startY;
@@ -395,8 +395,8 @@ export function FloatingWindowShell({
       }
       resizeRef.current = null;
       setIsResizing(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       window.removeEventListener('blur', onCancel);
     };
 
@@ -406,13 +406,13 @@ export function FloatingWindowShell({
       }
       resizeRef.current = null;
       setIsResizing(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       window.removeEventListener('blur', onCancel);
     };
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
   }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
 
@@ -493,14 +493,14 @@ export function FloatingWindowShell({
         ref={shellRef}
         data-floating-window
         data-floating-window-id={win.id}
-        onMouseDown={() => onFocus(win.id)}
+        onPointerDown={() => onFocus(win.id)}
         className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/45 text-card-foreground shadow-xl backdrop-blur-xl"
         style={shellStyle}
       >
       <div
-        onMouseDown={handleDragStart}
+        onPointerDown={handleDragStart}
         className={cn(
-          'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl',
+          'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
           canControl ? 'cursor-grab' : 'cursor-default',
         )}
       >
@@ -644,8 +644,8 @@ export function FloatingWindowShell({
 
         {!isMaximized && (
           <div
-            onMouseDown={handleResizeStart}
-            className="absolute right-0.5 bottom-0.5 z-10 size-4 cursor-nwse-resize bg-transparent text-muted-foreground"
+            onPointerDown={handleResizeStart}
+            className="absolute right-0.5 bottom-0.5 z-10 size-6 cursor-nwse-resize bg-transparent text-muted-foreground touch-none"
           >
             <svg
               width="10"

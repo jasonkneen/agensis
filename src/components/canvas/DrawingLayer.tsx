@@ -314,7 +314,7 @@ export function DrawingLayer({
     return next;
   }, [objects]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
     if (editingTextId) return;
     const pos = toPercent(e.clientX, e.clientY);
@@ -369,7 +369,7 @@ export function DrawingLayer({
     setDrawStart(pos);
   }, [activeTool, color, toPercent, onAddObject, objectAtPoint, editingTextId]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  const handleMouseMove = useCallback((e: React.PointerEvent) => {
     const pos = toPercent(e.clientX, e.clientY);
     setLastMousePos(pos);
 
@@ -463,7 +463,7 @@ export function DrawingLayer({
   }, [isDrawing, isDragging, activeTool, drawStart, lastMousePos, activeStrokeId,
       color, strokeWidth, onAddObject, onUpdateObject, boxSelect, boxSelectStart, objects, endDrag]);
 
-  const handleObjectSelect = useCallback((id: string, e: React.MouseEvent) => {
+  const handleObjectSelect = useCallback((id: string, e: React.PointerEvent) => {
     if (editingTextId) return;
     const obj = objects.find(o => o.id === id);
     const editable = obj ? canEditObject(obj) : false;
@@ -506,7 +506,7 @@ export function DrawingLayer({
     if (editable) onBringToFront(id);
   }, [activeTool, objects, canEditObject, onDeleteObject, onBringToFront, attachMode, selectedIds, onUpdateObject, editingTextId]);
 
-  const handleObjectDragStart = useCallback((id: string, e: React.MouseEvent) => {
+  const handleObjectDragStart = useCallback((id: string, e: React.PointerEvent) => {
     if (editingTextId) return;
     const rect = layerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -635,7 +635,7 @@ export function DrawingLayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedIds, objects, canEditObject, onDeleteObject, editingTextId, endDrag, endResize]);
 
-  const handleResizeStart = useCallback((id: string, handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => {
+  const handleResizeStart = useCallback((id: string, handle: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => {
     e.stopPropagation();
     const obj = objects.find(o => o.id === id);
     if (!obj || obj.type === 'pen' || editingTextId) return;
@@ -665,7 +665,7 @@ export function DrawingLayer({
 
   useEffect(() => {
     if (!isDragging) return;
-    const handleDocMouseMove = (e: MouseEvent) => {
+    const handleDocMouseMove = (e: PointerEvent) => {
       const snapshot = dragSnapshotRef.current;
       if (!isDragging || !snapshot) return;
       const r = snapshot.canvasRect;
@@ -679,7 +679,7 @@ export function DrawingLayer({
     const handlePointerCancel = () => endDrag();
     const handleWindowBlur = () => endDrag();
     const handleDragEnd = () => endDrag();
-    document.addEventListener('mousemove', handleDocMouseMove);
+    document.addEventListener('pointermove', handleDocMouseMove);
     document.addEventListener('mouseup', handleDocMouseUp);
     window.addEventListener('mouseup', handleDocMouseUp);
     window.addEventListener('pointerup', handleDocMouseUp);
@@ -687,7 +687,7 @@ export function DrawingLayer({
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('dragend', handleDragEnd);
     return () => {
-      document.removeEventListener('mousemove', handleDocMouseMove);
+      document.removeEventListener('pointermove', handleDocMouseMove);
       document.removeEventListener('mouseup', handleDocMouseUp);
       window.removeEventListener('mouseup', handleDocMouseUp);
       window.removeEventListener('pointerup', handleDocMouseUp);
@@ -701,7 +701,7 @@ export function DrawingLayer({
   useEffect(() => {
     if (!resizeState || !layerRef.current) return;
 
-    const handleDocMouseMove = (e: MouseEvent) => {
+    const handleDocMouseMove = (e: PointerEvent) => {
       const snapshot = resizeSnapshotRef.current;
       if (!resizeState || !snapshot) return;
       const r = snapshot.canvasRect;
@@ -714,14 +714,14 @@ export function DrawingLayer({
 
     const handleDocMouseUp = () => endResize();
 
-    document.addEventListener('mousemove', handleDocMouseMove);
+    document.addEventListener('pointermove', handleDocMouseMove);
     document.addEventListener('mouseup', handleDocMouseUp);
     window.addEventListener('mouseup', handleDocMouseUp);
     window.addEventListener('pointerup', handleDocMouseUp);
     window.addEventListener('pointercancel', handleDocMouseUp);
     window.addEventListener('blur', handleDocMouseUp);
     return () => {
-      document.removeEventListener('mousemove', handleDocMouseMove);
+      document.removeEventListener('pointermove', handleDocMouseMove);
       document.removeEventListener('mouseup', handleDocMouseUp);
       window.removeEventListener('mouseup', handleDocMouseUp);
       window.removeEventListener('pointerup', handleDocMouseUp);
@@ -806,13 +806,14 @@ export function DrawingLayer({
       {/* Drawing layer - only captures full-surface events for non-select tools */}
       <div
         ref={layerRef}
-        onMouseDown={drawingActive && activeTool !== 'select' ? handleMouseDown : undefined}
-        onMouseMove={drawingActive && activeTool !== 'select' ? handleMouseMove : undefined}
-        onMouseUp={drawingActive && activeTool !== 'select' ? handleMouseUp : undefined}
-        onMouseLeave={drawingActive && activeTool !== 'select' ? handleMouseUp : undefined}
+        onPointerDown={drawingActive && activeTool !== 'select' ? handleMouseDown : undefined}
+        onPointerMove={drawingActive && activeTool !== 'select' ? handleMouseMove : undefined}
+        onPointerUp={drawingActive && activeTool !== 'select' ? handleMouseUp : undefined}
+        onPointerLeave={drawingActive && activeTool !== 'select' ? handleMouseUp : undefined}
         style={{
           position: 'absolute',
           inset: 0,
+          touchAction: 'none',
           zIndex: drawingActive ? 500 : 0,
           cursor: drawingActive
             ? (activeTool === 'pen' || activeTool === 'eraser' ? 'crosshair'
@@ -1097,7 +1098,7 @@ function BoxSelectListener({
     const el = layerRef.current?.parentElement;
     if (!el) return;
 
-    const handleMouseDown = (e: MouseEvent) => {
+    const handleMouseDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
       if (target.closest('[data-canvas-item]')) return;
@@ -1113,7 +1114,7 @@ function BoxSelectListener({
       onSelect(new Set());
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMouseMove = (e: PointerEvent) => {
       if (!activeRef.current || !boxSelectStart) return;
       const pos = toPercent(e.clientX, e.clientY);
       const x = Math.min(boxSelectStart.x, pos.x);
@@ -1144,13 +1145,13 @@ function BoxSelectListener({
       setBoxSelectStart(null);
     };
 
-    el.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    el.addEventListener('pointerdown', handleMouseDown);
+    document.addEventListener('pointermove', handleMouseMove);
+    document.addEventListener('pointerup', handleMouseUp);
     return () => {
-      el.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      el.removeEventListener('pointerdown', handleMouseDown);
+      document.removeEventListener('pointermove', handleMouseMove);
+      document.removeEventListener('pointerup', handleMouseUp);
     };
   }, [layerRef, toPercent, onSelect, boxSelect, boxSelectStart, setBoxSelect, setBoxSelectStart, objects]);
 
@@ -1188,12 +1189,12 @@ function CanvasItemWrapper({
   editing: boolean;
   attachMode: boolean;
   parentObj?: CanvasObject;
-  onSelect: (e: React.MouseEvent) => void;
-  onDragStart: (e: React.MouseEvent) => void;
+  onSelect: (e: React.PointerEvent) => void;
+  onDragStart: (e: React.PointerEvent) => void;
   onDoubleClick: () => void;
   onTextChange: (text: string) => void;
   onStopEditing: () => void;
-  onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => void;
+  onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => void;
   showResizeHandles?: boolean;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
@@ -1248,7 +1249,7 @@ function CanvasItemWrapper({
         )}
         <div
           data-canvas-item
-          onMouseDown={e => {
+          onPointerDown={e => {
             e.stopPropagation();
             onSelect(e);
             onDragStart(e);
@@ -1330,7 +1331,7 @@ function CanvasItemWrapper({
       )}
       <div
         data-canvas-item
-        onMouseDown={e => {
+        onPointerDown={e => {
           e.stopPropagation();
           onSelect(e);
           onDragStart(e);
@@ -1392,7 +1393,7 @@ function ResizeHandles({
   py: number;
   pw: number;
   ph: number;
-  onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.MouseEvent) => void;
+  onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => void;
 }) {
   const handles: Array<{ key: 'nw' | 'ne' | 'sw' | 'se'; left: number; top: number; cursor: string }> = [
     { key: 'nw', left: px - 5, top: py - 5, cursor: 'nwse-resize' },
@@ -1407,7 +1408,7 @@ function ResizeHandles({
         <div
           key={handle.key}
           data-resize-handle
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
             e.preventDefault();
             onResizeStart(handle.key, e);
           }}
