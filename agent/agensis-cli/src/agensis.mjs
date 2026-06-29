@@ -240,6 +240,7 @@ async function runAgentJob(config, job, { signal }) {
   };
 
   sendDelta("");
+  const parser = command.streamJson ? createStreamJsonParser() : null;
   const progressTimer = setInterval(() => sendDelta(fullContent), 1000);
   if (progressTimer.unref) progressTimer.unref();
 
@@ -252,8 +253,13 @@ async function runAgentJob(config, job, { signal }) {
     label: "agent job",
     signal,
     onData: (chunk) => {
-      fullContent += String(chunk || "");
-      latest = latestLine(`${latest}\n${chunk}`);
+      if (parser) {
+        parser.feed(chunk);
+        fullContent = parser.live;
+      } else {
+        fullContent += String(chunk || "");
+        latest = latestLine(`${latest}\n${chunk}`);
+      }
       const now = Date.now();
       if (now - lastDeltaAt > 500) {
         lastDeltaAt = now;
@@ -263,6 +269,12 @@ async function runAgentJob(config, job, { signal }) {
   });
   clearInterval(progressTimer);
 
+  if (parser) {
+    parser.end();
+    fullContent = parser.live;
+    sendDelta(fullContent); // flush the final tokens
+  }
+
   const stdout = String(result.stdout || "").trim();
   const stderr = String(result.stderr || "").trim();
   const error = result.error
@@ -270,7 +282,9 @@ async function runAgentJob(config, job, { signal }) {
     : result.status === 0
       ? ""
       : stderr || `Command exited with status ${result.status}`;
-  const response = stdout || (error ? "" : stderr) || latest || "";
+  const response = parser
+    ? parser.result || (error ? "" : stderr)
+    : stdout || (error ? "" : stderr) || latest || "";
 
   send(job.ws, {
     action: "agent_job_result",
@@ -327,7 +341,27 @@ function buildAgentCommand(config, job) {
     if (model) nextArgs.push("--model", model);
     if (permissionMode === "accept_edits") nextArgs.push("--permission-mode", "acceptEdits");
     if (permissionMode === "yolo") nextArgs.push("--dangerously-skip-permissions");
-    return { cmd, args: nextArgs, model, permissionMode, permissionFlags };
+
+    // Stream tokens as they arrive instead of one buffered dump at exit.
+    // Plain `claude -p` defaults to --output-format text, which buffers the
+    // whole reply and writes it once on close — so the chat sits on "Thinking…"
+    // then pops the full answer. stream-json + partial messages emit NDJSON
+    // deltas we parse incrementally (see createStreamJsonParser).
+    // Only auto-enable when the user hasn't pinned their own --output-format,
+    // and only in print mode (the flags require --print / -p).
+    const hasOutputFormat = cleanArgs.some(
+      (a) => a === "--output-format" || String(a).startsWith("--output-format="),
+    );
+    const hasPrint = cleanArgs.includes("-p") || cleanArgs.includes("--print");
+    let streamJson = false;
+    if (!hasOutputFormat && hasPrint) {
+      nextArgs.push("--output-format", "stream-json", "--include-partial-messages");
+      if (!cleanArgs.includes("--verbose")) nextArgs.push("--verbose");
+      streamJson = true;
+    } else if (hasOutputFormat) {
+      streamJson = cleanArgs.some((a) => /stream-json/.test(String(a)));
+    }
+    return { cmd, args: nextArgs, model, permissionMode, permissionFlags, streamJson };
   }
 
   if (isCodexCommand(cmd)) {
@@ -338,6 +372,75 @@ function buildAgentCommand(config, job) {
   }
 
   return { cmd, args, model, permissionMode, permissionFlags };
+}
+
+// Incrementally parses Claude's `--output-format stream-json` NDJSON stream.
+// Each line is a JSON event. We accumulate token-level text_delta events for a
+// live, streaming view and pull the authoritative final answer from the
+// `result` event. Robust to both the partial-message wrapping (event.delta)
+// and bare delta shapes, and falls back to complete `assistant` messages when
+// partial messages aren't present.
+function createStreamJsonParser() {
+  let buffer = "";
+  let streamed = ""; // accumulated text_delta tokens (live view)
+  let sawDelta = false;
+  let assistantText = ""; // fallback when no token-level deltas arrive
+  let finalResult = null; // authoritative text from the `result` event
+
+  const handleEvent = (evt) => {
+    if (!evt || typeof evt !== "object") return;
+    const delta = (evt.event && evt.event.delta) || evt.delta;
+    if (delta && delta.type === "text_delta" && typeof delta.text === "string") {
+      sawDelta = true;
+      streamed += delta.text;
+      return;
+    }
+    if (evt.type === "result" && typeof evt.result === "string") {
+      finalResult = evt.result;
+      return;
+    }
+    if (evt.type === "assistant" && evt.message && Array.isArray(evt.message.content)) {
+      const text = evt.message.content
+        .filter((b) => b && b.type === "text" && typeof b.text === "string")
+        .map((b) => b.text)
+        .join("");
+      if (text) assistantText += text;
+    }
+  };
+
+  const parseLine = (line) => {
+    const trimmed = String(line).trim();
+    if (!trimmed) return;
+    try {
+      handleEvent(JSON.parse(trimmed));
+    } catch {
+      /* ignore non-JSON noise on the stream */
+    }
+  };
+
+  return {
+    feed(chunk) {
+      buffer += String(chunk || "");
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        parseLine(buffer.slice(0, idx));
+        buffer = buffer.slice(idx + 1);
+      }
+    },
+    end() {
+      if (buffer) {
+        parseLine(buffer);
+        buffer = "";
+      }
+    },
+    get live() {
+      return sawDelta ? streamed : assistantText;
+    },
+    get result() {
+      if (finalResult != null) return finalResult;
+      return sawDelta ? streamed : assistantText;
+    },
+  };
 }
 
 function resolveJobModel(config, job) {
