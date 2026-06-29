@@ -315,8 +315,8 @@ function TaskRow({
 
   return (
     <div className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
-      <Item variant="outline" className="task-row items-start">
-        <ItemActions className="gap-1 pt-0.5">
+      <Item variant="outline" className="task-row items-center">
+        <ItemActions className="gap-1">
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
             {expanded ? <ChevronDown /> : <ChevronRight />}
           </Button>
