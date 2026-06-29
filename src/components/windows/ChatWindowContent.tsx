@@ -511,7 +511,8 @@ export function ChatWindowContent({
         setShowGroupPicker(false);
         return;
       }
-      if (e.key === 'Enter' && filteredGroups.length > 0) {
+      // Tab or Enter completes the top group and closes the # menu.
+      if ((e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) && filteredGroups.length > 0) {
         e.preventDefault();
         handleGroupSelect(filteredGroups[0]);
         return;
