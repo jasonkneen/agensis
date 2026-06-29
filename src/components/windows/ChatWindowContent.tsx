@@ -36,6 +36,7 @@ import {
   Users,
   Wrench,
   X,
+  Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
@@ -207,7 +208,7 @@ type LinkedFile = {
   size: number;
 };
 
-type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'is_favorite' | 'archived_at' | 'participants'>;
+type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'is_favorite' | 'archived_at' | 'participants' | 'conversation_mode'>;
 
 const CHANNEL_META_COLUMNS = '*';
 
@@ -732,6 +733,20 @@ export function ChatWindowContent({
     return next;
   };
 
+  const conversationMode = channelMeta?.conversation_mode ?? 'mention';
+  const autoInterject = conversationMode === 'auto';
+
+  const handleToggleAutoInterject = async () => {
+    const next: ChatSession['conversation_mode'] = autoInterject ? 'mention' : 'auto';
+    // Optimistically reflect the new mode.
+    setChannelMeta(prev => (prev ? { ...prev, conversation_mode: next } : prev));
+    const saved = await persistChannelUpdates({ conversation_mode: next });
+    if (!saved) {
+      // Revert on failure.
+      setChannelMeta(prev => (prev ? { ...prev, conversation_mode: conversationMode } : prev));
+    }
+  };
+
   const handleOpenParticipantsDialog = () => {
     const selected = new Set<string>();
     const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
@@ -960,6 +975,18 @@ export function ChatWindowContent({
             )}
             {!isDirectMessage && (
               <>
+                <Button
+                  type="button"
+                  variant={autoInterject ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-8 px-2"
+                  aria-pressed={autoInterject}
+                  title={autoInterject ? 'Auto: agents chime in automatically when relevant' : 'Mentions only: agents reply when @mentioned'}
+                  onClick={() => { void handleToggleAutoInterject(); }}
+                >
+                  <Zap data-icon="inline-start" />
+                  Auto
+                </Button>
                 <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
                   <RotateCcw data-icon="inline-start" />
                   Catch up
