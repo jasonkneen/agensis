@@ -9,6 +9,7 @@ import {
   Plus,
 } from 'lucide-react';
 import type { ActiveView, ChatSession, Document, MemoryFact, Task } from '../../types';
+import { stripHtml } from '../../lib/utils';
 import { Badge } from '@/components/ui/badge';
 import {
   Command,
@@ -41,10 +42,6 @@ interface ResultItem {
   icon: React.ReactNode;
   badge: string;
   onSelect: () => void;
-}
-
-function stripHtml(html: string): string {
-  return html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function scoreMatch(text: string, query: string): number {

@@ -2,18 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Document } from '../types';
-
-type RealtimeChannel = {
-  on: <T>(type: 'db_changes', config: { event: string; schema: string; table: string; filter?: string }, callback: (payload: DbChangePayload<T>) => void) => RealtimeChannel;
-  subscribe: () => RealtimeChannel;
-  unsubscribe: () => Promise<unknown>;
-};
-
-type DbChangePayload<T> = {
-  eventType?: string;
-  new?: T;
-  old?: Partial<T>;
-};
+import type { RealtimeChannel, DbChangePayload } from '../types/realtime';
 
 export function useDocuments(workspaceId: string | null) {
   const [documents, setDocuments] = useState<Document[]>([]);

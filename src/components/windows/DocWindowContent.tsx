@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle, History, Sparkles, ListChecks, PanelsTopLeft } from 'lucide-react';
 import type { Document, DocumentVersion, Task } from '../../types';
+import { stripHtml } from '../../lib/utils';
 import { DocumentCommentsPanel } from '../editor/DocumentCommentsPanel';
 import { DocumentVersionHistoryPanel } from '../editor/DocumentVersionHistoryPanel';
 import { useDocumentVersions } from '../../hooks/useDocumentVersions';
@@ -151,12 +152,6 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function stripHtml(value: string) {
-  const tmp = window.document.createElement('div');
-  tmp.innerHTML = value;
-  return tmp.textContent || tmp.innerText || '';
 }
 
 async function runDocAI(prompt: string, title: string, docHtml: string, workspaceId?: string) {

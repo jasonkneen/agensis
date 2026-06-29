@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -134,20 +134,23 @@ export function useChat(workspaceId: string | null) {
   }, [updateSession]);
 
   // Top-level messages (no thread parent)
-  const topLevelMessages = messages.filter(m => !m.thread_parent_id);
+  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
 
   // Thread messages for the active thread
-  const threadMessages = activeThreadId
+  const threadMessages = useMemo(() => activeThreadId
     ? messages.filter(m => m.thread_parent_id === activeThreadId || m.id === activeThreadId)
-    : [];
+    : [], [messages, activeThreadId]);
 
   // Thread reply counts per parent message
-  const threadReplyCounts: Record<string, number> = {};
-  messages.forEach(m => {
-    if (m.thread_parent_id) {
-      threadReplyCounts[m.thread_parent_id] = (threadReplyCounts[m.thread_parent_id] || 0) + 1;
-    }
-  });
+  const threadReplyCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    messages.forEach(m => {
+      if (m.thread_parent_id) {
+        counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [messages]);
 
   const openThread = useCallback((messageId: string) => {
     setActiveThreadId(messageId);
@@ -157,19 +160,11 @@ export function useChat(workspaceId: string | null) {
     setActiveThreadId(null);
   }, []);
 
-  const sendMessage = useCallback(async (
+  const insertUserMessage = useCallback(async (
+    session: ChatSession,
     content: string,
-    model: string,
-    memoryFacts?: MemoryFact[],
-    linkedDocuments?: Document[],
-    workspaceContext?: WorkspaceContextSnapshot | null,
-    agent?: WorkspaceAgent | null,
     threadParentId?: string | null,
-    targetSession?: ChatSession | null,
-  ) => {
-    const session = targetSession ?? activeSession;
-    if (!session) return;
-
+  ): Promise<Message> => {
     const userMsg: Message = {
       id: crypto.randomUUID(),
       session_id: session.id,
@@ -181,19 +176,6 @@ export function useChat(workspaceId: string | null) {
 
     setMessages(prev => [...prev, userMsg]);
 
-    if (!navigator.onLine) {
-      const offlineReply: Message = {
-        id: crypto.randomUUID(),
-        session_id: session.id,
-        role: 'assistant',
-        content: 'You are currently offline. Your message will be sent when you reconnect.',
-        thread_parent_id: threadParentId ?? null,
-        created_at: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, offlineReply]);
-      return;
-    }
-
     const insertPayload: Record<string, unknown> = {
       id: userMsg.id,
       session_id: session.id,
@@ -203,18 +185,31 @@ export function useChat(workspaceId: string | null) {
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
     await backendClient.from('messages').insert(insertPayload);
 
-    if ((session.title === 'New Chat' || session.title === 'New Channel') && !threadParentId) {
-      const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
-      await backendClient
-        .from('chat_sessions')
-        .update({ title, updated_at: new Date().toISOString() })
-        .eq('id', session.id);
-      setSessions(prev => prev.map(s =>
-        s.id === session.id ? { ...s, title } : s
-      ));
-      setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
-    }
+    return userMsg;
+  }, []);
 
+  const autoTitleSession = useCallback(async (
+    session: ChatSession,
+    content: string,
+    threadParentId?: string | null,
+  ) => {
+    if (threadParentId) return;
+    if (session.title !== 'New Chat' && session.title !== 'New Channel') return;
+
+    const title = content.slice(0, 50) + (content.length > 50 ? '...' : '');
+    await backendClient
+      .from('chat_sessions')
+      .update({ title, updated_at: new Date().toISOString() })
+      .eq('id', session.id);
+    setSessions(prev => prev.map(s => s.id === session.id ? { ...s, title } : s));
+    setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
+  }, []);
+
+  const buildContextStrings = useCallback((
+    memoryFacts?: MemoryFact[],
+    linkedDocuments?: Document[],
+    contextMessages?: Message[],
+  ) => {
     const memoryContext = memoryFacts && memoryFacts.length > 0
       ? memoryFacts.map(f => `[${f.category}] ${f.fact}`).join('\n')
       : null;
@@ -223,59 +218,74 @@ export function useChat(workspaceId: string | null) {
       ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
       : null;
 
-    const contextMessages = threadParentId
-      ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
-      : activeSession?.id === session.id ? messages : [];
+    const messagesPayload = (contextMessages || []).map(m => ({
+      role: m.role,
+      content: messageText(m.content),
+    }));
 
-    const hasMention = Boolean(firstAgentMention(content));
-    const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
-    const directParticipant = directAgentParticipantRecord(session);
-    const directAgentChannel = Boolean(directParticipant);
-    // In an 'auto' channel, a plain message (no mention/thread/direct target) still
-    // dispatches so the server-side context-aware auto-interject gate can run.
-    // 'mention' channels keep the original mention-only routing.
-    const autoChannel = session.conversation_mode === 'auto';
-    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
+    return { memoryContext, docContext, messagesPayload };
+  }, []);
 
-    if (shouldRouteToAgent) {
-      const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...apiAuthHeaders(),
-        },
-        body: JSON.stringify({
-          workspaceId,
-          sessionId: session.id,
-          messageId: userMsg.id,
-          content,
-          threadParentId: threadParentId ?? null,
-          messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
-          memory: memoryContext,
-          documents: docContext,
-          workspaceContext: workspaceContext ?? null,
-        }),
-      }).catch(() => null);
-      const dispatchPayload = dispatchResponse
-        ? await dispatchResponse.json().catch(() => null)
-        : null;
-      if (dispatchResponse?.ok && dispatchPayload?.data?.message) {
-        setMessages(prev => {
-          const next = normalizeMessage(dispatchPayload.data.message);
-          return prev.some(message => message.id === next.id) ? prev : [...prev, next];
-        });
-        return;
-      }
-      if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
-        return;
-      }
-      if (!agent && !directParticipant) {
-        return;
-      }
-    } else if (!agent) {
-      return;
+  const dispatchToAgent = useCallback(async (
+    session: ChatSession,
+    userMsg: Message,
+    content: string,
+    contextMessages: Message[],
+    memoryContext: string | null,
+    docContext: string | null,
+    workspaceContext?: WorkspaceContextSnapshot | null,
+    threadParentId?: string | null,
+  ): Promise<boolean> => {
+    const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...apiAuthHeaders(),
+      },
+      body: JSON.stringify({
+        workspaceId,
+        sessionId: session.id,
+        messageId: userMsg.id,
+        content,
+        threadParentId: threadParentId ?? null,
+        messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
+        memory: memoryContext,
+        documents: docContext,
+        workspaceContext: workspaceContext ?? null,
+      }),
+    }).catch(() => null);
+
+    const dispatchPayload = dispatchResponse
+      ? await dispatchResponse.json().catch(() => null)
+      : null;
+
+    if (dispatchResponse?.ok && dispatchPayload?.data?.message) {
+      setMessages(prev => {
+        const next = normalizeMessage(dispatchPayload.data.message);
+        return prev.some(message => message.id === next.id) ? prev : [...prev, next];
+      });
+      return true;
     }
 
+    if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
+      return true;
+    }
+
+    return false;
+  }, [workspaceId]);
+
+  const streamDirectAI = useCallback(async (
+    session: ChatSession,
+    userMsg: Message,
+    model: string,
+    contextMessages: Message[],
+    memoryContext: string | null,
+    docContext: string | null,
+    workspaceContext?: WorkspaceContextSnapshot | null,
+    agent?: WorkspaceAgent | null,
+    directParticipant?: { name?: string; handle?: string; agent_id?: string } | null,
+    threadParentId?: string | null,
+  ) => {
     setStreaming(true);
 
     const assistantMsgId = crypto.randomUUID();
@@ -328,9 +338,7 @@ export function useChat(workspaceId: string | null) {
       if (!response.ok || !response.body) {
         const errData = await response.json().catch(() => ({}));
         const errMsg = errorMessage(errData.error || errData.message || 'Failed to connect to AI service');
-        setMessages(prev => prev.map(m =>
-          m.id === assistantMsgId ? { ...m, content: errMsg } : m
-        ));
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: errMsg } : m));
         const errInsert: Record<string, unknown> = {
           id: assistantMsgId,
           session_id: session.id,
@@ -366,9 +374,7 @@ export function useChat(workspaceId: string | null) {
               );
               if (delta) {
                 fullContent += delta;
-                setMessages(prev => prev.map(m =>
-                  m.id === assistantMsgId ? { ...m, content: fullContent } : m
-                ));
+                setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: fullContent } : m));
               }
             } catch {
               // Ignore malformed stream chunks and keep consuming the stream.
@@ -392,13 +398,85 @@ export function useChat(workspaceId: string | null) {
       }
     } catch (error) {
       const errMsg = errorMessage(error || 'Something went wrong. Please try again.');
-      setMessages(prev => prev.map(m =>
-        m.id === assistantMsgId ? { ...m, content: errMsg } : m
-      ));
+      setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: errMsg } : m));
     } finally {
       setStreaming(false);
     }
-  }, [activeSession, messages, workspaceId]);
+  }, [workspaceId]);
+
+  const sendMessage = useCallback(async (
+    content: string,
+    model: string,
+    memoryFacts?: MemoryFact[],
+    linkedDocuments?: Document[],
+    workspaceContext?: WorkspaceContextSnapshot | null,
+    agent?: WorkspaceAgent | null,
+    threadParentId?: string | null,
+    targetSession?: ChatSession | null,
+  ) => {
+    const session = targetSession ?? activeSession;
+    if (!session) return;
+
+    if (!navigator.onLine) {
+      const userMsg = await insertUserMessage(session, content, threadParentId);
+      const offlineReply: Message = {
+        id: crypto.randomUUID(),
+        session_id: session.id,
+        role: 'assistant',
+        content: 'You are currently offline. Your message will be sent when you reconnect.',
+        thread_parent_id: threadParentId ?? null,
+        created_at: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, offlineReply]);
+      return;
+    }
+
+    const userMsg = await insertUserMessage(session, content, threadParentId);
+    await autoTitleSession(session, content, threadParentId);
+
+    const contextMessages = threadParentId
+      ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
+      : activeSession?.id === session.id ? messages : [];
+
+    const { memoryContext, docContext, messagesPayload } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
+
+    const hasMention = Boolean(firstAgentMention(content));
+    const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
+    const directParticipant = directAgentParticipantRecord(session);
+    const directAgentChannel = Boolean(directParticipant);
+    const autoChannel = session.conversation_mode === 'auto';
+    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
+
+    if (shouldRouteToAgent) {
+      const dispatched = await dispatchToAgent(
+        session,
+        userMsg,
+        content,
+        contextMessages,
+        memoryContext,
+        docContext,
+        workspaceContext,
+        threadParentId,
+      );
+      if (dispatched) return;
+      if (!agent && !directParticipant) return;
+    } else if (!agent) {
+      return;
+    }
+
+    await streamDirectAI(
+      session,
+      userMsg,
+      model,
+      contextMessages,
+      memoryContext,
+      docContext,
+      workspaceContext,
+      agent,
+      directParticipant,
+      threadParentId,
+    );
+  }, [activeSession, messages, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
   const deleteSession = useCallback(async (id: string) => {
     await backendClient.from('chat_sessions').delete().eq('id', id);

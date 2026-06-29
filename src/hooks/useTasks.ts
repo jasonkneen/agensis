@@ -1,13 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
-
-type DbChangePayload<T> = {
-  eventType?: string;
-  new?: T;
-  old?: Partial<T>;
-};
+import type { DbChangePayload } from '../types/realtime';
 
 export interface CreateTaskInput {
   title: string;
@@ -126,8 +121,8 @@ export function useTasks(workspaceId: string | null, userId?: string) {
     return true;
   }, []);
 
-  const openTasks = tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled');
-  const doneTasks = tasks.filter(t => t.status === 'done');
+  const openTasks = useMemo(() => tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled'), [tasks]);
+  const doneTasks = useMemo(() => tasks.filter(t => t.status === 'done'), [tasks]);
 
   return {
     tasks,

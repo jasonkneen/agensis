@@ -733,16 +733,18 @@ function settingsWorkspaceIdFromRequest(req) {
   return workspaceId === 'base' ? '' : workspaceId;
 }
 
-function createPasswordHash(password) {
+const scryptAsync = promisify(crypto.scrypt);
+
+async function createPasswordHash(password) {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  const hash = (await scryptAsync(password, salt, 64)).toString('hex');
   return `${salt}:${hash}`;
 }
 
-function verifyPassword(password, passwordHash) {
+async function verifyPassword(password, passwordHash) {
   if (!passwordHash || !passwordHash.includes(':')) return false;
   const [salt, storedHash] = passwordHash.split(':');
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  const hash = (await scryptAsync(password, salt, 64)).toString('hex');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
 }
 
@@ -1265,17 +1267,6 @@ function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
     }
   }
   return null;
-}
-
-function pickAutoNextAgent(burst, rosterAgents, latestAuthorAgentId, autoRounds) {
-  if (rosterAgents.length === 0) return null;
-  const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
-  if (agentTurns >= autoRounds * rosterAgents.length) return null;
-  let candidate = rosterAgents[agentTurns % rosterAgents.length];
-  if (String(candidate.id) === latestAuthorAgentId && rosterAgents.length > 1) {
-    candidate = rosterAgents[(agentTurns + 1) % rosterAgents.length];
-  }
-  return candidate;
 }
 
 // --- Context-aware auto-interject -------------------------------------------
@@ -2120,10 +2111,19 @@ async function detectCapabilities(workspacePath = '') {
     { id: 'kimi', label: 'Kimi', command: 'kimi' },
   ];
 
-  const clis = await Promise.all(cliDefinitions.map(async definition => ({
+  // Global timeout for all CLI probes combined (they run in parallel via Promise.all).
+  const CLIPROBE_TIMEOUT_MS = 10000;
+  const cliProbePromise = Promise.all(cliDefinitions.map(async definition => ({
     ...definition,
     ...(await probeCommand(definition.command)),
   })));
+
+  const clis = await Promise.race([
+    cliProbePromise,
+    new Promise(resolve => setTimeout(() => {
+      resolve(cliDefinitions.map(def => ({ ...def, command: def.command, available: false, path: null, version: null })));
+    }, CLIPROBE_TIMEOUT_MS)),
+  ]);
 
   const packages = [
     '@anthropic-ai/claude-agent-sdk',
@@ -2272,18 +2272,47 @@ function matchesFilter(filter, row) {
 }
 
 const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// LRU cache for session-to-workspace lookups. Capped to prevent unbounded
+// memory growth on long-running servers.
+const WORKSPACE_SESSION_CACHE_MAX = 2000;
 const workspaceIdBySessionCache = new Map();
+
+function workspaceSessionCacheGet(sessionId) {
+  const value = workspaceIdBySessionCache.get(sessionId);
+  if (value === undefined) return undefined;
+  // Move to end (most recently used) by re-inserting.
+  workspaceIdBySessionCache.delete(sessionId);
+  workspaceIdBySessionCache.set(sessionId, value);
+  return value;
+}
+
+function workspaceSessionCacheSet(sessionId, workspaceId) {
+  if (workspaceIdBySessionCache.has(sessionId)) workspaceIdBySessionCache.delete(sessionId);
+  workspaceIdBySessionCache.set(sessionId, workspaceId);
+  // Evict oldest entries when the cache exceeds capacity.
+  if (workspaceIdBySessionCache.size > WORKSPACE_SESSION_CACHE_MAX) {
+    const excess = workspaceIdBySessionCache.size - WORKSPACE_SESSION_CACHE_MAX;
+    let evicted = 0;
+    for (const key of workspaceIdBySessionCache.keys()) {
+      if (evicted >= excess) break;
+      workspaceIdBySessionCache.delete(key);
+      evicted++;
+    }
+  }
+}
 
 async function resolveWorkspaceIdForSession(sessionId) {
   if (!sessionId) return null;
-  if (workspaceIdBySessionCache.has(sessionId)) return workspaceIdBySessionCache.get(sessionId);
+  const cached = workspaceSessionCacheGet(sessionId);
+  if (cached !== undefined) return cached;
   try {
     const rows = await getDb().unsafe(
       'select workspace_id from chat_sessions where id = $1 limit 1',
       [sessionId],
     );
     const workspaceId = rows[0]?.workspace_id || null;
-    if (workspaceId) workspaceIdBySessionCache.set(sessionId, workspaceId);
+    if (workspaceId) workspaceSessionCacheSet(sessionId, workspaceId);
     return workspaceId;
   } catch (error) {
     console.error('resolveWorkspaceIdForSession failed', error);
@@ -3028,7 +3057,7 @@ function createApp() {
 
       const rows = await getDb().unsafe(
         'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
-        [email, createPasswordHash(password)],
+        [email, await createPasswordHash(password)],
       );
 
       const user = rows[0];
@@ -3046,7 +3075,7 @@ function createApp() {
 
       const rows = await getDb().unsafe('select id, email, password_hash, created_at from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
-      if (!user || !verifyPassword(password, user.password_hash)) return jsonError(res, 401, new Error('Invalid email or password'));
+      if (!user || !(await verifyPassword(password, user.password_hash))) return jsonError(res, 401, new Error('Invalid email or password'));
 
       res.json({
         data: {

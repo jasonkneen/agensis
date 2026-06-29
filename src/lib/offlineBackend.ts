@@ -30,10 +30,12 @@ export async function offlineUpdate(
   id: string,
   updates: Record<string, unknown>,
 ): Promise<Record<string, unknown> | null> {
-  const fullPayload = { ...updates, id, updated_at: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const serverPayload = { ...updates, updated_at: now };
+  const fullPayload = { ...serverPayload, id };
 
   if (navigator.onLine) {
-    const { data, error } = await backendClient.from(table).update(updates).eq('id', id).select().single();
+    const { data, error } = await backendClient.from(table).update(serverPayload).eq('id', id).select().single();
     if (!error && data) return data;
   }
 

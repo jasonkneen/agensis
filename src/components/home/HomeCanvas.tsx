@@ -13,7 +13,6 @@ interface HomeCanvasProps {
   memoryFacts: MemoryFact[];
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
   onOpenNewDocument: () => void;
-  onOpenNewChat: () => void;
   workspaceName: string;
   backgroundOpacity?: number;
   backgroundImage?: string | null;

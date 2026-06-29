@@ -2,12 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import type { ActivityEvent, ActivityEventType } from '../types';
-
-type DbChangePayload<T> = {
-  eventType?: string;
-  new?: T;
-  old?: Partial<T>;
-};
+import type { DbChangePayload } from '../types/realtime';
 
 export interface LogEventInput {
   event_type: ActivityEventType;

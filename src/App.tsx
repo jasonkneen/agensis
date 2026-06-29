@@ -1523,7 +1523,6 @@ function CanvasLayerScene({
         memoryFacts={facts}
         onSendMessage={onHomeSendMessage}
         onOpenNewDocument={onNewDocument}
-        onOpenNewChat={onNewChat}
         workspaceName={workspaceName}
         backgroundOpacity={backgroundOpacity}
         backgroundImage={backgroundImage}

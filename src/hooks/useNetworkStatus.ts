@@ -33,8 +33,6 @@ export function useNetworkStatus() {
     syncingRef.current = true;
     setSyncing(true);
 
-    let failed = false;
-
     try {
       const items = (await peekQueue()).sort((a, b) => a.created_at - b.created_at);
       setPendingCount(items.length);
@@ -42,6 +40,8 @@ export function useNetworkStatus() {
       if (items.length === 0) {
         setSyncError(null);
       }
+
+      let failedCount = 0;
 
       for (const item of items) {
         try {
@@ -59,20 +59,22 @@ export function useNetworkStatus() {
           if (item.id != null) await dequeue(item.id);
           setPendingCount(prev => Math.max(0, prev - 1));
         } catch (error) {
-          failed = true;
+          failedCount++;
           const message = getErrorMessage(error);
-          setSyncError(`Sync blocked on ${item.table} ${item.operation}: ${message}`);
-          console.error('[offline-sync] Failed to flush queued change', {
+          console.error('[offline-sync] Failed to flush queued change (skipping)', {
             table: item.table,
             operation: item.operation,
             payload: item.payload,
             error,
           });
-          break;
+          // Skip this item and continue processing remaining items so one
+          // permanently-broken entry does not block the entire queue.
         }
       }
 
-      if (!failed) {
+      if (failedCount > 0) {
+        setSyncError(`${failedCount} queued change${failedCount === 1 ? '' : 's'} failed to sync`);
+      } else {
         setSyncError(null);
       }
     } finally {

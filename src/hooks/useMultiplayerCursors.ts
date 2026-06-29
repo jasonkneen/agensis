@@ -1,15 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { backendClient } from '../lib/backendClient';
-
-type RealtimeChannel = {
-  on: <T>(type: 'broadcast', config: { event: string }, callback: (message: BroadcastPayload<T>) => void) => RealtimeChannel;
-  subscribe: (callback?: (status: string) => void) => RealtimeChannel;
-  unsubscribe: () => Promise<unknown>;
-  send: (message: BroadcastSendMessage) => Promise<unknown>;
-};
-
-type BroadcastPayload<T> = { payload: T };
-type BroadcastSendMessage = { type: 'broadcast'; event: string; payload: unknown };
+import type { RealtimeChannel, BroadcastPayload, BroadcastSendMessage } from '../types/realtime';
 
 export interface CursorPresence {
   id: string;
@@ -44,8 +35,8 @@ export function useMultiplayerCursors(
   const channelRef = useRef<RealtimeChannel | null>(null);
   const throttleRef = useRef(0);
   const cleanupTimerRef = useRef<number | null>(null);
-  const displayName = userEmail?.split('@')[0] || 'Anonymous';
-  const color = userId ? pickColor(userId) : '#3b82f6';
+  const displayName = useMemo(() => userEmail?.split('@')[0] || 'Anonymous', [userEmail]);
+  const color = useMemo(() => userId ? pickColor(userId) : '#3b82f6', [userId]);
 
   const upsertCursor = useCallback((cursor: CursorPresence) => {
     if (!userId || cursor.id === userId) return;

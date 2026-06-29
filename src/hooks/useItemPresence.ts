@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
 import type { FloatingWindow, ItemPresenceUser, WorkspaceInstanceShareMode } from '../types';
-
-type RealtimeChannel = {
-  on: <T>(type: 'broadcast', config: { event: string }, callback: (message: BroadcastPayload<T>) => void) => RealtimeChannel;
-  subscribe: (callback?: (status: string) => void) => RealtimeChannel;
-  unsubscribe: () => Promise<unknown>;
-  send: (message: BroadcastSendMessage) => Promise<unknown>;
-};
-
-type BroadcastPayload<T> = { payload: T };
-type BroadcastSendMessage = { type: 'broadcast'; event: string; payload: unknown };
+import type { RealtimeChannel, BroadcastPayload, BroadcastSendMessage } from '../types/realtime';
 
 interface PresenceSnapshotItem {
   type: 'chat' | 'document';

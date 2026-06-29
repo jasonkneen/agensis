@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import type { SystemCapabilities } from '../lib/backendClient';
+import { stripHtml } from '../lib/utils';
 import type { Document, MemoryFact, Task, CanvasObject, WorkspaceAgent, AgentWebhook } from '../types';
 
 export interface WorkspaceContextSnapshot {
@@ -24,16 +25,6 @@ export interface WorkspaceContextSources {
   agents: WorkspaceAgent[];
   agentWebhooks: AgentWebhook[];
   capabilities: SystemCapabilities | null;
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function truncate(text: string, max: number): string {

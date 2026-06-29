@@ -1,5 +1,6 @@
 import { History, RotateCcw, X } from 'lucide-react';
 import type { DocumentVersion } from '../../types';
+import { stripHtml } from '../../lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
@@ -25,12 +26,6 @@ function formatTime(iso: string): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return date.toLocaleDateString();
-}
-
-function stripHtml(html: string): string {
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  return tmp.textContent || tmp.innerText || '';
 }
 
 function contentPreview(content: string): string {
