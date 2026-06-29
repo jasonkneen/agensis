@@ -124,7 +124,11 @@ function verifyPassword(password, passwordHash) {
   if (!passwordHash || !passwordHash.includes(':')) return false;
   const [salt, storedHash] = passwordHash.split(':');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+  const computed = Buffer.from(hash, 'hex');
+  const stored = Buffer.from(storedHash, 'hex');
+  // timingSafeEqual throws on a length mismatch; treat as a failed verification.
+  if (computed.length !== stored.length) return false;
+  return crypto.timingSafeEqual(computed, stored);
 }
 
 function slugHandle(value) {

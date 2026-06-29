@@ -813,7 +813,12 @@ async function verifyPassword(password, passwordHash) {
   if (!passwordHash || !passwordHash.includes(':')) return false;
   const [salt, storedHash] = passwordHash.split(':');
   const hash = (await scryptAsync(password, salt, 64)).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
+  const computed = Buffer.from(hash, 'hex');
+  const stored = Buffer.from(storedHash, 'hex');
+  // timingSafeEqual throws on a length mismatch (legacy/foreign hash formats);
+  // treat any mismatch as a failed verification instead of crashing the request.
+  if (computed.length !== stored.length) return false;
+  return crypto.timingSafeEqual(computed, stored);
 }
 
 function resolveAnthropicModel(model) {
