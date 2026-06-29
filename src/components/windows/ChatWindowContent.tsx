@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
@@ -8,6 +8,7 @@ import {
   Command as CommandIcon,
   CornerDownRight,
   Database,
+  Eraser,
   FileText,
   Folder,
   FolderOpen,
@@ -572,6 +573,30 @@ export function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
+  // "Clear my head": eject the current view without deleting anything. A per-session
+  // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
+  const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
+  const [clearedAt, setClearedAt] = useState<string | null>(null);
+  useEffect(() => {
+    setClearedAt(clearKey ? localStorage.getItem(clearKey) : null);
+  }, [clearKey]);
+  const clearView = useCallback(() => {
+    if (!clearKey) return;
+    const cutoff = new Date().toISOString();
+    localStorage.setItem(clearKey, cutoff);
+    setClearedAt(cutoff);
+  }, [clearKey]);
+  const restoreView = useCallback(() => {
+    if (!clearKey) return;
+    localStorage.removeItem(clearKey);
+    setClearedAt(null);
+  }, [clearKey]);
+  const clearCutoffMs = clearedAt ? new Date(clearedAt).getTime() : 0;
+  const shownMessages = useMemo(
+    () => (clearCutoffMs ? displayMessages.filter(m => new Date(m.created_at).getTime() > clearCutoffMs) : displayMessages),
+    [displayMessages, clearCutoffMs],
+  );
+  const hiddenCount = displayMessages.length - shownMessages.length;
 
   useEffect(() => {
     if (!inferredSessionId && (!workspaceId || !channelTitle)) {
@@ -973,6 +998,10 @@ export function ChatWindowContent({
               <Pin data-icon="inline-start" />
               Pins
             </Button>
+            <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={clearView} title="Clear this view — messages stay; scroll up to restore">
+              <Eraser data-icon="inline-start" />
+              Clear
+            </Button>
             <div className="min-w-2 flex-1" />
             {!isDirectMessage && contextControls && (
               <div className="flex min-w-0 max-w-[40vw] shrink overflow-x-auto text-xs text-muted-foreground">
@@ -1035,7 +1064,16 @@ export function ChatWindowContent({
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
               <MessageScrollerContent className="min-h-full gap-0 py-2">
-                {displayMessages.length === 0 ? (
+                {clearedAt && hiddenCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={restoreView}
+                    className="mx-auto my-2 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition hover:text-foreground"
+                  >
+                    Show {hiddenCount} earlier message{hiddenCount === 1 ? '' : 's'}
+                  </button>
+                )}
+                {shownMessages.length === 0 && !clearedAt ? (
                   <Empty className="min-h-full border-0">
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
@@ -1049,13 +1087,13 @@ export function ChatWindowContent({
                   </Empty>
                 ) : (
                   <div className="flex min-w-0 flex-col">
-                    {displayMessages.map((msg, idx) => (
-                      <MessageScrollerItem key={msg.id} scrollAnchor={idx === displayMessages.length - 1}>
+                    {shownMessages.map((msg, idx) => (
+                      <MessageScrollerItem key={msg.id} scrollAnchor={idx === shownMessages.length - 1}>
                         <ChatMessageBubble
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
                           accent={resolveMessageAccent(msg, agentAccentLookup)}
-                          isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
+                          isStreaming={streaming && idx === shownMessages.length - 1 && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
                           isEditing={editingMessageId === msg.id}
                           editingContent={editingContent}
