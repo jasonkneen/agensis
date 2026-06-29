@@ -89,14 +89,14 @@ export function useWorkspaceContext(sources: WorkspaceContextSources) {
           const details = [
             agent.description ? truncate(agent.description, 180) : null,
             agent.model ? `model: ${agent.model}` : null,
-            agent.tools?.length ? `tools: ${agent.tools.join(', ')}` : null,
-            agent.skills?.length ? `skills: ${agent.skills.join(', ')}` : null,
+            Array.isArray(agent.tools) && agent.tools.length ? `tools: ${agent.tools.join(', ')}` : null,
+            Array.isArray(agent.skills) && agent.skills.length ? `skills: ${agent.skills.join(', ')}` : null,
           ].filter(Boolean);
           return `- ${agent.name}${details.length ? ` - ${details.join('; ')}` : ''}`;
         }).join('\n')
       : null;
 
-    const agentSkillNames = uniqueList(agents.flatMap(agent => agent.skills || []));
+    const agentSkillNames = uniqueList(agents.flatMap(agent => Array.isArray(agent.skills) ? agent.skills : []));
     const detectedSkillLibraries = capabilities?.skills
       .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
       .map(skill => `- ${skill.label}: ${skill.count} entries at ${skill.path}`) || [];
