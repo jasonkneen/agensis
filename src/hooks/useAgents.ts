@@ -102,6 +102,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
       run_mode: input.run_mode ?? 'builtin',
+      enabled: true,
     });
     if (data) {
       const agent = data as unknown as WorkspaceAgent;

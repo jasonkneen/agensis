@@ -198,11 +198,7 @@ export function AgentsWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card/65 px-3 backdrop-blur-md">
-        <Bot className="size-4 text-primary" />
-        <span className="text-sm font-semibold">AI Agents</span>
-        <Badge variant="secondary">{agents.length}</Badge>
-        <div className="flex-1" />
+      <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
         <Button
           type="button"
           size="sm"
@@ -298,6 +294,7 @@ export function AgentsWindowContent({
                     }}
                     onDelete={() => handleDelete(agent.id)}
                     onCancelDelete={() => setConfirmDeleteId(null)}
+                    onToggleEnabled={() => onUpdateAgent(agent.id, { enabled: agent.enabled === false })}
                     capabilities={capabilities}
                     webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
                     connections={connections.filter(connection => connection.agent_id === agent.id)}
@@ -371,6 +368,7 @@ export function AgentsWindowContent({
                   setEditingId(null);
                 }}
                 onDelete={() => selectedAgent && handleDelete(selectedAgent.id)}
+                onToggleEnabled={() => selectedAgent && onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
                 capabilities={capabilities}
                 webhooks={selectedAgent ? webhooks.filter(webhook => webhook.agent_id === selectedAgent.id) : []}
                 connections={selectedAgent ? connections.filter(connection => connection.agent_id === selectedAgent.id) : []}
@@ -750,6 +748,7 @@ function AgentRow({
   onSave,
   onDelete,
   onCancelDelete,
+  onToggleEnabled,
   onSelect,
   capabilities,
   webhooks,
@@ -767,6 +766,7 @@ function AgentRow({
   onSave: (updates: Partial<WorkspaceAgent>) => void;
   onDelete: () => void;
   onCancelDelete: () => void;
+  onToggleEnabled: () => void;
   onSelect: () => void;
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
@@ -794,6 +794,7 @@ function AgentRow({
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
   const toolBadges = normalizeList(agent.tools).slice(0, 3);
   const accent = agentAccentColor(agent);
+  const agentActive = isAgentActive(agent);
 
   const handleSave = () => {
     onSave({
@@ -907,6 +908,7 @@ function AgentRow({
       data-agent-selected={selected || focused ? 'true' : undefined}
       className={cn(
         'agents-list-card cursor-pointer hover:bg-muted/50',
+        !agentActive && 'opacity-60',
         focused && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30',
         selected && 'border-primary/70 bg-primary/10 ring-1 ring-primary/30',
       )}
@@ -944,6 +946,7 @@ function AgentRow({
           <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
             {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
           </Badge>
+          {!agentActive && <Badge variant="secondary">deactivated</Badge>}
           {toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
         </div>
         {activeConnections.length > 0 && (
@@ -1017,9 +1020,26 @@ function AgentRow({
       <ItemActions className="agents-list-row-actions ml-11 mt-2 basis-full justify-end pr-1">
         <Button
           type="button"
+          variant={agentActive ? 'secondary' : 'ghost'}
+          size="icon-xs"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleEnabled();
+          }}
+          aria-label={agentActive ? `Deactivate ${agent.name}` : `Activate ${agent.name}`}
+          title={agentActive ? 'Deactivate agent' : 'Activate agent'}
+        >
+          <Power />
+        </Button>
+        <Button
+          type="button"
           variant={copyState === 'copied' ? 'secondary' : 'outline'}
           size="sm"
-          onClick={handleConnectionCommand}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleConnectionCommand();
+          }}
+          disabled={!agentActive}
           aria-label={`Copy connection command for ${agent.name}`}
         >
           {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
@@ -1060,6 +1080,7 @@ function AgentDetailPane({
   onCancelEdit,
   onSave,
   onDelete,
+  onToggleEnabled,
   capabilities,
   webhooks,
   connections,
@@ -1073,6 +1094,7 @@ function AgentDetailPane({
   onCancelEdit: () => void;
   onSave: (updates: Partial<WorkspaceAgent>) => void;
   onDelete: () => void;
+  onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
@@ -1134,6 +1156,7 @@ function AgentDetailPane({
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
   const tools = normalizeList(agent.tools);
   const skills = normalizeList(agent.skills);
+  const agentActive = isAgentActive(agent);
 
   const handleSave = () => {
     onSave({
@@ -1273,6 +1296,7 @@ function AgentDetailPane({
               <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
                 {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
               </Badge>
+              {!agentActive && <Badge variant="secondary">deactivated</Badge>}
             </div>
           </div>
         </div>
@@ -1280,9 +1304,19 @@ function AgentDetailPane({
         <div className="mt-3 flex flex-wrap gap-2">
           <Button
             type="button"
+            variant={agentActive ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={onToggleEnabled}
+          >
+            <Power data-icon="inline-start" />
+            {agentActive ? 'Deactivate' : 'Activate'}
+          </Button>
+          <Button
+            type="button"
             variant={copyState === 'copied' ? 'secondary' : 'outline'}
             size="sm"
             onClick={handleConnectionCommand}
+            disabled={!agentActive}
           >
             {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
             {copyState === 'copied' ? 'Copied' : 'Connect'}
@@ -1530,6 +1564,10 @@ function agentMatchesKey(agent: WorkspaceAgent, key: string) {
     agent.name,
     agentHandle(agent.name),
   ].some(value => normalizeAgentKey(value) === key);
+}
+
+function isAgentActive(agent: Pick<WorkspaceAgent, 'enabled'>) {
+  return agent.enabled !== false;
 }
 
 function agentHandle(value: string) {

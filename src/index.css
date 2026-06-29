@@ -1793,9 +1793,9 @@
   box-shadow: var(--neo-shadow-xs);
 }
 
-@container (min-width: 920px) {
+@container (min-width: 640px) {
   .agents-master-detail {
-    grid-template-columns: minmax(320px, 420px) minmax(420px, 1fr);
+    grid-template-columns: minmax(220px, 300px) minmax(280px, 1fr);
   }
 
   .agents-detail-pane {

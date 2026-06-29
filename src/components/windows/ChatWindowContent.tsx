@@ -299,6 +299,7 @@ export function ChatWindowContent({
   const filteredAgents = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
     return agents.filter(agent => {
+      if (agent.enabled === false) return false;
       const handle = agentHandle(agent);
       return agent.name.toLowerCase().includes(q) || handle.includes(q);
     });

@@ -498,6 +498,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
     ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
@@ -1006,7 +1007,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 async function verifyAgentConnectToken(token, req = null) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version, enabled
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -1017,7 +1018,7 @@ async function verifyAgentConnectToken(token, req = null) {
     const { workspaceId, agentId } = agentIdsFromWsRequest(req);
     if (workspaceId && agentId) {
       const fallbackRows = await getDb().unsafe(
-        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
+        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version, enabled
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -1027,7 +1028,7 @@ async function verifyAgentConnectToken(token, req = null) {
       if (agent) console.warn('[agensis] Using loopback-only dev agent auth fallback for', agent.id);
     }
   }
-  if (!agent) return null;
+  if (!agent || !isAgentEnabled(agent)) return null;
   return {
     agentId: agent.id,
     workspaceId: agent.workspace_id,
@@ -1111,6 +1112,21 @@ function parseJsonArray(value) {
   }
 }
 
+function isAgentEnabled(agent) {
+  return agent?.enabled !== false;
+}
+
+async function disconnectAgentDaemons(agentId, workspaceId) {
+  for (const [connectionId, entry] of [...connectedAgents.entries()]) {
+    if (String(entry.agentId) !== String(agentId)) continue;
+    if (String(entry.workspaceId) !== String(workspaceId)) continue;
+    sendWs(entry.ws, { type: 'agent_disabled', reason: 'deactivated' });
+    try { entry.ws.close(1008, 'Agent deactivated'); } catch { /* already closing */ }
+    connectedAgents.delete(connectionId);
+    await markAgentConnectionOffline(entry.ws);
+  }
+}
+
 function findConnectedAgent(workspaceId, agentId, handle) {
   const wantedHandle = slugHandle(handle);
   for (const entry of connectedAgents.values()) {
@@ -1144,12 +1160,17 @@ function agentRuntimePayload(agent) {
     permission_mode: permissionMode,
     permissionFlags: agentPermissionFlags(permissionMode),
     version: Number(agent.version || 0),
+    enabled: isAgentEnabled(agent),
   };
 }
 
 function refreshConnectedAgentConfigs(eventType, rows) {
   if (!['INSERT', 'UPDATE'].includes(eventType)) return;
   for (const row of rows || []) {
+    if (!isAgentEnabled(row)) {
+      void disconnectAgentDaemons(row.id, row.workspace_id);
+      continue;
+    }
     const agent = agentRuntimePayload(row);
     if (!agent?.id || !agent.workspace_id) continue;
     for (const entry of connectedAgents.values()) {
@@ -1343,7 +1364,7 @@ function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
     const authorAgentId = row.sender_kind === 'agent' ? String(row.sender_id || '') : '';
     for (const handle of parseAgentMentions(row.content)) {
       const agent = byHandle.get(handle);
-      if (!agent) continue;
+      if (!agent || !isAgentEnabled(agent)) continue;
       const agentId = String(agent.id);
       if (authorAgentId && agentId === authorAgentId) continue; // ignore self-mentions
       if (agentId === latestAuthorAgentId) continue; // never reply to itself back-to-back
@@ -1368,7 +1389,7 @@ const AUTO_INTERJECT_MODEL = 'claude-haiku-4-5';
 const WATCHER_HANDLES = new Set(['q', 'mills', 'research', 'scout']);
 
 function isWatcherAgent(agent) {
-  if (!agent) return false;
+  if (!agent || !isAgentEnabled(agent)) return false;
   const handle = slugHandle(agent.handle || agent.name);
   if (WATCHER_HANDLES.has(handle)) return true;
   // Role heuristic: explicit "watcher" markers only — kept narrow on purpose so
@@ -1442,6 +1463,7 @@ async function hasActiveBurstJob(sessionId, agentId) {
 // Returns { ok, pending }. pending=true means a daemon job is in flight and the
 // conversation will resume from handleAgentJobResult.
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
+  if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
   const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
@@ -1604,6 +1626,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
       if (agents.length === 0) return;
       const byHandle = new Map();
       for (const agent of agents) {
+        if (!isAgentEnabled(agent)) continue;
         byHandle.set(slugHandle(agent.handle || agent.name), agent);
         const nameHandle = slugHandle(agent.name);
         if (!byHandle.has(nameHandle)) byHandle.set(nameHandle, agent);
@@ -1617,14 +1640,14 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
 
       let nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
       if (!nextAgent && agentTurns === 0 && directTarget) {
-        nextAgent = agents.find((agent) => (directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
-          || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle))));
+        nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
+          || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
       }
       if (!nextAgent && agentTurns === 0 && threadParentId) {
         const target = await inferThreadAgentTarget(sessionId, threadParentId);
         if (target) {
-          nextAgent = agents.find((agent) => (target.agentId && String(agent.id) === target.agentId)
-            || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle)));
+          nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((target.agentId && String(agent.id) === target.agentId)
+            || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
         }
       }
       // Context-aware auto-interject (opt-in: conversation_mode === 'auto').
@@ -1742,6 +1765,8 @@ async function registerAgentConnection(ws, message) {
   if (workspaceId !== auth.workspaceId || agentId !== auth.agentId) {
     throw forbidden('Agent token does not match this workspace');
   }
+  const enabledRows = await getDb().unsafe('select enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
+  if (!isAgentEnabled(enabledRows[0])) throw forbidden('Agent is deactivated');
   const handle = slugHandle(message.handle || auth.handle || auth.name);
   const name = String(message.name || auth.name || handle).trim() || handle;
   const host = String(message.host || '').slice(0, 180);
@@ -3078,6 +3103,7 @@ function createApp() {
       const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
       const agent = rows[0];
       if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+      if (!isAgentEnabled(agent)) return jsonError(res, 403, new Error('Agent is deactivated'));
       await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
       const token = createAgentConnectToken();
       const handle = slugHandle(req.body?.handle || agent.handle || agent.name);

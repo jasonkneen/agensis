@@ -623,6 +623,7 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
   `);
   await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle)');
   await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash)');
@@ -690,6 +691,7 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
   const rows = await query('select * from workspace_agents where id = $1 limit 1', [agentId]);
   const agent = rows[0];
   if (!agent) return jsonError(404, new Error('Agent not found'));
+  if (agent.enabled === false) return jsonError(403, new Error('Agent is deactivated'));
   await assertWorkspaceRole({ userId, workspaceId: agent.workspace_id, capability: 'manage', db: query });
   const handle = slugHandle(body?.handle || agent.handle || agent.name);
   const model = resolveAnthropicModel(body?.model || agent.model);

@@ -292,6 +292,7 @@ export interface WorkspaceAgent {
   handle?: string | null;
   model: string;
   run_mode?: 'builtin' | 'daemon';
+  enabled?: boolean;
   permission_mode?: AgentPermissionMode;
   version?: number;
   created_by: string | null;

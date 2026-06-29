@@ -244,6 +244,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
   run_mode text NOT NULL DEFAULT 'builtin',
+  enabled boolean NOT NULL DEFAULT true,
   permission_mode text NOT NULL DEFAULT 'default',
   version integer NOT NULL DEFAULT 1,
   created_by uuid,
