@@ -1,7 +1,31 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { AgentConnection } from '../types';
+
+// The daemon heartbeats every 15s (AGENSIS_HEARTBEAT_MS). A connection whose
+// last_seen_at is older than this is treated as offline regardless of its stored
+// `status`, so the UI stops showing a dead daemon as "online" even if the
+// lifecycle event that flips the DB row never reaches us. 3x the heartbeat gives
+// margin for a single missed beat / network jitter.
+const STALE_AFTER_MS = 45_000;
+// Refetch cadence so a frozen last_seen_at is re-evaluated even when realtime
+// UPDATEs aren't arriving (the failure mode that makes lights "stay green").
+const POLL_INTERVAL_MS = 15_000;
+
+function isConnectionStale(connection: AgentConnection, nowMs: number): boolean {
+  const seen = connection.last_seen_at ? new Date(connection.last_seen_at).getTime() : NaN;
+  if (Number.isNaN(seen)) return false; // unparseable timestamp: trust stored status
+  return nowMs - seen > STALE_AFTER_MS;
+}
+
+// Coerce a connection's status to 'offline' when its heartbeat has gone stale.
+function withEffectiveStatus(connection: AgentConnection, nowMs: number): AgentConnection {
+  if (connection.status !== 'offline' && isConnectionStale(connection, nowMs)) {
+    return { ...connection, status: 'offline' };
+  }
+  return connection;
+}
 
 export function useAgentConnections(workspaceId: string | null) {
   const [connections, setConnections] = useState<AgentConnection[]>([]);
@@ -42,6 +66,23 @@ export function useAgentConnections(workspaceId: string | null) {
     void fetchConnections();
   }, [fetchConnections]);
 
+  // Poll so a daemon that died without delivering an offline UPDATE still has its
+  // last_seen_at re-read; the staleness derivation below then flips it to offline.
+  useEffect(() => {
+    if (!workspaceKey) return;
+    const id = window.setInterval(() => { void fetchConnections(); }, POLL_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [workspaceKey, fetchConnections]);
+
+  // A monotonically advancing tick drives re-derivation of staleness between
+  // fetches/events, so a light goes out on schedule even with no incoming data.
+  const [staleTick, setStaleTick] = useState(0);
+  useEffect(() => {
+    if (!workspaceKey) return;
+    const id = window.setInterval(() => setStaleTick(tick => tick + 1), POLL_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [workspaceKey]);
+
   const deduper = useRealtimeDeduper();
   useTableSubscription<AgentConnection>(
     {
@@ -70,7 +111,15 @@ export function useAgentConnections(workspaceId: string | null) {
     },
   );
 
-  return { connections, loading, refetch: fetchConnections };
+  // Expose connections with heartbeat-derived status so every consumer (sidebar
+  // status dot, presence list, chat participant chip) reflects real liveness.
+  const effectiveConnections = useMemo(() => {
+    void staleTick; // recompute on each tick
+    const nowMs = Date.now();
+    return connections.map(connection => withEffectiveStatus(connection, nowMs));
+  }, [connections, staleTick]);
+
+  return { connections: effectiveConnections, loading, refetch: fetchConnections };
 }
 
 function normalizeWorkspaceId(value: string | null) {
