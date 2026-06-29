@@ -1866,6 +1866,19 @@ async function reconcileAgentConnectionsAtStartup() {
   }
 }
 
+// Auto-cleanup: remove offline connection rows dead for a while, so the daemon
+// "Other connections" list self-prunes instead of piling up stale entries.
+async function pruneOfflineConnections() {
+  try {
+    const rows = await getDb().unsafe(
+      `delete from agent_connections where status = 'offline' and last_seen_at < now() - interval '120 seconds' returning *`,
+    );
+    if (rows.length > 0) notifyDbSubscribers('agent_connections', 'DELETE', rows.map(publicAgentConnection));
+  } catch {
+    // best effort
+  }
+}
+
 async function registerAgentConnection(ws, message) {
   const auth = ws.agentAuth;
   if (!auth) throw forbidden('Agent token is required');
@@ -1883,6 +1896,17 @@ async function registerAgentConnection(ws, message) {
   const metadata = parseJsonObject(message.metadata);
   const connectionId = crypto.randomUUID();
 
+  // Drop this agent's dead (offline) rows up front so a reconnect replaces them
+  // rather than stacking another stale entry in the UI.
+  try {
+    const stale = await getDb().unsafe(
+      `delete from agent_connections where workspace_id = $1 and agent_id = $2 and status = 'offline' returning *`,
+      [workspaceId, agentId],
+    );
+    if (stale.length > 0) notifyDbSubscribers('agent_connections', 'DELETE', stale.map(publicAgentConnection));
+  } catch {
+    // best effort
+  }
   const rows = await getDb().unsafe(
     `insert into agent_connections (id, workspace_id, agent_id, name, handle, host, cwd, status, metadata, connected_at, last_seen_at, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, 'online', $8::jsonb, now(), now(), now())
@@ -3206,6 +3230,22 @@ function createApp() {
     }
   });
 
+  app.delete('/backend/agents/connections/:id', requireAuth, async (req, res) => {
+    try {
+      const connectionId = String(req.params.id || '').trim();
+      if (!connectionId) return jsonError(res, 400, new Error('connection id is required'));
+      const rows = await getDb().unsafe('select * from agent_connections where id = $1 limit 1', [connectionId]);
+      const connection = rows[0];
+      if (!connection) return res.json({ data: { id: connectionId }, error: null });
+      await enforceWorkspaceRole(req.userId, connection.workspace_id, 'manage');
+      const deleted = await getDb().unsafe('delete from agent_connections where id = $1 returning *', [connectionId]);
+      if (deleted.length > 0) notifyDbSubscribers('agent_connections', 'DELETE', deleted.map(publicAgentConnection));
+      res.json({ data: { id: connectionId }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agents/:id/connection-command', requireAuth, async (req, res) => {
     try {
       const agentId = String(req.params.id || '').trim();
@@ -3843,7 +3883,7 @@ function startBackendServer(port = DEFAULT_PORT) {
     console.log(`[backend] listening on http://${host}:${port}`);
   });
   void reconcileAgentConnectionsAtStartup();
-  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); }, 30_000);
+  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void pruneOfflineConnections(); }, 30_000);
   if (jobReaper.unref) jobReaper.unref();
   server.on('close', () => {
     wss.close();

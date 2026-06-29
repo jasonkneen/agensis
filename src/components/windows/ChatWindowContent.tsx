@@ -1987,9 +1987,23 @@ function AgentProfileSidePanel({
                 {matchingConnections.map(connection => (
                   <div key={connection.id} className="flex min-w-0 items-center justify-between gap-2">
                     <span className="min-w-0 truncate">{connection.name || connection.handle}</span>
-                    <Badge variant={connection.status === 'online' || connection.status === 'busy' ? 'default' : 'secondary'} className="capitalize">
-                      {connection.status}
-                    </Badge>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Badge variant={connection.status === 'online' || connection.status === 'busy' ? 'default' : 'secondary'} className="capitalize">
+                        {connection.status}
+                      </Badge>
+                      {connection.status === 'offline' && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label="Remove dead connection"
+                          title="Remove this dead connection"
+                          onClick={() => void fetch(apiUrl(`/backend/agents/connections/${connection.id}`), { method: 'DELETE', headers: apiAuthHeaders() })}
+                        >
+                          <X />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
