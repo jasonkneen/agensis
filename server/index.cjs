@@ -1689,47 +1689,46 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
         }
       }
 
-      let nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
-      if (!nextAgent && agentTurns === 0 && directTarget) {
-        nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
-          || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
-      }
-      if (!nextAgent && agentTurns === 0 && threadParentId) {
-        const target = await inferThreadAgentTarget(sessionId, threadParentId);
-        if (target) {
-          nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((target.agentId && String(agent.id) === target.agentId)
-            || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
+      // A true 1:1 DM (a participant flagged direct:true) is isolated: ONLY that
+      // agent ever responds. Agents routinely @mention teammates to collaborate, but
+      // a private DM must not pull those others in. Channels keep full routing below.
+      const isDirectMessage = Boolean(directTarget && directTarget.direct);
+      let nextAgent = null;
+      if (isDirectMessage) {
+        if (agentTurns === 0) {
+          nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
+            || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
         }
-      }
-      // Context-aware auto-interject (opt-in: conversation_mode === 'auto').
-      // SAFETY INVARIANTS:
-      //  - Only runs in 'auto' channels; 'mention' channels reach this point with
-      //    nextAgent === null and simply return below, exactly as before.
-      //  - Mention/direct/thread routing is resolved FIRST (above); auto is a pure
-      //    fallback when no explicit target exists, so @mentions keep priority.
-      //  - Fires ONLY when agentTurns === 0 (no agent has spoken in this burst yet).
-      //    That guarantees at most ONE auto-interjection per human message: once the
-      //    chosen watcher posts, the next loop/re-entry sees agentTurns >= 1 and skips.
-      //    It also means the latest author is the human (latestAuthorAgentId === ''),
-      //    so we never auto-pick the previous speaker or go back-to-back.
-      //  - Candidate pool = channel participant watchers only (never an outsider).
-      //  - Relevance is a single cheap Haiku call that fails CLOSED (no interject on
-      //    any LLM/parse error). At most one agent, or none.
-      //  - Auto turns are ordinary agent turns counted against maxTurns. An agent reply
-      //    is not a human message, so it never re-seeds the burst (startIdx tracks the
-      //    last role==='user' row) — no auto re-entry, no reply loops.
-      if (!nextAgent && conversationMode === 'auto' && agentTurns === 0 && latestAuthorAgentId === '') {
-        const candidates = [...participantAgentIds]
-          .map((id) => agents.find((agent) => String(agent.id) === id))
-          .filter(isWatcherAgent);
-        if (candidates.length > 0) {
-          const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
-          const contextLines = rows
-            .slice(Math.max(0, startIdx - 5), startIdx)
-            .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
-            .join('\n');
-          const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates });
-          if (watcher) nextAgent = watcher;
+      } else {
+        nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
+        if (!nextAgent && agentTurns === 0 && directTarget) {
+          nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
+            || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
+        }
+        if (!nextAgent && agentTurns === 0 && threadParentId) {
+          const target = await inferThreadAgentTarget(sessionId, threadParentId);
+          if (target) {
+            nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((target.agentId && String(agent.id) === target.agentId)
+              || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
+          }
+        }
+        // Context-aware auto-interject (opt-in: conversation_mode === 'auto'). A pure
+        // fallback when no explicit target exists; fires once per human message
+        // (agentTurns === 0, latest author is the human), candidate pool limited to
+        // channel participant watchers, single cheap Haiku call that fails CLOSED.
+        if (!nextAgent && conversationMode === 'auto' && agentTurns === 0 && latestAuthorAgentId === '') {
+          const candidates = [...participantAgentIds]
+            .map((id) => agents.find((agent) => String(agent.id) === id))
+            .filter(isWatcherAgent);
+          if (candidates.length > 0) {
+            const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
+            const contextLines = rows
+              .slice(Math.max(0, startIdx - 5), startIdx)
+              .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
+              .join('\n');
+            const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates });
+            if (watcher) nextAgent = watcher;
+          }
         }
       }
       if (!nextAgent) return;
