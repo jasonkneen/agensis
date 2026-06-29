@@ -789,6 +789,7 @@ function AgentRow({
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [connectionCommand, setConnectionCommand] = useState('');
+  const [connectionError, setConnectionError] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
   const toolBadges = normalizeList(agent.tools).slice(0, 3);
@@ -836,14 +837,19 @@ function AgentRow({
       });
       const payload = await response.json().catch(() => null);
       const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
-      if (!response.ok || !command) return;
+      if (!response.ok || !command) {
+        setConnectionCommand('');
+        setConnectionError(payload?.error?.message || 'Daemon websocket backend is not available.');
+        return;
+      }
+      setConnectionError('');
       setConnectionCommand(command);
       setEditRunMode('daemon');
       await navigator.clipboard?.writeText(command);
       setCopyState('copied');
       window.setTimeout(() => setCopyState('idle'), 1600);
     } catch {
-      // Copy affordance stays idle; the backend error is not useful inline here.
+      setConnectionError('Could not create a daemon connection command.');
     }
   };
 
@@ -967,6 +973,11 @@ function AgentRow({
             </Button>
           </div>
         )}
+        {connectionError && (
+          <div className="agents-list-expanded-meta mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+            {connectionError}
+          </div>
+        )}
         {webhooks.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1.5">
             {webhooks.map(webhook => {
@@ -1083,6 +1094,7 @@ function AgentDetailPane({
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>('builtin');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [connectionCommand, setConnectionCommand] = useState('');
+  const [connectionError, setConnectionError] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
 
   useEffect(() => {
@@ -1101,6 +1113,7 @@ function AgentDetailPane({
     setEditModel(agent.model || 'auto');
     setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
     setConnectionCommand('');
+    setConnectionError('');
     setCopyState('idle');
   }, [agent?.id]);
 
@@ -1164,13 +1177,18 @@ function AgentDetailPane({
       });
       const payload = await response.json().catch(() => null);
       const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
-      if (!response.ok || !command) return;
+      if (!response.ok || !command) {
+        setConnectionCommand('');
+        setConnectionError(payload?.error?.message || 'Daemon websocket backend is not available.');
+        return;
+      }
+      setConnectionError('');
       setConnectionCommand(command);
       await navigator.clipboard?.writeText(command);
       setCopyState('copied');
       window.setTimeout(() => setCopyState('idle'), 1600);
     } catch {
-      // Copy affordance stays idle; the backend error is not useful inline here.
+      setConnectionError('Could not create a daemon connection command.');
     }
   };
 
@@ -1297,6 +1315,11 @@ function AgentDetailPane({
             >
               <Copy />
             </Button>
+          </div>
+        )}
+        {connectionError && (
+          <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+            {connectionError}
           </div>
         )}
 
