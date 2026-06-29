@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import type { FloatingWindow, FloatingWindowType } from '../types';
 
-let nextZIndex = 100;
 const WORKSPACE_WINDOW_MARGIN = 24;
 const WORKSPACE_WINDOW_EDGE_INSET = 8;
 const WORKSPACE_TOP_RESERVE = 56;
@@ -333,6 +332,7 @@ function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
 export function useWindows() {
   const [windows, setWindows] = useState<FloatingWindow[]>([]);
   const lastBoundsByWindowKey = useRef<Record<string, WindowBounds>>({});
+  const nextZIndexRef = useRef(100);
 
   const rememberWindowBounds = useCallback((win: FloatingWindow) => {
     lastBoundsByWindowKey.current[getWindowIdentityKey(win)] = getVisibleBounds(win);
@@ -346,10 +346,10 @@ export function useWindows() {
       if (opts?.sessionId) {
         const existing = prev.find(w => w.sessionId === opts.sessionId && w.canvasId === opts.canvasId);
         if (existing) {
-          nextZIndex++;
+          nextZIndexRef.current++;
           return prev.map(w =>
             w.id === existing.id
-              ? { ...w, minimized: false, zIndex: nextZIndex }
+              ? { ...w, minimized: false, zIndex: nextZIndexRef.current }
               : w
           );
         }
@@ -357,16 +357,16 @@ export function useWindows() {
       if (opts?.documentId) {
         const existing = prev.find(w => w.documentId === opts.documentId && w.canvasId === opts.canvasId);
         if (existing) {
-          nextZIndex++;
+          nextZIndexRef.current++;
           return prev.map(w =>
             w.id === existing.id
-              ? { ...w, minimized: false, zIndex: nextZIndex }
+              ? { ...w, minimized: false, zIndex: nextZIndexRef.current }
               : w
           );
         }
       }
 
-      nextZIndex++;
+      nextZIndexRef.current++;
 
       const restoreSize = getDefaultRestoreSize(type);
       const restorePos = getSpawnPosition(prev, restoreSize);
@@ -387,7 +387,7 @@ export function useWindows() {
         y: bounds.y,
         width: bounds.width,
         height: bounds.height,
-        zIndex: nextZIndex,
+        zIndex: nextZIndexRef.current,
         minimized: false,
         maximized: false,
         restoreBounds: rememberedBounds ? bounds : restoreBounds,
@@ -413,9 +413,9 @@ export function useWindows() {
   }, [rememberWindowBounds]);
 
   const focusWindow = useCallback((id: string) => {
-    nextZIndex++;
+    nextZIndexRef.current++;
     setWindows(prev =>
-      prev.map(w => w.id === id ? { ...w, zIndex: nextZIndex } : w)
+      prev.map(w => w.id === id ? { ...w, zIndex: nextZIndexRef.current } : w)
     );
   }, []);
 

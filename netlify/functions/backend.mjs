@@ -4,6 +4,37 @@ import os from 'node:os';
 import path from 'node:path';
 import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
+import {
+  verifyAuthToken,
+  enforceDbOperationAccess,
+  assertWorkspaceRole,
+  appendWorkspaceAccessClause,
+  logMessageActivityIdempotent,
+  createRateLimiter,
+} from '../../shared/backend-core.mjs';
+
+// H4 — Rate limiting. Module-scoped, in-memory fixed-window limiters.
+// NOTE: in-memory state lives in a single warm serverless instance; a
+// multi-instance / scaled deploy needs a SHARED store (Redis, etc.) to be
+// globally accurate. This is a first abuse-protection layer, not a hard quota.
+const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+
+function clientIpFromRequest(req) {
+  const forwarded = String(req.headers.get('x-forwarded-for') || '').split(',')[0].trim();
+  return forwarded || req.headers.get('x-nf-client-connection-ip') || 'unknown';
+}
+
+// Returns a 429 Response (with Retry-After) when the key is over budget, else null.
+function rateLimitBlock(limiter, key) {
+  const result = limiter.check(key);
+  if (result.allowed) return null;
+  const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
+  return new Response(
+    JSON.stringify({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }),
+    { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
+  );
+}
 
 const ALLOWED_TABLES = new Set([
   'app_users',
@@ -260,6 +291,19 @@ function getAuthSecret() {
 function issueToken(userId) {
   const sig = crypto.createHmac('sha256', getAuthSecret()).update(String(userId)).digest('base64url');
   return `${userId}.${sig}`;
+}
+
+// Resolve the authed user id from a request's Authorization header. Throws 401
+// when no valid Bearer token is present. The thrown error's `.status` is mapped
+// to the existing `{ data: null, error }` JSON shape by the top-level handler.
+function requireUserId(req) {
+  const userId = verifyAuthToken(req.headers.get('authorization'), getAuthSecret());
+  if (!userId) {
+    const err = new Error('Authentication required');
+    err.status = 401;
+    throw err;
+  }
+  return userId;
 }
 
 function quoteIdent(value) {
@@ -535,10 +579,11 @@ async function handleSystemCapabilities(req) {
   });
 }
 
-async function handleAgentConnections(req) {
+async function handleAgentConnections(req, userId) {
   const url = new URL(req.url);
   const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
   if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
   await ensureAgentConnectionsTable();
   const rows = await query(
     `select *
@@ -584,11 +629,12 @@ async function ensureAgentRuntimeTables() {
   await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
 }
 
-async function handleAgentDispatch(req) {
+async function handleAgentDispatch(req, userId) {
   const { workspaceId, sessionId, content } = await readBody(req);
   if (!workspaceId || !sessionId || !content) {
     return jsonError(400, new Error('workspaceId, sessionId, and content are required'));
   }
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
   // Serverless deployments cannot hold the local daemon orchestration loop open.
   // Return a positive contract response so the client can fall back to the
   // regular AI completion path without logging a route 404.
@@ -601,13 +647,14 @@ async function handleAgentDispatch(req) {
   });
 }
 
-async function handleCreateAgentWebhook(req) {
+async function handleCreateAgentWebhook(req, userId) {
   await ensureAgentRuntimeTables();
   const body = await readBody(req);
   const workspaceId = String(body?.workspace_id || '').trim();
   const agentId = body?.agent_id ? String(body.agent_id).trim() : null;
   const name = String(body?.name || '').trim();
   if (!workspaceId || !name) return jsonError(400, new Error('workspace_id and name are required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
   if (agentId) {
     const agentRows = await query('select id from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
     if (!agentRows[0]) return jsonError(404, new Error('Agent not found in this workspace'));
@@ -622,12 +669,13 @@ async function handleCreateAgentWebhook(req) {
   return json({ data: rows[0], error: null });
 }
 
-async function handleAgentConnectionCommand(req, agentId) {
+async function handleAgentConnectionCommand(req, agentId, userId) {
   await ensureAgentRuntimeTables();
   const body = await readBody(req);
   const rows = await query('select * from workspace_agents where id = $1 limit 1', [agentId]);
   const agent = rows[0];
   if (!agent) return jsonError(404, new Error('Agent not found'));
+  await assertWorkspaceRole({ userId, workspaceId: agent.workspace_id, capability: 'manage', db: query });
   const token = createAgentConnectToken();
   const handle = slugHandle(body?.handle || agent.handle || agent.name);
   const model = resolveAnthropicModel(body?.model || agent.model);
@@ -716,42 +764,31 @@ async function handleOAuthAuth() {
   return json({ data: { user, token: issueToken(user.id) }, error: null });
 }
 
-const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 // Logs an `activity_events` row for each inserted chat message so it surfaces in
-// the Activity feed. In prod the client inserts both user and assistant messages
-// through this route, so this captures both. Defensive: never breaks the insert.
-async function logMessageActivity(rows) {
-  for (const message of rows) {
-    if (!message || typeof message !== 'object') continue;
-    try {
-      const sessionId = message.session_id;
-      if (!sessionId) continue;
-      const sessionRows = await query('select workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
-      const workspaceId = sessionRows[0]?.workspace_id || null;
-      if (!workspaceId) continue;
-      const role = message.role || '';
-      const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
-      const content = typeof message.content === 'string' ? message.content : '';
-      const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
-      const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
-      const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
-      const metadata = {
-        session_id: sessionId,
-        role,
-        sender_kind: message.sender_kind || '',
-        sender_name: message.sender_name || '',
-        content,
-      };
-      await query(
-        `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
-         values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())`,
-        [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
-      );
-    } catch (error) {
-      console.error('logMessageActivity failed', error);
-    }
+// the Activity feed. Delegates to the shared idempotent logger so both backends
+// use ONE implementation (idempotent: skips messages already logged).
+// C3 — ensure the partial unique index that makes message-activity logging
+// idempotent. Mirrors the migration + server runtime DDL. Runs at most once per
+// warm instance and never throws into the caller (the ON CONFLICT insert
+// degrades gracefully if this hasn't landed yet).
+let activityIndexEnsured = false;
+async function ensureActivityEventsIndex() {
+  if (activityIndexEnsured) return;
+  try {
+    await query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_events_message_sent
+       ON activity_events (entity_id)
+       WHERE event_type = 'message_sent' AND entity_type = 'message'`,
+    );
+    activityIndexEnsured = true;
+  } catch (error) {
+    console.error('ensureActivityEventsIndex failed', error);
   }
+}
+
+async function logMessageActivity(rows) {
+  await ensureActivityEventsIndex();
+  await logMessageActivityIdempotent(rows, { db: query });
 }
 
 // Default agents seeded into every brand-new workspace. Kept in sync with the
@@ -849,13 +886,18 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
   );
 }
 
-async function handleDb(pathname, req) {
+async function handleDb(pathname, req, userId) {
   const body = await readBody(req);
 
   if (pathname === '/backend/db/select') {
     const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = body || {};
     const tableSql = ensureTable(table);
-    const { clause, params } = buildWhereClause(filters, []);
+    await enforceDbOperationAccess({ userId, table, op: 'select', filters, db: query });
+    // `workspaces` SELECT is scoped to rows the user owns or is a member of.
+    const where = table === 'workspaces'
+      ? appendWorkspaceAccessClause(buildWhereClause(filters, []), userId)
+      : buildWhereClause(filters, []);
+    const { clause, params } = where;
     const limitSql = Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : '';
     const rows = await query(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
     return json({ data: single ? (rows[0] ?? null) : rows, error: null });
@@ -864,7 +906,13 @@ async function handleDb(pathname, req) {
   if (pathname === '/backend/db/insert') {
     const { table, values, returning = '*', single = false } = body || {};
     const tableSql = ensureTable(table);
-    const rows = Array.isArray(values) ? values : [values];
+    await enforceDbOperationAccess({ userId, table, op: 'insert', payload: { values }, db: query });
+    // Force a workspace's owner to the authed user (never trust a client user_id).
+    const rows = (Array.isArray(values) ? values : [values]).map((row) => (
+      table === 'workspaces' && row && typeof row === 'object'
+        ? { ...row, user_id: userId }
+        : row
+    ));
     if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
 
     const columns = Object.keys(rows[0]);
@@ -883,7 +931,7 @@ async function handleDb(pathname, req) {
     if (table === 'workspaces') {
       for (const row of result) {
         try {
-          await seedDefaultAgents(row.id, row.user_id ?? null);
+          await seedDefaultAgents(row.id, row.user_id ?? userId);
         } catch (seedError) {
           console.error('seedDefaultAgents failed', seedError);
         }
@@ -896,6 +944,7 @@ async function handleDb(pathname, req) {
     const { table, values, filters = [], returning = '*', single = false } = body || {};
     const tableSql = ensureTable(table);
     if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
+    await enforceDbOperationAccess({ userId, table, op: 'update', filters, db: query });
 
     const params = [];
     const setParts = Object.keys(values).map((column) => {
@@ -916,7 +965,15 @@ async function handleDb(pathname, req) {
   if (pathname === '/backend/db/delete') {
     const { table, filters = [], single = false } = body || {};
     const tableSql = ensureTable(table);
+    // Refuse an unfiltered delete — it would wipe the entire table.
+    if (!Array.isArray(filters) || filters.length === 0) {
+      return jsonError(400, new Error('Delete requires at least one filter'));
+    }
     const where = buildWhereClause(filters, []);
+    if (!where.clause) {
+      return jsonError(400, new Error('Delete requires a non-empty where clause'));
+    }
+    await enforceDbOperationAccess({ userId, table, op: 'delete', filters, db: query });
     const result = await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
     return json({ data: single ? (result[0] ?? null) : null, error: null });
   }
@@ -924,8 +981,13 @@ async function handleDb(pathname, req) {
   return jsonError(404, new Error('Backend route not found'));
 }
 
-async function handleAiChat(req) {
+async function handleAiChat(req, userId) {
   const { messages, model, memory, documents, workspaceContext, workspaceId } = await readBody(req);
+  // A valid token is required (enforced by the router). When the request targets
+  // a workspace, the user must additionally be allowed to run agents there.
+  if (workspaceId) {
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
+  }
   const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId || null);
   if (!apiKey) return jsonError(503, new Error('ANTHROPIC_API_KEY is not configured'));
   const resolvedModel = !model || model === 'auto'
@@ -1053,17 +1115,20 @@ async function route(req) {
     return handleSystemCapabilities(req);
   }
   if (req.method === 'GET' && pathname === '/backend/agents/connections') {
-    return handleAgentConnections(req);
+    return handleAgentConnections(req, requireUserId(req));
   }
   if (req.method === 'POST' && pathname === '/backend/agents/dispatch') {
-    return handleAgentDispatch(req);
+    const userId = requireUserId(req);
+    const blocked = rateLimitBlock(dispatchRateLimiter, userId || clientIpFromRequest(req));
+    if (blocked) return blocked;
+    return handleAgentDispatch(req, userId);
   }
   if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
-    return handleCreateAgentWebhook(req);
+    return handleCreateAgentWebhook(req, requireUserId(req));
   }
   const connectionCommandMatch = pathname.match(/^\/backend\/agents\/([^/]+)\/connection-command$/);
   if (req.method === 'POST' && connectionCommandMatch) {
-    return handleAgentConnectionCommand(req, decodeURIComponent(connectionCommandMatch[1]));
+    return handleAgentConnectionCommand(req, decodeURIComponent(connectionCommandMatch[1]), requireUserId(req));
   }
   if (req.method === 'POST' && (pathname === '/backend/auth/signup' || pathname === '/backend/auth/signin')) {
     return handleAuth(pathname, req);
@@ -1072,23 +1137,29 @@ async function route(req) {
     return handleOAuthAuth();
   }
   if (req.method === 'POST' && pathname === '/backend/rpc/lookup_user_by_email') {
+    requireUserId(req);
     const body = await readBody(req);
     const lookupEmail = String(body?.lookup_email || '').trim().toLowerCase();
     const rows = await query('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
     return json({ data: rows, error: null });
   }
   if (req.method === 'POST' && pathname.startsWith('/backend/db/')) {
-    return handleDb(pathname, req);
+    return handleDb(pathname, req, requireUserId(req));
   }
   if (req.method === 'GET' && pathname === '/backend/settings/secrets') {
+    const userId = requireUserId(req);
     const url = new URL(req.url);
     const workspaceId = String(url.searchParams.get('workspaceId') || '').trim() || null;
+    // Managed secrets (ANTHROPIC_API_KEY etc.) require workspace manage rights.
+    if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const keys = await listManagedSecrets(workspaceId);
     return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/settings/secrets') {
+    const userId = requireUserId(req);
     const body = await readBody(req);
     const workspaceId = String(body?.workspaceId || '').trim() || null;
+    if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const updates = {};
     for (const key of MANAGED_SECRET_KEYS) {
       if (typeof body?.[key] === 'string') updates[key] = body[key].trim();
@@ -1097,14 +1168,17 @@ async function route(req) {
       return jsonError(400, new Error('No managed keys provided'));
     }
     for (const [key, value] of Object.entries(updates)) {
-      if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value);
+      if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value, userId);
       else await setSettingValue(key, value);
     }
     const keys = await listManagedSecrets(workspaceId);
     return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/ai-chat') {
-    return handleAiChat(req);
+    const userId = requireUserId(req);
+    const blocked = rateLimitBlock(aiChatRateLimiter, userId || clientIpFromRequest(req));
+    if (blocked) return blocked;
+    return handleAiChat(req, userId);
   }
 
   return jsonError(404, new Error('Backend route not found'));

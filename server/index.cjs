@@ -608,6 +608,29 @@ async function ensureRuntimeSchema() {
         CHECK (type IN ('rect', 'ellipse', 'diamond', 'arrow', 'line', 'pen', 'text', 'image', 'video', 'file', 'applet', 'sticky_note'));
     END $$;
   `);
+  // C3 — make message-activity logging idempotent. A retried daemon finalization
+  // re-logs the same message id; the partial unique index lets the logging insert
+  // use ON CONFLICT DO NOTHING (see logMessageActivity). Wrapped on its own so a
+  // failure (e.g. pre-existing duplicates) never blocks the rest of the schema
+  // bootstrap. Mirrored by supabase/migrations and backend.mjs.
+  try {
+    await db.unsafe(`
+      DELETE FROM activity_events a
+      USING activity_events b
+      WHERE a.event_type = 'message_sent'
+        AND a.entity_type = 'message'
+        AND b.event_type = 'message_sent'
+        AND b.entity_type = 'message'
+        AND a.entity_id IS NOT NULL
+        AND a.entity_id = b.entity_id
+        AND a.ctid > b.ctid;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_events_message_sent
+        ON activity_events (entity_id)
+        WHERE event_type = 'message_sent' AND entity_type = 'message';
+    `);
+  } catch (error) {
+    console.warn('[backend] activity_events idempotency index migration failed:', error.message || error);
+  }
 }
 
 function getDb() {
@@ -722,6 +745,50 @@ function mapDbError(error) {
 
 function jsonError(res, status, error) {
   res.status(status).json({ data: null, error: mapDbError(error) });
+}
+
+// ============================================================
+// H4 — Rate limiting (in-memory fixed window).
+// Canonical implementation lives in shared/backend-core.mjs; this CJS server is
+// self-contained (it keeps its own copies of the security helpers, e.g.
+// enforceDbOperationAccess) so the limiter is duplicated here rather than
+// importing the ESM core. Keep the two in sync.
+// NOTE: in-memory state is per-process — a multi-instance deploy needs a SHARED
+// store (Redis, etc.) for a globally accurate limit.
+// ============================================================
+function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
+  const hits = new Map(); // key -> { count, resetAt }
+  function check(key) {
+    const now = Date.now();
+    let entry = hits.get(key);
+    if (!entry || now >= entry.resetAt) {
+      entry = { count: 0, resetAt: now + windowMs };
+      hits.set(key, entry);
+    }
+    entry.count += 1;
+    const allowed = entry.count <= max;
+    return { allowed, retryAfterMs: allowed ? 0 : Math.max(0, entry.resetAt - now) };
+  }
+  return { check };
+}
+
+const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+
+// Returns true (and writes a 429 with Retry-After) when the key is over budget.
+function rateLimitBlocked(res, limiter, key) {
+  const result = limiter.check(String(key || 'unknown'));
+  if (result.allowed) return false;
+  const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
+  res.setHeader('Retry-After', String(retryAfter));
+  res.status(429).json({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } });
+  return true;
+}
+
+function clientIpFromReq(req) {
+  const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 function workspaceIdFromSettingsRequest(req) {
@@ -2345,9 +2412,15 @@ async function logMessageActivity(rows) {
         sender_name: message.sender_name || '',
         content,
       };
+      // C3: idempotent insert. ON CONFLICT DO NOTHING against the partial unique
+      // index uq_activity_events_message_sent means a retried finalization for the
+      // same message id is a no-op (returns 0 rows), so the feed row — and its
+      // realtime notification below — fire exactly once. Target left off so it
+      // degrades to a plain insert if the index hasn't been created yet.
       const inserted = await getDb().unsafe(
         `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
          values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
+         on conflict do nothing
          returning *`,
         [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
       );
@@ -2565,27 +2638,77 @@ function attachRealtime(server) {
 
   wss.on('connection', (ws, req) => {
     ws.subscriptions = [];
-    const authReady = (async () => {
-      const userId = await verifyToken(tokenFromWsRequest(req));
-      const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req), req);
-      if (!userId && !agentAuth) {
-        ws.close(1008, 'Authentication required');
-        return false;
-      }
+
+    // H3/H5 — two auth paths, both supported for a smooth deploy + the daemon CLI:
+    //  (1) Query-param credentials, verified on connect: `agentToken=` (daemon CLI,
+    //      agent/agensis-cli) and `token=` (legacy browser compat window).
+    //  (2) First-message auth frame `{ type: 'auth', token }` (the browser client
+    //      now sends this so the token never appears in the WS URL / proxy logs).
+    // authReady resolves true on success, false on failure/timeout; the message
+    // handler gates every action on it.
+    let authSettled = false;
+    let resolveAuth;
+    const authReady = new Promise((resolve) => { resolveAuth = resolve; });
+    function settleAuth(value) {
+      if (authSettled) return;
+      authSettled = true;
+      resolveAuth(value);
+    }
+    function finalizeAuthenticated(userId, agentAuth) {
       ws.userId = userId;
       ws.agentAuth = agentAuth;
       websocketClients.add(ws);
-      return true;
-    })().catch(() => {
-      ws.close(1008, 'Authentication failed');
-      return false;
-    });
+      settleAuth(true);
+    }
+
+    // Path (1): try query-param credentials up front. If absent/invalid we do NOT
+    // close — we wait for an auth frame (path 2) or the timeout below.
+    (async () => {
+      const userId = await verifyToken(tokenFromWsRequest(req));
+      const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req), req);
+      if (userId || agentAuth) finalizeAuthenticated(userId, agentAuth);
+    })().catch(() => { /* fall through to the auth-frame path / timeout */ });
+
+    // Reject if neither path authenticates within the grace window.
+    const authTimer = setTimeout(() => {
+      if (!authSettled) {
+        settleAuth(false);
+        try { ws.close(1008, 'Authentication required'); } catch { /* already closing */ }
+      }
+    }, 10_000);
+    if (authTimer.unref) authTimer.unref();
 
     ws.on('message', async (raw) => {
+      let message;
+      try {
+        message = JSON.parse(String(raw || '{}'));
+      } catch {
+        return;
+      }
+
+      // Path (2): the first valid `auth` frame authenticates the socket. Only
+      // honored while auth is still unsettled (it must be the FIRST message).
+      if (!authSettled && message && message.type === 'auth') {
+        try {
+          const userId = await verifyToken(message.token);
+          const agentAuth = userId ? null : await verifyAgentConnectToken(message.token, req);
+          if (!userId && !agentAuth) {
+            settleAuth(false);
+            ws.close(1008, 'Authentication failed');
+            return;
+          }
+          finalizeAuthenticated(userId, agentAuth);
+          sendWs(ws, { type: 'system', event: 'authenticated' });
+        } catch {
+          settleAuth(false);
+          try { ws.close(1008, 'Authentication failed'); } catch { /* already closing */ }
+        }
+        return;
+      }
+
       try {
         const authenticated = await authReady;
         if (!authenticated) return;
-        const message = JSON.parse(String(raw || '{}'));
         if (message.action === 'subscribe') {
           const binding = { channel: message.channel, ...(message.binding || {}) };
           await authorizeRealtimeBinding(ws.userId, message.channel, binding);
@@ -2627,6 +2750,8 @@ function attachRealtime(server) {
     });
 
     ws.on('close', () => {
+      clearTimeout(authTimer);
+      settleAuth(false);
       websocketClients.delete(ws);
       void markAgentConnectionOffline(ws);
     });
@@ -2639,10 +2764,17 @@ function createApp() {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '50mb' }));
-  const runtimeSchemaReady = ensureRuntimeSchema().catch((error) => {
-    console.warn('[backend] runtime schema migration failed:', error.message || error);
-    throw error;
-  });
+  // Runtime schema fallback (ensureRuntimeSchema) runs by default so dev bootstrap
+  // keeps working with zero config. Set AGENSIS_RUNTIME_SCHEMA=false in production
+  // and run `npm run migrate` instead, once the supabase/migrations/*.sql files are
+  // the source of truth. Unset/any-other-value preserves today's behavior.
+  const ALLOW_RUNTIME_SCHEMA = process.env.AGENSIS_RUNTIME_SCHEMA !== 'false';
+  const runtimeSchemaReady = ALLOW_RUNTIME_SCHEMA
+    ? ensureRuntimeSchema().catch((error) => {
+        console.warn('[backend] runtime schema migration failed:', error.message || error);
+        throw error;
+      })
+    : Promise.resolve();
 
   // Auth is enforced at the route boundary and again per workspace-scoped
   // operation. Keep this server-side; client filters are only UX hints.
@@ -2917,6 +3049,7 @@ function createApp() {
 
   app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
     try {
+      if (rateLimitBlocked(res, dispatchRateLimiter, req.userId || clientIpFromReq(req))) return;
       const { workspaceId, sessionId, content, threadParentId } = req.body || {};
       if (!workspaceId || !sessionId || !content) {
         return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
@@ -2959,6 +3092,10 @@ function createApp() {
 
   app.post('/backend/webhooks/:token', async (req, res) => {
     try {
+      // Unauthenticated endpoint: no userId/workspaceId is known before the token
+      // lookup, so rate-limit by caller IP (needs a trusted x-forwarded-for behind
+      // a proxy; falls back to the socket address).
+      if (rateLimitBlocked(res, webhookRateLimiter, clientIpFromReq(req))) return;
       const token = String(req.params.token || '');
       const rows = await getDb().unsafe(
         `select w.*,
@@ -3243,6 +3380,7 @@ function createApp() {
 
   app.post('/backend/ai-chat', requireAuth, async (req, res) => {
     try {
+      if (rateLimitBlocked(res, aiChatRateLimiter, req.userId || clientIpFromReq(req))) return;
       const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = req.body || {};
       if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
       await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');

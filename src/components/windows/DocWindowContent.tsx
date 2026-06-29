@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { sanitizeHtml, sanitizeClipboardHtml } from '@/lib/sanitize';
 
 interface DocWindowContentProps {
   document: Document;
@@ -130,9 +131,9 @@ function hydrateSketchCanvases(root: HTMLElement | null) {
         ? decodeURIComponent(block.dataset.spec)
         : specNode?.textContent || JSON.stringify(defaultGenerativeUiSpec());
       const spec = JSON.parse(rawSpec);
-      renderNode.innerHTML = renderGenerativeUiSpec(spec);
+      renderNode.innerHTML = sanitizeHtml(renderGenerativeUiSpec(spec));
     } catch {
-      renderNode.innerHTML = renderGenerativeUiSpec(defaultGenerativeUiSpec());
+      renderNode.innerHTML = sanitizeHtml(renderGenerativeUiSpec(defaultGenerativeUiSpec()));
     }
   });
 }
@@ -340,7 +341,7 @@ export function DocWindowContent({
   useEffect(() => {
     setTitle(doc.title);
     if (contentRef.current) {
-      contentRef.current.innerHTML = doc.content || '';
+      contentRef.current.innerHTML = sanitizeHtml(doc.content || '');
       hydrateSketchCanvases(contentRef.current);
     }
     lastSnapshotContentRef.current = doc.content || '';
@@ -349,7 +350,7 @@ export function DocWindowContent({
 
   const handleRestoreVersion = useCallback((version: DocumentVersion) => {
     if (contentRef.current) {
-      contentRef.current.innerHTML = version.content;
+      contentRef.current.innerHTML = sanitizeHtml(version.content);
       hydrateSketchCanvases(contentRef.current);
     }
     setTitle(version.title);
@@ -541,6 +542,22 @@ export function DocWindowContent({
     if (imageFiles.length > 0) {
       e.preventDefault();
       await handleImageInsert(imageFiles);
+      return;
+    }
+
+    // Sanitize any pasted rich text/HTML before it lands in the contenteditable.
+    const html = e.clipboardData.getData('text/html');
+    if (html) {
+      e.preventDefault();
+      document.execCommand('insertHTML', false, sanitizeClipboardHtml(html));
+      handleContentInput();
+      return;
+    }
+    const text = e.clipboardData.getData('text/plain');
+    if (text) {
+      e.preventDefault();
+      document.execCommand('insertText', false, text);
+      handleContentInput();
     }
   };
 

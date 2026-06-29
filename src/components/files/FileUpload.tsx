@@ -12,6 +12,7 @@ import {
   Upload,
 } from 'lucide-react';
 import type { UploadedFile } from '../../types';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
@@ -26,6 +27,82 @@ interface FileUploadProps {
   files: UploadedFile[];
   onUpload: (files: File[]) => void;
   onDelete: (id: string) => void;
+}
+
+// --- Client-side upload validation -----------------------------------------
+//
+// SECURITY NOTE: this is a client-side guard for UX and casual misuse only and
+// is trivially bypassable. The SERVER-SIDE upload handler MUST independently
+// enforce the same MIME allowlist and size caps (and ideally sniff content),
+// since browser-reported `file.type` is untrusted and easily spoofed. That
+// back-end enforcement is owned by another track — this note is the handoff.
+const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB per file
+const MAX_TOTAL_BYTES = 100 * 1024 * 1024; // 100 MB per upload batch
+
+// Allowlist keyed by extension -> acceptable MIME types. One extension can
+// legitimately map to several (or be reported as ""), so we validate the
+// extension first and only cross-check `file.type` when the browser supplies
+// a non-empty value. NOTE: archives (zip/tar) are intentionally excluded even
+// though getFileIcon() can render them — the app advertises "PDF, images,
+// text, and code", so we keep the allowlist to images/pdf/text/code/docs.
+const ALLOWED_EXTENSIONS: Record<string, string[]> = {
+  // Images
+  png: ['image/png'],
+  jpg: ['image/jpeg'],
+  jpeg: ['image/jpeg'],
+  gif: ['image/gif'],
+  webp: ['image/webp'],
+  svg: ['image/svg+xml'],
+  bmp: ['image/bmp', 'image/x-ms-bmp'],
+  // Documents
+  pdf: ['application/pdf'],
+  doc: ['application/msword'],
+  docx: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  xls: ['application/vnd.ms-excel'],
+  xlsx: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ppt: ['application/vnd.ms-powerpoint'],
+  pptx: ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  // Text / data
+  txt: ['text/plain'],
+  md: ['text/markdown', 'text/plain', 'text/x-markdown'],
+  csv: ['text/csv', 'application/vnd.ms-excel'],
+  rtf: ['application/rtf', 'text/rtf'],
+  // Code (browsers often report "" or text/plain for these)
+  json: ['application/json', 'text/json', 'text/plain'],
+  js: ['text/javascript', 'application/javascript', 'text/plain'],
+  mjs: ['text/javascript', 'application/javascript', 'text/plain'],
+  ts: ['text/typescript', 'application/typescript', 'video/mp2t', 'text/plain'],
+  tsx: ['text/plain'],
+  jsx: ['text/plain'],
+  html: ['text/html'],
+  css: ['text/css', 'text/plain'],
+  xml: ['application/xml', 'text/xml'],
+  yml: ['text/yaml', 'application/yaml', 'text/plain'],
+  yaml: ['text/yaml', 'application/yaml', 'text/plain'],
+};
+
+function getExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/** Returns an error string if the file is rejected, or null if it passes. */
+function validateFile(file: File): string | null {
+  const ext = getExtension(file.name);
+  const allowedMimes = ALLOWED_EXTENSIONS[ext];
+
+  if (!ext || !allowedMimes) {
+    return `"${file.name}" has an unsupported file type.`;
+  }
+  // Only cross-check the browser-provided MIME when it is present. An empty
+  // `file.type` is common for code/text files and must NOT cause a rejection.
+  if (file.type && !allowedMimes.includes(file.type)) {
+    return `"${file.name}" — file type "${file.type}" does not match its .${ext} extension.`;
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    return `"${file.name}" is too large (max ${formatBytes(MAX_FILE_BYTES)} per file).`;
+  }
+  return null;
 }
 
 function formatBytes(bytes: number) {
@@ -50,7 +127,35 @@ export function FileUpload({ files, onUpload, onDelete }: FileUploadProps) {
   const [dragging, setDragging] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [search, setSearch] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Validate a batch, upload only the files that pass, and surface a clear
+  // error for any that are rejected. All-valid batches behave exactly as before.
+  const processUpload = useCallback((incoming: File[]) => {
+    if (incoming.length === 0) return;
+
+    const accepted: File[] = [];
+    const errors: string[] = [];
+    let runningTotal = 0;
+
+    for (const file of incoming) {
+      const reason = validateFile(file);
+      if (reason) {
+        errors.push(reason);
+        continue;
+      }
+      if (runningTotal + file.size > MAX_TOTAL_BYTES) {
+        errors.push(`"${file.name}" skipped — exceeds the ${formatBytes(MAX_TOTAL_BYTES)} total upload limit.`);
+        continue;
+      }
+      runningTotal += file.size;
+      accepted.push(file);
+    }
+
+    setUploadError(errors.length > 0 ? errors.join(' ') : null);
+    if (accepted.length > 0) onUpload(accepted);
+  }, [onUpload]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -64,14 +169,15 @@ export function FileUpload({ files, onUpload, onDelete }: FileUploadProps) {
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const dropped = Array.from(e.dataTransfer.files);
-    if (dropped.length > 0) onUpload(dropped);
-  }, [onUpload]);
+    processUpload(Array.from(e.dataTransfer.files));
+  }, [processUpload]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      onUpload(Array.from(e.target.files));
+      processUpload(Array.from(e.target.files));
     }
+    // Reset so re-selecting the same file still fires onChange.
+    e.target.value = '';
   };
 
   const filteredFiles = files.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
@@ -145,9 +251,15 @@ export function FileUpload({ files, onUpload, onDelete }: FileUploadProps) {
             </span>
             <div>
               <p className="text-sm font-medium">{dragging ? 'Drop files here' : 'Drag and drop files'}</p>
-              <p className="text-xs text-muted-foreground">PDF, images, text, and code</p>
+              <p className="text-xs text-muted-foreground">PDF, images, text, and code — up to {formatBytes(MAX_FILE_BYTES)} each</p>
             </div>
           </div>
+
+          {uploadError && (
+            <Alert variant="destructive">
+              <AlertDescription>{uploadError}</AlertDescription>
+            </Alert>
+          )}
 
           {filteredFiles.length === 0 && files.length > 0 ? (
             <Empty className="min-h-40 border-0">

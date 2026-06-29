@@ -1778,13 +1778,13 @@ function AgentProfileSidePanel({
   connections,
   lookupKey,
   onClose,
-  onUpdateAgent: _onUpdateAgent,
 }: {
   agent: WorkspaceAgent | null;
   participant: ChannelParticipant | null;
   connections: AgentConnection[];
   lookupKey?: string | null;
   onClose: () => void;
+  // Accepted for API compatibility with the caller but not consumed here.
   onUpdateAgent?: (id: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
 }) {
   const handle = agent?.handle || participant?.handle || (agent ? agentHandle(agent) : normalizeAgentLookupKey(participant?.name));

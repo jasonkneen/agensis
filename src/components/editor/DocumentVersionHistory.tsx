@@ -1,6 +1,7 @@
 import { History, RotateCcw, X } from 'lucide-react';
 import type { DocumentVersion } from '../../types';
 import { stripHtml } from '../../lib/utils';
+import { sanitizeHtml } from '@/lib/sanitize';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
@@ -29,7 +30,7 @@ function formatTime(iso: string): string {
 }
 
 function contentPreview(content: string): string {
-  const plain = stripHtml(content).trim();
+  const plain = stripHtml(sanitizeHtml(content)).trim();
   if (plain.length <= 80) return plain;
   return plain.slice(0, 80) + '...';
 }
@@ -90,7 +91,7 @@ export function DocumentVersionHistory({
                   </ItemContent>
                 )}
                 <ItemActions className="mt-2">
-                  <Button type="button" variant="outline" size="xs" onClick={() => onRestore(version)}>
+                  <Button type="button" variant="outline" size="xs" onClick={() => onRestore({ ...version, content: sanitizeHtml(version.content) })}>
                     <RotateCcw data-icon="inline-start" className="size-3" />
                     Restore
                   </Button>

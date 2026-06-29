@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
+import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
@@ -53,41 +54,40 @@ export function useChat(workspaceId: string | null) {
     else setMessages([]);
   }, [activeSession, fetchMessages]);
 
-  useEffect(() => {
-    if (!activeSession?.id) return;
-    const sessionId = activeSession.id;
-    const channel = backendClient
-      .channel(`messages:${sessionId}`)
-      .on(
-        'db_changes',
-        { event: '*', schema: 'public', table: 'messages', filter: `session_id=eq.${sessionId}` },
-        (payload: { eventType?: string; new?: Message; old?: Partial<Message> }) => {
-          if (payload.eventType === 'INSERT') {
-            const row = payload.new;
-            if (!row) return;
-            setMessages(prev => {
-              const normalized = normalizeMessage(row);
-              const next = prev.some(message => message.id === row.id)
-                ? prev.map(message => message.id === row.id ? { ...message, ...normalized } : message)
-                : [...prev, normalized];
-              return next.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new;
-            if (!row) return;
-            setMessages(prev => prev.map(message => message.id === row.id ? normalizeMessage(row) : message));
-          } else if (payload.eventType === 'DELETE') {
-            const row = payload.old;
-            if (!row?.id) return;
-            setMessages(prev => prev.filter(message => message.id !== row.id));
-          }
-        },
-      )
-      .subscribe();
-    return () => {
-      backendClient.removeChannel(channel);
-    };
-  }, [activeSession?.id]);
+  const messageDeduper = useRealtimeDeduper();
+  const sessionId = activeSession?.id ?? null;
+  useTableSubscription<Message>(
+    {
+      enabled: !!sessionId,
+      channelName: `messages:${sessionId}`,
+      table: 'messages',
+      event: '*',
+      schema: 'public',
+      filter: `session_id=eq.${sessionId}`,
+    },
+    (payload) => {
+      if (!messageDeduper.shouldProcess(payload)) return;
+      if (payload.eventType === 'INSERT') {
+        const row = payload.new;
+        if (!row) return;
+        setMessages(prev => {
+          const normalized = normalizeMessage(row);
+          const next = prev.some(message => message.id === row.id)
+            ? prev.map(message => message.id === row.id ? { ...message, ...normalized } : message)
+            : [...prev, normalized];
+          return next.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        });
+      } else if (payload.eventType === 'UPDATE') {
+        const row = payload.new;
+        if (!row) return;
+        setMessages(prev => prev.map(message => message.id === row.id ? normalizeMessage(row) : message));
+      } else if (payload.eventType === 'DELETE') {
+        const row = payload.old;
+        if (!row?.id) return;
+        setMessages(prev => prev.filter(message => message.id !== row.id));
+      }
+    },
+  );
 
   const createSession = useCallback(async (model = 'auto', initial: Partial<ChatSession> = {}) => {
     if (!workspaceId) return null;

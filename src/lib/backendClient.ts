@@ -124,21 +124,18 @@ function realtimeDisabledOnThisHost() {
   return !isLoopbackHost(hostname);
 }
 
+// H3: the auth token is NOT embedded in the WS URL (it would leak to browser
+// history / proxy logs). It is sent as the first `{ type: 'auth', token }` frame
+// once the socket opens — see RealtimeManager's open handler.
 function getWsUrl() {
-  const token = getStoredSession()?.access_token;
-  const withToken = (url: string) => {
-    if (!token) return url;
-    const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}token=${encodeURIComponent(token)}`;
-  };
   if (BACKEND_BASE) {
-    return withToken(`${BACKEND_BASE.replace(/^http/, 'ws')}/backend/ws`);
+    return `${BACKEND_BASE.replace(/^http/, 'ws')}/backend/ws`;
   }
   if (typeof window !== 'undefined') {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return withToken(`${wsProtocol}//${window.location.host}/backend/ws`);
+    return `${wsProtocol}//${window.location.host}/backend/ws`;
   }
-  return withToken('/backend/ws');
+  return '/backend/ws';
 }
 
 function getStoredSession(): SessionLike | null {
@@ -345,19 +342,31 @@ class RealtimeManager {
     }
 
     this.socket.addEventListener('open', () => {
-      this.reconnectAttempts = 0;
-      this.unavailableUntil = 0;
-      this.permanentlyUnavailable = false;
-      this.flushPending();
-      for (const channel of this.channels) {
-        channel.resubscribe();
-        channel.notifyStatus('SUBSCRIBED');
+      // H3: authenticate via a first frame instead of a token in the URL. Channel
+      // (re)subscription is deferred until the server acknowledges auth (see the
+      // 'authenticated' branch in the message handler) so we never push
+      // subscriptions onto an unauthenticated socket.
+      const token = getStoredSession()?.access_token;
+      if (token) {
+        try {
+          this.socket?.send(JSON.stringify({ type: 'auth', token }));
+        } catch {
+          // socket went away between open and send — close will trigger reconnect
+        }
+        return;
       }
+      // No token (e.g. signed-out): proceed without auth; the server will close
+      // the socket if authentication is required.
+      this.onAuthenticated();
     });
 
     this.socket.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(String(event.data || '{}'));
+        if (message?.type === 'system' && message?.event === 'authenticated') {
+          this.onAuthenticated();
+          return;
+        }
         for (const channel of this.channels) {
           channel.handleMessage(message);
         }
@@ -389,6 +398,20 @@ class RealtimeManager {
         this.ensureConnected();
       }, delay);
     });
+  }
+
+  // Runs once the socket is usable: either the server acknowledged the auth frame
+  // ('authenticated' system message) or there is no token to send. Flushes queued
+  // messages and (re)subscribes every channel.
+  private onAuthenticated() {
+    this.reconnectAttempts = 0;
+    this.unavailableUntil = 0;
+    this.permanentlyUnavailable = false;
+    this.flushPending();
+    for (const channel of this.channels) {
+      channel.resubscribe();
+      channel.notifyStatus('SUBSCRIBED');
+    }
   }
 
   register(channel: LocalChannel) {

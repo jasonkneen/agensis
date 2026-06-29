@@ -45,6 +45,8 @@ import {
 } from './components/ui/dropdown-menu';
 import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
+import { TooltipProvider } from './components/ui/tooltip';
+import { Toaster } from './components/ui/sonner';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
@@ -56,7 +58,7 @@ import { useMemory } from './hooks/useMemory';
 import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
-import { useWindows } from './hooks/useWindows';
+import { WindowManagerProvider, useWindowManager } from './providers/WindowManagerProvider';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
 import { useSharing } from './hooks/useSharing';
@@ -64,10 +66,11 @@ import { useCanvasObjects } from './hooks/useCanvasObjects';
 import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
-import { useWorkspaceContext } from './hooks/useWorkspaceContext';
 import { useAgents } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
+import { useWorkspacePresence, windowLabel, type WorkspacePresenceUser } from './hooks/useWorkspacePresence';
+import { useWorkspaceKnowledge, type WorkspaceContextCounts } from './hooks/useWorkspaceKnowledge';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
@@ -84,27 +87,6 @@ const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
 
 type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
-type WorkspaceContextCounts = {
-  docs: number;
-  facts: number;
-  tasks: number;
-  agents: number;
-  skills: number;
-  commands: number;
-  tools: number;
-  webhooks: number;
-};
-type WorkspacePresenceUser = {
-  id: string;
-  name: string;
-  color: string;
-  kind?: 'user' | 'agent';
-  status?: string;
-  isCurrentUser?: boolean;
-  activityItems?: string[];
-  windows?: FloatingWindow[];
-};
-
 function normalizeAgentLookupKey(value?: string | null) {
   return (value || '').trim().replace(/^@+/, '').toLowerCase();
 }
@@ -154,61 +136,6 @@ function loadPresenceFavorites(): string[] {
   } catch {
     return [];
   }
-}
-
-function countLabel(value: number, singular: string, plural = `${singular}s`) {
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function uniqueTokens(values: unknown[]) {
-  return new Set(values.map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean));
-}
-
-function buildContextCounts(
-  documents: Document[],
-  facts: MemoryFact[],
-  tasks: Task[],
-  agents: WorkspaceAgent[],
-  agentWebhooks: AgentWebhook[],
-  capabilities: SystemCapabilities | null,
-): WorkspaceContextCounts {
-  const openTaskCount = tasks.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
-  const availableLibraries = capabilities?.skills.filter(skill => skill.available) || [];
-  const detectedSkillCount = availableLibraries
-    .filter(skill => skill.type === 'skills' || skill.type === 'agents')
-    .reduce((total, skill) => total + skill.count, 0);
-  const commandLibraryCount = availableLibraries
-    .filter(skill => skill.type === 'commands')
-    .reduce((total, skill) => total + skill.count, 0);
-  const selectedAgentSkills = uniqueTokens(agents.flatMap(agent => agent.skills || []));
-  const selectedAgentTools = uniqueTokens(agents.flatMap(agent => agent.tools || []));
-  const availableCommandCount = capabilities?.clis.filter(cli => cli.available).length || 0;
-  const availablePackageCount = capabilities?.packages.filter(pkg => pkg.available).length || 0;
-  const codexAppServerCount = capabilities?.codexAppServer.available ? 1 : 0;
-
-  return {
-    docs: documents.length,
-    facts: facts.length,
-    tasks: openTaskCount,
-    agents: agents.length,
-    skills: detectedSkillCount + selectedAgentSkills.size,
-    commands: availableCommandCount + commandLibraryCount,
-    tools: availablePackageCount + codexAppServerCount + selectedAgentTools.size,
-    webhooks: agentWebhooks.filter(webhook => webhook.enabled).length,
-  };
-}
-
-function formatContextTitle(counts: WorkspaceContextCounts) {
-  return [
-    countLabel(counts.docs, 'document'),
-    countLabel(counts.facts, 'memory fact'),
-    countLabel(counts.tasks, 'open task'),
-    countLabel(counts.agents, 'agent'),
-    countLabel(counts.skills, 'skill'),
-    countLabel(counts.commands, 'command'),
-    countLabel(counts.tools, 'tool'),
-    countLabel(counts.webhooks, 'enabled webhook'),
-  ].join(', ');
 }
 
 const CONTEXT_COUNT_ITEMS: Array<{
@@ -332,6 +259,14 @@ First ask one concise question if the applet idea is missing. If I provide a spe
 }
 
 export default function App() {
+  return (
+    <WindowManagerProvider>
+      <AppContent />
+    </WindowManagerProvider>
+  );
+}
+
+function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
@@ -381,7 +316,7 @@ export default function App() {
     applyThemePreset(settings.ui_theme_preset);
   }, []);
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
-  const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindows();
+  const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
   const { cursors } = useMultiplayerCursors(
     activeWorkspaceId,
@@ -406,69 +341,15 @@ export default function App() {
   const {
     connections: agentConnections,
   } = useAgentConnections(activeWorkspaceId || null);
-  const workspacePresenceUsers = useMemo<WorkspacePresenceUser[]>(() => {
-    const byId = new Map<string, WorkspacePresenceUser>();
-    if (user) {
-      byId.set(user.id, {
-        id: user.id,
-        name: user.email?.split('@')[0] || 'You',
-        color: colorFromSeed(user.id),
-        isCurrentUser: true,
-      });
-    }
-    cursors.forEach(cursor => {
-      if (!byId.has(cursor.id)) {
-        byId.set(cursor.id, {
-          id: cursor.id,
-          name: cursor.name,
-          color: cursor.color,
-          isCurrentUser: false,
-        });
-      }
-    });
-    itemPresence.remotePresenceUsers.forEach(remote => {
-      const existing = byId.get(remote.userId);
-      const visibleWindows = remote.windows.filter(win => !win.isPrivate);
-      const activityItems = remote.items
-        .map(item => {
-          if (item.type === 'document') {
-            const doc = documents.find(d => d.id === item.itemId);
-            return doc ? `Doc: ${doc.title}` : 'Document';
-          }
-          const session = sessions.find(s => s.id === item.itemId);
-          return session ? `Channel: ${session.title}` : 'Channel';
-        })
-        .slice(0, 4);
-      byId.set(remote.userId, {
-        id: remote.userId,
-        name: existing?.name || remote.name,
-        color: existing?.color || remote.color,
-        isCurrentUser: existing?.isCurrentUser,
-        activityItems: activityItems.length > 0 ? activityItems : visibleWindows.slice(0, 4).map(win => windowLabel(win)),
-        windows: visibleWindows,
-      });
-    });
-    agentConnections
-      .filter(connection => connection.status !== 'offline')
-      .forEach(connection => {
-        const agent = agents.find(item => item.id === connection.agent_id);
-        const id = `agent:${connection.agent_id || connection.id}`;
-        byId.set(id, {
-          id,
-          name: agent?.name || connection.name || connection.handle,
-          color: colorFromSeed(id),
-          kind: 'agent',
-          status: connection.status,
-          activityItems: [
-            connection.status === 'busy' ? 'Running a job' : 'Connected daemon',
-            connection.host ? `Host: ${connection.host}` : '',
-            connection.cwd ? `Folder: ${connection.cwd}` : '',
-          ].filter(Boolean).slice(0, 3),
-          windows: [],
-        });
-      });
-    return Array.from(byId.values());
-  }, [agentConnections, agents, cursors, documents, itemPresence.remotePresenceUsers, sessions, user]);
+  const workspacePresenceUsers = useWorkspacePresence({
+    user,
+    cursors,
+    remotePresenceUsers: itemPresence.remotePresenceUsers,
+    documents,
+    sessions,
+    agentConnections,
+    agents,
+  });
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
     const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';
@@ -560,16 +441,10 @@ export default function App() {
     };
   }, [capabilityWorkspacePath]);
 
-  const contextCounts = useMemo(
-    () => buildContextCounts(documents, facts, tasks, agents, agentWebhooks, systemCapabilities),
-    [documents, facts, tasks, agents, agentWebhooks, systemCapabilities],
-  );
-  const contextCountsTitle = useMemo(() => formatContextTitle(contextCounts), [contextCounts]);
-
-  const { buildSnapshot: buildWorkspaceContext } = useWorkspaceContext({
+  const { contextCounts, contextCountsTitle, buildWorkspaceContext } = useWorkspaceKnowledge({
     workspaceName: activeWorkspace?.name || 'Workspace',
     documents,
-    memoryFacts: facts,
+    facts,
     tasks,
     canvasObjects,
     agents,
@@ -1029,6 +904,7 @@ export default function App() {
   }
 
   return (
+    <TooltipProvider>
     <div className="relative flex h-screen overflow-hidden bg-background">
       <img
         src={workspaceBackdropImage}
@@ -1366,6 +1242,8 @@ export default function App() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    <Toaster />
+    </TooltipProvider>
   );
 }
 
@@ -1837,25 +1715,6 @@ function ReadOnlyChatWindowContent({
       readOnly
     />
   );
-}
-
-function colorFromSeed(seed: string): string {
-  const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
-  }
-  return colors[Math.abs(hash) % colors.length];
-}
-
-function windowLabel(win: FloatingWindow): string {
-  if (win.type === 'chat') return `Channel: ${win.title}`;
-  if (win.type === 'document') return `Doc: ${win.title}`;
-  if (win.type === 'memory') return 'Memory';
-  if (win.type === 'tasks') return 'Tasks';
-  if (win.type === 'activity') return 'Activity';
-  if (win.type === 'agents') return 'AI Agents';
-  return win.title;
 }
 
 function WorkspacePresenceAvatars({

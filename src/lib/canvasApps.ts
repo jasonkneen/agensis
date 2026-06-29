@@ -235,13 +235,25 @@ function buildTaskKanbanAppHtml() {
       window.addEventListener("unhandledrejection", function (event) {
         post("agensis:crash", { message: String(event.reason && event.reason.message || event.reason || "Unhandled promise rejection") });
       });
+      // Inbound bridge from the host app. Treat every message as UNTRUSTED:
+      // (a) only accept messages from our embedding parent window,
+      // (b) require a well-formed object with a string type,
+      // (c) allowlist the permitted inbound message types and drop the rest,
+      // (d) never eval message content.
+      var INBOUND_TYPES = { "agensis:init": true };
       window.addEventListener("message", function (event) {
-        var msg = event.data || {};
-        if (msg.type !== "agensis:init") return;
-        tasks = Array.isArray(msg.payload.tasks) ? msg.payload.tasks : [];
-        agents = Array.isArray(msg.payload.agents) ? msg.payload.agents : [];
-        state = Object.assign({ agentRuns: [] }, msg.payload.state || {});
-        applyTheme(msg.payload.theme);
+        if (event.source !== window.parent) return;
+        var msg = event.data;
+        if (!msg || typeof msg !== "object" || typeof msg.type !== "string") return;
+        if (INBOUND_TYPES[msg.type] !== true) {
+          try { console.warn("[agensis-applet] dropped unknown bridge message", msg.type); } catch (e) {}
+          return;
+        }
+        var payload = (msg.payload && typeof msg.payload === "object") ? msg.payload : {};
+        tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+        agents = Array.isArray(payload.agents) ? payload.agents : [];
+        state = Object.assign({ agentRuns: [] }, payload.state || {});
+        applyTheme(payload.theme);
         render();
       });
       function setVar(name, value) {
@@ -270,6 +282,12 @@ function buildTaskKanbanAppHtml() {
         var open = tasks.filter(function (task) { return task.status !== "done" && task.status !== "cancelled"; }).length;
         document.getElementById("summary").textContent = tasks.length + " tasks, " + open + " open";
         var board = document.getElementById("board");
+        // INTENTIONAL full-HTML writes: this script runs inside the sandboxed
+        // applet iframe and renders its own (parent-provided) document. These
+        // innerHTML assignments are NOT routed through DOMPurify by design.
+        // Most dynamic values use .textContent; a few parent-provided values
+        // (e.g. agent.id, run.status) are interpolated with only partial
+        // escaping — acceptable ONLY because the frame is sandboxed.
         board.innerHTML = statuses.map(function (pair) {
           return '<section class="lane" data-status="' + pair[0] + '"><h2>' + pair[1] + ' (' + taskCount(pair[0]) + ')</h2><div class="cards"></div></section>';
         }).join("");

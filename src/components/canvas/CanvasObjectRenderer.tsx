@@ -224,8 +224,20 @@ function AppletObject({
         return;
       }
       if (message.type === 'agensis:updateTask') {
-        if (payload.id && payload.updates) {
-          onAppletUpdateTask?.(String(payload.id), payload.updates as Partial<Task>);
+        if (payload.id && payload.updates && typeof payload.updates === 'object') {
+          // Allowlist: only user-editable Task fields may be set by a sandboxed applet.
+          // Excludes ids, workspace_id, created_by, assignee_id, source_*, timestamps,
+          // version, and completed_at to prevent mass-assignment of privileged columns.
+          const APPLET_TASK_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'due_date'] as const;
+          const safeUpdates: Partial<Task> = {};
+          for (const key of APPLET_TASK_UPDATE_FIELDS) {
+            if (Object.prototype.hasOwnProperty.call(payload.updates, key)) {
+              (safeUpdates as Record<string, unknown>)[key] = payload.updates[key];
+            }
+          }
+          if (Object.keys(safeUpdates).length > 0) {
+            onAppletUpdateTask?.(String(payload.id), safeUpdates);
+          }
         }
         return;
       }

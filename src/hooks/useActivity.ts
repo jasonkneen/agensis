@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
+import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ActivityEvent, ActivityEventType } from '../types';
-import type { DbChangePayload } from '../types/realtime';
 
 export interface LogEventInput {
   event_type: ActivityEventType;
@@ -41,24 +41,23 @@ export function useActivity(workspaceId: string | null, userId?: string) {
     fetchEvents();
   }, [fetchEvents]);
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    const channel = backendClient
-      .channel(`activity:${workspaceId}`)
-      .on(
-        'db_changes',
-        { event: 'INSERT', schema: 'public', table: 'activity_events', filter: `workspace_id=eq.${workspaceId}` },
-        (payload: DbChangePayload<ActivityEvent>) => {
-          const row = payload.new;
-          if (!row) return;
-          setEvents(prev => prev.some(e => e.id === row.id) ? prev : [row, ...prev].slice(0, 100));
-        },
-      )
-      .subscribe();
-    return () => {
-      backendClient.removeChannel(channel);
-    };
-  }, [workspaceId]);
+  const deduper = useRealtimeDeduper();
+  useTableSubscription<ActivityEvent>(
+    {
+      enabled: !!workspaceId,
+      channelName: `activity:${workspaceId}`,
+      table: 'activity_events',
+      event: 'INSERT',
+      schema: 'public',
+      filter: `workspace_id=eq.${workspaceId}`,
+    },
+    (payload) => {
+      if (!deduper.shouldProcess(payload)) return;
+      const row = payload.new;
+      if (!row) return;
+      setEvents(prev => prev.some(e => e.id === row.id) ? prev : [row, ...prev].slice(0, 100));
+    },
+  );
 
   const logEvent = useCallback(async (input: LogEventInput) => {
     if (!workspaceId || !navigator.onLine) return;
