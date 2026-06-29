@@ -1278,6 +1278,76 @@ function pickAutoNextAgent(burst, rosterAgents, latestAuthorAgentId, autoRounds)
   return candidate;
 }
 
+// --- Context-aware auto-interject -------------------------------------------
+// In an 'auto' channel a human message with NO @mention can still draw a single
+// "watcher" agent in unprompted, when that agent is clearly relevant. A cheap
+// Haiku call is the relevance gate; it fails CLOSED (any error => no interject).
+const AUTO_INTERJECT_MODEL = 'claude-haiku-4-5';
+const WATCHER_HANDLES = new Set(['q', 'mills', 'research', 'scout']);
+
+function isWatcherAgent(agent) {
+  if (!agent) return false;
+  const handle = slugHandle(agent.handle || agent.name);
+  if (WATCHER_HANDLES.has(handle)) return true;
+  // Role heuristic: explicit "watcher" markers only — kept narrow on purpose so
+  // we never widen the candidate pool into ordinary participants.
+  const haystack = `${agent.description || ''} ${agent.system_prompt || ''} ${agent.soul || ''}`.toLowerCase();
+  return /\bwatch(?:er|ing)?\b/.test(haystack);
+}
+
+// Single cheap LLM call: decide whether ONE candidate watcher should interject.
+// Returns the chosen agent row or null. Never throws (fail closed).
+async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates }) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  const roster = candidates
+    .map((a) => `- @${slugHandle(a.handle || a.name)}: ${textFromValue(a.description || a.soul || a.name).slice(0, 160)}`)
+    .join('\n');
+  const prompt = [
+    'You route a team chat. A human just posted in a channel where NO agent was @mentioned.',
+    'Decide whether exactly ONE of these watcher agents should proactively chime in because it is clearly,',
+    'specifically relevant to the latest human message. Most messages need NO interjection — only pick an',
+    'agent when it would add real, on-topic value. When unsure, pick null.',
+    '',
+    'Watcher agents:',
+    roster,
+    '',
+    'Recent context (oldest first):',
+    contextLines || '(none)',
+    '',
+    `Latest human message:\n${humanMessage}`,
+    '',
+    'Respond with STRICT JSON only, no prose: {"agent": "<handle>" | null, "reason": "<short>"}',
+  ].join('\n');
+
+  let text;
+  try {
+    text = await runAnthropicCompletion({
+      model: AUTO_INTERJECT_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      memory: null,
+      documents: null,
+      workspaceContext: null,
+      agentContext: null,
+      workspaceId,
+    });
+  } catch (error) {
+    console.error('auto-interject relevance call failed', error?.message || error);
+    return null; // fail closed
+  }
+
+  try {
+    const match = String(text || '').match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]);
+    if (!parsed || parsed.agent == null) return null;
+    const handle = slugHandle(String(parsed.agent));
+    if (!handle) return null;
+    return candidates.find((a) => slugHandle(a.handle || a.name) === handle) || null;
+  } catch {
+    return null; // unparseable => fail closed
+  }
+}
+
 async function hasActiveBurstJob(sessionId, agentId) {
   const rows = await getDb().unsafe(
     `select id from agent_jobs where session_id = $1 and agent_id = $2 and status = 'running' limit 1`,
@@ -1422,12 +1492,13 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const sessionRows = await getDb().unsafe(
-        'select id, workspace_id, participants from chat_sessions where id = $1 limit 1',
+        'select id, workspace_id, participants, conversation_mode from chat_sessions where id = $1 limit 1',
         [sessionId],
       );
       const session = sessionRows[0];
       if (!session || String(session.workspace_id) !== String(workspaceId)) return;
       const maxTurns = 10;
+      const conversationMode = String(session.conversation_mode || 'mention');
       const directTarget = directAgentParticipantFromSession(session);
 
       const rows = await loadChannelMessages(sessionId, threadParentId);
@@ -1472,6 +1543,37 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
         if (target) {
           nextAgent = agents.find((agent) => (target.agentId && String(agent.id) === target.agentId)
             || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle)));
+        }
+      }
+      // Context-aware auto-interject (opt-in: conversation_mode === 'auto').
+      // SAFETY INVARIANTS:
+      //  - Only runs in 'auto' channels; 'mention' channels reach this point with
+      //    nextAgent === null and simply return below, exactly as before.
+      //  - Mention/direct/thread routing is resolved FIRST (above); auto is a pure
+      //    fallback when no explicit target exists, so @mentions keep priority.
+      //  - Fires ONLY when agentTurns === 0 (no agent has spoken in this burst yet).
+      //    That guarantees at most ONE auto-interjection per human message: once the
+      //    chosen watcher posts, the next loop/re-entry sees agentTurns >= 1 and skips.
+      //    It also means the latest author is the human (latestAuthorAgentId === ''),
+      //    so we never auto-pick the previous speaker or go back-to-back.
+      //  - Candidate pool = channel participant watchers only (never an outsider).
+      //  - Relevance is a single cheap Haiku call that fails CLOSED (no interject on
+      //    any LLM/parse error). At most one agent, or none.
+      //  - Auto turns are ordinary agent turns counted against maxTurns. An agent reply
+      //    is not a human message, so it never re-seeds the burst (startIdx tracks the
+      //    last role==='user' row) — no auto re-entry, no reply loops.
+      if (!nextAgent && conversationMode === 'auto' && agentTurns === 0 && latestAuthorAgentId === '') {
+        const candidates = [...participantAgentIds]
+          .map((id) => agents.find((agent) => String(agent.id) === id))
+          .filter(isWatcherAgent);
+        if (candidates.length > 0) {
+          const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
+          const contextLines = rows
+            .slice(Math.max(0, startIdx - 5), startIdx)
+            .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
+            .join('\n');
+          const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates });
+          if (watcher) nextAgent = watcher;
         }
       }
       if (!nextAgent) return;
@@ -1619,6 +1721,9 @@ async function handleAgentJobResult(ws, message) {
     );
     if (messageRows.length > 0) {
       notifyDbSubscribers('messages', 'UPDATE', messageRows);
+      // Daemon replies only ever land via this finalizing UPDATE (the INSERT was
+      // a "Thinking 0s" placeholder), so log the real reply to the Activity feed here.
+      void logMessageActivity(messageRows);
     }
   } else {
     const messageRows = await getDb().unsafe(
@@ -2166,9 +2271,76 @@ function matchesFilter(filter, row) {
   return String(row?.[parsed.column] ?? '') === parsed.value;
 }
 
+const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const workspaceIdBySessionCache = new Map();
+
+async function resolveWorkspaceIdForSession(sessionId) {
+  if (!sessionId) return null;
+  if (workspaceIdBySessionCache.has(sessionId)) return workspaceIdBySessionCache.get(sessionId);
+  try {
+    const rows = await getDb().unsafe(
+      'select workspace_id from chat_sessions where id = $1 limit 1',
+      [sessionId],
+    );
+    const workspaceId = rows[0]?.workspace_id || null;
+    if (workspaceId) workspaceIdBySessionCache.set(sessionId, workspaceId);
+    return workspaceId;
+  } catch (error) {
+    console.error('resolveWorkspaceIdForSession failed', error);
+    return null;
+  }
+}
+
+// Logs an `activity_events` row for each inserted/finalized chat message so it
+// surfaces in the Activity feed. Fire-and-forget; never blocks message delivery.
+async function logMessageActivity(rows) {
+  for (const message of rows) {
+    if (!message || typeof message !== 'object') continue;
+    // Skip the "Thinking 0s" placeholder agent rows — the real reply is logged
+    // when the message is finalized via UPDATE.
+    if (isAgentPlaceholder(message)) continue;
+    try {
+      const sessionId = message.session_id;
+      const workspaceId = await resolveWorkspaceIdForSession(sessionId);
+      if (!workspaceId) continue;
+      const role = message.role || '';
+      const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
+      const content = typeof message.content === 'string' ? message.content : '';
+      const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
+      const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
+      const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+      const metadata = {
+        session_id: sessionId,
+        role,
+        sender_kind: message.sender_kind || '',
+        sender_name: message.sender_name || '',
+        content,
+      };
+      const inserted = await getDb().unsafe(
+        `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+         values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
+         returning *`,
+        [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
+      );
+      if (inserted.length > 0) {
+        // table is 'activity_events' here, so this cannot re-trigger message logging.
+        notifyDbSubscribers('activity_events', 'INSERT', inserted);
+      }
+    } catch (error) {
+      console.error('logMessageActivity failed', error);
+    }
+  }
+}
+
 function notifyDbSubscribers(table, eventType, rows) {
   const rowList = Array.isArray(rows) ? rows : [];
   if (rowList.length === 0) return;
+
+  // Single chokepoint: every message INSERT spawns a companion activity event.
+  // Guard on table === 'messages' so the activity insert above cannot recurse.
+  if (table === 'messages' && eventType === 'INSERT') {
+    void logMessageActivity(rowList);
+  }
 
   if (table === 'workspace_agents') {
     refreshConnectedAgentConfigs(eventType, rowList);
@@ -2195,6 +2367,103 @@ function notifyDbSubscribers(table, eventType, rows) {
       }
     }
   }
+}
+
+// Default agents seeded into every brand-new workspace. Kept in sync with the
+// netlify backend (netlify/functions/backend.mjs).
+const DEFAULT_AGENT_SEEDS = [
+  {
+    name: 'Scout',
+    handle: 'scout',
+    run_mode: 'builtin',
+    avatar: 'SC',
+    description: 'Codebase navigator.',
+    system_prompt:
+      "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Research',
+    handle: 'research',
+    run_mode: 'builtin',
+    avatar: 'RE',
+    description: 'Web and information researcher.',
+    system_prompt:
+      "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Coder',
+    handle: 'coder',
+    run_mode: 'daemon',
+    avatar: 'CO',
+    description: 'Coding agent (local daemon).',
+    system_prompt:
+      "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Q',
+    handle: 'q',
+    run_mode: 'daemon',
+    avatar: 'Q',
+    description: 'Tooling agent.',
+    system_prompt:
+      "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Mills',
+    handle: 'mills',
+    run_mode: 'daemon',
+    avatar: 'MI',
+    description: 'Skills agent.',
+    system_prompt:
+      "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
+  },
+];
+
+// Insert the default agents for a freshly created workspace. Idempotent: skips
+// entirely when the workspace already has any agents, so existing workspaces and
+// repeated calls never produce duplicates.
+async function seedDefaultAgents(workspaceId, ownerUserId) {
+  if (!workspaceId) return;
+  const db = getDb();
+  const existing = await db.unsafe(
+    'select count(*)::int as count from workspace_agents where workspace_id = $1',
+    [workspaceId],
+  );
+  if ((existing[0]?.count ?? 0) > 0) return;
+
+  const columns = [
+    'id', 'workspace_id', 'created_by', 'name', 'avatar', 'openpet_avatar_id',
+    'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
+    'handle', 'model', 'run_mode', 'permission_mode',
+  ];
+  const params = [];
+  const valueSql = DEFAULT_AGENT_SEEDS.map((seed) => {
+    const row = {
+      id: crypto.randomUUID(),
+      workspace_id: workspaceId,
+      created_by: ownerUserId ?? null,
+      name: seed.name,
+      avatar: seed.avatar,
+      openpet_avatar_id: '',
+      description: seed.description ?? '',
+      system_prompt: seed.system_prompt,
+      soul: '',
+      instructions: '',
+      tools: [],
+      skills: [],
+      handle: seed.handle,
+      model: 'auto',
+      run_mode: seed.run_mode,
+      permission_mode: 'default',
+    };
+    return `(${columns.map((column) => bindDbParam(params, 'workspace_agents', column, row[column])).join(', ')})`;
+  }).join(', ');
+
+  const inserted = await db.unsafe(
+    `insert into workspace_agents (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning *`,
+    params,
+  );
+  notifyDbSubscribers('workspace_agents', 'INSERT', inserted);
 }
 
 function relayBroadcast(channel, event, payload) {
@@ -2625,7 +2894,7 @@ function createApp() {
       }
       await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
       const sessionRows = await getDb().unsafe(
-        'select id, workspace_id, participants from chat_sessions where id = $1 limit 1',
+        'select id, workspace_id, participants, conversation_mode from chat_sessions where id = $1 limit 1',
         [sessionId],
       );
       if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
@@ -2639,7 +2908,11 @@ function createApp() {
       const threadTarget = mentions.length === 0 && threadParentId
         ? await inferThreadAgentTarget(sessionId, threadParentId)
         : null;
-      const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget);
+      // In 'auto' channels a plain human message (no mention/direct/thread target)
+      // still enters the orchestrator, which runs the context-aware auto-interject
+      // gate. 'mention' channels keep the original behaviour unchanged.
+      const autoMode = String(sessionRows[0].conversation_mode || 'mention') === 'auto';
+      const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget) || autoMode;
       if (!willDispatch) {
         return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
       }
@@ -2648,7 +2921,8 @@ function createApp() {
       // open for the whole multi-turn chain would block the user's UI.
       void continueConversation({ workspaceId, sessionId, threadParentId: threadParentId || null })
         .catch((error) => console.error('continueConversation (dispatch) failed', error));
-      return res.json({ data: { dispatched: true, mode: directTarget ? 'direct' : 'mention', mentions }, error: null });
+      const dispatchMode = directTarget ? 'direct' : (mentions.length > 0 || threadTarget ? 'mention' : 'auto');
+      return res.json({ data: { dispatched: true, mode: dispatchMode, mentions }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -2836,6 +3110,17 @@ function createApp() {
       );
 
       notifyDbSubscribers(table, 'INSERT', result);
+
+      if (table === 'workspaces') {
+        for (const row of result) {
+          try {
+            await seedDefaultAgents(row.id, row.user_id || req.userId);
+          } catch (seedError) {
+            console.error('seedDefaultAgents failed:', seedError);
+          }
+        }
+      }
+
       res.json({ data: single ? (result[0] ?? null) : result, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);

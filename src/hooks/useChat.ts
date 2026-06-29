@@ -231,7 +231,11 @@ export function useChat(workspaceId: string | null) {
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
-    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel));
+    // In an 'auto' channel, a plain message (no mention/thread/direct target) still
+    // dispatches so the server-side context-aware auto-interject gate can run.
+    // 'mention' channels keep the original mention-only routing.
+    const autoChannel = session.conversation_mode === 'auto';
+    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
 
     if (shouldRouteToAgent) {
       const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {

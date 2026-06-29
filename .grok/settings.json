@@ -1,3 +1,4 @@
 {
-  "model": "hermes-provider:openai-codex:gpt-5.5"
+  "model": "gpt-5.5",
+  "modelAdapterId": "openai.codex-app-server"
 }

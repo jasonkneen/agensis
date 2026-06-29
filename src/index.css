@@ -495,7 +495,9 @@
 :root[data-ui-theme="tinyworld"] .sidebar-search {
   position: relative;
   overflow: hidden;
-  border-color: color-mix(in srgb, var(--tw-control-outline) 36%, transparent) !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: var(--tw-control-outline) !important;
   color: var(--text-secondary) !important;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),

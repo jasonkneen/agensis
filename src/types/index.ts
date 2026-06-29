@@ -199,7 +199,8 @@ export type ActivityEventType =
   | 'chat_created'
   | 'memory_added'
   | 'member_joined'
-  | 'canvas_updated';
+  | 'canvas_updated'
+  | 'message_sent';
 
 export interface ActivityEvent {
   id: string;

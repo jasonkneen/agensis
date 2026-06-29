@@ -47,6 +47,8 @@ function iconFor(type: ActivityEventType): React.ReactNode {
       return <CheckCircle2 />;
     case 'chat_created':
       return <MessageSquare />;
+    case 'message_sent':
+      return <MessageSquare />;
     case 'memory_added':
       return <Brain />;
     case 'comment_created':

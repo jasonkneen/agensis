@@ -716,6 +716,139 @@ async function handleOAuthAuth() {
   return json({ data: { user, token: issueToken(user.id) }, error: null });
 }
 
+const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Logs an `activity_events` row for each inserted chat message so it surfaces in
+// the Activity feed. In prod the client inserts both user and assistant messages
+// through this route, so this captures both. Defensive: never breaks the insert.
+async function logMessageActivity(rows) {
+  for (const message of rows) {
+    if (!message || typeof message !== 'object') continue;
+    try {
+      const sessionId = message.session_id;
+      if (!sessionId) continue;
+      const sessionRows = await query('select workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
+      const workspaceId = sessionRows[0]?.workspace_id || null;
+      if (!workspaceId) continue;
+      const role = message.role || '';
+      const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
+      const content = typeof message.content === 'string' ? message.content : '';
+      const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
+      const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
+      const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+      const metadata = {
+        session_id: sessionId,
+        role,
+        sender_kind: message.sender_kind || '',
+        sender_name: message.sender_name || '',
+        content,
+      };
+      await query(
+        `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+         values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())`,
+        [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
+      );
+    } catch (error) {
+      console.error('logMessageActivity failed', error);
+    }
+  }
+}
+
+// Default agents seeded into every brand-new workspace. Kept in sync with the
+// local backend (server/index.cjs).
+const DEFAULT_AGENT_SEEDS = [
+  {
+    name: 'Scout',
+    handle: 'scout',
+    run_mode: 'builtin',
+    avatar: 'SC',
+    description: 'Codebase navigator.',
+    system_prompt:
+      "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Research',
+    handle: 'research',
+    run_mode: 'builtin',
+    avatar: 'RE',
+    description: 'Web and information researcher.',
+    system_prompt:
+      "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Coder',
+    handle: 'coder',
+    run_mode: 'daemon',
+    avatar: 'CO',
+    description: 'Coding agent (local daemon).',
+    system_prompt:
+      "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Q',
+    handle: 'q',
+    run_mode: 'daemon',
+    avatar: 'Q',
+    description: 'Tooling agent.',
+    system_prompt:
+      "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
+  },
+  {
+    name: 'Mills',
+    handle: 'mills',
+    run_mode: 'daemon',
+    avatar: 'MI',
+    description: 'Skills agent.',
+    system_prompt:
+      "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
+  },
+];
+
+// Insert the default agents for a freshly created workspace. Idempotent: skips
+// entirely when the workspace already has any agents, so existing workspaces and
+// repeated calls never produce duplicates.
+async function seedDefaultAgents(workspaceId, ownerUserId) {
+  if (!workspaceId) return;
+  const existing = await query(
+    'select count(*)::int as count from workspace_agents where workspace_id = $1',
+    [workspaceId],
+  );
+  if ((existing[0]?.count ?? 0) > 0) return;
+
+  const columns = [
+    'id', 'workspace_id', 'created_by', 'name', 'avatar', 'openpet_avatar_id',
+    'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
+    'handle', 'model', 'run_mode', 'permission_mode',
+  ];
+  const params = [];
+  const valueSql = DEFAULT_AGENT_SEEDS.map((seed) => {
+    const row = {
+      id: crypto.randomUUID(),
+      workspace_id: workspaceId,
+      created_by: ownerUserId ?? null,
+      name: seed.name,
+      avatar: seed.avatar,
+      openpet_avatar_id: '',
+      description: seed.description ?? '',
+      system_prompt: seed.system_prompt,
+      soul: '',
+      instructions: '',
+      tools: [],
+      skills: [],
+      handle: seed.handle,
+      model: 'auto',
+      run_mode: seed.run_mode,
+      permission_mode: 'default',
+    };
+    return `(${columns.map((column) => bindDbParam(params, 'workspace_agents', column, row[column])).join(', ')})`;
+  }).join(', ');
+
+  await query(
+    `insert into workspace_agents (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning *`,
+    params,
+  );
+}
+
 async function handleDb(pathname, req) {
   const body = await readBody(req);
 
@@ -744,6 +877,18 @@ async function handleDb(pathname, req) {
       `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(returning)}`,
       params,
     );
+    if (table === 'messages') {
+      await logMessageActivity(result);
+    }
+    if (table === 'workspaces') {
+      for (const row of result) {
+        try {
+          await seedDefaultAgents(row.id, row.user_id ?? null);
+        } catch (seedError) {
+          console.error('seedDefaultAgents failed', seedError);
+        }
+      }
+    }
     return json({ data: single ? (result[0] ?? null) : result, error: null });
   }
 
