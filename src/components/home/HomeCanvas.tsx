@@ -136,7 +136,7 @@ export function HomeCanvas({
 
         <div className="relative w-full">
           {showDocPicker && filteredDocs.length > 0 && (
-            <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-52 rounded-lg border bg-popover shadow-lg">
+            <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-64 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
               <CommandList className="max-h-52">
                 <CommandGroup heading="Link a document">
                   {filteredDocs.map(doc => (
