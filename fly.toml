@@ -12,7 +12,7 @@
 # Secrets live in `fly secrets`, NEVER in this file.
 
 app = "agensis-backend"
-primary_region = "iad"
+primary_region = "fra"
 
 [build]
   dockerfile = "Dockerfile.fly"
