@@ -92,7 +92,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <Badge asChild variant={!filterCategory ? 'default' : 'outline'} className="cursor-pointer">
+          <Badge asChild variant={!filterCategory ? 'default' : 'outline'} className="memory-filter-chip cursor-pointer">
             <button type="button" onClick={() => setFilterCategory(null)}>
               All
             </button>
@@ -102,7 +102,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
               key={category}
               asChild
               variant={filterCategory === category ? 'default' : 'outline'}
-              className="cursor-pointer"
+              className="memory-filter-chip cursor-pointer"
             >
               <button
                 type="button"
@@ -171,7 +171,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
                   </Item>
                 ) : (
                   <Item key={fact.id} variant="outline">
-                    <ItemMedia variant="icon" className="size-8 rounded-lg bg-muted">
+                    <ItemMedia variant="icon" className="size-9 rounded-xl bg-muted [&_svg]:size-5">
                       <Brain />
                     </ItemMedia>
                     <ItemContent className="min-w-0">
@@ -182,11 +182,11 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
                     </ItemContent>
                     <Badge variant="outline">{fact.category}</Badge>
                     <ItemActions>
-                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => handleEdit(fact)} aria-label="Edit memory">
-                        <Pencil />
+                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => handleEdit(fact)} aria-label="Edit memory">
+                        <Pencil className="size-4" />
                       </Button>
-                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => onDelete(fact.id)} aria-label="Delete memory">
-                        <Trash2 />
+                      <Button type="button" variant="ghost" size="icon-sm" onClick={() => onDelete(fact.id)} aria-label="Delete memory">
+                        <Trash2 className="size-4" />
                       </Button>
                     </ItemActions>
                   </Item>

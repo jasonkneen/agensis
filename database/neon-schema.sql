@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   name text NOT NULL,
   avatar text NOT NULL DEFAULT 'AI',
   openpet_avatar_id text DEFAULT '',
+  accent_color text DEFAULT '#00a95c',
   description text DEFAULT '',
   system_prompt text NOT NULL DEFAULT '',
   soul text DEFAULT '',

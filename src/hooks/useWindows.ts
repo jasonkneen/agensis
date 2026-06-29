@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
 import type { FloatingWindow, FloatingWindowType } from '../types';
+import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../lib/workspaceLayout';
 
-const WORKSPACE_WINDOW_MARGIN = 24;
-const WORKSPACE_WINDOW_EDGE_INSET = 8;
-const WORKSPACE_TOP_RESERVE = 56;
+const WORKSPACE_WINDOW_MARGIN = WORKSPACE_CHROME_GAP;
+const WORKSPACE_WINDOW_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 const TILE_TOLERANCE = 12;
@@ -78,7 +78,7 @@ function fitWindowSize(
 ): { width: number; height: number } {
   return {
     width: clampDimension(size.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - margin * 2)),
-    height: clampDimension(size.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - margin * 2)),
+    height: clampDimension(size.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - WORKSPACE_BOTTOM_RESERVE - margin * 2)),
   };
 }
 
@@ -105,7 +105,7 @@ function getSpawnPosition(
 
   const viewport = getWorkspaceViewportSize();
   const maxX = Math.max(0, viewport.width - size.width - WORKSPACE_WINDOW_MARGIN);
-  const maxY = Math.max(WORKSPACE_TOP_RESERVE, viewport.height - size.height - WORKSPACE_WINDOW_MARGIN);
+  const maxY = Math.max(WORKSPACE_TOP_RESERVE, viewport.height - WORKSPACE_BOTTOM_RESERVE - size.height - WORKSPACE_WINDOW_MARGIN);
   const minX = Math.min(WORKSPACE_WINDOW_MARGIN, maxX);
   const minY = Math.min(WORKSPACE_TOP_RESERVE, maxY);
   const baseX = clampNumber((viewport.width - size.width) / 2, minX, maxX);
@@ -123,7 +123,7 @@ function clampToViewport(bounds: WindowBounds) {
   const size = fitWindowSize(bounds, viewport, WORKSPACE_WINDOW_EDGE_INSET);
   const maxX = Math.max(WORKSPACE_WINDOW_EDGE_INSET, viewport.width - size.width - WORKSPACE_WINDOW_EDGE_INSET);
   const minY = WORKSPACE_TOP_RESERVE;
-  const maxY = Math.max(minY, viewport.height - size.height - WORKSPACE_WINDOW_EDGE_INSET);
+  const maxY = Math.max(minY, viewport.height - WORKSPACE_BOTTOM_RESERVE - size.height - WORKSPACE_WINDOW_EDGE_INSET);
 
   return {
     x: Math.round(clampNumber(bounds.x, WORKSPACE_WINDOW_EDGE_INSET, maxX)),
@@ -139,7 +139,7 @@ function getFullViewportBounds(): WindowBounds {
     x: WORKSPACE_WINDOW_EDGE_INSET,
     y: WORKSPACE_TOP_RESERVE,
     width: Math.round(Math.max(1, viewport.width - WORKSPACE_WINDOW_EDGE_INSET * 2)),
-    height: Math.round(Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - WORKSPACE_WINDOW_EDGE_INSET)),
+    height: Math.round(Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - WORKSPACE_BOTTOM_RESERVE - WORKSPACE_WINDOW_EDGE_INSET)),
   };
 }
 

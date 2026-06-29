@@ -31,6 +31,10 @@ import postgres from 'postgres';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', 'supabase', 'migrations');
+// Serializes concurrent `npm run migrate` runs (e.g. parallel deploys) via a
+// session-scoped Postgres advisory lock so two processes can't apply the same
+// migration at once.
+const MIGRATION_LOCK_KEY = 4242042042;
 
 async function main() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -48,6 +52,9 @@ async function main() {
   });
 
   try {
+    // Block until we hold the migration lock; released in finally (and implicitly
+    // by sql.end()). Prevents two runners racing the same pending migration.
+    await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
     // 1. Does the tracking table already exist? (Decides backfill behavior.)
     const trackingExisted = Boolean(
       (await sql`SELECT to_regclass('public._schema_migrations') AS reg`)[0].reg,
@@ -122,6 +129,7 @@ async function main() {
       console.log(`[migrate] Done. ${pending.length} applied this run.`);
     }
   } finally {
+    try { await sql`SELECT pg_advisory_unlock(${MIGRATION_LOCK_KEY})`; } catch { /* connection already closing */ }
     await sql.end({ timeout: 5 });
   }
 }

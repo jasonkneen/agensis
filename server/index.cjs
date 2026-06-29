@@ -493,6 +493,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
@@ -982,7 +983,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 async function verifyAgentConnectToken(token, req = null) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -993,7 +994,7 @@ async function verifyAgentConnectToken(token, req = null) {
     const { workspaceId, agentId } = agentIdsFromWsRequest(req);
     if (workspaceId && agentId) {
       const fallbackRows = await getDb().unsafe(
-        `select id, workspace_id, name, avatar, openpet_avatar_id, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
+        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -1689,6 +1690,27 @@ async function markAgentConnectionOffline(ws) {
   }
 }
 
+// On a fresh process there are no live sockets, so any agent_connections row still
+// marked online/busy is stale — left behind when a previous process restarted,
+// crashed, or was redeployed. Reset them so the UI doesn't report agents as
+// connected when they aren't. Best-effort: a brand-new DB may not have the table
+// yet (in which case there are no connections to reconcile anyway).
+async function reconcileAgentConnectionsAtStartup() {
+  try {
+    const rows = await getDb().unsafe(
+      `update agent_connections set status = 'offline', updated_at = now()
+       where status <> 'offline'
+       returning *`,
+    );
+    if (rows.length > 0) {
+      console.log(`[backend] reset ${rows.length} stale agent connection(s) to offline on startup`);
+      notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+    }
+  } catch (error) {
+    console.warn('[backend] startup agent-connection reconcile skipped:', error.message || error);
+  }
+}
+
 async function registerAgentConnection(ws, message) {
   const auth = ws.agentAuth;
   if (!auth) throw forbidden('Agent token is required');
@@ -2320,8 +2342,14 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
 }
 
 function sendWs(ws, message) {
-  if (ws.readyState === 1) {
+  if (ws.readyState !== 1) return;
+  // Drop instead of unbounded-buffering when a slow client backs up, and never let
+  // a broken-pipe send throw into the realtime loop (it would skip later clients).
+  if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > 4 * 1024 * 1024) return;
+  try {
     ws.send(JSON.stringify(message));
+  } catch {
+    // socket went away mid-send; its 'close' handler will clean up subscriptions
   }
 }
 
@@ -2479,6 +2507,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'scout',
     run_mode: 'builtin',
     avatar: 'SC',
+    accent_color: '#38bdf8',
     description: 'Codebase navigator.',
     system_prompt:
       "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
@@ -2488,6 +2517,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'research',
     run_mode: 'builtin',
     avatar: 'RE',
+    accent_color: '#a78bfa',
     description: 'Web and information researcher.',
     system_prompt:
       "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
@@ -2497,6 +2527,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'coder',
     run_mode: 'daemon',
     avatar: 'CO',
+    accent_color: '#00a95c',
     description: 'Coding agent (local daemon).',
     system_prompt:
       "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
@@ -2506,6 +2537,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'q',
     run_mode: 'daemon',
     avatar: 'Q',
+    accent_color: '#f59e0b',
     description: 'Tooling agent.',
     system_prompt:
       "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
@@ -2515,6 +2547,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'mills',
     run_mode: 'daemon',
     avatar: 'MI',
+    accent_color: '#f472b6',
     description: 'Skills agent.',
     system_prompt:
       "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
@@ -2535,7 +2568,7 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
 
   const columns = [
     'id', 'workspace_id', 'created_by', 'name', 'avatar', 'openpet_avatar_id',
-    'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
+    'accent_color', 'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
     'handle', 'model', 'run_mode', 'permission_mode',
   ];
   const params = [];
@@ -2547,6 +2580,7 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
       name: seed.name,
       avatar: seed.avatar,
       openpet_avatar_id: '',
+      accent_color: seed.accent_color,
       description: seed.description ?? '',
       system_prompt: seed.system_prompt,
       soul: '',
@@ -2638,6 +2672,10 @@ function attachRealtime(server) {
 
   wss.on('connection', (ws, req) => {
     ws.subscriptions = [];
+    // Liveness: the heartbeat interval below pings each socket and terminates any
+    // that miss a pong, so an ungraceful drop still fires 'close' (→ offline).
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
 
     // H3/H5 — two auth paths, both supported for a smooth deploy + the daemon CLI:
     //  (1) Query-param credentials, verified on connect: `agentToken=` (daemon CLI,
@@ -2757,6 +2795,23 @@ function attachRealtime(server) {
     });
   });
 
+  // Ping connected sockets every 30s; terminate any that didn't answer the previous
+  // ping. terminate() fires 'close', which marks the agent connection offline — this
+  // catches daemons that vanish without a clean disconnect (sleep, network loss,
+  // kill -9) and would otherwise show as "online" forever.
+  const livenessInterval = setInterval(() => {
+    for (const client of wss.clients) {
+      if (client.isAlive === false) {
+        client.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      try { client.ping(); } catch { /* socket already closing */ }
+    }
+  }, 30000);
+  livenessInterval.unref?.();
+  wss.on('close', () => clearInterval(livenessInterval));
+
   return wss;
 }
 
@@ -2866,6 +2921,10 @@ function createApp() {
       await enforceWorkspaceRole(req.userId, workspaceId, 'write');
       const id = crypto.randomUUID();
       const buffer = Buffer.from(contentBase64, 'base64');
+      const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB; matches the client FileUpload cap
+      if (buffer.length > MAX_UPLOAD_BYTES) {
+        return jsonError(res, 413, new Error('File exceeds the 25MB upload limit'));
+      }
       const storagePath = storagePathFor(workspaceId, id, name);
       const fullPath = resolveStoragePath(storagePath);
       fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -3470,6 +3529,7 @@ function startBackendServer(port = DEFAULT_PORT) {
   server.listen(port, '127.0.0.1', () => {
     console.log(`[backend] listening on http://127.0.0.1:${port}`);
   });
+  void reconcileAgentConnectionsAtStartup();
   server.on('close', () => {
     wss.close();
     websocketClients = new Set();

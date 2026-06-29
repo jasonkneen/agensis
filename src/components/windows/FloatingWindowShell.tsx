@@ -11,10 +11,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 
 const SNAP_THRESHOLD = 44;
-const MAXIMIZED_TOP_RESERVE = 56;
-const MAXIMIZED_EDGE_INSET = 8;
+const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
+const MAXIMIZED_BOTTOM_RESERVE = WORKSPACE_BOTTOM_RESERVE;
+const MAXIMIZED_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 
@@ -80,13 +82,32 @@ function getSidebarFallbackInset(): number {
 function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
   const viewport = getShellViewport(shell);
   const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - MAXIMIZED_EDGE_INSET * 2));
-  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - MAXIMIZED_TOP_RESERVE - MAXIMIZED_EDGE_INSET));
+  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - MAXIMIZED_TOP_RESERVE - MAXIMIZED_BOTTOM_RESERVE - MAXIMIZED_EDGE_INSET));
   return {
     x: Math.round(clampNumber(bounds.x, MAXIMIZED_EDGE_INSET, Math.max(MAXIMIZED_EDGE_INSET, viewport.width - width - MAXIMIZED_EDGE_INSET))),
-    y: Math.round(clampNumber(bounds.y, MAXIMIZED_TOP_RESERVE, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - height - MAXIMIZED_EDGE_INSET))),
+    y: Math.round(clampNumber(bounds.y, MAXIMIZED_TOP_RESERVE, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - MAXIMIZED_BOTTOM_RESERVE - height - MAXIMIZED_EDGE_INSET))),
     width,
     height,
   };
+}
+
+function getFullWindowBounds(shell: HTMLElement | null): WindowBounds {
+  const viewport = getShellViewport(shell);
+  return {
+    x: MAXIMIZED_EDGE_INSET,
+    y: MAXIMIZED_TOP_RESERVE,
+    width: Math.round(Math.max(1, viewport.width - MAXIMIZED_EDGE_INSET * 2)),
+    height: Math.round(Math.max(1, viewport.height - MAXIMIZED_TOP_RESERVE - MAXIMIZED_BOTTOM_RESERVE - MAXIMIZED_EDGE_INSET)),
+  };
+}
+
+function isFullWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): boolean {
+  const full = getFullWindowBounds(shell);
+  const tolerance = 2;
+  return Math.abs(bounds.x - full.x) <= tolerance
+    && Math.abs(bounds.y - full.y) <= tolerance
+    && Math.abs(bounds.width - full.width) <= tolerance
+    && Math.abs(bounds.height - full.height) <= tolerance;
 }
 
 function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow): WindowBounds {
@@ -209,7 +230,7 @@ function restoreBoundsForDrag(
 
   return clampWindowBounds({
     x: pointerX - width * pointerRatio,
-    y: Math.min(pointerY - 20, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - height - MAXIMIZED_EDGE_INSET)),
+    y: Math.min(pointerY - 20, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - MAXIMIZED_BOTTOM_RESERVE - height - MAXIMIZED_EDGE_INSET)),
     width,
     height,
   }, shell);
@@ -449,13 +470,14 @@ export function FloatingWindowShell({
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
   const displayBounds = getCurrentWindowBounds(shellRef.current, win);
+  const isFullView = isMaximized || isFullWindowBounds(displayBounds, shellRef.current);
   const shellStyle: React.CSSProperties = isMaximized
     ? {
         position: 'absolute',
         left: MAXIMIZED_EDGE_INSET,
         top: MAXIMIZED_TOP_RESERVE,
         width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px)`,
-        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + MAXIMIZED_EDGE_INSET}px)`,
+        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + MAXIMIZED_BOTTOM_RESERVE + MAXIMIZED_EDGE_INSET}px)`,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -493,17 +515,25 @@ export function FloatingWindowShell({
         ref={shellRef}
         data-floating-window
         data-floating-window-id={win.id}
+        data-window-view-mode={isFullView ? 'full' : 'floating'}
         onPointerDown={() => onFocus(win.id)}
-        className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/45 text-card-foreground shadow-xl backdrop-blur-xl"
+        className="flex flex-col overflow-visible rounded-lg text-card-foreground"
         style={shellStyle}
-      >
-      <div
-        onPointerDown={handleDragStart}
-        className={cn(
-          'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
-          canControl ? 'cursor-grab' : 'cursor-default',
-        )}
-      >
+        >
+        <div
+          data-window-surface
+          className={cn(
+            'flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border shadow-xl backdrop-blur-xl',
+            isFullView ? 'bg-card' : 'bg-card/45',
+          )}
+        >
+        <div
+          onPointerDown={handleDragStart}
+          className={cn(
+            'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
+            canControl ? 'cursor-grab' : 'cursor-default',
+          )}
+        >
         {titleIcon && (
           <span className="flex shrink-0 items-center text-muted-foreground">
             {titleIcon}
@@ -630,28 +660,30 @@ export function FloatingWindowShell({
         </div>
       </div>
 
-      <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
-        {privacyBlanked ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
-            <EyeOff className="size-6 text-muted-foreground" />
-            <div className="text-sm font-medium">Private window</div>
-            <div className="max-w-64 text-xs text-muted-foreground">
-              This user has blanked the contents of this window.
+        <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
+          {privacyBlanked ? (
+            <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
+              <EyeOff className="size-6 text-muted-foreground" />
+              <div className="text-sm font-medium">Private window</div>
+              <div className="max-w-64 text-xs text-muted-foreground">
+                This user has blanked the contents of this window.
+              </div>
             </div>
-          </div>
-        ) : children}
-      </div>
+          ) : children}
+        </div>
+        </div>
 
         {!isMaximized && (
           <div
+            data-window-resize-handle
             onPointerDown={handleResizeStart}
-            className="absolute right-0.5 bottom-0.5 z-10 size-6 cursor-nwse-resize bg-transparent text-muted-foreground touch-none"
+            className="absolute -right-3 -bottom-3 z-10 size-8 cursor-nwse-resize bg-transparent text-muted-foreground/70 touch-none"
           >
             <svg
               width="10"
               height="10"
               viewBox="0 0 10 10"
-              className="absolute right-1 bottom-1 opacity-30"
+              className="absolute right-2.5 bottom-2.5 opacity-50"
             >
               <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1" />
               <line x1="9" y1="4" x2="4" y2="9" stroke="currentColor" strokeWidth="1" />

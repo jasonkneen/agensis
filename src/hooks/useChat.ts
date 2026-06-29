@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
+import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -361,49 +362,58 @@ export function useChat(workspaceId: string | null) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';
+      let streamError = '';
+      let streamBuffer = '';
+
+      const consumeStreamData = (data: string) => {
+        if (data === '[DONE]') return;
+        try {
+          const parsed = JSON.parse(data);
+          const { text, error } = parseAiStreamPayload(parsed);
+          if (error) {
+            streamError = error;
+          }
+          if (text) {
+            fullContent += text;
+            setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: fullContent } : m));
+          }
+        } catch {
+          // Ignore malformed stream chunks and keep consuming the stream.
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            try {
-              const parsed = JSON.parse(data);
-              const delta = messageText(
-                parsed.delta?.text ??
-                parsed.choices?.[0]?.delta?.content ??
-                parsed.text ??
-                parsed.content ??
-                parsed.message,
-              );
-              if (delta) {
-                fullContent += delta;
-                setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: fullContent } : m));
-              }
-            } catch {
-              // Ignore malformed stream chunks and keep consuming the stream.
-            }
-          }
+        streamBuffer += decoder.decode(value, { stream: true });
+        const { data, remainder } = extractSseDataLines(streamBuffer);
+        streamBuffer = remainder;
+        data.forEach(consumeStreamData);
+      }
+
+      const flushed = decoder.decode();
+      if (flushed) streamBuffer += flushed;
+      if (streamBuffer) {
+        const { data } = extractSseDataLines(streamBuffer, true);
+        for (const item of data) {
+          consumeStreamData(item);
         }
       }
 
-      if (fullContent) {
-        const assistantInsert: Record<string, unknown> = {
-          id: assistantMsgId,
-          session_id: session.id,
-          role: 'assistant',
-          content: fullContent,
-          sender_kind: agent || directParticipant ? 'agent' : '',
-          sender_id: agent?.id || directParticipant?.agent_id || directParticipant?.handle || '',
-          sender_name: agent?.name || directParticipant?.name || directParticipant?.handle || '',
-        };
-        if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
-        await backendClient.from('messages').insert(assistantInsert);
-      }
+      const finalContent = finalAssistantStreamContent(fullContent, streamError);
+      setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: finalContent } : m));
+
+      const assistantInsert: Record<string, unknown> = {
+        id: assistantMsgId,
+        session_id: session.id,
+        role: 'assistant',
+        content: finalContent,
+        sender_kind: agent || directParticipant ? 'agent' : '',
+        sender_id: agent?.id || directParticipant?.agent_id || directParticipant?.handle || '',
+        sender_name: agent?.name || directParticipant?.name || directParticipant?.handle || '',
+      };
+      if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
+      await backendClient.from('messages').insert(assistantInsert);
     } catch (error) {
       // Unmount aborted the stream — the component is gone, skip all state writes.
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -562,33 +572,4 @@ function normalizeMessage(message: Message): Message {
     ...message,
     content: messageText(message.content),
   };
-}
-
-function messageText(value: unknown): string {
-  if (typeof value === 'string') {
-    return value === '[object Object]' ? 'Response could not be rendered as text.' : value;
-  }
-  if (value == null) return '';
-  if (Array.isArray(value)) return value.map(messageText).filter(Boolean).join('\n');
-  if (typeof value === 'object') {
-    const record = value as {
-      text?: unknown;
-      content?: unknown;
-      message?: unknown;
-      error?: unknown;
-      delta?: unknown;
-      output?: unknown;
-      response?: unknown;
-    };
-    for (const key of ['text', 'content', 'message', 'error', 'delta', 'output', 'response'] as const) {
-      const text = messageText(record[key]);
-      if (text) return text;
-    }
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return 'Response could not be rendered as text.';
-    }
-  }
-  return String(value);
 }

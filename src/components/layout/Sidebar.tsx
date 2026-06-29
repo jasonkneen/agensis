@@ -48,12 +48,18 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { isImageAvatar } from '../../lib/openpets';
+import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
+import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
+const COLLAPSED_SIDEBAR_WIDTH = 52;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
+const SIDEBAR_FRAME_STYLE: React.CSSProperties = {
+  marginTop: WORKSPACE_TOP_RESERVE,
+  height: `calc(100% - ${WORKSPACE_TOP_RESERVE + WORKSPACE_BOTTOM_RESERVE}px)`,
+};
 
 type SidebarAgentTarget = {
   id: string;
@@ -195,11 +201,12 @@ export function Sidebar({
   const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
   const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
-    const left = isCollapsed ? 68 : width + 16;
+    const sidebarFrameWidth = isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width;
+    const left = sidebarFrameWidth + WORKSPACE_CHROME_GAP * 2;
     document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
-    document.documentElement.style.setProperty('--workspace-viewport-top', '8px');
-    document.documentElement.style.setProperty('--workspace-viewport-right', '8px');
-    document.documentElement.style.setProperty('--workspace-viewport-bottom', '8px');
+    document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
+    document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
+    document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
   }, [collapsed]);
 
   React.useEffect(() => {
@@ -239,7 +246,8 @@ export function Sidebar({
     return (
       <aside
         data-sidebar-panel
-        className="sidebar-collapsed-panel m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl rounded-tl-none border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+        className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl rounded-tl-none border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+        style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH }}
       >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
           <PanelLeft />
@@ -306,8 +314,8 @@ export function Sidebar({
     <aside
       ref={sidebarRef}
       data-sidebar-panel
-      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl rounded-tl-none border border-border bg-card/45 text-card-foreground shadow-xl"
-      style={{ width: sidebarWidth }}
+      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl rounded-tl-none border border-border bg-card/45 text-card-foreground shadow-xl"
+      style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
     >
       <div className="px-2 pt-2 pb-3">
         <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
@@ -830,7 +838,8 @@ function DirectAgentRow({
   const status = agent.status || 'offline';
   const statusColor = status === 'online' ? 'bg-emerald-500' : status === 'busy' ? 'bg-amber-500' : 'bg-muted-foreground/40';
   const avatar = agent.avatar || null;
-  const avatarSrc = isImageAvatar(avatar) ? avatar : undefined;
+  const avatarSrc = avatar && isImageAvatar(avatar) ? renderablePetAssetUrl(avatar) : undefined;
+  const avatarIsSpritesheet = isPetSpritesheetAvatar(avatar);
   const profileEnabled = Boolean(agent.agentId || handle);
 
   return (
@@ -842,10 +851,18 @@ function DirectAgentRow({
       >
         <span className="relative flex size-7 shrink-0 items-center justify-center">
           <Avatar size="default" className="size-7 rounded-md bg-muted">
-            {avatarSrc && <AvatarImage src={avatarSrc} alt="" className="rounded-md" />}
-            <AvatarFallback className="rounded-md">
-              <Bot className="size-4" />
-            </AvatarFallback>
+            {avatarIsSpritesheet && avatar ? (
+              <span className="animated-pet-avatar-shell size-full rounded-md">
+                <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(avatar)})` }} />
+              </span>
+            ) : (
+              <>
+                {avatarSrc && <AvatarImage src={avatarSrc} alt="" className="rounded-md" />}
+                <AvatarFallback className="rounded-md">
+                  <Bot className="size-4" />
+                </AvatarFallback>
+              </>
+            )}
           </Avatar>
           <span className={`absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background ${statusColor}`} />
         </span>
@@ -915,9 +932,12 @@ function SidebarRailButton({
       title={typeof count === 'number' && count > 0 ? `${title} (${count})` : title}
     >
       {icon}
-      <span className="sidebar-rail-label">{title}</span>
+      <span className="sidebar-rail-label">
+        {title}
+        {typeof count === 'number' && count > 0 ? ` (${formatCount(count)})` : ''}
+      </span>
       {typeof count === 'number' && count > 0 && (
-        <span className="sidebar-rail-count">{formatCount(count)}</span>
+        <span className="sidebar-rail-count" aria-hidden />
       )}
     </Button>
   );

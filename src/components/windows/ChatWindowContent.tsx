@@ -43,6 +43,7 @@ import { ChatThreadPanel } from '../chat/ChatThreadPanel';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { apiAuthHeaders, apiUrl, backendClient, type SystemCapabilities } from '../../lib/backendClient';
+import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import type {
   CanvasGroup,
   CanvasObject,
@@ -128,6 +129,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
+import { agentAccentColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -685,6 +687,10 @@ export function ChatWindowContent({
     () => buildAgentAvatarLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
   );
+  const agentAccentLookup = useMemo(
+    () => buildAgentAccentLookup(agents, persistedParticipants),
+    [agents, persistedParticipants],
+  );
 
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
     if (channelMeta?.id) return channelMeta;
@@ -1048,6 +1054,7 @@ export function ChatWindowContent({
                         <ChatMessageBubble
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
+                          accent={resolveMessageAccent(msg, agentAccentLookup)}
                           isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
                           isEditing={editingMessageId === msg.id}
@@ -1353,6 +1360,7 @@ export function ChatWindowContent({
               parentMessage={parentMessage}
               threadMessages={visibleThreadMessages}
               streaming={streaming}
+              resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
               onClose={closeSidePanel}
               embedded
@@ -1497,6 +1505,7 @@ function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initial
 function ChatMessageBubble({
   msg,
   avatar,
+  accent,
   isStreaming,
   replyCount,
   isEditing,
@@ -1513,6 +1522,7 @@ function ChatMessageBubble({
 }: {
   msg: ChatMessage;
   avatar?: string;
+  accent?: string;
   isStreaming?: boolean;
   replyCount?: number;
   isEditing?: boolean;
@@ -1531,6 +1541,7 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
+  const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const initials = isUser ? 'You'.slice(0, 2).toUpperCase() : (senderName.slice(0, 2).toUpperCase() || 'AI');
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
@@ -1539,9 +1550,17 @@ function ChatMessageBubble({
     : '';
   const canOpenAgentProfile = msg.sender_kind === 'agent' && Boolean(msg.sender_id || msg.sender_name);
   const agentProfileKey = msg.sender_id || msg.sender_name || '';
+  const isAgentMessage = msg.sender_kind === 'agent' && Boolean(accent);
+  const accentStyle = isAgentMessage
+    ? ({ '--agent-accent': validAgentAccentColor(accent) } as React.CSSProperties & { '--agent-accent': string })
+    : undefined;
 
   return (
-    <div className="group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40">
+    <div
+      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40"
+      data-agent-message={isAgentMessage ? 'true' : undefined}
+      style={accentStyle}
+    >
       <div className="chat-message-avatar mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-[10px] font-semibold text-muted-foreground">
         <MessageAvatar avatar={avatar} initials={initials} isAgent={msg.sender_kind === 'agent' || msg.role === 'assistant'} />
       </div>
@@ -1551,12 +1570,13 @@ function ChatMessageBubble({
             <button
               type="button"
               className="truncate text-left text-sm font-semibold text-foreground underline-offset-2 hover:underline"
+              style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}
               onClick={() => onAgentProfile?.(agentProfileKey)}
             >
               {senderName}
             </button>
           ) : (
-            <span className="truncate text-sm font-semibold text-foreground">{senderName}</span>
+            <span className="truncate text-sm font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
           {timeLabel && <span className="shrink-0 text-xs text-muted-foreground">{timeLabel}</span>}
         </div>
@@ -1587,7 +1607,7 @@ function ChatMessageBubble({
                 Thinking
               </span>
             ) : (
-              <span className="text-muted-foreground">Message content is unavailable.</span>
+              <span className="text-muted-foreground">{unavailableMessage}</span>
             )}
             {artifact && <ChatArtifact artifact={artifact} />}
           </div>
@@ -1795,13 +1815,13 @@ function AgentProfileSidePanel({
   );
   const activeConnection = matchingConnections.find(connection => connection.status !== 'offline') || matchingConnections[0] || null;
   const status = activeConnection?.status || participant?.status || (agent?.run_mode === 'daemon' ? 'daemon' : 'built-in');
-  const description = agent?.description || agent?.soul || '';
-  const prompt = agent?.system_prompt || agent?.instructions || '';
-  const chips = [...normalizeStringList(agent?.tools), ...normalizeStringList(agent?.skills)];
+  const tools = normalizeStringList(agent?.tools);
+  const skills = normalizeStringList(agent?.skills);
+  const metadataRows = activeConnection ? agentConnectionMetadataRows(activeConnection.metadata) : [];
   const AvatarIcon = getAgentAvatarIcon(agent?.avatar);
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div className="flex h-full min-w-0 flex-col" style={agent ? agentAccentStyle(agent) : undefined}>
       <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Profile</span>
@@ -1811,7 +1831,7 @@ function AgentProfileSidePanel({
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <div className="flex flex-col items-center text-center">
-          <div className="grid size-20 place-items-center overflow-hidden rounded-2xl border bg-muted text-2xl font-semibold">
+          <div className="agent-profile-avatar grid size-20 place-items-center overflow-hidden rounded-2xl bg-muted text-2xl font-semibold">
             {agent?.avatar && isPetSpritesheetAvatar(agent.avatar) ? (
               <span className="animated-pet-avatar-shell size-full">
                 <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(agent.avatar)})` }} />
@@ -1832,41 +1852,69 @@ function AgentProfileSidePanel({
         </div>
 
         <div className="mt-5 space-y-3 text-sm">
-          <AgentProfileField label="Runtime" value={agent?.run_mode === 'daemon' || activeConnection ? 'Connected agent' : 'Built in'} />
-          <AgentProfileField label="Model" value={agent?.model || 'Auto'} />
+          <div className="grid grid-cols-2 gap-2">
+            <AgentProfileStat label="Runtime" value={agent?.run_mode === 'daemon' || activeConnection ? 'Connected' : 'Built in'} />
+            <AgentProfileStat label="Model" value={agent?.model || 'Auto'} />
+            <AgentProfileStat label="Mode" value={formatRunMode(agent?.run_mode)} />
+            <AgentProfileStat label="Access" value={formatPermissionMode(agent?.permission_mode)} />
+          </div>
+
+          <AgentProfileSection title="Identity">
+            <AgentProfileField label="Name" value={name} />
+            <AgentProfileField label="Handle" value={handle ? `@${handle}` : ''} />
+            <AgentProfileField label="Agent ID" value={agent?.id ? shortId(agent.id) : ''} title={agent?.id} />
+            <AgentProfileField label="Workspace ID" value={agent?.workspace_id ? shortId(agent.workspace_id) : ''} title={agent?.workspace_id} />
+            <AgentProfileField label="Version" value={agent?.version ? `v${agent.version}` : ''} />
+            <AgentProfileField label="Created" value={formatDateTime(agent?.created_at)} />
+            <AgentProfileField label="Updated" value={formatDateTime(agent?.updated_at)} />
+          </AgentProfileSection>
+
+          {participant && (
+            <AgentProfileSection title="Channel">
+              <AgentProfileField label="Participant ID" value={shortId(participant.id)} title={participant.id} />
+              <AgentProfileField label="Direct channel" value={participant.direct ? 'Yes' : 'No'} />
+              <AgentProfileField label="Added" value={formatDateTime(participant.added_at)} />
+            </AgentProfileSection>
+          )}
+
           {activeConnection && (
-            <>
+            <AgentProfileSection title="Connection">
+              <AgentProfileField label="Status" value={activeConnection.status} />
+              <AgentProfileField label="Connection ID" value={shortId(activeConnection.id)} title={activeConnection.id} />
+              <AgentProfileField label="Agent ID" value={activeConnection.agent_id ? shortId(activeConnection.agent_id) : ''} title={activeConnection.agent_id || undefined} />
               <AgentProfileField label="Host" value={activeConnection.host || 'Local'} />
               <AgentProfileField label="Working directory" value={activeConnection.cwd || 'Not reported'} />
-            </>
+              <AgentProfileField label="Connected" value={formatDateTime(activeConnection.connected_at)} />
+              <AgentProfileField label="Last heartbeat" value={formatDateTime(activeConnection.last_seen_at)} />
+              <AgentProfileField label="Updated" value={formatDateTime(activeConnection.updated_at)} />
+            </AgentProfileSection>
           )}
-          {description && (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Description</div>
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">{description}</div>
-            </div>
+
+          {metadataRows.length > 0 && (
+            <AgentProfileSection title="Runtime metadata">
+              {metadataRows.map(row => (
+                <AgentProfileField key={row.label} label={row.label} value={row.value} />
+              ))}
+            </AgentProfileSection>
           )}
-          {prompt && (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Instructions</div>
-              <div className="max-h-44 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{prompt}</div>
-            </div>
+
+          <AgentProfileChipSection title="Tools" empty="No tools configured" items={tools} />
+          <AgentProfileChipSection title="Skills" empty="No skills configured" items={skills} />
+
+          {agent?.description && (
+            <AgentProfileTextSection title="Description" value={agent.description} />
           )}
-          {chips.length > 0 && (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Tools and skills</div>
-              <div className="flex flex-wrap gap-1.5">
-                {chips.map(chip => (
-                  <Badge key={chip} variant="secondary" className="max-w-full truncate">
-                    {chip}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+          {agent?.soul && agent.soul !== agent.description && (
+            <AgentProfileTextSection title="Soul" value={agent.soul} />
+          )}
+          {agent?.system_prompt && (
+            <AgentProfileTextSection title="System prompt" value={agent.system_prompt} tall />
+          )}
+          {agent?.instructions && agent.instructions !== agent.system_prompt && (
+            <AgentProfileTextSection title="Instructions" value={agent.instructions} tall />
           )}
           {matchingConnections.length > 1 && (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Connections</div>
+            <AgentProfileSection title="Other connections">
               <div className="space-y-1.5">
                 {matchingConnections.map(connection => (
                   <div key={connection.id} className="flex min-w-0 items-center justify-between gap-2">
@@ -1877,7 +1925,7 @@ function AgentProfileSidePanel({
                   </div>
                 ))}
               </div>
-            </div>
+            </AgentProfileSection>
           )}
         </div>
       </div>
@@ -1898,14 +1946,117 @@ function normalizeStringList(value: unknown): string[] {
   return [];
 }
 
-function AgentProfileField({ label, value }: { label: string; value: string }) {
+function AgentProfileSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
+      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="space-y-2">{children}</div>
+    </section>
+  );
+}
+
+function AgentProfileTextSection({ title, value, tall = false }: { title: string; value: string; tall?: boolean }) {
+  return (
+    <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
+      <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className={`overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${tall ? 'max-h-48' : 'max-h-32'}`}>
+        {value}
+      </div>
+    </section>
+  );
+}
+
+function AgentProfileChipSection({ title, empty, items }: { title: string; empty: string; items: string[] }) {
+  return (
+    <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
+      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      {items.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map(item => (
+            <Badge key={item} variant="secondary" className="max-w-full truncate" title={item}>
+              {item}
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <div className="text-sm text-muted-foreground">{empty}</div>
+      )}
+    </section>
+  );
+}
+
+function AgentProfileStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="agent-profile-stat min-w-0 rounded-lg border bg-muted/30 p-2">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-sm font-semibold" title={value}>{value}</div>
+    </div>
+  );
+}
+
+function AgentProfileField({ label, value, title }: { label: string; value: string; title?: string }) {
   if (!value) return null;
   return (
     <div className="flex min-w-0 items-start justify-between gap-3 border-b border-border/60 pb-2 last:border-b-0">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium">{value}</span>
+      <span className="shrink-0 font-semibold text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium" title={title || value}>{value}</span>
     </div>
   );
+}
+
+function formatRunMode(value?: WorkspaceAgent['run_mode']) {
+  return value === 'daemon' ? 'Daemon' : 'Built-in';
+}
+
+function formatPermissionMode(value?: WorkspaceAgent['permission_mode']) {
+  if (value === 'accept_edits') return 'Accept edits';
+  if (value === 'yolo') return 'YOLO';
+  return 'Default';
+}
+
+function shortId(value?: string | null) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= 13) return text;
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function agentConnectionMetadataRows(metadata: Record<string, unknown> | null | undefined) {
+  if (!metadata || typeof metadata !== 'object') return [];
+  return Object.entries(metadata)
+    .map(([key, value]) => ({ label: humanizeMetadataKey(key), value: metadataValueText(value) }))
+    .filter(row => row.value)
+    .slice(0, 8);
+}
+
+function metadataValueText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value == null) return '';
+  try {
+    const json = JSON.stringify(value);
+    return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+  } catch {
+    return String(value);
+  }
+}
+
+function humanizeMetadataKey(value: string) {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
 }
 
 type SelectedPanelFile =
@@ -2452,6 +2603,12 @@ function addAvatarAlias(map: Map<string, string>, alias: string | null | undefin
   if (normalized && value) map.set(normalized, value);
 }
 
+function addAccentAlias(map: Map<string, string>, alias: string | null | undefined, accent: string | null | undefined) {
+  const normalized = normalizeAgentLookupKey(alias);
+  const value = validAgentAccentColor(accent);
+  if (normalized) map.set(normalized, value);
+}
+
 function buildAgentAvatarLookup(agents: WorkspaceAgent[], participants: ChannelParticipant[]) {
   const map = new Map<string, string>();
   agents.forEach(agent => {
@@ -2479,6 +2636,38 @@ function resolveMessageAvatar(message: ChatMessage, lookup: Map<string, string>)
   for (const key of [message.sender_id, message.sender_name, message.sender_id ? `agent:${message.sender_id}` : '']) {
     const avatar = lookup.get(normalizeAgentLookupKey(key));
     if (avatar) return avatar;
+  }
+  return '';
+}
+
+function buildAgentAccentLookup(agents: WorkspaceAgent[], participants: ChannelParticipant[]) {
+  const map = new Map<string, string>();
+  agents.forEach(agent => {
+    const accent = agentAccentColor(agent);
+    addAccentAlias(map, agent.id, accent);
+    addAccentAlias(map, `agent:${agent.id}`, accent);
+    addAccentAlias(map, agent.name, accent);
+    addAccentAlias(map, agent.handle, accent);
+    addAccentAlias(map, agentHandle(agent), accent);
+  });
+  participants.forEach(participant => {
+    if (participant.kind !== 'agent') return;
+    const agent = agents.find(item => participantMatchesLookupKey(participant, item.id) || agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+    if (!agent) return;
+    const accent = agentAccentColor(agent);
+    addAccentAlias(map, participant.id, accent);
+    addAccentAlias(map, participant.agent_id, accent);
+    addAccentAlias(map, participant.handle, accent);
+    addAccentAlias(map, participant.name, accent);
+  });
+  return map;
+}
+
+function resolveMessageAccent(message: ChatMessage, lookup: Map<string, string>) {
+  if (message.sender_kind !== 'agent') return '';
+  for (const key of [message.sender_id, message.sender_name, message.sender_id ? `agent:${message.sender_id}` : '']) {
+    const accent = lookup.get(normalizeAgentLookupKey(key));
+    if (accent) return accent;
   }
   return '';
 }

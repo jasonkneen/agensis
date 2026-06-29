@@ -50,6 +50,7 @@ import { Toaster } from './components/ui/sonner';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
+import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -85,6 +86,15 @@ const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
+
+function windowDockIcon(type: FloatingWindow['type']) {
+  if (type === 'chat') return <MessageSquare className="size-4" />;
+  if (type === 'memory') return <Brain className="size-4" />;
+  if (type === 'tasks') return <CheckCircle2 className="size-4" />;
+  if (type === 'activity') return <Activity className="size-4" />;
+  if (type === 'agents') return <Bot className="size-4" />;
+  return <FileText className="size-4" />;
+}
 
 type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
 function normalizeAgentLookupKey(value?: string | null) {
@@ -478,9 +488,12 @@ function AppContent() {
       }))
     : windows;
   const activeWindows = exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
-  const minimizedActiveWindows = focusedRemotePresence
-    ? activeWindows.filter(win => win.minimized)
-    : windows.filter(win => (win.canvasId || 'base') === activeLayerId && win.minimized);
+  const dockWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
+  const focusedDockWindow = dockWindows
+    .filter(win => !win.minimized)
+    .reduce<FloatingWindow | null>((topWindow, win) => (
+      !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
+    ), null);
   const canEditCanvasObject = useCallback((obj: CanvasObject) => !obj.user_id || obj.user_id === user?.id, [user?.id]);
   const settingsLayer = layers.find(layer => layer.id === (settingsLayerId || activeLayerId)) || activeLayer;
   const settingsWorkspace = useMemo<Workspace | null>(() => {
@@ -912,7 +925,7 @@ function AppContent() {
 
   return (
     <TooltipProvider>
-    <div className="relative flex h-screen overflow-hidden bg-background">
+    <div className="relative flex h-screen overflow-hidden bg-background" style={{ gap: WORKSPACE_CHROME_GAP, padding: WORKSPACE_CHROME_GAP }}>
       <img
         src={workspaceBackdropImage}
         alt=""
@@ -968,12 +981,15 @@ function AppContent() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} data-workspace-viewport className="relative m-2 ml-0 min-h-0 flex-1 overflow-hidden rounded-none">
+        <main ref={canvasRef} data-workspace-viewport className="relative min-h-0 flex-1 overflow-hidden rounded-none">
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
           >
-            <div className="workspace-top-controls absolute top-2 right-2 z-[11000] flex items-start gap-2">
+            <div
+              className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
+              style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET }}
+            >
               {!drawingActive && (
                 <Button
                   type="button"
@@ -1143,28 +1159,51 @@ function AppContent() {
               onCreateCustomApp={handleCreateCustomApplet}
             />
 
-            {minimizedActiveWindows.length > 0 && (
-              <div className="absolute right-3 bottom-[72px] z-50 flex gap-1.5">
-                {minimizedActiveWindows.map(win => (
+            {dockWindows.length > 0 && (
+              <div
+                className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
+                style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
+              >
+                {dockWindows.map(win => {
+                  const active = focusedDockWindow?.id === win.id;
+                  const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
+                  return (
                   <Button
                     key={win.id}
                     type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => minimizeWindow(win.id)}
-                    className="bg-popover shadow-md"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      if (win.minimized) {
+                        focusWindow(win.id);
+                        minimizeWindow(win.id);
+                        return;
+                      }
+                      if (active) {
+                        minimizeWindow(win.id);
+                        return;
+                      }
+                      focusWindow(win.id);
+                    }}
+                    className={cn(
+                      'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+                      active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+                      win.minimized && 'text-muted-foreground',
+                    )}
+                    title={`${dockActionLabel} ${windowLabel(win)}`}
+                    aria-label={`${dockActionLabel} ${windowLabel(win)}`}
                   >
-                    {win.type === 'chat' ? <MessageSquare data-icon="inline-start" className="size-3" />
-                      : win.type === 'memory' ? <Brain data-icon="inline-start" className="size-3" />
-                      : win.type === 'tasks' ? <CheckCircle2 data-icon="inline-start" className="size-3" />
-                      : win.type === 'activity' ? <Activity data-icon="inline-start" className="size-3" />
-                      : win.type === 'agents' ? <Bot data-icon="inline-start" className="size-3" />
-                      : <FileText data-icon="inline-start" className="size-3" />}
-                    <span className="max-w-[120px] truncate">
-                      {win.title}
-                    </span>
+                    {windowDockIcon(win.type)}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'absolute bottom-0.5 left-1/2 h-1 w-2 -translate-x-1/2 rounded-[2px]',
+                        active ? 'bg-foreground' : win.minimized ? 'bg-muted-foreground/55' : 'bg-primary/65',
+                      )}
+                    />
                   </Button>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1217,6 +1256,7 @@ function AppContent() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         workspace={settingsWorkspace}
+        secretsWorkspaceId={activeWorkspace?.id ?? null}
         onUpdateWorkspace={handleUpdateSettingsWorkspace}
         workspaceName={settingsWorkspace?.name || 'Personal'}
         userEmail={user.email || ''}
@@ -1356,7 +1396,7 @@ function CanvasLayerScene({
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: { name: string; avatar?: string; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string; run_mode?: 'builtin' | 'daemon' }) => void;
+  onCreateAgent: (input: { name: string; avatar?: string; openpet_avatar_id?: string | null; accent_color?: string | null; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string; run_mode?: 'builtin' | 'daemon' }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
   focusedAgentKey: string | null;
@@ -1773,7 +1813,7 @@ function WorkspacePresenceAvatars({
   return (
     <div ref={panelRef} data-presence-panel className="relative flex flex-col items-end gap-2">
       {expanded && (
-        <div className="absolute top-full right-0 z-10 mt-2 w-96 overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl">
+        <div className="absolute right-0 bottom-full z-10 mb-2 w-96 overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>
@@ -1822,9 +1862,9 @@ function WorkspacePresenceAvatars({
                         : person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
                     </div>
                     {person.activityItems && person.activityItems.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
+                      <div className="presence-activity-chips mt-2 flex flex-wrap gap-x-1.5 gap-y-2">
                         {person.activityItems.map(item => (
-                          <Badge key={item} variant="secondary" className="max-w-[9rem] truncate text-[10px]">
+                          <Badge key={item} variant="secondary" className="presence-activity-chip max-w-[12rem] truncate text-[10px]">
                             {item}
                           </Badge>
                         ))}

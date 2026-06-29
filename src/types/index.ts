@@ -282,6 +282,7 @@ export interface WorkspaceAgent {
   name: string;
   avatar: string;
   openpet_avatar_id?: string | null;
+  accent_color?: string | null;
   description: string;
   system_prompt: string;
   soul?: string;

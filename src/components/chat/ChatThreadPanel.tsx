@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
+import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
+import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { Message as ChatMessage } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -29,6 +31,7 @@ interface ChatThreadPanelProps {
   parentMessage: ChatMessage;
   threadMessages: ChatMessage[];
   streaming: boolean;
+  resolveMessageAccent?: (message: ChatMessage) => string;
   onSendReply: (content: string, model: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -38,6 +41,7 @@ export function ChatThreadPanel({
   parentMessage,
   threadMessages,
   streaming,
+  resolveMessageAccent,
   onSendReply,
   onClose,
   embedded = false,
@@ -74,7 +78,7 @@ export function ChatThreadPanel({
       </div>
 
       <div className="border-b border-border p-3">
-        <ThreadBubble msg={parentMessage} isParent />
+        <ThreadBubble msg={parentMessage} accent={resolveMessageAccent?.(parentMessage)} isParent />
       </div>
 
       <MessageScrollerProvider autoScroll={autoScroll}>
@@ -94,6 +98,7 @@ export function ChatThreadPanel({
                     <MessageScrollerItem key={msg.id} scrollAnchor={idx === replies.length - 1}>
                       <ThreadBubble
                         msg={msg}
+                        accent={resolveMessageAccent?.(msg)}
                         isStreaming={streaming && idx === replies.length - 1 && msg.role === 'assistant'}
                       />
                     </MessageScrollerItem>
@@ -148,10 +153,12 @@ export function ChatThreadPanel({
 
 function ThreadBubble({
   msg,
+  accent,
   isStreaming,
   isParent,
 }: {
   msg: ChatMessage;
+  accent?: string;
   isStreaming?: boolean;
   isParent?: boolean;
 }) {
@@ -167,15 +174,23 @@ function ThreadBubble({
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
+  const isAgentMessage = msg.sender_kind === 'agent' && Boolean(accent);
+  const accentStyle = isAgentMessage
+    ? ({ '--agent-accent': validAgentAccentColor(accent) } as CSSProperties & { '--agent-accent': string })
+    : undefined;
 
   return (
-    <div className={`flex min-w-0 gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 ${isParent ? 'opacity-80' : ''}`}>
+    <div
+      className={`chat-thread-message flex min-w-0 gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 ${isParent ? 'opacity-80' : ''}`}
+      data-agent-message={isAgentMessage ? 'true' : undefined}
+      style={accentStyle}
+    >
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
         {isUser ? <User className="size-3.5" /> : <Bot className="size-3.5" />}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="truncate text-xs font-semibold text-foreground">{senderName}</span>
+          <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
         <div className="mt-0.5 text-xs leading-relaxed text-foreground">
@@ -186,6 +201,8 @@ function ThreadBubble({
               <Spinner className="size-3" />
               Thinking
             </span>
+          ) : !isUser ? (
+            <span className="text-muted-foreground">{EMPTY_STREAM_RESPONSE}</span>
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>

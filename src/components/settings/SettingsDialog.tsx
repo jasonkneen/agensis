@@ -53,6 +53,10 @@ interface SettingsDialogProps {
   onUpdateWorkspace: (id: string, updates: Partial<Workspace>) => void;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
+  // Real workspace UUID for workspace-scoped settings (secrets). The `workspace`
+  // prop above is a layer-flavored view whose id is the canvas layer id (e.g.
+  // 'base'), which is NOT a uuid and must never reach a workspace_id column.
+  secretsWorkspaceId: string | null;
 }
 
 type TabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'secrets' | 'about';
@@ -76,6 +80,7 @@ export function SettingsDialog({
   userEmail,
   themeMode,
   onThemeChange,
+  secretsWorkspaceId,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<TabId>('general');
   const activeTab = TABS.find(item => item.id === tab);
@@ -123,7 +128,7 @@ export function SettingsDialog({
               )}
               {tab === 'ai' && <AIPanel />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
-              {tab === 'secrets' && <SecretsPanel workspace={workspace} />}
+              {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'about' && <AboutPanel />}
             </div>
           </ScrollArea>
@@ -727,7 +732,7 @@ interface SecretKeyInfo {
   scope?: 'workspace' | 'app' | 'unset';
 }
 
-function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
+function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
   const [keys, setKeys] = useState<SecretKeyInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [reveal, setReveal] = useState<Record<string, boolean>>({});
@@ -737,7 +742,7 @@ function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
   const [savedAt, setSavedAt] = useState(0);
 
   const load = useCallback(async () => {
-    if (!workspace?.id) {
+    if (!workspaceId) {
       setKeys([]);
       setLoading(false);
       return;
@@ -745,7 +750,7 @@ function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(apiUrl(`/backend/settings/secrets?workspaceId=${encodeURIComponent(workspace.id)}`), { headers: apiAuthHeaders() });
+      const res = await fetch(apiUrl(`/backend/settings/secrets?workspaceId=${encodeURIComponent(workspaceId)}`), { headers: apiAuthHeaders() });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);
       setKeys(json.data?.keys || []);
@@ -754,7 +759,7 @@ function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
     } finally {
       setLoading(false);
     }
-  }, [workspace?.id]);
+  }, [workspaceId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -770,7 +775,7 @@ function SecretsPanel({ workspace }: { workspace: Workspace | null }) {
       const res = await fetch(apiUrl('/backend/settings/secrets'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-        body: JSON.stringify({ workspaceId: workspace?.id, ...payload }),
+        body: JSON.stringify({ workspaceId, ...payload }),
       });
       const json = await res.json();
       if (json.error) throw new Error(json.error.message);

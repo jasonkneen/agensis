@@ -3,6 +3,11 @@ const DB_VERSION = 1;
 const QUEUE_STORE = 'sync_queue';
 const CACHE_STORE = 'data_cache';
 
+// Bounds so a long offline session (or a wedged sync) can't grow IndexedDB
+// without limit. Oldest entries are evicted first once either bound is exceeded.
+const MAX_QUEUE_ENTRIES = 5000;
+const QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 interface SyncEntry {
   id?: number;
   table: string;
@@ -51,7 +56,32 @@ export async function enqueue(entry: Omit<SyncEntry, 'id' | 'created_at'>): Prom
     ...entry,
     created_at: Date.now(),
   }));
+  await pruneQueue(db);
   db.close();
+}
+
+// Evict expired and overflow entries so a long offline stretch (or a wedged sync)
+// can't grow the queue without limit. getAll() returns rows in key (insertion)
+// order, so the lowest ids are the oldest and get dropped first.
+async function pruneQueue(db: IDBDatabase): Promise<void> {
+  const now = Date.now();
+  const all = (await req(tx(db, QUEUE_STORE, 'readonly').getAll())) as SyncEntry[];
+  const survivors: SyncEntry[] = [];
+  const toDelete: number[] = [];
+  for (const item of all) {
+    if (typeof item.id !== 'number') continue;
+    if (now - item.created_at > QUEUE_TTL_MS) toDelete.push(item.id);
+    else survivors.push(item);
+  }
+  const overflow = survivors.length - MAX_QUEUE_ENTRIES;
+  if (overflow > 0) {
+    for (const item of survivors.slice(0, overflow)) {
+      if (typeof item.id === 'number') toDelete.push(item.id);
+    }
+  }
+  if (toDelete.length === 0) return;
+  const store = tx(db, QUEUE_STORE, 'readwrite');
+  await Promise.all(toDelete.map((id) => req(store.delete(id))));
 }
 
 export async function peekQueue(): Promise<SyncEntry[]> {

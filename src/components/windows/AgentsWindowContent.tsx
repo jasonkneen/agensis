@@ -57,6 +57,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 
@@ -69,6 +70,7 @@ interface AgentsWindowContentProps {
     name: string;
     avatar?: string;
     openpet_avatar_id?: string | null;
+    accent_color?: string | null;
     description?: string;
     system_prompt: string;
     soul?: string;
@@ -116,6 +118,7 @@ export function AgentsWindowContent({
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
   const [newOpenPetAvatarId, setNewOpenPetAvatarId] = useState('');
+  const [newAccentColor, setNewAccentColor] = useState(DEFAULT_AGENT_ACCENT);
   const [newHandle, setNewHandle] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newSystemPrompt, setNewSystemPrompt] = useState('');
@@ -129,10 +132,27 @@ export function AgentsWindowContent({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
+  const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
+  const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || focusedAgent || agents[0] || null;
 
   useEffect(() => {
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
   }, []);
+
+  useEffect(() => {
+    if (focusedAgent?.id) setSelectedAgentId(focusedAgent.id);
+  }, [focusedAgent?.id]);
+
+  useEffect(() => {
+    if (agents.length === 0) {
+      setSelectedAgentId(null);
+      return;
+    }
+    if (!selectedAgentId || !agents.some(agent => agent.id === selectedAgentId)) {
+      setSelectedAgentId(focusedAgent?.id || agents[0].id);
+    }
+  }, [agents, focusedAgent?.id, selectedAgentId]);
 
   const handleCreate = () => {
     if (!newName.trim()) return;
@@ -140,6 +160,7 @@ export function AgentsWindowContent({
       name: newName.trim(),
       avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
       openpet_avatar_id: newOpenPetAvatarId,
+      accent_color: validAgentAccentColor(newAccentColor),
       handle: newHandle.trim() || agentHandle(newName),
       description: newDescription.trim(),
       system_prompt: newSystemPrompt.trim(),
@@ -153,6 +174,7 @@ export function AgentsWindowContent({
     setNewName('');
     setNewAvatar(DEFAULT_AGENT_AVATAR);
     setNewOpenPetAvatarId('');
+    setNewAccentColor(agentAccentPaletteColor(agents.length + 1));
     setNewHandle('');
     setNewDescription('');
     setNewSystemPrompt('');
@@ -192,85 +214,172 @@ export function AgentsWindowContent({
         </Button>
       </div>
 
-      {showCreate && (
-        <div className="shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md">
-          <AgentForm
-            name={newName}
-            avatar={newAvatar}
-            openPetAvatarId={newOpenPetAvatarId}
-            handle={newHandle}
-            description={newDescription}
-            systemPrompt={newSystemPrompt}
-            soul={newSoul}
-            instructions={newInstructions}
-            tools={newTools}
-            skills={newSkills}
-            model={newModel}
-            runMode={newRunMode}
-            capabilities={capabilities}
-            onNameChange={setNewName}
-            onAvatarChange={(value) => {
-              setNewAvatar(value);
-              setNewOpenPetAvatarId('');
-            }}
-            onOpenPetAvatarChange={(pet) => {
-              setNewAvatar(openPetAvatarSrc(pet));
-              setNewOpenPetAvatarId(pet.id);
-            }}
-            onHandleChange={setNewHandle}
-            onDescriptionChange={setNewDescription}
-            onSystemPromptChange={setNewSystemPrompt}
-            onSoulChange={setNewSoul}
-            onInstructionsChange={setNewInstructions}
-            onToolsChange={setNewTools}
-            onSkillsChange={setNewSkills}
-            onModelChange={setNewModel}
-            onRunModeChange={setNewRunMode}
-            onCancel={() => setShowCreate(false)}
-            onSubmit={handleCreate}
-            submitLabel="Create"
-            submitIcon={<Plus data-icon="inline-start" />}
-          />
-        </div>
-      )}
+      <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-2">
+        <div className="agents-master-detail h-full min-h-0">
+          <div className="agents-list-pane min-h-0 overflow-y-auto pr-2 pb-2">
+            {showCreate && (
+              <div className="agents-inline-create mb-2 rounded-lg border bg-card/55 p-3 backdrop-blur-md">
+                <AgentForm
+                  name={newName}
+                  avatar={newAvatar}
+                  openPetAvatarId={newOpenPetAvatarId}
+                  accentColor={newAccentColor}
+                  handle={newHandle}
+                  description={newDescription}
+                  systemPrompt={newSystemPrompt}
+                  soul={newSoul}
+                  instructions={newInstructions}
+                  tools={newTools}
+                  skills={newSkills}
+                  model={newModel}
+                  runMode={newRunMode}
+                  capabilities={capabilities}
+                  onNameChange={setNewName}
+                  onAvatarChange={(value) => {
+                    setNewAvatar(value);
+                    setNewOpenPetAvatarId('');
+                  }}
+                  onOpenPetAvatarChange={(pet) => {
+                    setNewAvatar(openPetAvatarSrc(pet));
+                    setNewOpenPetAvatarId(pet.id);
+                  }}
+                  onAccentColorChange={setNewAccentColor}
+                  onHandleChange={setNewHandle}
+                  onDescriptionChange={setNewDescription}
+                  onSystemPromptChange={setNewSystemPrompt}
+                  onSoulChange={setNewSoul}
+                  onInstructionsChange={setNewInstructions}
+                  onToolsChange={setNewTools}
+                  onSkillsChange={setNewSkills}
+                  onModelChange={setNewModel}
+                  onRunModeChange={setNewRunMode}
+                  onCancel={() => setShowCreate(false)}
+                  onSubmit={handleCreate}
+                  submitLabel="Create"
+                  submitIcon={<Plus data-icon="inline-start" />}
+                />
+              </div>
+            )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        {agents.length === 0 ? (
-          <Empty className="h-full border-0">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Bot />
-              </EmptyMedia>
-              <EmptyTitle>No agents yet</EmptyTitle>
-              <EmptyDescription>Create an agent, copy its connection command, and run it where the daemon should execute.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <ItemGroup className="gap-1">
-            {agents.map(agent => (
-              <AgentRow
-                key={agent.id}
-                agent={agent}
-                focused={agentMatchesKey(agent, normalizedFocusedAgentKey)}
-                isEditing={editingId === agent.id}
-                confirmDelete={confirmDeleteId === agent.id}
-                onEdit={() => setEditingId(editingId === agent.id ? null : agent.id)}
+            {agents.length === 0 ? (
+              <Empty className="h-full border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Bot />
+                  </EmptyMedia>
+                  <EmptyTitle>No agents yet</EmptyTitle>
+                  <EmptyDescription>Create an agent, copy its connection command, and run it where the daemon should execute.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <ItemGroup className="gap-1">
+                {agents.map(agent => (
+                  <AgentRow
+                    key={agent.id}
+                    agent={agent}
+                    focused={agentMatchesKey(agent, normalizedFocusedAgentKey)}
+                    selected={selectedAgent?.id === agent.id}
+                    isEditing={editingId === agent.id}
+                    confirmDelete={confirmDeleteId === agent.id}
+                    onSelect={() => {
+                      setSelectedAgentId(agent.id);
+                      setShowCreate(false);
+                      setEditingId(null);
+                    }}
+                    onEdit={() => {
+                      setSelectedAgentId(agent.id);
+                      setShowCreate(false);
+                      setEditingId(editingId === agent.id ? null : agent.id);
+                    }}
+                    onCancelEdit={() => setEditingId(null)}
+                    onSave={(updates) => {
+                      onUpdateAgent(agent.id, updates);
+                      setEditingId(null);
+                    }}
+                    onDelete={() => handleDelete(agent.id)}
+                    onCancelDelete={() => setConfirmDeleteId(null)}
+                    capabilities={capabilities}
+                    webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
+                    connections={connections.filter(connection => connection.agent_id === agent.id)}
+                    onCreateWebhook={() => onCreateWebhook({ agent_id: agent.id, name: `${agent.name} webhook` })}
+                    onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+                  />
+                ))}
+              </ItemGroup>
+            )}
+          </div>
+
+          <aside className="agents-detail-pane min-h-0 overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
+            {showCreate ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+                  <Plus className="size-4 text-primary" />
+                  <span className="text-sm font-semibold">Create agent</span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                  <AgentForm
+                    name={newName}
+                    avatar={newAvatar}
+                    openPetAvatarId={newOpenPetAvatarId}
+                    accentColor={newAccentColor}
+                    handle={newHandle}
+                    description={newDescription}
+                    systemPrompt={newSystemPrompt}
+                    soul={newSoul}
+                    instructions={newInstructions}
+                    tools={newTools}
+                    skills={newSkills}
+                    model={newModel}
+                    runMode={newRunMode}
+                    capabilities={capabilities}
+                    onNameChange={setNewName}
+                    onAvatarChange={(value) => {
+                      setNewAvatar(value);
+                      setNewOpenPetAvatarId('');
+                    }}
+                    onOpenPetAvatarChange={(pet) => {
+                      setNewAvatar(openPetAvatarSrc(pet));
+                      setNewOpenPetAvatarId(pet.id);
+                    }}
+                    onAccentColorChange={setNewAccentColor}
+                    onHandleChange={setNewHandle}
+                    onDescriptionChange={setNewDescription}
+                    onSystemPromptChange={setNewSystemPrompt}
+                    onSoulChange={setNewSoul}
+                    onInstructionsChange={setNewInstructions}
+                    onToolsChange={setNewTools}
+                    onSkillsChange={setNewSkills}
+                    onModelChange={setNewModel}
+                    onRunModeChange={setNewRunMode}
+                    onCancel={() => setShowCreate(false)}
+                    onSubmit={handleCreate}
+                    submitLabel="Create"
+                    submitIcon={<Plus data-icon="inline-start" />}
+                  />
+                </div>
+              </div>
+            ) : (
+              <AgentDetailPane
+                agent={selectedAgent}
+                isEditing={Boolean(selectedAgent && editingId === selectedAgent.id)}
+                confirmDelete={Boolean(selectedAgent && confirmDeleteId === selectedAgent.id)}
+                onEdit={() => selectedAgent && setEditingId(selectedAgent.id)}
                 onCancelEdit={() => setEditingId(null)}
                 onSave={(updates) => {
-                  onUpdateAgent(agent.id, updates);
+                  if (!selectedAgent) return;
+                  onUpdateAgent(selectedAgent.id, updates);
                   setEditingId(null);
                 }}
-                onDelete={() => handleDelete(agent.id)}
-                onCancelDelete={() => setConfirmDeleteId(null)}
+                onDelete={() => selectedAgent && handleDelete(selectedAgent.id)}
                 capabilities={capabilities}
-                webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
-                connections={connections.filter(connection => connection.agent_id === agent.id)}
-                onCreateWebhook={() => onCreateWebhook({ agent_id: agent.id, name: `${agent.name} webhook` })}
+                webhooks={selectedAgent ? webhooks.filter(webhook => webhook.agent_id === selectedAgent.id) : []}
+                connections={selectedAgent ? connections.filter(connection => connection.agent_id === selectedAgent.id) : []}
+                onCreateWebhook={() => selectedAgent ? onCreateWebhook({ agent_id: selectedAgent.id, name: `${selectedAgent.name} webhook` }) : Promise.resolve(null)}
                 onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
               />
-            ))}
-          </ItemGroup>
-        )}
+            )}
+          </aside>
+        </div>
       </div>
     </div>
   );
@@ -280,6 +389,7 @@ function AgentForm({
   name,
   avatar,
   openPetAvatarId,
+  accentColor,
   handle,
   description,
   systemPrompt,
@@ -293,6 +403,7 @@ function AgentForm({
   onNameChange,
   onAvatarChange,
   onOpenPetAvatarChange,
+  onAccentColorChange,
   onHandleChange,
   onDescriptionChange,
   onSystemPromptChange,
@@ -310,6 +421,7 @@ function AgentForm({
   name: string;
   avatar: string;
   openPetAvatarId: string;
+  accentColor: string;
   handle: string;
   description: string;
   systemPrompt: string;
@@ -323,6 +435,7 @@ function AgentForm({
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
   onOpenPetAvatarChange: (pet: OpenPet) => void;
+  onAccentColorChange: (value: string) => void;
   onHandleChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -481,6 +594,34 @@ function AgentForm({
       </Tabs>
 
       <Field>
+        <FieldLabel htmlFor="agent-accent-color">Accent color</FieldLabel>
+        <div className="agent-accent-picker flex min-w-0 flex-wrap items-center gap-2">
+          {AGENT_ACCENT_CHOICES.map(choice => (
+            <button
+              key={choice}
+              type="button"
+              className={cn(
+                'agent-accent-swatch size-8 rounded-lg border transition',
+                validAgentAccentColor(accentColor) === choice && 'ring-2 ring-ring ring-offset-2 ring-offset-background',
+              )}
+              style={{ backgroundColor: choice }}
+              onClick={() => onAccentColorChange(choice)}
+              aria-label={`Use accent ${choice}`}
+              title={choice}
+            />
+          ))}
+          <input
+            id="agent-accent-color"
+            type="color"
+            value={validAgentAccentColor(accentColor)}
+            onChange={event => onAccentColorChange(event.target.value)}
+            className="agent-accent-color-input h-8 w-10 cursor-pointer rounded-lg border border-input bg-transparent p-1"
+            aria-label="Custom accent color"
+          />
+        </div>
+      </Field>
+
+      <Field>
         <FieldLabel htmlFor="agent-description">Description</FieldLabel>
         <Input
           id="agent-description"
@@ -601,6 +742,7 @@ function AgentForm({
 function AgentRow({
   agent,
   focused,
+  selected,
   isEditing,
   confirmDelete,
   onEdit,
@@ -608,6 +750,7 @@ function AgentRow({
   onSave,
   onDelete,
   onCancelDelete,
+  onSelect,
   capabilities,
   webhooks,
   connections,
@@ -616,6 +759,7 @@ function AgentRow({
 }: {
   agent: WorkspaceAgent;
   focused: boolean;
+  selected: boolean;
   isEditing: boolean;
   confirmDelete: boolean;
   onEdit: () => void;
@@ -623,6 +767,7 @@ function AgentRow({
   onSave: (updates: Partial<WorkspaceAgent>) => void;
   onDelete: () => void;
   onCancelDelete: () => void;
+  onSelect: () => void;
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
@@ -632,6 +777,7 @@ function AgentRow({
   const [editName, setEditName] = useState(agent.name);
   const [editAvatar, setEditAvatar] = useState(agent.avatar || DEFAULT_AGENT_AVATAR);
   const [editOpenPetAvatarId, setEditOpenPetAvatarId] = useState(agent.openpet_avatar_id || '');
+  const [editAccentColor, setEditAccentColor] = useState(agentAccentColor(agent));
   const [editHandle, setEditHandle] = useState(agent.handle || agentHandle(agent.name));
   const [editDescription, setEditDescription] = useState(agent.description || '');
   const [editSystemPrompt, setEditSystemPrompt] = useState(agent.system_prompt || '');
@@ -646,12 +792,14 @@ function AgentRow({
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
   const toolBadges = normalizeList(agent.tools).slice(0, 3);
+  const accent = agentAccentColor(agent);
 
   const handleSave = () => {
     onSave({
       name: editName.trim(),
       avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
       openpet_avatar_id: editOpenPetAvatarId,
+      accent_color: validAgentAccentColor(editAccentColor),
       handle: editHandle.trim() || agentHandle(editName),
       description: editDescription.trim(),
       system_prompt: editSystemPrompt.trim(),
@@ -701,12 +849,13 @@ function AgentRow({
 
   if (isEditing) {
     return (
-      <Item variant="outline" className="items-stretch">
+      <Item variant="outline" className="agents-inline-editor items-stretch" style={agentAccentStyle(agent)}>
         <ItemContent>
           <AgentForm
             name={editName}
             avatar={editAvatar}
             openPetAvatarId={editOpenPetAvatarId}
+            accentColor={editAccentColor}
             handle={editHandle}
             description={editDescription}
             systemPrompt={editSystemPrompt}
@@ -726,6 +875,7 @@ function AgentRow({
               setEditAvatar(openPetAvatarSrc(pet));
               setEditOpenPetAvatarId(pet.id);
             }}
+            onAccentColorChange={setEditAccentColor}
             onHandleChange={setEditHandle}
             onDescriptionChange={setEditDescription}
             onSystemPromptChange={setEditSystemPrompt}
@@ -748,14 +898,32 @@ function AgentRow({
   return (
     <Item
       variant="default"
-      className={cn('hover:bg-muted/50', focused && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30')}
+      data-agent-selected={selected || focused ? 'true' : undefined}
+      className={cn(
+        'agents-list-card cursor-pointer hover:bg-muted/50',
+        focused && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30',
+        selected && 'border-primary/70 bg-primary/10 ring-1 ring-primary/30',
+      )}
+      style={agentAccentStyle(agent)}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       onMouseEnter={onCancelDelete}
     >
       <ItemMedia className="size-9 overflow-hidden rounded-full bg-muted text-base">
         <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
       </ItemMedia>
       <ItemContent className="min-w-0">
-        <ItemTitle className="max-w-full truncate">{agent.name}</ItemTitle>
+        <ItemTitle className="max-w-full truncate">
+          <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
+          {agent.name}
+        </ItemTitle>
         {agent.description ? (
           <ItemDescription>{agent.description}</ItemDescription>
         ) : (
@@ -773,7 +941,7 @@ function AgentRow({
           {toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
         </div>
         {activeConnections.length > 0 && (
-          <div className="mt-2 flex flex-col gap-1">
+          <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
             {activeConnections.slice(0, 3).map(connection => (
               <div key={connection.id} className="agent-meta-row flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
                 <Monitor className="size-3 shrink-0" />
@@ -785,7 +953,7 @@ function AgentRow({
           </div>
         )}
         {connectionCommand && (
-          <div className="mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
+          <div className="agents-list-expanded-meta mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
             <Terminal className="size-3 shrink-0" />
             <code className="min-w-0 flex-1 truncate" title={connectionCommand}>Connect command</code>
             <Button
@@ -800,7 +968,7 @@ function AgentRow({
           </div>
         )}
         {webhooks.length > 0 && (
-          <div className="mt-2 flex flex-col gap-1.5">
+          <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1.5">
             {webhooks.map(webhook => {
               const url = webhookUrl(webhook.token);
               return (
@@ -835,7 +1003,7 @@ function AgentRow({
           </div>
         )}
       </ItemContent>
-      <ItemActions className="ml-11 mt-2 basis-full justify-end pr-1">
+      <ItemActions className="agents-list-row-actions ml-11 mt-2 basis-full justify-end pr-1">
         <Button
           type="button"
           variant={copyState === 'copied' ? 'secondary' : 'outline'}
@@ -871,6 +1039,382 @@ function AgentRow({
       </ItemActions>
     </Item>
   );
+}
+
+function AgentDetailPane({
+  agent,
+  isEditing,
+  confirmDelete,
+  onEdit,
+  onCancelEdit,
+  onSave,
+  onDelete,
+  capabilities,
+  webhooks,
+  connections,
+  onCreateWebhook,
+  onToggleWebhook,
+}: {
+  agent: WorkspaceAgent | null;
+  isEditing: boolean;
+  confirmDelete: boolean;
+  onEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: (updates: Partial<WorkspaceAgent>) => void;
+  onDelete: () => void;
+  capabilities: SystemCapabilities | null;
+  webhooks: AgentWebhook[];
+  connections: AgentConnection[];
+  onCreateWebhook: () => Promise<AgentWebhook | null>;
+  onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+}) {
+  const [editName, setEditName] = useState('');
+  const [editAvatar, setEditAvatar] = useState(DEFAULT_AGENT_AVATAR);
+  const [editOpenPetAvatarId, setEditOpenPetAvatarId] = useState('');
+  const [editAccentColor, setEditAccentColor] = useState(DEFAULT_AGENT_ACCENT);
+  const [editHandle, setEditHandle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editSystemPrompt, setEditSystemPrompt] = useState('');
+  const [editSoul, setEditSoul] = useState('');
+  const [editInstructions, setEditInstructions] = useState('');
+  const [editTools, setEditTools] = useState('');
+  const [editSkills, setEditSkills] = useState('');
+  const [editModel, setEditModel] = useState('auto');
+  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>('builtin');
+  const [creatingWebhook, setCreatingWebhook] = useState(false);
+  const [connectionCommand, setConnectionCommand] = useState('');
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+
+  useEffect(() => {
+    if (!agent) return;
+    setEditName(agent.name);
+    setEditAvatar(agent.avatar || DEFAULT_AGENT_AVATAR);
+    setEditOpenPetAvatarId(agent.openpet_avatar_id || '');
+    setEditAccentColor(agentAccentColor(agent));
+    setEditHandle(agent.handle || agentHandle(agent.name));
+    setEditDescription(agent.description || '');
+    setEditSystemPrompt(agent.system_prompt || '');
+    setEditSoul(agent.soul || '');
+    setEditInstructions(agent.instructions || '');
+    setEditTools(joinList(agent.tools));
+    setEditSkills(joinList(agent.skills));
+    setEditModel(agent.model || 'auto');
+    setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
+    setConnectionCommand('');
+    setCopyState('idle');
+  }, [agent?.id]);
+
+  if (!agent) {
+    return (
+      <Empty className="h-full border-0">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Bot />
+          </EmptyMedia>
+          <EmptyTitle>Select an agent</EmptyTitle>
+          <EmptyDescription>Choose an agent from the list to view details or edit its setup.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  const activeConnections = connections.filter(connection => connection.status !== 'offline');
+  const tools = normalizeList(agent.tools);
+  const skills = normalizeList(agent.skills);
+
+  const handleSave = () => {
+    onSave({
+      name: editName.trim(),
+      avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
+      openpet_avatar_id: editOpenPetAvatarId,
+      accent_color: validAgentAccentColor(editAccentColor),
+      handle: editHandle.trim() || agentHandle(editName),
+      description: editDescription.trim(),
+      system_prompt: editSystemPrompt.trim(),
+      soul: editSoul.trim(),
+      instructions: editInstructions.trim(),
+      tools: splitList(editTools),
+      skills: splitList(editSkills),
+      model: editModel,
+      run_mode: editRunMode,
+    });
+  };
+
+  const handleCreateWebhook = async () => {
+    setCreatingWebhook(true);
+    try {
+      await onCreateWebhook();
+    } finally {
+      setCreatingWebhook(false);
+    }
+  };
+
+  const handleConnectionCommand = async () => {
+    try {
+      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...apiAuthHeaders(),
+        },
+        body: JSON.stringify({
+          handle: editHandle || agent.handle || agentHandle(agent.name),
+          baseUrl: apiBaseUrl(),
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
+      if (!response.ok || !command) return;
+      setConnectionCommand(command);
+      await navigator.clipboard?.writeText(command);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1600);
+    } catch {
+      // Copy affordance stays idle; the backend error is not useful inline here.
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+          <Pencil className="size-4 text-primary" />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">Edit {agent.name}</span>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onCancelEdit} aria-label="Close editor">
+            <X />
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <AgentForm
+            name={editName}
+            avatar={editAvatar}
+            openPetAvatarId={editOpenPetAvatarId}
+            accentColor={editAccentColor}
+            handle={editHandle}
+            description={editDescription}
+            systemPrompt={editSystemPrompt}
+            soul={editSoul}
+            instructions={editInstructions}
+            tools={editTools}
+            skills={editSkills}
+            model={editModel}
+            runMode={editRunMode}
+            capabilities={capabilities}
+            onNameChange={setEditName}
+            onAvatarChange={(value) => {
+              setEditAvatar(value);
+              setEditOpenPetAvatarId('');
+            }}
+            onOpenPetAvatarChange={(pet) => {
+              setEditAvatar(openPetAvatarSrc(pet));
+              setEditOpenPetAvatarId(pet.id);
+            }}
+            onAccentColorChange={setEditAccentColor}
+            onHandleChange={setEditHandle}
+            onDescriptionChange={setEditDescription}
+            onSystemPromptChange={setEditSystemPrompt}
+            onSoulChange={setEditSoul}
+            onInstructionsChange={setEditInstructions}
+            onToolsChange={setEditTools}
+            onSkillsChange={setEditSkills}
+            onModelChange={setEditModel}
+            onRunModeChange={setEditRunMode}
+            onCancel={onCancelEdit}
+            onSubmit={handleSave}
+            submitLabel="Save"
+            submitIcon={<Save data-icon="inline-start" />}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        <Bot className="size-4 text-primary" />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">Agent details</span>
+        <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} aria-label={`Edit ${agent.name}`}>
+          <Pencil />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="agent-detail-summary flex min-w-0 items-stretch gap-3 rounded-lg border bg-muted/25 p-3">
+          <div className="agent-detail-avatar grid min-h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-xl bg-muted text-lg font-semibold sm:w-28">
+            <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-base font-semibold">{agent.name}</div>
+            <div className="text-sm text-muted-foreground">@{agent.handle || agentHandle(agent.name)}</div>
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{agent.description || 'No description'}</p>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
+                {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
+              </Badge>
+              <Badge variant="outline">{displayModel(agent.model)}</Badge>
+              <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
+                {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
+              </Badge>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant={copyState === 'copied' ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={handleConnectionCommand}
+          >
+            {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
+            {copyState === 'copied' ? 'Copied' : 'Connect'}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={handleCreateWebhook} disabled={creatingWebhook}>
+            <Link2 data-icon="inline-start" />
+            Webhook
+          </Button>
+          <Button
+            type="button"
+            variant={confirmDelete ? 'destructive' : 'ghost'}
+            size="sm"
+            onClick={onDelete}
+          >
+            <Trash2 data-icon="inline-start" />
+            {confirmDelete ? 'Confirm delete' : 'Delete'}
+          </Button>
+        </div>
+
+        {connectionCommand && (
+          <div className="mt-3 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
+            <Terminal className="size-3 shrink-0" />
+            <code className="min-w-0 flex-1 truncate" title={connectionCommand}>{connectionCommand}</code>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => void navigator.clipboard?.writeText(connectionCommand)}
+              aria-label={`Copy connection command for ${agent.name}`}
+            >
+              <Copy />
+            </Button>
+          </div>
+        )}
+
+        <div className="mt-3 grid gap-3">
+          <AgentDetailSection title="Runtime">
+            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in'} />
+            <AgentDetailField label="Model" value={displayModel(agent.model)} />
+            <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
+          </AgentDetailSection>
+
+          {activeConnections.length > 0 && (
+            <AgentDetailSection title="Connections">
+              <div className="space-y-1.5">
+                {activeConnections.map(connection => (
+                  <div key={connection.id} className="rounded-md border bg-muted/35 px-2 py-1.5 text-xs">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <Monitor className="size-3 shrink-0" />
+                      <span className="font-medium text-foreground">{connection.status}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
+                    </div>
+                    {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
+                  </div>
+                ))}
+              </div>
+            </AgentDetailSection>
+          )}
+
+          <AgentDetailTokenSection title="Tools" items={tools} empty="No tools configured" />
+          <AgentDetailTokenSection title="Skills" items={skills} empty="No skills configured" />
+
+          {agent.system_prompt && (
+            <AgentDetailSection title="System prompt">
+              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.system_prompt}</p>
+            </AgentDetailSection>
+          )}
+          {agent.instructions && (
+            <AgentDetailSection title="Instructions">
+              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.instructions}</p>
+            </AgentDetailSection>
+          )}
+          {agent.soul && (
+            <AgentDetailSection title="Soul">
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">{agent.soul}</p>
+            </AgentDetailSection>
+          )}
+
+          {webhooks.length > 0 && (
+            <AgentDetailSection title="Webhooks">
+              <div className="space-y-1.5">
+                {webhooks.map(webhook => {
+                  const url = webhookUrl(webhook.token);
+                  return (
+                    <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/35 px-2 py-1 text-xs">
+                      <Link2 className="size-3 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
+                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => void navigator.clipboard?.writeText(url)} aria-label={`Copy webhook for ${agent.name}`}>
+                        <Copy />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={webhook.enabled ? 'secondary' : 'ghost'}
+                        size="icon-xs"
+                        onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
+                        aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
+                        title={webhook.enabled ? 'Enabled' : 'Disabled'}
+                      >
+                        <Power />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </AgentDetailSection>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="agent-detail-section rounded-lg border bg-muted/25 p-3">
+      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function AgentDetailField({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/60 py-1.5 first:pt-0 last:border-b-0 last:pb-0">
+      <span className="shrink-0 text-sm font-semibold text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right text-sm font-medium" title={value}>{value}</span>
+    </div>
+  );
+}
+
+function AgentDetailTokenSection({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return (
+    <AgentDetailSection title={title}>
+      {items.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map(item => <Badge key={item} variant="outline" className="max-w-full truncate" title={item}>{item}</Badge>)}
+        </div>
+      ) : (
+        <div className="text-sm text-muted-foreground">{empty}</div>
+      )}
+    </AgentDetailSection>
+  );
+}
+
+function formatAgentDate(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function modelOptions(current: string) {

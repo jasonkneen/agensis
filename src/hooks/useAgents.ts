@@ -8,6 +8,7 @@ export interface CreateAgentInput {
   name: string;
   avatar?: string;
   openpet_avatar_id?: string | null;
+  accent_color?: string | null;
   description?: string;
   system_prompt: string;
   soul?: string;
@@ -91,6 +92,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       name: input.name,
       avatar: input.avatar ?? 'AI',
       openpet_avatar_id: input.openpet_avatar_id ?? '',
+      accent_color: input.accent_color ?? '#00a95c',
       description: input.description ?? '',
       system_prompt: input.system_prompt,
       soul: input.soul ?? '',

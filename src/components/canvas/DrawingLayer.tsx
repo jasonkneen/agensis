@@ -841,6 +841,14 @@ export function DrawingLayer({
             }}
             onStopEditing={() => setEditingTextId(null)}
             onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
+            onDelete={canEditObject(obj) ? () => {
+              onDeleteObject(obj.id);
+              setSelectedIds(prev => {
+                const next = new Set(prev);
+                next.delete(obj.id);
+                return next;
+              });
+            } : undefined}
             showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && tool === 'select'}
             tasks={tasks}
             agents={agents}
@@ -922,6 +930,14 @@ export function DrawingLayer({
           }}
           onStopEditing={() => setEditingTextId(null)}
           onResizeStart={(handle, e) => handleResizeStart(obj.id, handle, e)}
+          onDelete={canEditObject(obj) ? () => {
+            onDeleteObject(obj.id);
+            setSelectedIds(prev => {
+              const next = new Set(prev);
+              next.delete(obj.id);
+              return next;
+            });
+          } : undefined}
           showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && activeTool === 'select'}
           tasks={tasks}
           agents={agents}
@@ -1172,6 +1188,7 @@ function CanvasItemWrapper({
   onTextChange,
   onStopEditing,
   onResizeStart,
+  onDelete,
   showResizeHandles = false,
   tasks = [],
   agents = [],
@@ -1195,6 +1212,7 @@ function CanvasItemWrapper({
   onTextChange: (text: string) => void;
   onStopEditing: () => void;
   onResizeStart: (handle: 'nw' | 'ne' | 'sw' | 'se', e: React.PointerEvent) => void;
+  onDelete?: () => void;
   showResizeHandles?: boolean;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
@@ -1206,7 +1224,8 @@ function CanvasItemWrapper({
   interactive?: boolean;
 }) {
   const showAttachLine = parentObj && !editing;
-  const displayZIndex = parentObj ? Math.max(obj.z_index, parentObj.z_index + 1) : obj.z_index;
+  const baseDisplayZIndex = parentObj ? Math.max(obj.z_index, parentObj.z_index + 1) : obj.z_index;
+  const displayZIndex = selected && obj.type === 'applet' ? Math.max(baseDisplayZIndex, 9000) : baseDisplayZIndex;
   const px = (obj.x / 100) * canvasW;
   const py = (obj.y / 100) * canvasH;
   const pw = (obj.width / 100) * canvasW;
@@ -1300,6 +1319,7 @@ function CanvasItemWrapper({
                 onAppletStateChange={onAppletStateChange}
                 onAppletCreateTask={onAppletCreateTask}
                 onAppletUpdateTask={onAppletUpdateTask}
+                onDelete={onDelete}
               />
             )}
             {showResizeHandles && obj.type !== 'pen' && !editing && (
@@ -1371,6 +1391,7 @@ function CanvasItemWrapper({
               onAppletStateChange={onAppletStateChange}
               onAppletCreateTask={onAppletCreateTask}
               onAppletUpdateTask={onAppletUpdateTask}
+              onDelete={onDelete}
             />
             {showResizeHandles && obj.type !== 'pen' && !editing && (
               <ResizeHandles px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />

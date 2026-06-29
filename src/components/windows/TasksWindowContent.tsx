@@ -13,10 +13,11 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import type { Task, TaskPriority, TaskStatus } from '../../types';
+import type { Task, TaskComment, TaskPriority, TaskStatus } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useTaskComments } from '../../hooks/useTaskComments';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -38,7 +39,6 @@ import {
   ItemActions,
   ItemContent,
   ItemGroup,
-  ItemMedia,
   ItemTitle,
 } from '@/components/ui/item';
 import {
@@ -52,6 +52,7 @@ import {
 } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
 interface TasksWindowContentProps {
   tasks: Task[];
@@ -78,6 +79,17 @@ const PRIORITY_LABELS: Record<TaskPriority, string> = {
   high: 'High',
   urgent: 'Urgent',
 };
+
+const TASK_COMMENT_AVATAR_COLORS = [
+  'bg-red-500',
+  'bg-orange-500',
+  'bg-yellow-500',
+  'bg-green-500',
+  'bg-cyan-500',
+  'bg-blue-500',
+  'bg-violet-500',
+  'bg-pink-500',
+];
 
 type AssignmentFilter = 'all' | 'mine' | 'others';
 
@@ -245,6 +257,7 @@ export function TasksWindowContent({
                         members={members}
                         workspaceId={workspaceId}
                         currentUserId={currentUserId}
+                        currentUserEmail={currentUserEmail}
                         onToggle={() => onToggleStatus(task)}
                         onDelete={() => onDeleteTask(task.id)}
                         onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
@@ -272,6 +285,7 @@ function TaskRow({
   members,
   workspaceId,
   currentUserId,
+  currentUserEmail,
   onToggle,
   onDelete,
   onChangeStatus,
@@ -286,6 +300,7 @@ function TaskRow({
   members: WorkspaceMember[];
   workspaceId: string;
   currentUserId?: string;
+  currentUserEmail: string;
   onToggle: () => void;
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
@@ -383,8 +398,10 @@ function TaskRow({
         <TaskDetail
           task={task}
           subtasks={subtasks}
+          members={members}
           workspaceId={workspaceId}
           currentUserId={currentUserId}
+          currentUserEmail={currentUserEmail}
           onAddSubtask={onAddSubtask}
           onToggleSubtask={onToggleSubtask}
           onDeleteSubtask={onDeleteSubtask}
@@ -397,16 +414,20 @@ function TaskRow({
 function TaskDetail({
   task,
   subtasks,
+  members,
   workspaceId,
   currentUserId,
+  currentUserEmail,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
 }: {
   task: Task;
   subtasks: Task[];
+  members: WorkspaceMember[];
   workspaceId: string;
   currentUserId?: string;
+  currentUserEmail: string;
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
@@ -490,17 +511,14 @@ function TaskDetail({
         {comments.length > 0 && (
           <ItemGroup className="gap-1">
             {comments.map(comment => (
-              <Item key={comment.id} size="xs" variant="muted" className="task-comment-row">
-                <ItemMedia className="size-2 rounded-full bg-primary" />
-                <ItemContent className="min-w-0">
-                  <ItemTitle className="max-w-full whitespace-normal font-normal">{comment.content}</ItemTitle>
-                </ItemContent>
-                <ItemActions>
-                  <Button type="button" variant="ghost" size="icon-xs" onClick={() => deleteComment(comment.id)} aria-label="Delete comment">
-                    <Trash2 />
-                  </Button>
-                </ItemActions>
-              </Item>
+              <TaskCommentItem
+                key={comment.id}
+                comment={comment}
+                members={members}
+                currentUserId={currentUserId}
+                currentUserEmail={currentUserEmail}
+                onDelete={() => deleteComment(comment.id)}
+              />
             ))}
           </ItemGroup>
         )}
@@ -522,4 +540,79 @@ function TaskDetail({
       </section>
     </div>
   );
+}
+
+function TaskCommentItem({
+  comment,
+  members,
+  currentUserId,
+  currentUserEmail,
+  onDelete,
+}: {
+  comment: TaskComment;
+  members: WorkspaceMember[];
+  currentUserId?: string;
+  currentUserEmail: string;
+  onDelete: () => void;
+}) {
+  const member = comment.user_id ? members.find(item => item.user_id === comment.user_id) : null;
+  const isCurrentUser = Boolean(currentUserId && comment.user_id === currentUserId);
+  const authorEmail = member?.email || (isCurrentUser ? currentUserEmail : undefined);
+  const authorLabel = isCurrentUser
+    ? 'You'
+    : authorEmail?.split('@')[0] || 'Teammate';
+
+  return (
+    <Item size="xs" variant="muted" className="task-comment-row items-start">
+      <TaskCommentAvatar email={authorEmail} seed={comment.user_id || comment.id} />
+      <ItemContent className="min-w-0 gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate text-[11px] font-semibold text-foreground">{authorLabel}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
+        </div>
+        <ItemTitle className="max-w-full whitespace-normal text-xs font-normal leading-snug">{comment.content}</ItemTitle>
+      </ItemContent>
+      <ItemActions className="ml-1">
+        <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete comment">
+          <Trash2 />
+        </Button>
+      </ItemActions>
+    </Item>
+  );
+}
+
+function TaskCommentAvatar({ email, seed }: { email?: string; seed: string }) {
+  const source = email || seed || 'user';
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = ((hash << 5) - hash + source.charCodeAt(i)) | 0;
+  }
+  const color = TASK_COMMENT_AVATAR_COLORS[Math.abs(hash) % TASK_COMMENT_AVATAR_COLORS.length];
+
+  return (
+    <Avatar size="sm" className="size-5">
+      <AvatarFallback className={cn(color, 'text-[9px] font-bold text-white')}>
+        {taskCommentInitial(email || seed)}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+function taskCommentInitial(value?: string) {
+  return (value?.[0] || 'U').toUpperCase();
+}
+
+function formatRelativeTime(iso: string) {
+  const date = new Date(iso);
+  const timestamp = date.getTime();
+  if (!Number.isFinite(timestamp)) return '';
+  const diff = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  return date.toLocaleDateString();
 }

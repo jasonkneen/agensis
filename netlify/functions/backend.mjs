@@ -604,6 +604,7 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
@@ -799,6 +800,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'scout',
     run_mode: 'builtin',
     avatar: 'SC',
+    accent_color: '#38bdf8',
     description: 'Codebase navigator.',
     system_prompt:
       "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
@@ -808,6 +810,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'research',
     run_mode: 'builtin',
     avatar: 'RE',
+    accent_color: '#a78bfa',
     description: 'Web and information researcher.',
     system_prompt:
       "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
@@ -817,6 +820,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'coder',
     run_mode: 'daemon',
     avatar: 'CO',
+    accent_color: '#00a95c',
     description: 'Coding agent (local daemon).',
     system_prompt:
       "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
@@ -826,6 +830,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'q',
     run_mode: 'daemon',
     avatar: 'Q',
+    accent_color: '#f59e0b',
     description: 'Tooling agent.',
     system_prompt:
       "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
@@ -835,6 +840,7 @@ const DEFAULT_AGENT_SEEDS = [
     handle: 'mills',
     run_mode: 'daemon',
     avatar: 'MI',
+    accent_color: '#f472b6',
     description: 'Skills agent.',
     system_prompt:
       "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
@@ -854,7 +860,7 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
 
   const columns = [
     'id', 'workspace_id', 'created_by', 'name', 'avatar', 'openpet_avatar_id',
-    'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
+    'accent_color', 'description', 'system_prompt', 'soul', 'instructions', 'tools', 'skills',
     'handle', 'model', 'run_mode', 'permission_mode',
   ];
   const params = [];
@@ -866,6 +872,7 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
       name: seed.name,
       avatar: seed.avatar,
       openpet_avatar_id: '',
+      accent_color: seed.accent_color,
       description: seed.description ?? '',
       system_prompt: seed.system_prompt,
       soul: '',

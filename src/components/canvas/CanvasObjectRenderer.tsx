@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, FileText, RotateCw } from 'lucide-react';
+import { AlertTriangle, FileText, RotateCw, X } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { CANVAS_APPS, parseAppletState } from '../../lib/canvasApps';
 import { apiAuthHeaders } from '../../lib/backendClient';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
+import { Button } from '@/components/ui/button';
 
 interface CanvasObjectRendererProps {
   obj: CanvasObject;
@@ -19,6 +20,7 @@ interface CanvasObjectRendererProps {
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
   onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
+  onDelete?: () => void;
 }
 
 export function CanvasObjectRenderer({
@@ -34,6 +36,7 @@ export function CanvasObjectRenderer({
   onAppletStateChange,
   onAppletCreateTask,
   onAppletUpdateTask,
+  onDelete,
 }: CanvasObjectRendererProps) {
   void onSelect;
 
@@ -100,6 +103,7 @@ export function CanvasObjectRenderer({
         onAppletStateChange={onAppletStateChange}
         onAppletCreateTask={onAppletCreateTask}
         onAppletUpdateTask={onAppletUpdateTask}
+        onDelete={onDelete}
       />
     );
   }
@@ -148,7 +152,7 @@ export function CanvasObjectRenderer({
 }
 
 function AppletObject({
-  obj, px, py, pw, ph, selected, attachHighlight, hostInteractionActive, tasks, agents, onAppletStateChange, onAppletCreateTask, onAppletUpdateTask,
+  obj, px, py, pw, ph, selected, attachHighlight, hostInteractionActive, tasks, agents, onAppletStateChange, onAppletCreateTask, onAppletUpdateTask, onDelete,
 }: {
   obj: CanvasObject;
   px: number; py: number; pw: number; ph: number;
@@ -160,6 +164,7 @@ function AppletObject({
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
   onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
+  onDelete?: () => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [crash, setCrash] = useState<string | null>(null);
@@ -167,6 +172,7 @@ function AppletObject({
   const parsed = parseAppletState(obj.text_content);
   const appId = parsed.appId || obj.file_name || 'applet';
   const appDefinition = CANVAS_APPS.find(app => app.id === appId);
+  const appletTitle = obj.file_name || appDefinition?.name || 'Canvas applet';
   const appletHtml = appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
   const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 
@@ -252,6 +258,8 @@ function AppletObject({
   return (
     <div
       data-canvas-item-id={obj.id}
+      data-canvas-applet-shell
+      data-selected={selected ? 'true' : undefined}
       style={{
         position: 'absolute',
         left: px,
@@ -274,6 +282,45 @@ function AppletObject({
         backfaceVisibility: 'hidden',
       }}
     >
+      <div data-canvas-applet-chrome>
+        <span data-canvas-applet-title>
+          <FileText style={{ width: 13, height: 13 }} />
+          <span>{appletTitle}</span>
+        </span>
+        <span data-canvas-applet-controls>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label={`Restart ${appletTitle}`}
+            title="Restart"
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation();
+              setCrash(null);
+              setReloadKey(key => key + 1);
+            }}
+          >
+            <RotateCw />
+          </Button>
+          {onDelete && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-xs"
+              aria-label={`Close ${appletTitle}`}
+              title="Close"
+              onPointerDown={event => event.stopPropagation()}
+              onClick={event => {
+                event.stopPropagation();
+                onDelete();
+              }}
+            >
+              <X />
+            </Button>
+          )}
+        </span>
+      </div>
       <iframe
         key={reloadKey}
         ref={iframeRef}
@@ -283,7 +330,8 @@ function AppletObject({
         sandbox="allow-forms allow-modals allow-popups allow-scripts"
         style={{
           width: '100%',
-          height: '100%',
+          height: 'calc(100% - 2rem)',
+          marginTop: '2rem',
           border: 0,
           display: 'block',
           pointerEvents: selected && !hostInteractionActive ? 'auto' : 'none',
@@ -294,7 +342,10 @@ function AppletObject({
         <div
           style={{
             position: 'absolute',
-            inset: 0,
+            top: '2rem',
+            right: 0,
+            bottom: 0,
+            left: 0,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
