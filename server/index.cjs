@@ -609,6 +609,24 @@ async function ensureRuntimeSchema() {
         CHECK (type IN ('rect', 'ellipse', 'diamond', 'arrow', 'line', 'pen', 'text', 'image', 'video', 'file', 'applet', 'sticky_note'));
     END $$;
   `);
+  await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS workspace_invites (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      token text NOT NULL UNIQUE,
+      email text DEFAULT '',
+      role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      accepted_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      accepted_at timestamptz,
+      expires_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
+  `);
   // C3 — make message-activity logging idempotent. A retried daemon finalization
   // re-logs the same message id; the partial unique index lets the logging insert
   // use ON CONFLICT DO NOTHING (see logMessageActivity). Wrapped on its own so a
@@ -3300,6 +3318,151 @@ function createApp() {
       res.json({ data: rows, error: null });
     } catch (error) {
       jsonError(res, 500, error);
+    }
+  });
+
+  // ── Workspace members (with emails) + invite links ───────────────────────
+
+  app.get('/backend/workspaces/:id/members', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const rows = await getDb().unsafe(
+        `select * from (
+           select w.user_id as user_id, u.email as email, 'owner' as role,
+                  null::uuid as id, null::uuid as invited_by, w.created_at as created_at
+             from workspaces w join app_users u on u.id = w.user_id
+            where w.id = $1
+           union all
+           select m.user_id, u.email, m.role, m.id, m.invited_by, m.created_at
+             from workspace_members m join app_users u on u.id = m.user_id
+            where m.workspace_id = $1
+         ) t order by (role = 'owner') desc, created_at asc`,
+        [workspaceId],
+      );
+      res.json({ data: rows, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/workspaces/:id/invites', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const rows = await getDb().unsafe(
+        `select i.*, cu.email as created_by_email, au.email as accepted_by_email
+           from workspace_invites i
+           left join app_users cu on cu.id = i.created_by
+           left join app_users au on au.id = i.accepted_by
+          where i.workspace_id = $1
+          order by i.created_at desc`,
+        [workspaceId],
+      );
+      res.json({ data: rows, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/workspaces/:id/invites', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const allowedRoles = ['admin', 'editor', 'commenter', 'viewer'];
+      const role = allowedRoles.includes(req.body?.role) ? req.body.role : 'editor';
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const token = crypto.randomBytes(24).toString('base64url');
+      const rows = await getDb().unsafe(
+        `insert into workspace_invites (workspace_id, token, email, role, status, created_by, expires_at)
+         values ($1, $2, $3, $4, 'pending', $5, now() + interval '14 days')
+         returning *`,
+        [workspaceId, token, email, role, req.userId],
+      );
+      notifyDbSubscribers('workspace_invites', 'INSERT', rows);
+      res.json({ data: rows[0], error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.delete('/backend/workspaces/:id/invites/:inviteId', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      const inviteId = String(req.params.inviteId || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const rows = await getDb().unsafe(
+        `update workspace_invites set status = 'revoked', updated_at = now()
+          where id = $1 and workspace_id = $2 returning *`,
+        [inviteId, workspaceId],
+      );
+      notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+      res.json({ data: rows[0] ?? null, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/invites/:token', requireAuth, async (req, res) => {
+    try {
+      const token = String(req.params.token || '').trim();
+      const rows = await getDb().unsafe(
+        `select i.id, i.role, i.status, i.expires_at, i.workspace_id,
+                w.name as workspace_name, cu.email as inviter_email
+           from workspace_invites i
+           join workspaces w on w.id = i.workspace_id
+           left join app_users cu on cu.id = i.created_by
+          where i.token = $1 limit 1`,
+        [token],
+      );
+      const invite = rows[0];
+      if (!invite) return jsonError(res, 404, new Error('Invite not found'));
+      const expired = invite.expires_at && new Date(invite.expires_at) < new Date();
+      res.json({ data: { ...invite, expired: !!expired, valid: invite.status === 'pending' && !expired }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/invites/:token/accept', requireAuth, async (req, res) => {
+    try {
+      const token = String(req.params.token || '').trim();
+      const inviteRows = await getDb().unsafe('select * from workspace_invites where token = $1 limit 1', [token]);
+      const invite = inviteRows[0];
+      if (!invite) return jsonError(res, 404, new Error('Invite not found'));
+      if (invite.status === 'revoked') return jsonError(res, 410, new Error('This invite has been revoked'));
+      if (invite.expires_at && new Date(invite.expires_at) < new Date()) return jsonError(res, 410, new Error('This invite has expired'));
+      if (invite.status === 'accepted' && invite.accepted_by && String(invite.accepted_by) !== String(req.userId)) {
+        return jsonError(res, 410, new Error('This invite has already been used'));
+      }
+      const workspaceId = invite.workspace_id;
+      const owns = await getDb().unsafe('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, req.userId]);
+      if (owns.length === 0) {
+        const existing = await getDb().unsafe('select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, req.userId]);
+        if (existing.length === 0) {
+          const memberRows = await getDb().unsafe(
+            `insert into workspace_members (workspace_id, user_id, role, invited_by)
+             values ($1, $2, $3, $4) returning *`,
+            [workspaceId, req.userId, invite.role, invite.created_by],
+          );
+          notifyDbSubscribers('workspace_members', 'INSERT', memberRows);
+        }
+      }
+      if (invite.status === 'pending') {
+        const updated = await getDb().unsafe(
+          `update workspace_invites set status = 'accepted', accepted_by = $2, accepted_at = now(), updated_at = now()
+            where id = $1 returning *`,
+          [invite.id, req.userId],
+        );
+        notifyDbSubscribers('workspace_invites', 'UPDATE', updated);
+      }
+      const wsRows = await getDb().unsafe('select id, name from workspaces where id = $1 limit 1', [workspaceId]);
+      res.json({ data: { workspaceId, workspace: wsRows[0] ?? null }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
     }
   });
 

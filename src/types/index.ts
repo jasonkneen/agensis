@@ -134,9 +134,9 @@ export interface CanvasGroup {
 
 export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow' | 'text' | 'eraser' | 'sticky_note';
 
-export type ActiveView = 'chat' | 'document' | 'memory' | 'files' | 'tasks' | 'activity' | 'agents';
+export type ActiveView = 'chat' | 'document' | 'memory' | 'files' | 'tasks' | 'activity' | 'agents' | 'users';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'tasks' | 'activity' | 'agents';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'tasks' | 'activity' | 'agents' | 'users';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';

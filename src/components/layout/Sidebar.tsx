@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Archive,
   Bot,
+  Users,
   Brain,
   ChevronRight,
   Copy,
@@ -95,6 +96,7 @@ interface SidebarProps {
   onOpenTasks?: () => void;
   onOpenActivity?: () => void;
   onOpenAgents?: () => void;
+  onOpenUsers?: () => void;
   onAgentMessage?: (agent: SidebarAgentTarget) => void;
   onAgentProfile?: (agent: SidebarAgentTarget) => void;
   onOpenTemplates?: () => void;
@@ -132,6 +134,7 @@ export function Sidebar({
   onOpenTasks,
   onOpenActivity,
   onOpenAgents,
+  onOpenUsers,
   onAgentMessage,
   onAgentProfile,
   onOpenTemplates,
@@ -267,6 +270,7 @@ export function Sidebar({
         <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
         {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
         {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
+        {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
         {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
         <div className="flex-1" />
         <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
@@ -539,6 +543,7 @@ export function Sidebar({
             <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
             {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
             {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
+            {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
             {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
         </div>
       </ScrollArea>

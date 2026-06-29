@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -9,6 +9,7 @@ import { DocWindowContent } from './components/windows/DocWindowContent';
 import { TasksWindowContent } from './components/windows/TasksWindowContent';
 import { ActivityWindowContent } from './components/windows/ActivityWindowContent';
 import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
+import { UsersWindow } from './components/windows/UsersWindow';
 import { MemorySection } from './components/memory/MemorySection';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import CommandPalette from './components/search/CommandPalette';
@@ -19,7 +20,8 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
-import { backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
+import { inviteUrl } from './hooks/useWorkspaceUsers';
 import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
 import {
   AlertDialog,
@@ -628,6 +630,59 @@ function AppContent() {
     openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenUsers = useCallback(() => {
+    const existing = windows.find(w => w.type === 'users');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('users', { title: 'Users', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  // Quick "copy invite link" used by the presence popup: mints an editor invite
+  // for the active workspace and copies the shareable URL.
+  const handleCopyInviteLink = useCallback(async (): Promise<string | null> => {
+    if (!activeWorkspaceId) return null;
+    try {
+      const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(activeWorkspaceId)}/invites`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ role: 'editor' }),
+      });
+      const payload = await res.json().catch(() => null);
+      const token = payload?.data?.token;
+      if (!token) return null;
+      const url = inviteUrl(window.location.origin, token);
+      await navigator.clipboard?.writeText(url);
+      return url;
+    } catch {
+      return null;
+    }
+  }, [activeWorkspaceId]);
+
+  // Accept-invite-on-load: if the URL carries ?invite=<token>, join the workspace
+  // once authenticated, then reload (so useWorkspaces refetches the new workspace).
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('invite');
+    if (!token) return;
+    (async () => {
+      try {
+        await fetch(apiUrl(`/backend/invites/${encodeURIComponent(token)}/accept`), {
+          method: 'POST',
+          headers: apiAuthHeaders(),
+        });
+      } catch {
+        // ignore — the reload below still strips the param
+      }
+      params.delete('invite');
+      const qs = params.toString();
+      window.location.replace(`${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    })();
+  }, [user]);
+
   const handleOpenAgentProfile = useCallback((agentIdOrHandle?: string | null) => {
     if (agentIdOrHandle) setFocusedAgentKey(agentIdOrHandle);
     handleOpenAgents();
@@ -953,6 +1008,7 @@ function AppContent() {
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}
         onOpenAgents={handleOpenAgents}
+        onOpenUsers={handleOpenUsers}
         onAgentMessage={handleAgentDirectMessage}
         onAgentProfile={(agent) => handleOpenAgentProfile(agent.agentId || agent.id || agent.handle || agent.name)}
         onOpenTemplates={() => setTemplatePickerOpen(true)}
@@ -1012,6 +1068,7 @@ function AppContent() {
                 onToggleFavorite={togglePresenceFavorite}
                 onFocusUser={setFocusedPresenceUserId}
                 onOpenRemoteWindow={handleOpenPresenceWindow}
+                onCopyInviteLink={handleCopyInviteLink}
               />
             </div>
 
@@ -1692,6 +1749,32 @@ function CanvasLayerScene({
           );
         }
 
+        if (win.type === 'users') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Users size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <UsersWindow
+                workspaceId={workspaceId}
+                workspaceName={workspaceName}
+                currentUserId={userId}
+                currentUserEmail={userEmail}
+              />
+            </FloatingWindowShell>
+          );
+        }
+
         return null;
       })}
     </>
@@ -1773,6 +1856,7 @@ function WorkspacePresenceAvatars({
   onToggleFavorite,
   onFocusUser,
   onOpenRemoteWindow,
+  onCopyInviteLink,
 }: {
   users: WorkspacePresenceUser[];
   getMode: (id?: string | null) => PresenceVisibilityMode;
@@ -1782,9 +1866,11 @@ function WorkspacePresenceAvatars({
   onToggleFavorite: (id: string) => void;
   onFocusUser: (id: string | null) => void;
   onOpenRemoteWindow: (win: FloatingWindow) => void;
+  onCopyInviteLink?: () => Promise<string | null>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   useEffect(() => {
     if (!expanded) return;
@@ -1821,6 +1907,26 @@ function WorkspacePresenceAvatars({
             </div>
             <Badge variant="secondary">{users.length}</Badge>
           </div>
+          {onCopyInviteLink && (
+            <div className="border-b px-3 py-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={async () => {
+                  const url = await onCopyInviteLink();
+                  if (url) {
+                    setInviteCopied(true);
+                    window.setTimeout(() => setInviteCopied(false), 1600);
+                  }
+                }}
+              >
+                <Users data-icon="inline-start" className="size-3.5" />
+                {inviteCopied ? 'Invite link copied' : 'Copy invite link'}
+              </Button>
+            </div>
+          )}
           <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
             Non-private open windows appear here as local-open references. Moving, closing, or resizing your copy does not affect theirs.
           </div>
