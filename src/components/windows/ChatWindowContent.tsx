@@ -490,10 +490,18 @@ export function ChatWindowContent({
         setShowDocPicker(false);
         return;
       }
-      if (e.key === 'Enter' && filteredDocs.length > 0) {
-        e.preventDefault();
-        handleDocSelect(filteredDocs[0]);
-        return;
+      // Tab or Enter completes the top item (agents render above docs) and closes the @ menu.
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        if (filteredAgents.length > 0) {
+          e.preventDefault();
+          handleAgentSelect(filteredAgents[0]);
+          return;
+        }
+        if (filteredDocs.length > 0) {
+          e.preventDefault();
+          handleDocSelect(filteredDocs[0]);
+          return;
+        }
       }
     }
 
