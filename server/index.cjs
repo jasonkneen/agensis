@@ -1091,11 +1091,18 @@ function publicAgentConnection(row) {
 
 function parseJsonObject(value) {
   if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (Array.isArray(value)) {
+    // jsonb `string || string` concatenation corrupts an object into an array of
+    // JSON-string fragments (seen on agent_jobs.metadata after a delta update).
+    // Merge the fragments back so callers still read the original keys.
+    return value.reduce((acc, part) => Object.assign(acc, parseJsonObject(part)), {});
+  }
+  if (typeof value === 'object') return value;
   if (typeof value !== 'string') return {};
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (Array.isArray(parsed)) return parseJsonObject(parsed);
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
   }
@@ -3108,7 +3115,11 @@ function createApp() {
       const token = createAgentConnectToken();
       const handle = slugHandle(req.body?.handle || agent.handle || agent.name);
       const model = resolveAnthropicModel(req.body?.model || agent.model);
-      const permissionMode = normalizeAgentPermissionMode(req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode);
+      let permissionMode = normalizeAgentPermissionMode(req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode);
+      // Remote daemons run on the user's own machine and need full access to do real
+      // work, so the connect command defaults to yolo (full permissions, no sandbox)
+      // unless an explicitly safer mode (e.g. accept_edits) was requested.
+      if (permissionMode === 'default') permissionMode = 'yolo';
       const updateRows = await getDb().unsafe(
         `update workspace_agents
          set handle = $2,
