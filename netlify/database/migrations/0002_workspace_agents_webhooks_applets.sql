@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name text NOT NULL,
   avatar text NOT NULL DEFAULT 'AI',
-  accent_color text DEFAULT '#00a95c',
   description text DEFAULT '',
   system_prompt text NOT NULL DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
