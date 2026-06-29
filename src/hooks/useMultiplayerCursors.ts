@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { backendClient } from '../lib/backendClient';
-import type { RealtimeChannel, BroadcastPayload, BroadcastSendMessage } from '../types/realtime';
+import type { RealtimeChannel, BroadcastPayload } from '../types/realtime';
 
 export interface CursorPresence {
   id: string;

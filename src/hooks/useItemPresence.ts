@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
 import type { FloatingWindow, ItemPresenceUser, WorkspaceInstanceShareMode } from '../types';
-import type { RealtimeChannel, BroadcastPayload, BroadcastSendMessage } from '../types/realtime';
+import type { RealtimeChannel, BroadcastPayload } from '../types/realtime';
 
 interface PresenceSnapshotItem {
   type: 'chat' | 'document';

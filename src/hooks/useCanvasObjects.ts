@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import type { CanvasObject, CanvasObjectType, CanvasGroup } from '../types';
-import type { RealtimeChannel, BroadcastPayload, DbChangePayload, BroadcastSendMessage } from '../types/realtime';
+import type { RealtimeChannel, BroadcastPayload, DbChangePayload } from '../types/realtime';
 
 interface BroadcastCanvasObjectPayload {
   senderId?: string;
