@@ -1105,7 +1105,7 @@ function ItemRow({
   return (
     <button
       type="button"
-      className={`sidebar-item-row sidebar-item-row-${kind} flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring`}
+      className={`sidebar-item-row sidebar-item-row-${kind} group flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring`}
       onClick={onClick}
     >
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
@@ -1113,17 +1113,19 @@ function ItemRow({
       </span>
       <span className="sidebar-item-label min-w-0 truncate text-left">{label}</span>
       {presenceUsers.length > 0 && (
-        <span className="ml-auto flex shrink-0 items-center gap-0.5">
+        <span className="ml-auto flex shrink-0 items-center gap-0.5 transition-all duration-150 group-hover:gap-1">
           {presenceUsers.slice(0, 3).map(person => (
             <span
               key={person.userId}
-              className="size-2 rounded-full ring-1 ring-background"
+              className="flex size-2 items-center justify-center overflow-hidden rounded-full text-[0px] font-semibold leading-none text-white ring-1 ring-background transition-all duration-150 group-hover:size-4 group-hover:text-[9px]"
               style={{ backgroundColor: person.color }}
               title={`${person.name}${person.typing ? ' is typing' : ' is active'}`}
-            />
+            >
+              {person.name.trim().charAt(0).toUpperCase()}
+            </span>
           ))}
           {presenceUsers.length > 3 && (
-            <span className="text-[10px] text-muted-foreground">+{presenceUsers.length - 3}</span>
+            <span className="text-[10px] leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
           )}
         </span>
       )}
