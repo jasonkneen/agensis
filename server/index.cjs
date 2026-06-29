@@ -1725,10 +1725,65 @@ function agentLiveMessageContent(message) {
   return `Thinking ${formatElapsedMs(message?.elapsedMs)}`;
 }
 
+// Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
+// pending "Thinking …" placeholder with a clear message, so a chat never hangs on
+// a spinner when the daemon disconnects, crashes, or simply never answers.
+async function finalizeStuckJob(job, reason) {
+  try {
+    const updated = await getDb().unsafe(
+      `update agent_jobs set status = 'failed', updated_at = now() where id = $1 and status = 'running' returning id`,
+      [job.id],
+    );
+    if (updated.length === 0) return; // a real result already finalized it
+    const meta = parseJsonObject(job.metadata);
+    const responseMessageId = meta.responseMessageId || null;
+    if (!responseMessageId) return;
+    const handle = meta.handle || 'agent';
+    const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+    const rows = await getDb().unsafe(
+      `update messages set content = $2
+       where id = $1 and session_id = $3 and content ~ '^Thinking '
+       returning *`,
+      [responseMessageId, content, job.session_id],
+    );
+    if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+  } catch {
+    // best effort
+  }
+}
+
+// Fail every running job tied to a connection that just dropped.
+async function failConnectionJobs(connectionId, reason) {
+  if (!connectionId) return;
+  try {
+    const rows = await getDb().unsafe(
+      `select * from agent_jobs where connection_id = $1 and status = 'running'`,
+      [connectionId],
+    );
+    for (const job of rows) await finalizeStuckJob(job, reason);
+  } catch {
+    // best effort
+  }
+}
+
+// Backstop: time out any running job pending too long (covers half-open sockets
+// that never fire 'close', or a daemon that connected but never returned a result).
+async function reapStuckAgentJobs() {
+  try {
+    const rows = await getDb().unsafe(
+      `select * from agent_jobs where status = 'running' and started_at < now() - interval '240 seconds'`,
+    );
+    for (const job of rows) await finalizeStuckJob(job, 'timed out');
+  } catch {
+    // best effort
+  }
+}
+
 async function markAgentConnectionOffline(ws) {
   const connectionId = ws.agentConnectionId;
   if (!connectionId) return;
   connectedAgents.delete(connectionId);
+  void failConnectionJobs(connectionId, 'the daemon disconnected');
   try {
     const rows = await getDb().unsafe(
       `update agent_connections
@@ -1759,6 +1814,9 @@ async function reconcileAgentConnectionsAtStartup() {
       console.log(`[backend] reset ${rows.length} stale agent connection(s) to offline on startup`);
       notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
     }
+    const stuckJobs = await getDb().unsafe(`select * from agent_jobs where status = 'running'`);
+    for (const job of stuckJobs) await finalizeStuckJob(job, 'the backend restarted');
+    if (stuckJobs.length > 0) console.log(`[backend] finalized ${stuckJobs.length} orphaned running job(s) on startup`);
   } catch (error) {
     console.warn('[backend] startup agent-connection reconcile skipped:', error.message || error);
   }
@@ -3741,6 +3799,8 @@ function startBackendServer(port = DEFAULT_PORT) {
     console.log(`[backend] listening on http://${host}:${port}`);
   });
   void reconcileAgentConnectionsAtStartup();
+  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); }, 30_000);
+  if (jobReaper.unref) jobReaper.unref();
   server.on('close', () => {
     wss.close();
     websocketClients = new Set();
