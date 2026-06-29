@@ -1502,6 +1502,26 @@ function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initial
   return isAgent ? <Bot className="size-4" /> : <span>{initials}</span>;
 }
 
+// Live "Thinking Ns" timer for agent placeholders — ticks locally from the
+// placeholder's created_at so it counts up even before any streamed content
+// (or realtime update) arrives.
+function ThinkingIndicator({ startedAt }: { startedAt?: string | null }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = startedAt ? new Date(startedAt).getTime() : Date.now();
+    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - start) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  return (
+    <span className="flex items-center gap-2 text-muted-foreground">
+      <Spinner className="size-3" />
+      Thinking {elapsed}s
+    </span>
+  );
+}
+
 function ChatMessageBubble({
   msg,
   avatar,
@@ -1541,6 +1561,7 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
+  const isThinkingPlaceholder = (msg.sender_kind === 'agent' || msg.role === 'assistant') && /^thinking[\s\d.ms]*$/i.test(rawContent.trim());
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const initials = isUser ? 'You'.slice(0, 2).toUpperCase() : (senderName.slice(0, 2).toUpperCase() || 'AI');
@@ -1599,13 +1620,12 @@ function ChatMessageBubble({
           </div>
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
-            {displayContent ? (
+            {isThinkingPlaceholder ? (
+              <ThinkingIndicator startedAt={msg.created_at} />
+            ) : displayContent ? (
               <MarkdownContent content={displayContent} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (
-              <span className="flex items-center gap-2 text-muted-foreground">
-                <Spinner className="size-3" />
-                Thinking
-              </span>
+              <ThinkingIndicator startedAt={msg.created_at} />
             ) : (
               <span className="text-muted-foreground">{unavailableMessage}</span>
             )}
