@@ -142,6 +142,26 @@ At minimum, a fresh setup should:
 - set `ANTHROPIC_API_KEY` if using AI chat
 - run `npm run backend`
 
+## Production daemon sockets
+
+Netlify Functions serve the deployed HTTP API routes, but they do not host
+long-lived WebSocket upgrade servers. Agent daemon commands therefore need a
+separate long-running Node backend that runs `server/index.cjs` and serves
+`/backend/ws`.
+
+For production, deploy `server/index.cjs` to a Node host that supports
+WebSockets, point it at the same database, and set this environment variable on
+the Netlify site:
+
+```bash
+AGENSIS_DAEMON_BASE_URL=https://your-daemon-backend.example.com
+```
+
+After that is configured, the AI Agents window generates `agensis connect`
+commands against the daemon backend. Without this value, command generation
+returns a clear configuration error instead of producing a command that points
+at the Netlify site and fails with a websocket 404.
+
 ## Project structure
 
 ```text
