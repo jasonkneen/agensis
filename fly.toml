@@ -1,0 +1,43 @@
+# Fly.io config for the agensis realtime backend (server/index.cjs).
+#
+# Netlify can't host WebSockets, so the WS realtime + agent-daemon endpoint
+# (/backend/ws) and the rest of the Express API run here. The static frontend
+# stays on Netlify; daemons are pointed here via AGENSIS_DAEMON_BASE_URL.
+#
+# First deploy:
+#   flyctl auth login
+#   fly launch --no-deploy --copy-config --name agensis-backend   # or: fly apps create agensis-backend
+#   fly secrets set DATABASE_URL='...' ANTHROPIC_API_KEY='...' AGENSIS_AUTH_SECRET='...'
+#   fly deploy
+# Secrets live in `fly secrets`, NEVER in this file.
+
+app = "agensis-backend"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  HOST = "0.0.0.0"
+  API_PORT = "8080"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine warm so open WebSockets (browser realtime + agent daemons)
+  # are not torn down by idle auto-stop.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/backend/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

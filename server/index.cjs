@@ -3074,7 +3074,10 @@ function createApp() {
         [agentId, handle, hashAgentToken(token), model, permissionMode],
       );
       notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
-      const baseUrl = normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
+      // Daemons connect over WebSocket, which the Netlify deploy can't host. When
+      // AGENSIS_DAEMON_BASE_URL is set (e.g. the Fly backend), emit it as the
+      // connect --url so the daemon targets the WS-capable host, not the app origin.
+      const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
       const commands = agentConnectionCommand({
         baseUrl,
         token,
@@ -3526,8 +3529,11 @@ function startBackendServer(port = DEFAULT_PORT) {
   const app = createApp();
   const server = http.createServer(app);
   const wss = attachRealtime(server);
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`[backend] listening on http://127.0.0.1:${port}`);
+  // Bind to 127.0.0.1 locally (Electron/dev safety) but to 0.0.0.0 in a container
+  // so Fly's proxy can reach it. Fly sets HOST=0.0.0.0 via fly.toml [env].
+  const host = process.env.HOST || '127.0.0.1';
+  server.listen(port, host, () => {
+    console.log(`[backend] listening on http://${host}:${port}`);
   });
   void reconcileAgentConnectionsAtStartup();
   server.on('close', () => {

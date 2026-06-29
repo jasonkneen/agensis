@@ -694,7 +694,10 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
      returning *`,
     [agentId, handle, hashAgentToken(token), model, permissionMode],
   );
-  const baseUrl = normalizeBaseUrl(body?.baseUrl) || requestBaseUrl(req);
+  // Daemons connect over WebSocket, which Netlify functions can't host. When
+  // AGENSIS_DAEMON_BASE_URL is set (the Fly backend), emit it as the connect --url
+  // so the daemon targets the WS-capable host rather than this Netlify origin.
+  const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(body?.baseUrl) || requestBaseUrl(req);
   const commands = agentConnectionCommand({
     baseUrl,
     token,

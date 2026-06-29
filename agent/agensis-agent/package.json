@@ -1,0 +1,52 @@
+{
+  "name": "@agensis/agensis-agent",
+  "version": "0.0.5",
+  "description": "Run a local agensis workspace agent daemon. Connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to agensis. Ships as a single minified bundle.",
+  "homepage": "https://agensis.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasonkneen/agensis.git",
+    "directory": "agent/agensis-agent"
+  },
+  "bugs": {
+    "url": "https://github.com/jasonkneen/agensis/issues"
+  },
+  "type": "module",
+  "bin": {
+    "agensis": "bin/agensis.mjs",
+    "agensis-agent": "bin/agensis.mjs"
+  },
+  "files": [
+    "bin/agensis.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "agensis",
+    "workspace",
+    "agent",
+    "daemon",
+    "claude-code",
+    "codex",
+    "cursor",
+    "coding-agent"
+  ],
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.5"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
+}
