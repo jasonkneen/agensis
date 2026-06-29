@@ -1200,19 +1200,19 @@ export function ChatWindowContent({
 
           <div className="relative">
             {showDocPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] rounded-2xl border border-border bg-popover p-2 pt-3 shadow-xl">
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                 <CommandList className="max-h-[min(240px,40vh)]">
                   <CommandEmpty>No agents or documents found.</CommandEmpty>
                   {filteredAgents.length > 0 && (
-                    <CommandGroup heading="Agents" className="pb-2">
+                    <CommandGroup heading="Agents">
                       {filteredAgents.map(agent => (
                         <CommandItem
                           key={agent.id}
                           value={`${agent.name} ${agentHandle(agent)}`}
-                          className="min-h-14 rounded-xl px-3 py-2"
+                          className="rounded-lg px-2 py-1.5"
                           onSelect={() => handleAgentSelect(agent)}
                         >
-                          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                             <Bot className="size-4" />
                           </span>
                           <span className="min-w-0 flex-1">
@@ -1231,10 +1231,10 @@ export function ChatWindowContent({
                       <CommandItem
                         key={doc.id}
                         value={doc.title}
-                        className="min-h-14 rounded-xl px-3 py-2"
+                        className="rounded-lg px-2 py-1.5"
                         onSelect={() => handleDocSelect(doc)}
                       >
-                        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
                           <FileText className="size-4" />
                         </span>
                         <span className="min-w-0 flex-1">
