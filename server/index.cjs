@@ -1347,13 +1347,53 @@ async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = n
   return merged;
 }
 
-function buildDaemonPrompt(contextMessages, agent, coParticipants) {
+// Cross-session "shared brain": a short digest of what THIS agent has recently
+// done in OTHER sessions (channels + DMs) in this workspace, so it has continuity
+// — e.g. you can ask it in a DM what it's working on in a channel, or give pointers.
+async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) {
+  if (!workspaceId || !agentId) return '';
+  try {
+    const rows = await getDb().unsafe(
+      `select distinct on (m.session_id) m.session_id, s.title, s.folder, m.content, m.created_at
+       from messages m
+       join chat_sessions s on s.id = m.session_id
+       where s.workspace_id = $1
+         and m.sender_kind = 'agent' and m.sender_id = $2
+         and m.session_id <> $3
+         and m.content !~ '^Thinking '
+       order by m.session_id, m.created_at desc`,
+      [workspaceId, String(agentId), currentSessionId || ''],
+    );
+    const recent = rows
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 6);
+    if (recent.length === 0) return '';
+    return recent
+      .map((r) => {
+        const where = r.folder === 'Direct messages' ? `DM "${r.title || 'Untitled'}"` : `channel "${r.title || 'Untitled'}"`;
+        const text = textFromValue(r.content).replace(/\s+/g, ' ').trim().slice(0, 220);
+        return `- In ${where}: "${text}"`;
+      })
+      .join('\n');
+  } catch {
+    return '';
+  }
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '') {
   const selfHandle = slugHandle(agent.handle || agent.name);
   const lines = [];
   if (coParticipants.length > 0) {
     lines.push(
       `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
       'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
+      '',
+    );
+  }
+  if (recentActivity) {
+    lines.push(
+      "You are one continuous agent across this workspace's DMs and channels. Your recent activity elsewhere (use for continuity, and when asked what you are working on):",
+      recentActivity,
       '',
     );
   }
@@ -1475,6 +1515,10 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
   const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
   const agentContext = agentContextFromRow(agent, coParticipants);
+  const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
+  if (recentActivity && agentContext) {
+    agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's DMs and channels. Recent activity elsewhere (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
+  }
 
   if (runMode === 'builtin') {
     const jobRows = await getDb().unsafe(
@@ -1552,7 +1596,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   );
   notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
-  const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants);
+  const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
   const jobRows = await getDb().unsafe(
     `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
