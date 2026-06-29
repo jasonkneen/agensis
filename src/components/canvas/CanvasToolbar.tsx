@@ -9,6 +9,7 @@ import {
   Square,
   StickyNote,
   Type,
+  X,
 } from 'lucide-react';
 import type { CanvasTool } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -55,6 +56,7 @@ interface CanvasToolbarProps {
   onToolChange: (tool: CanvasTool) => void;
   onColorChange: (color: string) => void;
   onStrokeWidthChange: (w: number) => void;
+  onExitDrawing: () => void;
 }
 
 export function CanvasToolbar({
@@ -64,6 +66,7 @@ export function CanvasToolbar({
   onToolChange,
   onColorChange,
   onStrokeWidthChange,
+  onExitDrawing,
 }: CanvasToolbarProps) {
   return (
     <div className="canvas-toolbar absolute bottom-4 left-1/2 z-[600] flex -translate-x-1/2 items-center gap-1.5 rounded-xl border bg-popover/95 px-2.5 py-1.5 text-popover-foreground shadow-lg backdrop-blur">
@@ -133,6 +136,19 @@ export function CanvasToolbar({
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
+
+      <Separator orientation="vertical" className="mx-1 h-6" />
+
+      <Button
+        type="button"
+        variant="destructive"
+        size="icon-sm"
+        title="Exit drawing"
+        aria-label="Exit drawing"
+        onClick={onExitDrawing}
+      >
+        <X data-icon="inline-start" className="size-4" />
+      </Button>
     </div>
   );
 }

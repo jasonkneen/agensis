@@ -73,9 +73,9 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
       <div className="shrink-0 border-b border-border bg-card p-4">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-4">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
             <Brain className="size-5" />
           </div>
@@ -92,25 +92,26 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="xs"
-            variant={!filterCategory ? 'default' : 'outline'}
-            onClick={() => setFilterCategory(null)}
-          >
-            All
-          </Button>
+          <Badge asChild variant={!filterCategory ? 'default' : 'outline'} className="cursor-pointer">
+            <button type="button" onClick={() => setFilterCategory(null)}>
+              All
+            </button>
+          </Badge>
           {categoriesInUse.map(category => (
-            <Button
+            <Badge
               key={category}
-              type="button"
-              size="xs"
+              asChild
               variant={filterCategory === category ? 'default' : 'outline'}
-              onClick={() => setFilterCategory(filterCategory === category ? null : category)}
+              className="cursor-pointer"
             >
-              <Tag data-icon="inline-start" />
-              {category}
-            </Button>
+              <button
+                type="button"
+                onClick={() => setFilterCategory(filterCategory === category ? null : category)}
+              >
+                <Tag data-icon="inline-start" />
+                {category}
+              </button>
+            </Badge>
           ))}
         </div>
       </div>
@@ -179,7 +180,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
                         {new Date(fact.updated_at).toLocaleDateString()}
                       </ItemDescription>
                     </ItemContent>
-                    <Badge variant="secondary">{fact.category}</Badge>
+                    <Badge variant="outline">{fact.category}</Badge>
                     <ItemActions>
                       <Button type="button" variant="ghost" size="icon-xs" onClick={() => handleEdit(fact)} aria-label="Edit memory">
                         <Pencil />

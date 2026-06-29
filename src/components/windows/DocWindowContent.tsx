@@ -598,8 +598,8 @@ export function DocWindowContent({
   const canShowComments = Boolean(workspaceId && currentUserEmail);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-2">
+    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card/65 px-2 backdrop-blur-md">
         {TOOLBAR.map((item, idx) => (
           item.divider ? (
             <Separator key={idx} orientation="vertical" className="mx-1 h-5" />
@@ -616,7 +616,7 @@ export function DocWindowContent({
                         : handleGenerativeUIInsert
               }
               variant="ghost"
-              size="icon-xs"
+              size="icon-sm"
             >
               {item.icon}
             </Button>
@@ -627,7 +627,7 @@ export function DocWindowContent({
               title={item.label}
               onMouseDown={e => { e.preventDefault(); execFormat(item.action!); handleContentInput(); }}
               variant="ghost"
-              size="icon-xs"
+              size="icon-sm"
             >
               {item.icon}
             </Button>
@@ -656,7 +656,7 @@ export function DocWindowContent({
             }}
             title={commentsOpen ? 'Hide comments' : 'Comment (select text first to anchor)'}
             variant={commentsOpen ? 'secondary' : 'ghost'}
-            size="icon-xs"
+            size="icon-sm"
           >
             <MessageCircle />
           </Button>
@@ -670,7 +670,7 @@ export function DocWindowContent({
             }}
             title={historyOpen ? 'Hide version history' : 'Version history'}
             variant={historyOpen ? 'secondary' : 'ghost'}
-            size="icon-xs"
+            size="icon-sm"
           >
             <History />
           </Button>
@@ -680,7 +680,7 @@ export function DocWindowContent({
           onClick={() => onToggleFavorite(doc.id, doc.is_favorite)}
           title={doc.is_favorite ? 'Unfavorite' : 'Favorite'}
           variant={doc.is_favorite ? 'secondary' : 'ghost'}
-          size="icon-xs"
+          size="icon-sm"
         >
           <Star fill={doc.is_favorite ? 'currentColor' : 'none'} />
         </Button>
@@ -689,7 +689,7 @@ export function DocWindowContent({
           onClick={() => onDelete(doc.id)}
           title="Delete"
           variant="ghost"
-          size="icon-xs"
+          size="icon-sm"
         >
           <Trash2 />
         </Button>

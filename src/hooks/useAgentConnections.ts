@@ -11,38 +11,49 @@ type AgentConnectionRealtimePayload = {
 export function useAgentConnections(workspaceId: string | null) {
   const [connections, setConnections] = useState<AgentConnection[]>([]);
   const [loading, setLoading] = useState(false);
+  const [realtimeWorkspaceId, setRealtimeWorkspaceId] = useState<string | null>(null);
+  const workspaceKey = normalizeWorkspaceId(workspaceId);
 
   const fetchConnections = useCallback(async () => {
-    if (!workspaceId) {
+    if (!workspaceKey) {
       setConnections([]);
+      setRealtimeWorkspaceId(null);
       setLoading(false);
       return;
     }
+    setRealtimeWorkspaceId(prev => prev === workspaceKey ? prev : null);
     setLoading(true);
     try {
-      const response = await fetch(apiUrl(`/backend/agents/connections?workspaceId=${encodeURIComponent(workspaceId)}`), {
+      const response = await fetch(apiUrl(`/backend/agents/connections?workspaceId=${encodeURIComponent(workspaceKey)}`), {
         headers: apiAuthHeaders(),
       });
       const payload = await response.json().catch(() => null);
       if (response.ok && Array.isArray(payload?.data)) {
         setConnections(payload.data);
+        setRealtimeWorkspaceId(workspaceKey);
+        return;
       }
+      setConnections([]);
+      setRealtimeWorkspaceId(null);
+    } catch {
+      setConnections([]);
+      setRealtimeWorkspaceId(null);
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceKey]);
 
   useEffect(() => {
     void fetchConnections();
   }, [fetchConnections]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceKey || realtimeWorkspaceId !== workspaceKey) return;
     const channel = backendClient
-      .channel(`agent_connections:${workspaceId}`)
+      .channel(`agent_connections:${workspaceKey}`)
       .on(
         'db_changes',
-        { event: '*', schema: 'public', table: 'agent_connections', filter: `workspace_id=eq.${workspaceId}` },
+        { event: '*', schema: 'public', table: 'agent_connections', filter: `workspace_id=eq.${workspaceKey}` },
         (payload: AgentConnectionRealtimePayload) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new;
@@ -63,7 +74,11 @@ export function useAgentConnections(workspaceId: string | null) {
     return () => {
       backendClient.removeChannel(channel);
     };
-  }, [workspaceId]);
+  }, [workspaceKey, realtimeWorkspaceId]);
 
   return { connections, loading, refetch: fetchConnections };
+}
+
+function normalizeWorkspaceId(value: string | null) {
+  return typeof value === 'string' ? value.trim() : '';
 }

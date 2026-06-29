@@ -13,10 +13,14 @@ import {
 import { cn } from '@/lib/utils';
 
 const SNAP_THRESHOLD = 44;
+const MAXIMIZED_TOP_RESERVE = 56;
+const MAXIMIZED_EDGE_INSET = 8;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
+type WindowUpdateOptions = { interaction?: 'drag' | 'resize' | 'programmatic' };
+type ViewportRect = Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -28,7 +32,7 @@ function clampDimension(value: number, min: number, max: number): number {
   return Math.round(clampNumber(value, floor, ceiling));
 }
 
-function getShellViewport(shell: HTMLElement | null): { width: number; height: number; rect: DOMRect | null } {
+function getShellViewport(shell: HTMLElement | null): { width: number; height: number; rect: ViewportRect | null } {
   const viewport = shell?.closest('[data-workspace-viewport]')
     || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
   const rect = viewport?.getBoundingClientRect() || null;
@@ -41,18 +45,45 @@ function getShellViewport(shell: HTMLElement | null): { width: number; height: n
     return { width: parentRect.width, height: parentRect.height, rect: parentRect };
   }
   if (typeof window !== 'undefined') {
+    const leftInset = getWorkspaceInset('--workspace-viewport-left') || getSidebarFallbackInset();
+    const rightInset = getWorkspaceInset('--workspace-viewport-right');
+    const topInset = getWorkspaceInset('--workspace-viewport-top');
+    const bottomInset = getWorkspaceInset('--workspace-viewport-bottom');
+    const width = window.innerWidth - leftInset - rightInset;
+    const height = window.innerHeight - topInset - bottomInset;
+    if (width > 0 && height > 0) {
+      return {
+        width,
+        height,
+        rect: { left: leftInset, top: topInset, width, height },
+      };
+    }
     return { width: window.innerWidth, height: window.innerHeight, rect: null };
   }
   return { width: 1024, height: 720, rect: null };
 }
 
+function getWorkspaceInset(name: string): number {
+  if (typeof document === 'undefined') return 0;
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name);
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function getSidebarFallbackInset(): number {
+  if (typeof document === 'undefined') return 0;
+  const sidebar = document.querySelector('[data-sidebar-panel]');
+  const rect = sidebar?.getBoundingClientRect();
+  return rect && rect.width > 0 ? Math.max(0, Math.round(rect.right)) : 0;
+}
+
 function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
   const viewport = getShellViewport(shell);
-  const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, viewport.width);
-  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, viewport.height);
+  const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - MAXIMIZED_EDGE_INSET * 2));
+  const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - MAXIMIZED_TOP_RESERVE - MAXIMIZED_EDGE_INSET));
   return {
-    x: Math.round(clampNumber(bounds.x, 0, Math.max(0, viewport.width - width))),
-    y: Math.round(clampNumber(bounds.y, 0, Math.max(0, viewport.height - height))),
+    x: Math.round(clampNumber(bounds.x, MAXIMIZED_EDGE_INSET, Math.max(MAXIMIZED_EDGE_INSET, viewport.width - width - MAXIMIZED_EDGE_INSET))),
+    y: Math.round(clampNumber(bounds.y, MAXIMIZED_TOP_RESERVE, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - height - MAXIMIZED_EDGE_INSET))),
     width,
     height,
   };
@@ -107,7 +138,7 @@ function nearestEdge(pointerX: number, pointerY: number, bounds: WindowBounds): 
   return nearest.distance <= SNAP_THRESHOLD ? nearest.edge : null;
 }
 
-function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: DOMRect | null): WindowBounds[] {
+function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: ViewportRect | null): WindowBounds[] {
   if (!shell || !viewportRect) return [];
   const currentId = shell.dataset.floatingWindowId;
   return Array.from(document.querySelectorAll<HTMLElement>('[data-floating-window]'))
@@ -143,10 +174,9 @@ function getSnapPreviewBounds(
     return null;
   }
 
-  const workspaceBounds = { x: 0, y: 0, width: viewport.width, height: viewport.height };
-  const workspaceEdge = nearestEdge(pointerX, pointerY, workspaceBounds);
-  if (workspaceEdge) return clampWindowBounds(splitBounds(workspaceBounds, workspaceEdge), shell);
-
+  // Snapping is panel-relative: empty workspace edges must not steal a drag.
+  // A full-view panel still works as a split target because its own bounds cover
+  // the workspace and are included in getOtherWindowBounds().
   for (const bounds of getOtherWindowBounds(shell, rect)) {
     if (!pointerInsideBounds(pointerX, pointerY, bounds)) continue;
     const edge = nearestEdge(pointerX, pointerY, bounds);
@@ -179,7 +209,7 @@ function restoreBoundsForDrag(
 
   return clampWindowBounds({
     x: pointerX - width * pointerRatio,
-    y: Math.min(pointerY - 20, Math.max(0, viewport.height - height)),
+    y: Math.min(pointerY - 20, Math.max(MAXIMIZED_TOP_RESERVE, viewport.height - height - MAXIMIZED_EDGE_INSET)),
     width,
     height,
   }, shell);
@@ -189,7 +219,7 @@ interface FloatingWindowShellProps {
   window: FloatingWindow;
   onClose: (id: string) => void;
   onFocus: (id: string) => void;
-  onUpdate: (id: string, updates: Partial<FloatingWindow>) => void;
+  onUpdate: (id: string, updates: Partial<FloatingWindow>, options?: WindowUpdateOptions) => void;
   onMinimize: (id: string) => void;
   onShare?: () => void;
   presenceMode?: PresenceVisibilityMode;
@@ -290,7 +320,7 @@ export function FloatingWindowShell({
           ...next,
           maximized: false,
           restoreBounds: next,
-        });
+        }, { interaction: 'drag' });
       }
       dragRef.current = null;
       setSnapPreview(null);
@@ -361,7 +391,7 @@ export function FloatingWindowShell({
         if (shellRef.current) {
           syncShellBounds(shellRef.current, next);
         }
-        onUpdate(win.id, { ...next, restoreBounds: next });
+        onUpdate(win.id, { ...next, restoreBounds: next }, { interaction: 'resize' });
       }
       resizeRef.current = null;
       setIsResizing(false);
@@ -422,10 +452,10 @@ export function FloatingWindowShell({
   const shellStyle: React.CSSProperties = isMaximized
     ? {
         position: 'absolute',
-        left: 0,
-        top: 0,
-        width: '100%',
-        height: '100%',
+        left: MAXIMIZED_EDGE_INSET,
+        top: MAXIMIZED_TOP_RESERVE,
+        width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px)`,
+        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + MAXIMIZED_EDGE_INSET}px)`,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -464,13 +494,13 @@ export function FloatingWindowShell({
         data-floating-window
         data-floating-window-id={win.id}
         onMouseDown={() => onFocus(win.id)}
-        className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/85 text-card-foreground shadow-xl backdrop-blur-xl"
+        className="flex flex-col overflow-hidden rounded-lg border border-border bg-card/45 text-card-foreground shadow-xl backdrop-blur-xl"
         style={shellStyle}
       >
       <div
         onMouseDown={handleDragStart}
         className={cn(
-          'flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card/80 px-3 backdrop-blur-xl',
+          'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl',
           canControl ? 'cursor-grab' : 'cursor-default',
         )}
       >
@@ -489,46 +519,7 @@ export function FloatingWindowShell({
           <span className="truncate text-xs font-medium">{win.title}</span>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant={win.isPrivate ? 'secondary' : 'outline'}
-            size="icon-xs"
-            onClick={() => {
-              if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
-            }}
-            disabled={!canTogglePrivacy}
-            aria-label={win.isPrivate ? 'Window privacy on' : 'Window privacy off'}
-            title={win.isPrivate ? 'Privacy on' : 'Privacy off'}
-          >
-            {win.isPrivate ? <EyeOff /> : <Eye />}
-          </Button>
-
-          <Button
-            type="button"
-            variant={win.locked ? 'secondary' : 'outline'}
-            size="icon-xs"
-            onClick={() => {
-              if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
-            }}
-            disabled={!canToggleLock}
-            aria-label={win.locked ? 'Window locked' : 'Window unlocked'}
-            title={win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
-          >
-            {win.locked ? <Lock /> : <Unlock />}
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            onClick={() => onMinimize(win.id)}
-            disabled={!canControl}
-            aria-label="Minimize"
-          >
-            <Minus />
-          </Button>
-
+        <div className="flex shrink-0 flex-nowrap items-center gap-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
@@ -579,6 +570,45 @@ export function FloatingWindowShell({
 
           <Button
             type="button"
+            variant={win.isPrivate ? 'secondary' : 'outline'}
+            size="icon-xs"
+            onClick={() => {
+              if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
+            }}
+            disabled={!canTogglePrivacy}
+            aria-label={win.isPrivate ? 'Window privacy on' : 'Window privacy off'}
+            title={win.isPrivate ? 'Privacy on' : 'Privacy off'}
+          >
+            {win.isPrivate ? <EyeOff /> : <Eye />}
+          </Button>
+
+          <Button
+            type="button"
+            variant={win.locked ? 'secondary' : 'outline'}
+            size="icon-xs"
+            onClick={() => {
+              if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
+            }}
+            disabled={!canToggleLock}
+            aria-label={win.locked ? 'Window locked' : 'Window unlocked'}
+            title={win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
+          >
+            {win.locked ? <Lock /> : <Unlock />}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            onClick={() => onMinimize(win.id)}
+            disabled={!canControl}
+            aria-label="Minimize"
+          >
+            <Minus />
+          </Button>
+
+          <Button
+            type="button"
             variant="outline"
             size="icon-xs"
             onClick={handleMaximize}
@@ -615,7 +645,7 @@ export function FloatingWindowShell({
         {!isMaximized && (
           <div
             onMouseDown={handleResizeStart}
-            className="absolute right-0 bottom-0 z-10 size-4 cursor-nwse-resize text-muted-foreground"
+            className="absolute right-0.5 bottom-0.5 z-10 size-4 cursor-nwse-resize bg-transparent text-muted-foreground"
           >
             <svg
               width="10"

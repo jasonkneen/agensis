@@ -11,13 +11,14 @@ type Block =
 interface MarkdownContentProps {
   content: string;
   compact?: boolean;
+  onMentionClick?: (mention: string) => void;
 }
 
-export function MarkdownContent({ content, compact = false }: MarkdownContentProps) {
+export function MarkdownContent({ content, compact = false, onMentionClick }: MarkdownContentProps) {
   const blocks = parseBlocks(content);
   return (
     <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
-      {blocks.map((block, index) => renderBlock(block, index))}
+      {blocks.map((block, index) => renderBlock(block, index, onMentionClick))}
     </div>
   );
 }
@@ -115,7 +116,7 @@ function splitTableRow(row: string) {
     .map(cell => cell.trim());
 }
 
-function renderBlock(block: Block, index: number) {
+function renderBlock(block: Block, index: number, onMentionClick?: (mention: string) => void) {
   switch (block.type) {
     case 'code':
       return (
@@ -126,20 +127,20 @@ function renderBlock(block: Block, index: number) {
       );
     case 'heading': {
       const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3';
-      return <Tag key={index}>{renderInline(block.content)}</Tag>;
+      return <Tag key={index}>{renderInline(block.content, onMentionClick)}</Tag>;
     }
     case 'list': {
       const Tag = block.ordered ? 'ol' : 'ul';
       return (
         <Tag key={index}>
           {block.items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInline(item)}</li>
+            <li key={itemIndex}>{renderInline(item, onMentionClick)}</li>
           ))}
         </Tag>
       );
     }
     case 'blockquote':
-      return <blockquote key={index}>{renderInline(block.content)}</blockquote>;
+      return <blockquote key={index}>{renderInline(block.content, onMentionClick)}</blockquote>;
     case 'table':
       return (
         <div key={index} className="chat-markdown-table-wrap">
@@ -149,7 +150,7 @@ function renderBlock(block: Block, index: number) {
                 <tr key={rowIndex}>
                   {row.map((cell, cellIndex) => {
                     const Cell = rowIndex === 0 ? 'th' : 'td';
-                    return <Cell key={cellIndex}>{renderInline(cell)}</Cell>;
+                    return <Cell key={cellIndex}>{renderInline(cell, onMentionClick)}</Cell>;
                   })}
                 </tr>
               ))}
@@ -158,13 +159,13 @@ function renderBlock(block: Block, index: number) {
         </div>
       );
     case 'paragraph':
-      return <p key={index}>{renderInline(block.content)}</p>;
+      return <p key={index}>{renderInline(block.content, onMentionClick)}</p>;
     default:
       return null;
   }
 }
 
-function renderInline(text: string): React.ReactNode[] {
+function renderInline(text: string, onMentionClick?: (mention: string) => void): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
   let lastIndex = 0;
@@ -172,15 +173,15 @@ function renderInline(text: string): React.ReactNode[] {
 
   while ((match = pattern.exec(text))) {
     if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
+      parts.push(...renderPlainText(text.slice(lastIndex, match.index), parts.length, onMentionClick));
     }
     const token = match[0];
     if (token.startsWith('`')) {
       parts.push(<code key={parts.length}>{token.slice(1, -1)}</code>);
     } else if (token.startsWith('**')) {
-      parts.push(<strong key={parts.length}>{renderInline(token.slice(2, -2))}</strong>);
+      parts.push(<strong key={parts.length}>{renderInline(token.slice(2, -2), onMentionClick)}</strong>);
     } else if (token.startsWith('*')) {
-      parts.push(<em key={parts.length}>{renderInline(token.slice(1, -1))}</em>);
+      parts.push(<em key={parts.length}>{renderInline(token.slice(1, -1), onMentionClick)}</em>);
     } else {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       const href = link?.[2] || '';
@@ -193,7 +194,34 @@ function renderInline(text: string): React.ReactNode[] {
   }
 
   if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
+    parts.push(...renderPlainText(text.slice(lastIndex), parts.length, onMentionClick));
   }
+  return parts;
+}
+
+function renderPlainText(text: string, keyOffset: number, onMentionClick?: (mention: string) => void): React.ReactNode[] {
+  if (!onMentionClick) return [text];
+  const parts: React.ReactNode[] = [];
+  const pattern = /(^|[^\w])@([a-zA-Z0-9_.-]{1,64})\b/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const prefix = match[1] || '';
+    const handle = match[2];
+    const mentionStart = match.index + prefix.length;
+    if (mentionStart > lastIndex) parts.push(text.slice(lastIndex, mentionStart));
+    parts.push(
+      <button
+        key={`${keyOffset}-${parts.length}-${handle}`}
+        type="button"
+        className="chat-mention-link"
+        onClick={() => onMentionClick(handle)}
+      >
+        @{handle}
+      </button>,
+    );
+    lastIndex = mentionStart + handle.length + 1;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts;
 }

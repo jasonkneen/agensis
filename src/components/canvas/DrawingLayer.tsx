@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
-import { Pencil, X, Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
+import { Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
 import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { Badge } from '@/components/ui/badge';
@@ -951,8 +951,6 @@ export function DrawingLayer({
 
       {(!drawingActive || activeTool === 'select') && selectionBar}
 
-      <DrawFAB active={drawingActive} onClick={onToggleDrawing} />
-
       {drawingActive && (
         <CanvasToolbar
           activeTool={tool}
@@ -961,6 +959,7 @@ export function DrawingLayer({
           onToolChange={setTool}
           onColorChange={setColor}
           onStrokeWidthChange={setStrokeWidth}
+          onExitDrawing={onToggleDrawing}
         />
       )}
 
@@ -1500,23 +1499,6 @@ function TextEditor({
       }}
     >
       {obj.text_content || ''}
-    </div>
-  );
-}
-
-function DrawFAB({ active, onClick }: { active: boolean; onClick: () => void }) {
-  return (
-    <div className="absolute right-4 bottom-[5.5rem] z-[600]">
-      <Button
-        type="button"
-        variant={active ? 'destructive' : 'default'}
-        size="icon-lg"
-        onClick={onClick}
-        title={active ? 'Exit drawing' : 'Draw on canvas'}
-        className="size-12 rounded-full shadow-lg transition-transform hover:scale-105"
-      >
-        {active ? <X data-icon="inline-start" className="size-5" /> : <Pencil data-icon="inline-start" className="size-5" />}
-      </Button>
     </div>
   );
 }

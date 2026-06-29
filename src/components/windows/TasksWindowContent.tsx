@@ -148,8 +148,8 @@ export function TasksWindowContent({
   const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+      <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 backdrop-blur-md">
         <ToggleGroup
           type="single"
           size="sm"
@@ -167,7 +167,7 @@ export function TasksWindowContent({
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
 
-      <div className="shrink-0 border-b border-border bg-card p-3">
+      <div className="shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md">
         <div className="task-add-row gap-2">
           <div className="min-w-0">
             <Input
@@ -299,7 +299,7 @@ function TaskRow({
   const doneSubs = subtasks.filter(subtask => subtask.status === 'done').length;
 
   return (
-    <div className="flex flex-col">
+    <div className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
       <Item variant="outline" className="task-row items-start">
         <ItemActions className="gap-1 pt-0.5">
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
@@ -428,7 +428,7 @@ function TaskDetail({
   };
 
   return (
-    <div className="task-detail ml-9 flex flex-col gap-4 border-l py-3 pr-2 pl-4">
+    <div className="task-detail ml-8 flex flex-col gap-4 border-l py-3 pr-3 pl-5">
       <section className="flex flex-col gap-2">
         <Marker>
           <MarkerIcon>

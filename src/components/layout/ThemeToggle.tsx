@@ -1,6 +1,6 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Button } from '@/components/ui/button';
 
 interface ThemeToggleProps {
   mode: ThemeMode;
@@ -13,28 +13,25 @@ const options: { value: ThemeMode; icon: typeof Sun; label: string }[] = [
   { value: 'system', icon: Monitor, label: 'System' },
 ];
 
+const cycle: ThemeMode[] = ['light', 'dark', 'system'];
+
 export function ThemeToggle({ mode, onModeChange }: ThemeToggleProps) {
+  const current = options.find(option => option.value === mode) || options[0];
+  const nextMode = cycle[(cycle.indexOf(mode) + 1) % cycle.length] || cycle[0];
+  const next = options.find(option => option.value === nextMode) || options[0];
+  const Icon = current.icon;
+
   return (
-    <ToggleGroup
-      type="single"
-      value={mode}
-      onValueChange={value => {
-        if (value) onModeChange(value as ThemeMode);
-      }}
-      variant="outline"
-      size="sm"
-      spacing={2}
-      className="theme-toggle grid w-full grid-cols-3"
-      aria-label="Theme"
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className="theme-toggle-cycle"
+      onClick={() => onModeChange(nextMode)}
+      aria-label={`Theme: ${current.label}. Switch to ${next.label}`}
+      title={`Theme: ${current.label}. Switch to ${next.label}`}
     >
-      {options.map(opt => {
-        const Icon = opt.icon;
-        return (
-          <ToggleGroupItem key={opt.value} value={opt.value} title={opt.label} aria-label={opt.label} className="min-w-0 px-0">
-            <Icon data-icon="inline-start" className="size-4" />
-          </ToggleGroupItem>
-        );
-      })}
-    </ToggleGroup>
+      <Icon className="size-4" />
+    </Button>
   );
 }

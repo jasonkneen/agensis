@@ -3,12 +3,15 @@ import type { FloatingWindow, FloatingWindowType } from '../types';
 
 let nextZIndex = 100;
 const WORKSPACE_WINDOW_MARGIN = 24;
+const WORKSPACE_WINDOW_EDGE_INSET = 8;
+const WORKSPACE_TOP_RESERVE = 56;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 const TILE_TOLERANCE = 12;
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
 type TileEdge = 'left' | 'right' | 'top' | 'bottom';
+type WindowUpdateOptions = { interaction?: 'drag' | 'resize' | 'programmatic' };
 
 type WindowIdentity = {
   type: FloatingWindowType;
@@ -32,7 +35,31 @@ function getWorkspaceViewportSize(): { width: number; height: number } {
     return { width: rect.width, height: rect.height };
   }
 
+  const leftInset = getWorkspaceInset('--workspace-viewport-left') || getSidebarFallbackInset();
+  const rightInset = getWorkspaceInset('--workspace-viewport-right');
+  const topInset = getWorkspaceInset('--workspace-viewport-top');
+  const bottomInset = getWorkspaceInset('--workspace-viewport-bottom');
+  const fallbackWidth = window.innerWidth - leftInset - rightInset;
+  const fallbackHeight = window.innerHeight - topInset - bottomInset;
+  if (fallbackWidth > 0 && fallbackHeight > 0) {
+    return { width: fallbackWidth, height: fallbackHeight };
+  }
+
   return { width: window.innerWidth, height: window.innerHeight };
+}
+
+function getWorkspaceInset(name: string): number {
+  if (typeof document === 'undefined') return 0;
+  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name);
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+}
+
+function getSidebarFallbackInset(): number {
+  if (typeof document === 'undefined') return 0;
+  const sidebar = document.querySelector('[data-sidebar-panel]');
+  const rect = sidebar?.getBoundingClientRect();
+  return rect && rect.width > 0 ? Math.max(0, Math.round(rect.right)) : 0;
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -52,7 +79,7 @@ function fitWindowSize(
 ): { width: number; height: number } {
   return {
     width: clampDimension(size.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - margin * 2)),
-    height: clampDimension(size.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - margin * 2)),
+    height: clampDimension(size.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - margin * 2)),
   };
 }
 
@@ -79,9 +106,9 @@ function getSpawnPosition(
 
   const viewport = getWorkspaceViewportSize();
   const maxX = Math.max(0, viewport.width - size.width - WORKSPACE_WINDOW_MARGIN);
-  const maxY = Math.max(0, viewport.height - size.height - WORKSPACE_WINDOW_MARGIN);
+  const maxY = Math.max(WORKSPACE_TOP_RESERVE, viewport.height - size.height - WORKSPACE_WINDOW_MARGIN);
   const minX = Math.min(WORKSPACE_WINDOW_MARGIN, maxX);
-  const minY = Math.min(WORKSPACE_WINDOW_MARGIN, maxY);
+  const minY = Math.min(WORKSPACE_TOP_RESERVE, maxY);
   const baseX = clampNumber((viewport.width - size.width) / 2, minX, maxX);
   const baseY = clampNumber((viewport.height - size.height) / 2, minY, maxY);
   const offset = existing.length * 28;
@@ -94,13 +121,14 @@ function getSpawnPosition(
 
 function clampToViewport(bounds: WindowBounds) {
   const viewport = getWorkspaceViewportSize();
-  const size = fitWindowSize(bounds, viewport);
-  const maxX = Math.max(0, viewport.width - size.width);
-  const maxY = Math.max(0, viewport.height - size.height);
+  const size = fitWindowSize(bounds, viewport, WORKSPACE_WINDOW_EDGE_INSET);
+  const maxX = Math.max(WORKSPACE_WINDOW_EDGE_INSET, viewport.width - size.width - WORKSPACE_WINDOW_EDGE_INSET);
+  const minY = WORKSPACE_TOP_RESERVE;
+  const maxY = Math.max(minY, viewport.height - size.height - WORKSPACE_WINDOW_EDGE_INSET);
 
   return {
-    x: Math.round(clampNumber(bounds.x, 0, maxX)),
-    y: Math.round(clampNumber(bounds.y, 0, maxY)),
+    x: Math.round(clampNumber(bounds.x, WORKSPACE_WINDOW_EDGE_INSET, maxX)),
+    y: Math.round(clampNumber(bounds.y, minY, maxY)),
     width: size.width,
     height: size.height,
   };
@@ -109,10 +137,10 @@ function clampToViewport(bounds: WindowBounds) {
 function getFullViewportBounds(): WindowBounds {
   const viewport = getWorkspaceViewportSize();
   return {
-    x: 0,
-    y: 0,
-    width: Math.round(Math.max(1, viewport.width)),
-    height: Math.round(Math.max(1, viewport.height)),
+    x: WORKSPACE_WINDOW_EDGE_INSET,
+    y: WORKSPACE_TOP_RESERVE,
+    width: Math.round(Math.max(1, viewport.width - WORKSPACE_WINDOW_EDGE_INSET * 2)),
+    height: Math.round(Math.max(1, viewport.height - WORKSPACE_TOP_RESERVE - WORKSPACE_WINDOW_EDGE_INSET)),
   };
 }
 
@@ -134,47 +162,51 @@ function getVisibleBounds(win: FloatingWindow): WindowBounds {
   });
 }
 
-function getTileEdge(bounds: WindowBounds): TileEdge | null {
-  const viewport = getWorkspaceViewportSize();
-  const fullWidth = Math.round(viewport.width);
-  const fullHeight = Math.round(viewport.height);
+function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
+  const fullWidth = Math.round(container.width);
+  const fullHeight = Math.round(container.height);
   const halfWidth = Math.max(MIN_WINDOW_WIDTH, Math.round(fullWidth / 2));
   const halfHeight = Math.max(MIN_WINDOW_HEIGHT, Math.round(fullHeight / 2));
 
-  const near = (a: number, b: number) => Math.abs(a - b) <= TILE_TOLERANCE;
-
-  if (near(bounds.y, 0) && near(bounds.height, fullHeight)) {
-    if (near(bounds.x, 0) && near(bounds.width, halfWidth)) return 'left';
-    if (near(bounds.x, fullWidth - halfWidth) && near(bounds.width, halfWidth)) return 'right';
+  if (edge === 'left') return { x: container.x, y: container.y, width: Math.min(halfWidth, fullWidth), height: fullHeight };
+  if (edge === 'right') {
+    const width = Math.min(halfWidth, fullWidth);
+    return { x: container.x + Math.max(0, fullWidth - width), y: container.y, width, height: fullHeight };
   }
-
-  if (near(bounds.x, 0) && near(bounds.width, fullWidth)) {
-    if (near(bounds.y, 0) && near(bounds.height, halfHeight)) return 'top';
-    if (near(bounds.y, fullHeight - halfHeight) && near(bounds.height, halfHeight)) return 'bottom';
-  }
-
-  return null;
+  if (edge === 'top') return { x: container.x, y: container.y, width: fullWidth, height: Math.min(halfHeight, fullHeight) };
+  const height = Math.min(halfHeight, fullHeight);
+  return { x: container.x, y: container.y + Math.max(0, fullHeight - height), width: fullWidth, height };
 }
 
-function getComplementaryTile(edge: TileEdge): WindowBounds {
-  const viewport = getWorkspaceViewportSize();
-  const fullWidth = Math.round(viewport.width);
-  const fullHeight = Math.round(viewport.height);
+function getComplementaryTile(container: WindowBounds, edge: TileEdge): WindowBounds {
+  const fullWidth = Math.round(container.width);
+  const fullHeight = Math.round(container.height);
   const halfWidth = Math.max(MIN_WINDOW_WIDTH, Math.round(fullWidth / 2));
   const halfHeight = Math.max(MIN_WINDOW_HEIGHT, Math.round(fullHeight / 2));
 
-  if (edge === 'left') return { x: halfWidth, y: 0, width: Math.max(1, fullWidth - halfWidth), height: fullHeight };
-  if (edge === 'right') return { x: 0, y: 0, width: Math.max(1, fullWidth - halfWidth), height: fullHeight };
-  if (edge === 'top') return { x: 0, y: halfHeight, width: fullWidth, height: Math.max(1, fullHeight - halfHeight) };
-  return { x: 0, y: 0, width: fullWidth, height: Math.max(1, fullHeight - halfHeight) };
+  if (edge === 'left') return { x: container.x + Math.min(halfWidth, fullWidth), y: container.y, width: Math.max(1, fullWidth - Math.min(halfWidth, fullWidth)), height: fullHeight };
+  if (edge === 'right') return { x: container.x, y: container.y, width: Math.max(1, fullWidth - Math.min(halfWidth, fullWidth)), height: fullHeight };
+  if (edge === 'top') return { x: container.x, y: container.y + Math.min(halfHeight, fullHeight), width: fullWidth, height: Math.max(1, fullHeight - Math.min(halfHeight, fullHeight)) };
+  return { x: container.x, y: container.y, width: fullWidth, height: Math.max(1, fullHeight - Math.min(halfHeight, fullHeight)) };
+}
+
+function boundsMatch(a: WindowBounds, b: WindowBounds): boolean {
+  return Math.abs(a.x - b.x) <= TILE_TOLERANCE
+    && Math.abs(a.y - b.y) <= TILE_TOLERANCE
+    && Math.abs(a.width - b.width) <= TILE_TOLERANCE
+    && Math.abs(a.height - b.height) <= TILE_TOLERANCE;
+}
+
+function getTileEdge(bounds: WindowBounds, container: WindowBounds = getFullViewportBounds()): TileEdge | null {
+  for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
+    if (boundsMatch(bounds, getSplitTile(container, edge))) return edge;
+  }
+  return null;
 }
 
 function applyWindowBoundsUpdate(win: FloatingWindow, updates: Partial<FloatingWindow>): FloatingWindow {
   const merged: FloatingWindow = { ...win, ...updates };
-  const hasBoundsUpdate = updates.x !== undefined
-    || updates.y !== undefined
-    || updates.width !== undefined
-    || updates.height !== undefined;
+  const hasBoundsUpdate = hasWindowBoundsUpdate(updates);
 
   if (hasBoundsUpdate && !merged.maximized) {
     Object.assign(merged, clampToViewport({
@@ -190,6 +222,13 @@ function applyWindowBoundsUpdate(win: FloatingWindow, updates: Partial<FloatingW
   }
 
   return merged;
+}
+
+function hasWindowBoundsUpdate(updates: Partial<FloatingWindow>): boolean {
+  return updates.x !== undefined
+    || updates.y !== undefined
+    || updates.width !== undefined
+    || updates.height !== undefined;
 }
 
 function looksLikeResize(previous: FloatingWindow, next: FloatingWindow): boolean {
@@ -219,18 +258,41 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
     width: active.width,
     height: active.height,
   };
-  const edge = getTileEdge(activeBounds);
-  if (!edge) return windows;
-
   const activeCanvasId = active.canvasId || 'base';
-  const partner = windows
+  const visiblePartners = windows
     .filter(w => w.id !== activeId && !w.minimized && (w.canvasId || 'base') === activeCanvasId)
-    .sort((a, b) => b.zIndex - a.zIndex)[0];
-  if (!partner) return windows;
+    .sort((a, b) => b.zIndex - a.zIndex);
 
-  const partnerBounds = clampToViewport(getComplementaryTile(edge));
+  const viewportBounds = getFullViewportBounds();
+  const workspaceEdge = getTileEdge(activeBounds, viewportBounds);
+  if (workspaceEdge) {
+    const partner = visiblePartners[0];
+    if (!partner) return windows;
+    const partnerBounds = clampToViewport(getComplementaryTile(viewportBounds, workspaceEdge));
+    return windows.map(w => (
+      w.id === partner.id
+        ? {
+            ...w,
+            ...partnerBounds,
+            maximized: false,
+            restoreBounds: partnerBounds,
+          }
+        : w
+    ));
+  }
+
+  const splitTarget = visiblePartners
+    .map(partner => {
+      const container = getVisibleBounds(partner);
+      const edge = getTileEdge(activeBounds, container);
+      return edge ? { partner, container, edge } : null;
+    })
+    .find(Boolean);
+  if (!splitTarget) return windows;
+
+  const partnerBounds = clampToViewport(getComplementaryTile(splitTarget.container, splitTarget.edge));
   return windows.map(w => (
-    w.id === partner.id
+    w.id === splitTarget.partner.id
       ? {
           ...w,
           ...partnerBounds,
@@ -357,9 +419,12 @@ export function useWindows() {
     );
   }, []);
 
-  const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>) => {
+  const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>, options?: WindowUpdateOptions) => {
     setWindows(prev => {
       const updated = prev.map(w => w.id === id ? applyWindowBoundsUpdate(w, updates) : w);
+      if (options?.interaction !== 'drag' || !hasWindowBoundsUpdate(updates)) {
+        return updated;
+      }
       return maybeSplitPartner(prev, updated, id);
     });
   }, []);

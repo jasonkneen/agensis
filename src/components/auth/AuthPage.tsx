@@ -25,18 +25,21 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    const emailText = normalizeTextInput(email).trim();
+    const passwordText = normalizeTextInput(password);
+    const confirmPasswordText = normalizeTextInput(confirmPassword);
 
-    if (!email.trim() || !password.trim()) {
+    if (!emailText || !passwordText.trim()) {
       setError('Please fill in all fields.');
       return;
     }
 
-    if (mode === 'signup' && password !== confirmPassword) {
+    if (mode === 'signup' && passwordText !== confirmPasswordText) {
       setError('Passwords do not match.');
       return;
     }
 
-    if (password.length < 6) {
+    if (passwordText.length < 6) {
       setError('Password must be at least 6 characters.');
       return;
     }
@@ -44,8 +47,8 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
     setSubmitting(true);
 
     const result = mode === 'signin'
-      ? await onSignIn(email.trim(), password)
-      : await onSignUp(email.trim(), password);
+      ? await onSignIn(emailText, passwordText)
+      : await onSignUp(emailText, passwordText);
 
     setSubmitting(false);
 
@@ -177,7 +180,7 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
                       type="email"
                       placeholder="Email address"
                       value={email}
-                      onChange={e => setEmail(e.target.value)}
+                      onChange={e => setEmail(normalizeTextInput(e.target.value))}
                       autoFocus
                     />
                   </InputGroup>
@@ -192,7 +195,7 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
                       type="password"
                       placeholder="Password"
                       value={password}
-                      onChange={e => setPassword(e.target.value)}
+                      onChange={e => setPassword(normalizeTextInput(e.target.value))}
                     />
                   </InputGroup>
                 </Field>
@@ -207,7 +210,7 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
                         type="password"
                         placeholder="Confirm password"
                         value={confirmPassword}
-                        onChange={e => setConfirmPassword(e.target.value)}
+                        onChange={e => setConfirmPassword(normalizeTextInput(e.target.value))}
                       />
                     </InputGroup>
                   </Field>
@@ -243,4 +246,8 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
       </div>
     </main>
   );
+}
+
+function normalizeTextInput(value: unknown) {
+  return typeof value === 'string' ? value : '';
 }

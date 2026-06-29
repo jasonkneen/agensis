@@ -58,7 +58,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
-import { fetchFeaturedOpenPets, isImageAvatar, type OpenPet } from '../../lib/openpets';
+import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -175,8 +175,8 @@ export function AgentsWindowContent({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
+    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card/65 px-3 backdrop-blur-md">
         <Bot className="size-4 text-primary" />
         <span className="text-sm font-semibold">AI Agents</span>
         <Badge variant="secondary">{agents.length}</Badge>
@@ -193,7 +193,7 @@ export function AgentsWindowContent({
       </div>
 
       {showCreate && (
-        <div className="shrink-0 border-b border-border bg-card p-3">
+        <div className="shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md">
           <AgentForm
             name={newName}
             avatar={newAvatar}
@@ -214,7 +214,7 @@ export function AgentsWindowContent({
               setNewOpenPetAvatarId('');
             }}
             onOpenPetAvatarChange={(pet) => {
-              setNewAvatar(pet.thumbnail);
+              setNewAvatar(openPetAvatarSrc(pet));
               setNewOpenPetAvatarId(pet.id);
             }}
             onHandleChange={setNewHandle}
@@ -425,40 +425,40 @@ function AgentForm({
           </div>
         </TabsContent>
         <TabsContent value="avatar" className="mt-0">
-          <div className="agent-avatar-grid grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2 overflow-y-auto pr-1">
+          <div className="agent-avatar-grid grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4.25rem,1fr))] gap-2 overflow-y-auto pr-1">
             {AGENT_AVATAR_CHOICES.map(choice => (
               <button
                 key={choice.id}
                 type="button"
                 className={cn(
-                  'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition hover:border-primary/60',
+                  'agent-avatar-tile flex aspect-square items-center justify-center rounded-lg border bg-muted/40 p-1.5 transition hover:border-primary/60',
                   avatar === choice.src && 'border-primary ring-2 ring-primary/40',
                 )}
                 onClick={() => onAvatarChange(choice.src)}
                 title={choice.label}
                 aria-label={`Use ${choice.label} avatar`}
               >
-                <img src={choice.src} alt="" className="size-full rounded-md object-contain" loading="lazy" draggable={false} />
+                <img src={choice.src} alt="" className="agent-avatar-tile-image" loading="lazy" draggable={false} />
               </button>
             ))}
           </div>
         </TabsContent>
         <TabsContent value="openpets" className="mt-0">
           {openPets.length > 0 ? (
-            <div className="grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4rem,1fr))] gap-2 overflow-y-auto pr-1">
+            <div className="agent-avatar-grid grid max-h-72 grid-cols-[repeat(auto-fill,minmax(4.25rem,1fr))] gap-2 overflow-y-auto pr-1">
               {openPets.map(pet => (
                 <button
                   key={pet.id}
                   type="button"
                   className={cn(
-                    'flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-1 transition hover:border-primary/60',
+                    'agent-avatar-tile flex aspect-square items-center justify-center rounded-lg border bg-muted/40 p-1.5 transition hover:border-primary/60',
                     openPetAvatarId === pet.id && 'border-primary ring-2 ring-primary/40',
                   )}
                   onClick={() => onOpenPetAvatarChange(pet)}
                   title={pet.displayName}
                   aria-label={`Use ${pet.displayName} OpenPets avatar`}
                 >
-                  <img src={pet.thumbnail} alt="" className="size-full object-contain" loading="lazy" draggable={false} />
+                  <AgentAvatarPreview value={openPetAvatarSrc(pet)} className="size-full" />
                 </button>
               ))}
             </div>
@@ -645,6 +645,7 @@ function AgentRow({
   const [connectionCommand, setConnectionCommand] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
+  const toolBadges = normalizeList(agent.tools).slice(0, 3);
 
   const handleSave = () => {
     onSave({
@@ -722,7 +723,7 @@ function AgentRow({
               setEditOpenPetAvatarId('');
             }}
             onOpenPetAvatarChange={(pet) => {
-              setEditAvatar(pet.thumbnail);
+              setEditAvatar(openPetAvatarSrc(pet));
               setEditOpenPetAvatarId(pet.id);
             }}
             onHandleChange={setEditHandle}
@@ -762,23 +763,23 @@ function AgentRow({
         )}
         <div className="flex flex-wrap gap-1">
           <Badge variant="outline">@{agent.handle || agentHandle(agent.name)}</Badge>
-          <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'secondary'}>
+          <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
           </Badge>
-          <Badge variant="secondary">{displayModel(agent.model)}</Badge>
-          <Badge variant={activeConnections.length > 0 ? 'default' : 'secondary'}>
+          <Badge variant="outline">{displayModel(agent.model)}</Badge>
+          <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
             {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
           </Badge>
-          {(agent.tools || []).slice(0, 3).map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
+          {toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
         </div>
         {activeConnections.length > 0 && (
           <div className="mt-2 flex flex-col gap-1">
             {activeConnections.slice(0, 3).map(connection => (
-              <div key={connection.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+              <div key={connection.id} className="agent-meta-row flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
                 <Monitor className="size-3 shrink-0" />
-                <span className="font-medium text-foreground">{connection.status}</span>
-                <span className="truncate">{connection.host || 'daemon'}</span>
-                {connection.cwd && <span className="truncate opacity-75">{connection.cwd}</span>}
+                <span className="font-medium text-foreground">Daemon</span>
+                <span className="truncate">{connection.status}</span>
+                <span className="truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
               </div>
             ))}
           </div>
@@ -786,7 +787,7 @@ function AgentRow({
         {connectionCommand && (
           <div className="mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
             <Terminal className="size-3 shrink-0" />
-            <code className="min-w-0 flex-1 truncate">{connectionCommand}</code>
+            <code className="min-w-0 flex-1 truncate" title={connectionCommand}>Connect command</code>
             <Button
               type="button"
               variant="ghost"
@@ -808,7 +809,7 @@ function AgentRow({
                   className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
                 >
                   <Link2 className="size-3 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate" title={url}>{url}</span>
+                  <span className="min-w-0 flex-1 truncate" title={url}>Webhook URL</span>
                   <Button
                     type="button"
                     variant="ghost"
@@ -834,7 +835,7 @@ function AgentRow({
           </div>
         )}
       </ItemContent>
-      <ItemActions className="ml-auto">
+      <ItemActions className="ml-11 mt-2 basis-full justify-end pr-1">
         <Button
           type="button"
           variant={copyState === 'copied' ? 'secondary' : 'outline'}
@@ -882,8 +883,15 @@ function modelOptions(current: string) {
 function AgentAvatarPreview({ value, className }: { value?: string | null; className?: string }) {
   const avatar = value || DEFAULT_AGENT_AVATAR;
   const iconChoice = getAgentIconChoice(avatar);
+  if (isPetSpritesheetAvatar(avatar)) {
+    return (
+      <span className={cn('animated-pet-avatar-shell', className)}>
+        <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(avatar)})` }} />
+      </span>
+    );
+  }
   if (isImageAvatar(avatar)) {
-    return <img src={avatar} alt="" className={cn('size-full object-contain', className)} loading="lazy" draggable={false} />;
+    return <img src={renderablePetAssetUrl(avatar)} alt="" className={cn('size-full object-contain', className)} loading="lazy" draggable={false} />;
   }
   if (iconChoice) {
     const Icon = iconChoice.icon;
@@ -914,8 +922,24 @@ function splitList(value: string) {
   return value.split(',').map(item => item.trim()).filter(Boolean);
 }
 
-function joinList(value: string[] | null | undefined) {
-  return (value || []).join(', ');
+function normalizeList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value.split(',').map(item => item.trim()).filter(Boolean);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
+  }
+
+  return [];
+}
+
+function joinList(value: unknown) {
+  return normalizeList(value).join(', ');
 }
 
 function addToken(value: string, token: string) {

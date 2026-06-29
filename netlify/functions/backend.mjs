@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
 
@@ -38,7 +41,18 @@ const VERSIONED_TABLES = new Set([
   'agent_webhooks',
 ]);
 
+const JSON_COLUMNS_BY_TABLE = {
+  chat_sessions: new Set(['participants']),
+  canvas_objects: new Set(['points']),
+  workspace_agents: new Set(['tools', 'skills']),
+  agent_connections: new Set(['metadata']),
+  agent_jobs: new Set(['metadata']),
+  activity_events: new Set(['metadata']),
+};
+
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
+const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
+const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
 let database;
 
 function dbPool() {
@@ -82,6 +96,163 @@ function verifyPassword(password, passwordHash) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
 }
 
+function slugHandle(value) {
+  return String(value || 'agent')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'agent';
+}
+
+function hashAgentToken(token) {
+  return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function createAgentConnectToken() {
+  return `aga_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function normalizeAgentPermissionMode(value) {
+  return value === 'accept_edits' || value === 'yolo' ? value : 'default';
+}
+
+function resolveAnthropicModel(model) {
+  if (model === 'claude-sonnet-4-6') return 'claude-sonnet-4-5';
+  if (model === 'claude-opus-4-6') return 'claude-opus-4-5';
+  if (model === 'claude-haiku-4-5') return 'claude-haiku-4-5';
+  if (model && model !== 'auto') return model;
+  return 'claude-opus-4-5';
+}
+
+function normalizeBaseUrl(value) {
+  const text = String(value || '').trim().replace(/\/+$/, '');
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function requestBaseUrl(req) {
+  const publicUrl = normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL || process.env.PUBLIC_URL || '');
+  if (publicUrl) return publicUrl;
+  const url = new URL(req.url);
+  const forwardedProto = String(req.headers.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers.get('x-forwarded-host') || '').split(',')[0].trim();
+  const proto = forwardedProto || url.protocol.replace(':', '') || 'https';
+  const host = forwardedHost || req.headers.get('host') || url.host;
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0):8888$/.test(host)) {
+    return 'http://127.0.0.1:3142';
+  }
+  return `${proto}://${host}`;
+}
+
+function shellQuote(value) {
+  const text = String(value || '');
+  if (/^[A-Za-z0-9_/:.,=@%+-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+function isPathInside(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function codexPetAssetUrl(petDirName, assetName) {
+  return `/backend/codex-pets/${encodeURIComponent(petDirName)}/${encodeURIComponent(assetName)}`;
+}
+
+function contentTypeForImageAsset(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  return 'application/octet-stream';
+}
+
+function listCodexPets() {
+  if (!fs.existsSync(CODEX_PETS_ROOT)) return [];
+  return fs.readdirSync(CODEX_PETS_ROOT, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .flatMap(entry => {
+      try {
+        const petDir = path.resolve(CODEX_PETS_ROOT, entry.name);
+        if (!isPathInside(CODEX_PETS_ROOT, petDir)) return [];
+        const manifestPath = path.join(petDir, 'pet.json');
+        if (!fs.existsSync(manifestPath)) return [];
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const spriteName = path.basename(String(manifest.spritesheetPath || 'spritesheet.webp'));
+        if (!/\.(webp|png|gif|jpe?g)$/i.test(spriteName)) return [];
+        const spritePath = path.resolve(petDir, spriteName);
+        if (!isPathInside(petDir, spritePath) || !fs.existsSync(spritePath)) return [];
+        const id = String(manifest.id || entry.name).trim() || entry.name;
+        const assetUrl = codexPetAssetUrl(entry.name, spriteName);
+        return [{
+          id: `codex:${id}`,
+          displayName: String(manifest.displayName || id),
+          description: typeof manifest.description === 'string' ? manifest.description : 'Local Codex pet.',
+          thumbnail: assetUrl,
+          spritesheet: assetUrl,
+          category: typeof manifest.category === 'string' ? manifest.category : 'codex',
+          featured: false,
+          original: false,
+          source: 'codex',
+        }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function mergeLocalCodexPets(openPetsPayload) {
+  const remotePets = Array.isArray(openPetsPayload?.pets) ? openPetsPayload.pets : [];
+  const codexPets = listCodexPets();
+  return {
+    ...(openPetsPayload && typeof openPetsPayload === 'object' ? openPetsPayload : {}),
+    pets: [...codexPets, ...remotePets],
+    pageSize: codexPets.length + remotePets.length,
+  };
+}
+
+function agentPermissionFlags(permissionMode) {
+  return normalizeAgentPermissionMode(permissionMode) === 'yolo' ? ['--no-sandbox', '--yolo'] : [];
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode }) {
+  const resolvedModel = resolveAnthropicModel(model);
+  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
+  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
+  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
+  if (resolvedPermissionMode === 'yolo') commandPermissionArgs.push('--no-sandbox');
+  const portableCommand = [
+    'agensis',
+    'connect',
+    '--url',
+    shellQuote(baseUrl),
+    '--token',
+    shellQuote(token),
+    '--workspace',
+    shellQuote(workspaceId),
+    '--agent',
+    shellQuote(agentId),
+    '--handle',
+    shellQuote(handle),
+    '--name',
+    shellQuote(displayName),
+    '--model',
+    shellQuote(resolvedModel),
+    ...commandPermissionArgs,
+  ].join(' ');
+  return { localCommand: portableCommand, portableCommand };
+}
+
 function getAuthSecret() {
   return process.env.AUTH_SECRET || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL || 'netlify-preview-auth-secret';
 }
@@ -110,6 +281,35 @@ function normalizeColumns(columns) {
   const list = String(columns).split(',').map((column) => column.trim()).filter(Boolean);
   if (list.length === 0) return '*';
   return list.map(quoteIdent).join(', ');
+}
+
+function isJsonColumn(table, column) {
+  return Boolean(JSON_COLUMNS_BY_TABLE[table]?.has(column));
+}
+
+function invalidJsonValue(table, column) {
+  const err = new Error(`${table}.${column} must be valid JSON`);
+  err.status = 400;
+  return err;
+}
+
+function normalizeJsonParam(table, column, value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      throw invalidJsonValue(table, column);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+function bindDbParam(params, table, column, value) {
+  const jsonColumn = isJsonColumn(table, column);
+  params.push(jsonColumn ? normalizeJsonParam(table, column, value) : (value ?? null));
+  return `$${params.length}${jsonColumn ? '::jsonb' : ''}`;
 }
 
 function buildWhereClause(filters = [], params = []) {
@@ -175,6 +375,91 @@ function buildSystemPrompt(memory, documents, workspaceContext) {
 async function query(text, params = []) {
   const result = await dbPool().query(text, params);
   return result.rows;
+}
+
+function maskSecret(value) {
+  if (!value) return '';
+  if (value.length <= 8) return '••••••';
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+async function ensureSecretsTables() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key text PRIMARY KEY,
+      value text NOT NULL DEFAULT '',
+      updated_at timestamptz DEFAULT now()
+    )
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS workspace_secrets (
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      key text NOT NULL,
+      value text NOT NULL DEFAULT '',
+      updated_by uuid,
+      updated_at timestamptz DEFAULT now(),
+      PRIMARY KEY (workspace_id, key)
+    )
+  `);
+  await query('CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id)');
+}
+
+async function getSettingValue(key) {
+  await ensureSecretsTables();
+  const rows = await query('select value from app_settings where key = $1 limit 1', [key]);
+  return rows[0]?.value || '';
+}
+
+async function setSettingValue(key, value) {
+  await ensureSecretsTables();
+  await query(
+    `insert into app_settings (key, value, updated_at) values ($1, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [key, value],
+  );
+}
+
+async function getWorkspaceSecretValue(workspaceId, key) {
+  if (!workspaceId) return '';
+  await ensureSecretsTables();
+  const rows = await query(
+    'select value from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
+    [workspaceId, key],
+  );
+  return rows[0]?.value || '';
+}
+
+async function setWorkspaceSecretValue(workspaceId, key, value, userId = null) {
+  await ensureSecretsTables();
+  await query(
+    `insert into workspace_secrets (workspace_id, key, value, updated_by, updated_at)
+     values ($1, $2, $3, $4, now())
+     on conflict (workspace_id, key)
+     do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [workspaceId, key, value, userId],
+  );
+}
+
+async function resolveSecret(key, workspaceId = null) {
+  const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
+  if (workspaceValue) return workspaceValue;
+  const appValue = await getSettingValue(key).catch(() => '');
+  return appValue || process.env[key] || '';
+}
+
+async function listManagedSecrets(workspaceId = null) {
+  await ensureSecretsTables();
+  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
+    const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
+    const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
+    const value = workspaceValue || fallbackValue;
+    return {
+      key,
+      configured: Boolean(value),
+      preview: maskSecret(value),
+      scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+    };
+  }));
 }
 
 function parseJsonObject(value) {
@@ -266,6 +551,129 @@ async function handleAgentConnections(req) {
   return json({ data: rows.map(publicAgentConnection), error: null });
 }
 
+async function ensureAgentRuntimeTables() {
+  await query(`
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+  `);
+  await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle)');
+  await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash)');
+  await query(`
+    CREATE TABLE IF NOT EXISTS agent_webhooks (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      name text NOT NULL DEFAULT 'Webhook',
+      token text NOT NULL UNIQUE,
+      enabled boolean NOT NULL DEFAULT true,
+      last_triggered_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      version integer NOT NULL DEFAULT 1
+    )
+  `);
+  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id)');
+  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
+}
+
+async function handleAgentDispatch(req) {
+  const { workspaceId, sessionId, content } = await readBody(req);
+  if (!workspaceId || !sessionId || !content) {
+    return jsonError(400, new Error('workspaceId, sessionId, and content are required'));
+  }
+  // Serverless deployments cannot hold the local daemon orchestration loop open.
+  // Return a positive contract response so the client can fall back to the
+  // regular AI completion path without logging a route 404.
+  return json({
+    data: {
+      dispatched: false,
+      reason: 'serverless_dispatch_unavailable',
+    },
+    error: null,
+  });
+}
+
+async function handleCreateAgentWebhook(req) {
+  await ensureAgentRuntimeTables();
+  const body = await readBody(req);
+  const workspaceId = String(body?.workspace_id || '').trim();
+  const agentId = body?.agent_id ? String(body.agent_id).trim() : null;
+  const name = String(body?.name || '').trim();
+  if (!workspaceId || !name) return jsonError(400, new Error('workspace_id and name are required'));
+  if (agentId) {
+    const agentRows = await query('select id from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
+    if (!agentRows[0]) return jsonError(404, new Error('Agent not found in this workspace'));
+  }
+  const token = crypto.randomBytes(32).toString('base64url');
+  const rows = await query(
+    `insert into agent_webhooks (workspace_id, agent_id, name, token)
+     values ($1, $2, $3, $4)
+     returning *`,
+    [workspaceId, agentId || null, name, token],
+  );
+  return json({ data: rows[0], error: null });
+}
+
+async function handleAgentConnectionCommand(req, agentId) {
+  await ensureAgentRuntimeTables();
+  const body = await readBody(req);
+  const rows = await query('select * from workspace_agents where id = $1 limit 1', [agentId]);
+  const agent = rows[0];
+  if (!agent) return jsonError(404, new Error('Agent not found'));
+  const token = createAgentConnectToken();
+  const handle = slugHandle(body?.handle || agent.handle || agent.name);
+  const model = resolveAnthropicModel(body?.model || agent.model);
+  const permissionMode = normalizeAgentPermissionMode(body?.permissionMode || body?.permission_mode || agent.permission_mode);
+  const updateRows = await query(
+    `update workspace_agents
+     set handle = $2,
+         connect_token_hash = $3,
+         run_mode = 'daemon',
+         model = $4,
+         permission_mode = $5,
+         updated_at = now(),
+         version = coalesce(version, 0) + 1
+     where id = $1
+     returning *`,
+    [agentId, handle, hashAgentToken(token), model, permissionMode],
+  );
+  const baseUrl = normalizeBaseUrl(body?.baseUrl) || requestBaseUrl(req);
+  const commands = agentConnectionCommand({
+    baseUrl,
+    token,
+    workspaceId: agent.workspace_id,
+    agentId,
+    handle,
+    name: updateRows[0]?.name || agent.name,
+    model: updateRows[0]?.model || agent.model,
+    permissionMode,
+  });
+  return json({
+    data: {
+      agent: updateRows[0],
+      handle,
+      token,
+      command: commands.portableCommand,
+      localCommand: commands.localCommand,
+      portableCommand: commands.portableCommand,
+      baseUrl,
+      model,
+      permissionMode,
+      permission_mode: permissionMode,
+      permissionFlags: agentPermissionFlags(permissionMode),
+    },
+    error: null,
+  });
+}
+
 async function handleAuth(pathname, req) {
   const body = await readBody(req);
   const email = String(body?.email || '').trim().toLowerCase();
@@ -329,8 +737,7 @@ async function handleDb(pathname, req) {
     const columns = Object.keys(rows[0]);
     const params = [];
     const valueSql = rows.map((row) => `(${columns.map((column) => {
-      params.push(row[column] ?? null);
-      return `$${params.length}`;
+      return bindDbParam(params, table, column, row[column]);
     }).join(', ')})`).join(', ');
 
     const result = await query(
@@ -347,8 +754,7 @@ async function handleDb(pathname, req) {
 
     const params = [];
     const setParts = Object.keys(values).map((column) => {
-      params.push(values[column] ?? null);
-      return `${quoteIdent(column)} = $${params.length}`;
+      return `${quoteIdent(column)} = ${bindDbParam(params, table, column, values[column])}`;
     });
     if (VERSIONED_TABLES.has(table) && values.version == null) {
       setParts.push('"version" = COALESCE("version", 0) + 1');
@@ -374,10 +780,9 @@ async function handleDb(pathname, req) {
 }
 
 async function handleAiChat(req) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const { messages, model, memory, documents, workspaceContext, workspaceId } = await readBody(req);
+  const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId || null);
   if (!apiKey) return jsonError(503, new Error('ANTHROPIC_API_KEY is not configured'));
-
-  const { messages, model, memory, documents, workspaceContext } = await readBody(req);
   const resolvedModel = !model || model === 'auto'
     ? 'claude-opus-4-5'
     : model === 'claude-opus-4-6'
@@ -456,11 +861,64 @@ async function route(req) {
     await query('select 1');
     return json({ ok: true });
   }
+  if (req.method === 'GET' && pathname === '/backend/openpets/catalog') {
+    try {
+      let payload = { version: 3, page: 0, pageSize: 0, pets: [] };
+      let remoteError = null;
+      try {
+        const response = await fetch(OPENPETS_CATALOG_URL, {
+          headers: { 'User-Agent': 'agensis/1.0 (+https://openpets.dev)' },
+        });
+        if (!response.ok) {
+          remoteError = new Error(`OpenPets catalog returned ${response.status}`);
+        } else {
+          payload = await response.json();
+        }
+      } catch (error) {
+        remoteError = error;
+      }
+      const merged = mergeLocalCodexPets(payload);
+      if (remoteError && merged.pets.length === 0) return jsonError(502, remoteError);
+      return json({ data: merged, error: null });
+    } catch (error) {
+      return jsonError(502, error);
+    }
+  }
+  const codexPetAssetMatch = pathname.match(/^\/backend\/codex-pets\/([^/]+)\/([^/]+)$/);
+  if (req.method === 'GET' && codexPetAssetMatch) {
+    try {
+      const petDir = path.resolve(CODEX_PETS_ROOT, decodeURIComponent(codexPetAssetMatch[1]));
+      const assetName = path.basename(decodeURIComponent(codexPetAssetMatch[2]));
+      const assetPath = path.resolve(petDir, assetName);
+      if (!assetName || !/\.(webp|png|gif|jpe?g)$/i.test(assetName)) return jsonError(404, new Error('Pet asset not found'));
+      if (!isPathInside(CODEX_PETS_ROOT, petDir) || !isPathInside(petDir, assetPath)) return jsonError(404, new Error('Pet asset not found'));
+      if (!fs.existsSync(path.join(petDir, 'pet.json')) || !fs.existsSync(assetPath)) return jsonError(404, new Error('Pet asset not found'));
+      const body = await fs.promises.readFile(assetPath);
+      return new Response(body, {
+        headers: {
+          'Content-Type': contentTypeForImageAsset(assetPath),
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    } catch (error) {
+      return jsonError(500, error);
+    }
+  }
   if (req.method === 'GET' && pathname === '/backend/system/capabilities') {
     return handleSystemCapabilities(req);
   }
   if (req.method === 'GET' && pathname === '/backend/agents/connections') {
     return handleAgentConnections(req);
+  }
+  if (req.method === 'POST' && pathname === '/backend/agents/dispatch') {
+    return handleAgentDispatch(req);
+  }
+  if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
+    return handleCreateAgentWebhook(req);
+  }
+  const connectionCommandMatch = pathname.match(/^\/backend\/agents\/([^/]+)\/connection-command$/);
+  if (req.method === 'POST' && connectionCommandMatch) {
+    return handleAgentConnectionCommand(req, decodeURIComponent(connectionCommandMatch[1]));
   }
   if (req.method === 'POST' && (pathname === '/backend/auth/signup' || pathname === '/backend/auth/signin')) {
     return handleAuth(pathname, req);
@@ -478,11 +936,27 @@ async function route(req) {
     return handleDb(pathname, req);
   }
   if (req.method === 'GET' && pathname === '/backend/settings/secrets') {
-    const keys = MANAGED_SECRET_KEYS.map((key) => ({ key, configured: !!process.env[key], preview: process.env[key] ? 'configured' : '' }));
+    const url = new URL(req.url);
+    const workspaceId = String(url.searchParams.get('workspaceId') || '').trim() || null;
+    const keys = await listManagedSecrets(workspaceId);
     return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/settings/secrets') {
-    return jsonError(501, new Error('Secrets must be configured in Netlify environment variables'));
+    const body = await readBody(req);
+    const workspaceId = String(body?.workspaceId || '').trim() || null;
+    const updates = {};
+    for (const key of MANAGED_SECRET_KEYS) {
+      if (typeof body?.[key] === 'string') updates[key] = body[key].trim();
+    }
+    if (Object.keys(updates).length === 0) {
+      return jsonError(400, new Error('No managed keys provided'));
+    }
+    for (const [key, value] of Object.entries(updates)) {
+      if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value);
+      else await setSettingValue(key, value);
+    }
+    const keys = await listManagedSecrets(workspaceId);
+    return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/ai-chat') {
     return handleAiChat(req);
@@ -495,7 +969,7 @@ export default async function handler(req) {
   try {
     return await route(req);
   } catch (error) {
-    return jsonError(500, error);
+    return jsonError(error.status || 500, error);
   }
 }
 

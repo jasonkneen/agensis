@@ -18,6 +18,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let acceptedJobCount = 0;
   let resolveWait = null;
   let queue = null;
+  let lastSocketErrorCode = '';
 
   const stop = () => {
     stopped = true;
@@ -43,7 +44,8 @@ export async function runAgensisDaemon(rawConfig = {}) {
 
   const connect = () => {
     if (stopped) return;
-    const url = socketUrl(config.url, config.token);
+    const url = socketUrl(config.url, config.token, config);
+    lastSocketErrorCode = '';
     log(`Connecting to ${url.replace(config.token, "redacted")}`);
     ws = new WebSocket(url);
 
@@ -118,6 +120,13 @@ export async function runAgensisDaemon(rawConfig = {}) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
+      if (lastSocketErrorCode === "ECONNREFUSED" && isLocalBackendUrl(config.url)) {
+        log("Local agent backend is not running on 127.0.0.1:3142.");
+        log("Start it in another terminal with: npm run backend");
+        log("Then rerun this connect command.");
+        stop();
+        return;
+      }
       if (config.once && acceptedJobCount > 0 && queue.active() === 0 && queue.size() === 0) {
         stop();
       }
@@ -127,6 +136,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
     });
 
     ws.on("error", (error) => {
+      lastSocketErrorCode = error?.code || '';
       log(`Socket error: ${error?.message || error}`);
     });
   };
@@ -177,13 +187,36 @@ function normalizeConfig(raw) {
   return config;
 }
 
-function socketUrl(baseUrl, token) {
-  const url = new URL(baseUrl);
+function socketUrl(baseUrl, token, config = {}) {
+  const url = agentBackendUrl(baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/backend/ws";
   url.search = "";
   url.searchParams.set("agentToken", token);
+  if (config.workspace) url.searchParams.set("workspaceId", config.workspace);
+  if (config.agent) url.searchParams.set("agentId", config.agent);
   return url.toString();
+}
+
+function agentBackendUrl(baseUrl) {
+  const url = new URL(baseUrl);
+  if ((url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "0.0.0.0") && url.port === "8888") {
+    // Netlify/Vite dev on :8888 serves HTTP functions only. The agent
+    // websocket backend is the local API server on :3142.
+    url.protocol = "http:";
+    url.hostname = "127.0.0.1";
+    url.port = "3142";
+  }
+  return url;
+}
+
+function isLocalBackendUrl(baseUrl) {
+  try {
+    const url = agentBackendUrl(baseUrl);
+    return (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "0.0.0.0") && url.port === "3142";
+  } catch {
+    return false;
+  }
 }
 
 async function runAgentJob(config, job, { signal }) {

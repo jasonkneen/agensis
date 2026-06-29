@@ -259,7 +259,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       }}
       title="Command Palette"
       description="Search documents, channels, memory, tasks, and actions."
-      className="top-[15vh] w-[calc(100vw-2rem)] max-w-xl translate-y-0"
+      className="top-[15vh] w-[min(720px,calc(100vw-2rem))] max-w-none sm:max-w-none translate-y-0"
     >
       <Command shouldFilter={false}>
         <CommandInput value={query} onValueChange={setQuery} placeholder="Search documents, channels, memory..." />

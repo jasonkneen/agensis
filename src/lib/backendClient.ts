@@ -1,6 +1,6 @@
 const BACKEND_BASE = (() => {
-  const explicit = import.meta.env.VITE_BACKEND_BASE_URL;
-  if (explicit) return explicit.replace(/\/$/, '');
+  const explicit = normalizeBackendBase(import.meta.env.VITE_BACKEND_BASE_URL);
+  if (explicit) return explicit;
   if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
     return 'http://127.0.0.1:3142';
   }
@@ -83,6 +83,32 @@ type BackendClient = {
   };
 };
 
+function normalizeBackendBase(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const base = value.trim().replace(/\/+$/, '');
+  if (!base) return '';
+  if (typeof window === 'undefined' || window.location.protocol === 'file:') return base;
+  if (isLoopbackHost(window.location.hostname)) return base;
+  return isLoopbackBackendBase(base) ? '' : base;
+}
+
+function isLoopbackHost(hostname: string) {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '0.0.0.0'
+    || hostname === '::1'
+    || hostname === '[::1]';
+}
+
+function isLoopbackBackendBase(base: string) {
+  if (typeof window === 'undefined') return false;
+  try {
+    return isLoopbackHost(new URL(base, window.location.origin).hostname);
+  } catch {
+    return /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::|\/|$)/i.test(base);
+  }
+}
+
 function backendUrl(path: string) {
   return `${BACKEND_BASE}${path}`;
 }
@@ -90,9 +116,12 @@ function backendUrl(path: string) {
 function realtimeDisabledOnThisHost() {
   if (typeof window === 'undefined') return true;
   if (BACKEND_BASE) return false;
-  const { protocol, hostname } = window.location;
+  const { protocol, hostname, port } = window.location;
+  // Netlify/Vite dev on :8888 proxies HTTP functions but does not expose the
+  // local websocket backend, so do not even attempt /backend/ws there.
+  if (isLoopbackHost(hostname) && port === '8888') return true;
   if (protocol !== 'https:') return false;
-  return hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]';
+  return !isLoopbackHost(hostname);
 }
 
 function getWsUrl() {
@@ -282,21 +311,43 @@ class QueryBuilder<T = LooseJson> {
 }
 
 class RealtimeManager {
+  private static readonly INITIAL_RECONNECT_DELAY_MS = 800;
+  private static readonly MAX_RECONNECT_DELAY_MS = 8000;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 5;
+  private static readonly UNAVAILABLE_RETRY_DELAY_MS = 30000;
+  private static readonly MAX_PENDING_MESSAGES = 50;
+
   private socket: WebSocket | null = null;
   private channels = new Set<LocalChannel>();
   private pendingMessages: string[] = [];
   private reconnectTimer: number | null = null;
+  private reconnectAttempts = 0;
+  private unavailableUntil = 0;
+  private permanentlyUnavailable = false;
 
   ensureConnected() {
     if (typeof WebSocket === 'undefined') return;
-    if (realtimeDisabledOnThisHost()) return;
+    if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) return;
+    if (this.channels.size === 0) return;
+    if (this.isUnavailableCoolingDown()) {
+      this.scheduleUnavailableRetry();
+      return;
+    }
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
-    this.socket = new WebSocket(getWsUrl());
+    try {
+      this.socket = new WebSocket(getWsUrl());
+    } catch {
+      this.enterUnavailableCooldown();
+      return;
+    }
 
     this.socket.addEventListener('open', () => {
+      this.reconnectAttempts = 0;
+      this.unavailableUntil = 0;
+      this.permanentlyUnavailable = false;
       this.flushPending();
       for (const channel of this.channels) {
         channel.resubscribe();
@@ -315,18 +366,40 @@ class RealtimeManager {
       }
     });
 
+    this.socket.addEventListener('error', () => {
+      this.enterPermanentUnavailable();
+    });
+
     this.socket.addEventListener('close', () => {
       this.socket = null;
-      if (realtimeDisabledOnThisHost()) return;
+      if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) return;
+      if (this.channels.size === 0) return;
       if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = window.setTimeout(() => this.ensureConnected(), 800);
+      if (this.reconnectAttempts >= RealtimeManager.MAX_RECONNECT_ATTEMPTS) {
+        this.enterUnavailableCooldown();
+        return;
+      }
+      const delay = Math.min(
+        RealtimeManager.INITIAL_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts,
+        RealtimeManager.MAX_RECONNECT_DELAY_MS,
+      );
+      this.reconnectAttempts += 1;
+      this.reconnectTimer = window.setTimeout(() => {
+        this.reconnectTimer = null;
+        this.ensureConnected();
+      }, delay);
     });
   }
 
   register(channel: LocalChannel) {
     this.channels.add(channel);
-    if (realtimeDisabledOnThisHost()) {
+    if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) {
       channel.notifyStatus('UNAVAILABLE');
+      return;
+    }
+    if (this.isUnavailableCoolingDown()) {
+      channel.notifyStatus('UNAVAILABLE');
+      this.scheduleUnavailableRetry();
       return;
     }
     this.ensureConnected();
@@ -339,15 +412,34 @@ class RealtimeManager {
   unregister(channel: LocalChannel) {
     this.channels.delete(channel);
     if (realtimeDisabledOnThisHost()) return;
+    if (this.channels.size === 0) {
+      this.pendingMessages = [];
+      this.reconnectAttempts = 0;
+      this.unavailableUntil = 0;
+      if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      if (this.socket) {
+        this.socket.close();
+        this.socket = null;
+      }
+      return;
+    }
     this.send({ action: 'unsubscribe', channel: channel.name });
   }
 
   send(message: Record<string, unknown>) {
-    if (realtimeDisabledOnThisHost()) return;
+    if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) return;
+    if (this.isUnavailableCoolingDown()) {
+      this.scheduleUnavailableRetry();
+      return;
+    }
     const encoded = JSON.stringify(message);
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(encoded);
       return;
+    }
+    if (this.pendingMessages.length >= RealtimeManager.MAX_PENDING_MESSAGES) {
+      this.pendingMessages.shift();
     }
     this.pendingMessages.push(encoded);
     this.ensureConnected();
@@ -359,6 +451,46 @@ class RealtimeManager {
       const next = this.pendingMessages.shift();
       if (next) this.socket.send(next);
     }
+  }
+
+  private markUnavailable() {
+    this.pendingMessages = [];
+    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    for (const channel of this.channels) {
+      channel.notifyStatus('UNAVAILABLE');
+    }
+  }
+
+  private enterUnavailableCooldown() {
+    this.markUnavailable();
+    this.reconnectAttempts = 0;
+    this.unavailableUntil = Date.now() + RealtimeManager.UNAVAILABLE_RETRY_DELAY_MS;
+    this.scheduleUnavailableRetry();
+  }
+
+  private enterPermanentUnavailable() {
+    this.permanentlyUnavailable = true;
+    this.unavailableUntil = Number.POSITIVE_INFINITY;
+    this.markUnavailable();
+  }
+
+  private isUnavailableCoolingDown() {
+    if (this.unavailableUntil <= Date.now()) {
+      this.unavailableUntil = 0;
+      return false;
+    }
+    return true;
+  }
+
+  private scheduleUnavailableRetry() {
+    if (this.channels.size === 0 || this.reconnectTimer || realtimeDisabledOnThisHost() || this.permanentlyUnavailable) return;
+    const delay = Math.max(this.unavailableUntil - Date.now(), 0);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.unavailableUntil = 0;
+      this.ensureConnected();
+    }, delay);
   }
 }
 
@@ -565,7 +697,18 @@ export const backendClient: BackendClient = {
 // Electron file:// and explicit VITE_BACKEND_BASE_URL the same way the rest
 // of the client does). Used by features that hit raw endpoints (e.g. settings).
 export function apiUrl(path: string) {
+  if (shouldUseLocalSidecar(path)) return `http://127.0.0.1:3142${path}`;
   return backendUrl(path);
+}
+
+function shouldUseLocalSidecar(path: string) {
+  if (typeof window === 'undefined') return false;
+  if (BACKEND_BASE) return false;
+  const { hostname, port } = window.location;
+  if (!isLoopbackHost(hostname) || port !== '8888') return false;
+  return /^\/backend\/files\//.test(path)
+    || /^\/backend\/workspaces\/[^/]+\/project-files(?:\?|$)/.test(path)
+    || path.startsWith('/backend/system/inspect-path');
 }
 
 export function apiBaseUrl() {
@@ -591,10 +734,14 @@ export interface SystemCapabilities {
 
 export async function getSystemCapabilities(workspacePath?: string): Promise<SystemCapabilities | null> {
   const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : '';
-  const response = await fetch(apiUrl(`/backend/system/capabilities${query}`), {
-    headers: apiAuthHeaders(),
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.error) return null;
-  return payload.data as SystemCapabilities;
+  try {
+    const response = await fetch(apiUrl(`/backend/system/capabilities${query}`), {
+      headers: apiAuthHeaders(),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.error || !payload?.data) return null;
+    return payload.data as SystemCapabilities;
+  } catch {
+    return null;
+  }
 }

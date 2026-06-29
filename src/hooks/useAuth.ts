@@ -15,20 +15,24 @@ export function useAuth() {
 
     async function initializeAuth() {
       try {
-        const callbackResult = await handleAuthCallback();
-        if (callbackResult?.type === 'oauth') {
-          const { data, error } = await backendClient.auth.signInWithOAuthSession();
-          if (!error && active) {
-            if (data.user) {
-              await seedWorkspaces(data.user.id);
+        if (!consumeOAuthRedirectStatus()) {
+          const callbackResult = await handleAuthCallback();
+          if (callbackResult?.type === 'oauth') {
+            const { data, error } = await backendClient.auth.signInWithOAuthSession();
+            if (!error && active) {
+              if (data.user) {
+                await seedWorkspaces(data.user.id);
+              }
+              setSession(data.session);
+              setUser(data.user);
+              return;
             }
-            setSession(data.session);
-            setUser(data.user);
-            return;
           }
         }
       } catch (error) {
-        if (!(error instanceof MissingIdentityError) && !(error instanceof AuthError)) {
+        if (error instanceof MissingIdentityError || error instanceof AuthError) {
+          clearAuthCallbackHash();
+        } else {
           throw error;
         }
       } finally {
@@ -103,4 +107,32 @@ async function seedWorkspaces(userId: string) {
     { name: 'Personal', description: 'Your personal workspace', icon: '🌱', user_id: userId },
     { name: 'Work', description: 'Professional workspace', icon: '💼', user_id: userId },
   ]);
+}
+
+function consumeOAuthRedirectStatus() {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const hasOAuthStatus = params.has('error') || params.has('error_description') || params.has('error_code');
+  if (hasOAuthStatus) {
+    clearAuthCallbackHash();
+  }
+  return hasOAuthStatus;
+}
+
+function clearAuthCallbackHash() {
+  if (typeof window === 'undefined' || !hasAuthCallbackHash()) return;
+  window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
+}
+
+function hasAuthCallbackHash() {
+  if (typeof window === 'undefined' || !window.location.hash) return false;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  return params.has('access_token')
+    || params.has('confirmation_token')
+    || params.has('recovery_token')
+    || params.has('invite_token')
+    || params.has('email_change_token')
+    || params.has('error')
+    || params.has('error_description')
+    || params.has('error_code');
 }

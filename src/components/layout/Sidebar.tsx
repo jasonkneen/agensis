@@ -129,6 +129,7 @@ export function Sidebar({
   onAgentMessage,
   onAgentProfile,
   onOpenTemplates,
+  openTaskCount = 0,
   recents,
   sessions,
   agents = [],
@@ -238,7 +239,7 @@ export function Sidebar({
     return (
       <aside
         data-sidebar-panel
-        className="m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-hidden rounded-xl border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+        className="sidebar-collapsed-panel m-2 flex h-[calc(100%-1rem)] w-[52px] shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl rounded-tl-none border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
       >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
           <PanelLeft />
@@ -256,9 +257,9 @@ export function Sidebar({
         <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
         {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
         <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+        {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
         {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
         {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
-        {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
         <div className="flex-1" />
         <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
         <SidebarRailButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
@@ -305,7 +306,7 @@ export function Sidebar({
     <aside
       ref={sidebarRef}
       data-sidebar-panel
-      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card/45 text-card-foreground shadow-xl"
+      className="m-2 relative flex h-[calc(100%-1rem)] shrink-0 flex-col overflow-hidden rounded-xl rounded-tl-none border border-border bg-card/45 text-card-foreground shadow-xl"
       style={{ width: sidebarWidth }}
     >
       <div className="px-2 pt-2 pb-3">
@@ -315,11 +316,10 @@ export function Sidebar({
           </Button>
           <button
             type="button"
-            className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm font-medium outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={onOpenWorkspaceGrid || onCreateWorkspace}
             aria-label="Switch workspace"
           >
-            <Layers3 data-icon="inline-start" />
             <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
           </button>
           <Button type="button" variant="ghost" size="icon-sm" onClick={onCreateWorkspace} aria-label="Create workspace">
@@ -342,7 +342,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1 px-2">
+      <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
         <div className="flex flex-col gap-1 pb-2">
             <SidebarSection
               id="threads"
@@ -489,7 +489,7 @@ export function Sidebar({
               open={openSections.has('direct-messages')}
               onOpenChange={open => toggleSection('direct-messages', open)}
             >
-              {directMessageTargets.slice(0, 8).map(agent => (
+              {directMessageTargets.map(agent => (
                 <DirectAgentRow
                   key={getAgentKey(agent)}
                   agent={agent}
@@ -536,15 +536,14 @@ export function Sidebar({
       </ScrollArea>
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
-        <ThemeToggle mode={themeMode} onModeChange={onThemeChange} />
         <div className="flex items-center gap-2">
           <Avatar size="sm">
             <AvatarFallback>{userInitial}</AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-medium">{userEmail}</div>
-            <div className="truncate text-xs text-muted-foreground">{workspace?.name || 'Personal'}</div>
           </div>
+          <ThemeToggle mode={themeMode} onModeChange={onThemeChange} />
           <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="App settings">
             <Settings className="size-4" />
           </Button>
@@ -605,6 +604,13 @@ function directAgentParticipantForSession(session?: ChatSession | null) {
   );
   if (agentParticipants.length === 0) return null;
   return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+function getParticipantAvatar(participant: ReturnType<typeof directAgentParticipantForSession>) {
+  if (!participant || typeof participant !== 'object') return null;
+  const record = participant as unknown as Record<string, unknown>;
+  const value = record.avatar ?? record.avatar_url ?? record.image ?? record.icon;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function isDirectSession(session: ChatSession) {
@@ -793,6 +799,7 @@ function buildDirectTargetFromSession(session: ChatSession): SidebarMessageTarge
     agentId,
     name: participant?.name || session.title || handle || 'Direct message',
     handle,
+    avatar: getParticipantAvatar(participant),
     status: participant?.status as AgentConnection['status'] | undefined,
     session,
   };
@@ -830,7 +837,7 @@ function DirectAgentRow({
     <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center justify-start gap-2 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="sidebar-agent-primary min-w-0 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={onMessage}
       >
         <span className="relative flex size-7 shrink-0 items-center justify-center">
@@ -845,7 +852,7 @@ function DirectAgentRow({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-medium leading-tight text-foreground">{agent.name}</span>
           <span className="block truncate text-xs leading-tight text-muted-foreground">
-            {handle ? `@${handle}` : 'agent'} · {status}
+            {handle ? `@${handle}` : 'agent'}
           </span>
         </span>
       </button>
@@ -908,6 +915,7 @@ function SidebarRailButton({
       title={typeof count === 'number' && count > 0 ? `${title} (${count})` : title}
     >
       {icon}
+      <span className="sidebar-rail-label">{title}</span>
       {typeof count === 'number' && count > 0 && (
         <span className="sidebar-rail-count">{formatCount(count)}</span>
       )}
@@ -942,7 +950,7 @@ function ActionTile({
       <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="sidebar-action-label min-w-0 truncate text-left">{label}</span>
       {typeof count === 'number' && count > 0 && (
-        <span className="sidebar-action-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+        <span className="sidebar-action-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
           {formatCount(count)}
         </span>
       )}
@@ -955,6 +963,8 @@ function SidebarSection({
   label,
   icon,
   count,
+  actionLabel,
+  onAction,
   open,
   onOpenChange,
   children,
@@ -963,30 +973,50 @@ function SidebarSection({
   label: string;
   icon: React.ReactNode;
   count: number;
+  actionLabel?: string;
+  onAction?: () => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) {
+  const hasAction = Boolean(actionLabel && onAction);
+
   return (
     <Collapsible open={open} onOpenChange={onOpenChange} className="pt-2">
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="sidebar-section-trigger flex min-w-0 w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-controls={`${id}-content`}
-        >
-          <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-          <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
-            {icon}
-          </span>
-          <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
-          {count > 0 && (
-            <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
-              {formatCount(count)}
+      <div className="sidebar-section-header">
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-controls={`${id}-content`}
+          >
+            <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+            <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
+              {icon}
             </span>
-          )}
-        </button>
-      </CollapsibleTrigger>
+            <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
+            {!hasAction && count > 0 && (
+              <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
+                {formatCount(count)}
+              </span>
+            )}
+          </button>
+        </CollapsibleTrigger>
+        {hasAction && (
+          <button
+            type="button"
+            className="sidebar-section-action"
+            aria-label={actionLabel}
+            title={actionLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAction?.();
+            }}
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
+      </div>
       <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
         {children}
       </CollapsibleContent>
@@ -1021,7 +1051,7 @@ function SidebarFolderGroup({
           <Folder className="size-4 shrink-0" />
           <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
           {count > 0 && (
-            <span className="sidebar-section-count rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+            <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
               {formatCount(count)}
             </span>
           )}
@@ -1100,7 +1130,7 @@ function SessionRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div>
+        <div className="min-w-0 w-full">
           <ItemRow
             icon={archived ? <Archive /> : icon || <MessageSquare />}
             label={session.title}
@@ -1149,7 +1179,7 @@ function DocumentRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div>
+        <div className="min-w-0 w-full">
           <ItemRow
             icon={<FileText />}
             label={doc.title}

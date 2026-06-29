@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
-import type { ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
+import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
 export function useChat(workspaceId: string | null) {
@@ -229,7 +229,8 @@ export function useChat(workspaceId: string | null) {
 
     const hasMention = Boolean(firstAgentMention(content));
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
-    const directAgentChannel = Boolean(directAgentParticipant(session));
+    const directParticipant = directAgentParticipantRecord(session);
+    const directAgentChannel = Boolean(directParticipant);
     const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel));
 
     if (shouldRouteToAgent) {
@@ -254,13 +255,20 @@ export function useChat(workspaceId: string | null) {
       const dispatchPayload = dispatchResponse
         ? await dispatchResponse.json().catch(() => null)
         : null;
+      if (dispatchResponse?.ok && dispatchPayload?.data?.message) {
+        setMessages(prev => {
+          const next = normalizeMessage(dispatchPayload.data.message);
+          return prev.some(message => message.id === next.id) ? prev : [...prev, next];
+        });
+        return;
+      }
       if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
         return;
       }
-      return;
-    }
-
-    if (!agent || workspaceId) {
+      if (!agent && !directParticipant) {
+        return;
+      }
+    } else if (!agent) {
       return;
     }
 
@@ -283,9 +291,17 @@ export function useChat(workspaceId: string | null) {
         systemPrompt: agent.system_prompt,
         soul: agent.soul,
         instructions: agent.instructions,
-        tools: agent.tools || [],
-        skills: agent.skills || [],
+        tools: normalizeStringList(agent.tools),
+        skills: normalizeStringList(agent.skills),
         model: agent.model,
+      } : directParticipant ? {
+        name: directParticipant.name || directParticipant.handle || 'Agent',
+        systemPrompt: '',
+        soul: '',
+        instructions: '',
+        tools: [],
+        skills: [],
+        model: model || 'auto',
       } : null;
 
       const response = await fetch(apiUrl('/backend/ai-chat'), {
@@ -363,6 +379,9 @@ export function useChat(workspaceId: string | null) {
           session_id: session.id,
           role: 'assistant',
           content: fullContent,
+          sender_kind: agent || directParticipant ? 'agent' : '',
+          sender_id: agent?.id || directParticipant?.agent_id || directParticipant?.handle || '',
+          sender_name: agent?.name || directParticipant?.name || directParticipant?.handle || '',
         };
         if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
         await backendClient.from('messages').insert(assistantInsert);
@@ -419,12 +438,20 @@ function hasAgentTargetInThread(threadMessages: Message[]): boolean {
   });
 }
 
-function directAgentParticipant(session: ChatSession | null | undefined): boolean {
+function directAgentParticipantRecord(session: ChatSession | null | undefined): ChannelParticipant | null {
   const participants = Array.isArray(session?.participants) ? session.participants : [];
   const agentParticipants = participants.filter(participant =>
-    participant?.kind === 'agent' && (participant.agent_id || participant.handle)
+    participant?.kind === 'agent' && (participant.agent_id || participant.handle || participant.name)
   );
-  return agentParticipants.some(participant => participant.direct) || agentParticipants.length === 1;
+  if (agentParticipants.length === 0) return null;
+  return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(',').map(item => item.trim()).filter(Boolean);
+  if (value && typeof value === 'object') return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
+  return [];
 }
 
 function errorMessage(value: unknown): string {

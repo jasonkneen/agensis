@@ -47,7 +47,9 @@ export function HomeCanvas({
     }
     return WORKSPACE_BACKGROUND_IMAGES[Math.abs(hash) % WORKSPACE_BACKGROUND_IMAGES.length];
   }, [workspaceName]);
-  const visibleBackgroundImage = backgroundImage || fallbackBackgroundImage;
+  const visibleBackgroundImage = backgroundImage === undefined ? fallbackBackgroundImage : backgroundImage;
+  const clampedBackgroundOpacity = Math.min(1, Math.max(0, backgroundOpacity));
+  const overlayOpacity = Math.max(0, 1 - clampedBackgroundOpacity);
 
   const filteredDocs = documents.filter(d => d.title.toLowerCase().includes(docPickerQuery.toLowerCase()));
   const canSend = input.trim().length > 0;
@@ -118,13 +120,17 @@ export function HomeCanvas({
 
   return (
     <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-6">
-      <img
-        src={visibleBackgroundImage}
-        alt=""
-        className="pointer-events-none absolute inset-0 size-full object-cover"
-        style={{ opacity: backgroundOpacity }}
-      />
-      <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
+      {visibleBackgroundImage ? (
+        <>
+          <img
+            src={visibleBackgroundImage}
+            alt=""
+            className="pointer-events-none absolute inset-0 size-full object-cover"
+            style={{ opacity: clampedBackgroundOpacity }}
+          />
+          <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" style={{ opacity: overlayOpacity }} />
+        </>
+      ) : null}
 
       <div className="pointer-events-auto relative z-10 flex w-full max-w-3xl flex-col items-center gap-5">
         <h1 className="text-center text-3xl font-semibold leading-tight text-white [text-shadow:0_2px_16px_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.65)]">What's on your mind?</h1>
@@ -166,7 +172,7 @@ export function HomeCanvas({
             </div>
           )}
 
-          <InputGroup className="home-workspace-composer h-auto flex-col items-stretch overflow-hidden border bg-card/95 shadow-xl backdrop-blur-md">
+          <InputGroup className="home-workspace-composer h-auto flex-col items-stretch overflow-hidden border bg-card/95 shadow-xl has-disabled:opacity-100">
             <InputGroupTextarea
               ref={inputRef}
               value={input}

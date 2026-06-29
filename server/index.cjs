@@ -14,6 +14,8 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
 const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
+const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
+const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
 const ALLOWED_TABLES = new Set([
   'app_users',
   'workspaces',
@@ -50,6 +52,15 @@ const VERSIONED_TABLES = new Set([
   'workspace_agents',
   'agent_webhooks',
 ]);
+
+const JSON_COLUMNS_BY_TABLE = {
+  chat_sessions: new Set(['participants']),
+  canvas_objects: new Set(['points']),
+  workspace_agents: new Set(['tools', 'skills']),
+  agent_connections: new Set(['metadata']),
+  agent_jobs: new Set(['metadata']),
+  activity_events: new Set(['metadata']),
+};
 
 let envLoaded = false;
 let db;
@@ -633,6 +644,35 @@ function normalizeColumns(columns) {
   return list.map(quoteIdent).join(', ');
 }
 
+function isJsonColumn(table, column) {
+  return Boolean(JSON_COLUMNS_BY_TABLE[table]?.has(column));
+}
+
+function invalidJsonValue(table, column) {
+  const err = new Error(`${table}.${column} must be valid JSON`);
+  err.status = 400;
+  return err;
+}
+
+function normalizeJsonParam(table, column, value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      throw invalidJsonValue(table, column);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+function bindDbParam(params, table, column, value) {
+  const jsonColumn = isJsonColumn(table, column);
+  params.push(jsonColumn ? normalizeJsonParam(table, column, value) : (value ?? null));
+  return `$${params.length}${jsonColumn ? '::jsonb' : ''}`;
+}
+
 function buildWhereClause(filters = [], params = []) {
   if (!Array.isArray(filters) || filters.length === 0) {
     return { clause: '', params };
@@ -778,6 +818,68 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
+function isPathInside(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function codexPetAssetUrl(petDirName, assetName) {
+  return `/backend/codex-pets/${encodeURIComponent(petDirName)}/${encodeURIComponent(assetName)}`;
+}
+
+function contentTypeForImageAsset(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  return 'application/octet-stream';
+}
+
+function listCodexPets() {
+  if (!fs.existsSync(CODEX_PETS_ROOT)) return [];
+  return fs.readdirSync(CODEX_PETS_ROOT, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .flatMap(entry => {
+      try {
+        const petDir = path.resolve(CODEX_PETS_ROOT, entry.name);
+        if (!isPathInside(CODEX_PETS_ROOT, petDir)) return [];
+        const manifestPath = path.join(petDir, 'pet.json');
+        if (!fs.existsSync(manifestPath)) return [];
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        const spriteName = path.basename(String(manifest.spritesheetPath || 'spritesheet.webp'));
+        if (!/\.(webp|png|gif|jpe?g)$/i.test(spriteName)) return [];
+        const spritePath = path.resolve(petDir, spriteName);
+        if (!isPathInside(petDir, spritePath) || !fs.existsSync(spritePath)) return [];
+        const id = String(manifest.id || entry.name).trim() || entry.name;
+        const assetUrl = codexPetAssetUrl(entry.name, spriteName);
+        return [{
+          id: `codex:${id}`,
+          displayName: String(manifest.displayName || id),
+          description: typeof manifest.description === 'string' ? manifest.description : 'Local Codex pet.',
+          thumbnail: assetUrl,
+          spritesheet: assetUrl,
+          category: typeof manifest.category === 'string' ? manifest.category : 'codex',
+          featured: false,
+          original: false,
+          source: 'codex',
+        }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function mergeLocalCodexPets(openPetsPayload) {
+  const remotePets = Array.isArray(openPetsPayload?.pets) ? openPetsPayload.pets : [];
+  const codexPets = listCodexPets();
+  return {
+    ...(openPetsPayload && typeof openPetsPayload === 'object' ? openPetsPayload : {}),
+    pets: [...codexPets, ...remotePets],
+    pageSize: codexPets.length + remotePets.length,
+  };
+}
+
 function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode }) {
   const resolvedModel = resolveAnthropicModel(model);
   const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
@@ -808,7 +910,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   return { localCommand: portableCommand, portableCommand };
 }
 
-async function verifyAgentConnectToken(token) {
+async function verifyAgentConnectToken(token, req = null) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
     `select id, workspace_id, name, avatar, openpet_avatar_id, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
@@ -817,7 +919,21 @@ async function verifyAgentConnectToken(token) {
      limit 1`,
     [hashAgentToken(token)],
   );
-  const agent = rows[0];
+  let agent = rows[0];
+  if (!agent && allowLoopbackAgentDevFallback(req, token)) {
+    const { workspaceId, agentId } = agentIdsFromWsRequest(req);
+    if (workspaceId && agentId) {
+      const fallbackRows = await getDb().unsafe(
+        `select id, workspace_id, name, avatar, openpet_avatar_id, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version
+         from workspace_agents
+         where id = $1 and workspace_id = $2
+         limit 1`,
+        [agentId, workspaceId],
+      );
+      agent = fallbackRows[0];
+      if (agent) console.warn('[agensis] Using loopback-only dev agent auth fallback for', agent.id);
+    }
+  }
   if (!agent) return null;
   return {
     agentId: agent.id,
@@ -835,6 +951,30 @@ function agentTokenFromWsRequest(req) {
   } catch {
     return '';
   }
+}
+
+function agentIdsFromWsRequest(req) {
+  try {
+    const url = new URL(req?.url || '', 'http://localhost');
+    return {
+      workspaceId: url.searchParams.get('workspaceId') || '',
+      agentId: url.searchParams.get('agentId') || '',
+    };
+  } catch {
+    return { workspaceId: '', agentId: '' };
+  }
+}
+
+function allowLoopbackAgentDevFallback(req, token) {
+  if (process.env.NODE_ENV === 'production') return false;
+  if (!String(token || '').startsWith('aga_')) return false;
+  const remote = req?.socket?.remoteAddress || '';
+  const host = String(req?.headers?.host || '');
+  return remote === '127.0.0.1'
+    || remote === '::1'
+    || remote === '::ffff:127.0.0.1'
+    || host.startsWith('127.0.0.1:')
+    || host.startsWith('localhost:');
 }
 
 function publicAgentConnection(row) {
@@ -1641,7 +1781,13 @@ function validFileSourceRoot(value) {
   }
 }
 
-async function workspaceProjectFileSources(workspaceId, workspace) {
+async function workspaceProjectFileSources(workspaceId, workspace, filters = {}) {
+  const agentFilterKeys = new Set(
+    (Array.isArray(filters.agents) ? filters.agents : [])
+      .map(value => slugHandle(value || ''))
+      .filter(Boolean),
+  );
+  const hasAgentFilter = agentFilterKeys.size > 0;
   const sources = [];
   const seen = new Set();
   const addSource = (source) => {
@@ -1670,6 +1816,16 @@ async function workspaceProjectFileSources(workspaceId, workspace) {
 
   connections.forEach(connection => {
     const handle = slugHandle(connection.handle || connection.name || 'agent');
+    const connectionKeys = [
+      connection.id,
+      connection.agent_id,
+      connection.handle,
+      connection.name,
+      handle,
+      `agent:${connection.agent_id || ''}`,
+      `agent:${handle}`,
+    ].map(value => slugHandle(value || '')).filter(Boolean);
+    if (hasAgentFilter && !connectionKeys.some(key => agentFilterKeys.has(key))) return;
     addSource({
       id: `agent:${connection.id}`,
       kind: 'agent',
@@ -2113,7 +2269,7 @@ function attachRealtime(server) {
     ws.subscriptions = [];
     const authReady = (async () => {
       const userId = await verifyToken(tokenFromWsRequest(req));
-      const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req));
+      const agentAuth = userId ? null : await verifyAgentConnectToken(agentTokenFromWsRequest(req), req);
       if (!userId && !agentAuth) {
         ws.close(1008, 'Authentication required');
         return false;
@@ -2211,6 +2367,48 @@ function createApp() {
     }
   });
 
+  app.get('/backend/openpets/catalog', requireAuth, async (_req, res) => {
+    try {
+      let payload = { version: 3, page: 0, pageSize: 0, pets: [] };
+      let remoteError = null;
+      try {
+        const response = await fetch(OPENPETS_CATALOG_URL, {
+          headers: { 'User-Agent': 'agensis/1.0 (+https://openpets.dev)' },
+        });
+        if (!response.ok) {
+          remoteError = new Error(`OpenPets catalog returned ${response.status}`);
+        } else {
+          payload = await response.json();
+        }
+      } catch (error) {
+        remoteError = error;
+      }
+
+      const merged = mergeLocalCodexPets(payload);
+      if (remoteError && merged.pets.length === 0) return jsonError(res, 502, remoteError);
+      res.setHeader('Cache-Control', 'public, max-age=120');
+      res.json({ data: merged, error: null });
+    } catch (error) {
+      jsonError(res, 502, error);
+    }
+  });
+
+  app.get('/backend/codex-pets/:petDir/:asset', async (req, res) => {
+    try {
+      const petDir = path.resolve(CODEX_PETS_ROOT, String(req.params.petDir || ''));
+      const assetName = path.basename(String(req.params.asset || ''));
+      const assetPath = path.resolve(petDir, assetName);
+      if (!assetName || !/\.(webp|png|gif|jpe?g)$/i.test(assetName)) return jsonError(res, 404, new Error('Pet asset not found'));
+      if (!isPathInside(CODEX_PETS_ROOT, petDir) || !isPathInside(petDir, assetPath)) return jsonError(res, 404, new Error('Pet asset not found'));
+      if (!fs.existsSync(path.join(petDir, 'pet.json')) || !fs.existsSync(assetPath)) return jsonError(res, 404, new Error('Pet asset not found'));
+      res.setHeader('Content-Type', contentTypeForImageAsset(assetPath));
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      fs.createReadStream(assetPath).pipe(res);
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
   app.get('/backend/system/capabilities', requireAuth, async (req, res) => {
     try {
       const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
@@ -2283,7 +2481,12 @@ function createApp() {
       );
       const workspace = rows[0];
       if (!workspace) return jsonError(res, 404, new Error('Workspace not found'));
-      const sources = await workspaceProjectFileSources(workspaceId, workspace);
+      const requestedAgents = Array.isArray(req.query.agent)
+        ? req.query.agent
+        : req.query.agent
+          ? [req.query.agent]
+          : [];
+      const sources = await workspaceProjectFileSources(workspaceId, workspace, { agents: requestedAgents });
       if (sources.length === 0) return res.json({ data: { root: '', files: [], sources: [] }, error: null });
       const fileSources = sources.map(source => {
         const files = listProjectFiles(source.root, source.kind === 'agent' ? 160 : 300).map(file => ({
@@ -2624,8 +2827,7 @@ function createApp() {
       const columns = Object.keys(rows[0]);
       const params = [];
       const valueSql = rows.map((row) => `(${columns.map((column) => {
-        params.push(row[column] ?? null);
-        return `$${params.length}`;
+        return bindDbParam(params, table, column, row[column]);
       }).join(', ')})`).join(', ');
 
       const result = await getDb().unsafe(
@@ -2649,8 +2851,7 @@ function createApp() {
 
       const params = [];
       const setParts = Object.keys(values).map((column) => {
-        params.push(values[column] ?? null);
-        return `${quoteIdent(column)} = $${params.length}`;
+        return `${quoteIdent(column)} = ${bindDbParam(params, table, column, values[column])}`;
       });
       if (VERSIONED_TABLES.has(table) && values.version == null) {
         setParts.push('"version" = COALESCE("version", 0) + 1');

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Bell,
   Check,
   Eye,
   EyeOff,
@@ -15,7 +16,8 @@ import {
 } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
 import { AI_MODELS, type Workspace } from '../../types';
-import { getSettings, setSetting } from '../../lib/settings';
+import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
+import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -53,10 +55,11 @@ interface SettingsDialogProps {
   onThemeChange: (mode: ThemeMode) => void;
 }
 
-type TabId = 'general' | 'appearance' | 'ai' | 'tools' | 'secrets' | 'about';
+type TabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'secrets' | 'about';
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <SettingsIcon /> },
+  { id: 'notifications', label: 'Notifications', icon: <Bell /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette /> },
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
@@ -80,12 +83,12 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
       <DialogContent className="settings-dialog grid max-h-[calc(100svh-1.5rem)] overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="border-b border-border p-4 pr-12">
+        <DialogHeader className="settings-dialog-header border-b border-border p-4 pr-12">
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>{activeTab?.label}</DialogDescription>
         </DialogHeader>
-        <div className="grid min-h-0 grid-cols-[12rem_1fr]">
-          <nav className="flex flex-col gap-1 border-r border-border bg-muted/40 p-3">
+        <div className="settings-dialog-body grid min-h-0 grid-cols-[12rem_1fr]">
+          <nav className="settings-dialog-nav flex flex-col gap-1 border-r border-border p-3">
             {TABS.map(item => (
               <Button
                 key={item.id}
@@ -99,8 +102,8 @@ export function SettingsDialog({
               </Button>
             ))}
           </nav>
-          <ScrollArea className="h-[34rem] min-w-0">
-            <div className="p-4">
+          <ScrollArea className="settings-dialog-scroll h-[34rem] min-w-0">
+            <div className="settings-dialog-content p-4">
               {tab === 'general' && (
                 <GeneralPanel
                   workspace={workspace}
@@ -109,6 +112,7 @@ export function SettingsDialog({
                   onUpdateWorkspace={onUpdateWorkspace}
                 />
               )}
+              {tab === 'notifications' && <NotificationsPanel />}
               {tab === 'appearance' && (
                 <AppearancePanel
                   workspace={workspace}
@@ -218,6 +222,93 @@ function GeneralPanel({
   );
 }
 
+function NotificationsPanel() {
+  const settings = getSettings();
+  const [level, setLevel] = useState<NotificationLevel>(settings.notifications_level);
+  const [sound, setSound] = useState(settings.notifications_sound);
+  const [desktop, setDesktop] = useState(settings.notifications_desktop);
+  const [agentEvents, setAgentEvents] = useState(settings.notifications_agent_events);
+  const [taskReminders, setTaskReminders] = useState(settings.notifications_task_reminders);
+
+  const setNotificationLevel = (next: NotificationLevel) => {
+    setLevel(next);
+    setSetting('notifications_level', next);
+  };
+
+  const toggle = (key: 'notifications_sound' | 'notifications_desktop' | 'notifications_agent_events' | 'notifications_task_reminders', value: boolean) => {
+    setSetting(key, value);
+    if (key === 'notifications_sound') setSound(value);
+    if (key === 'notifications_desktop') setDesktop(value);
+    if (key === 'notifications_agent_events') setAgentEvents(value);
+    if (key === 'notifications_task_reminders') setTaskReminders(value);
+  };
+
+  return (
+    <div className="settings-panel-stack">
+      <SettingsPanelHeader title="Notifications" description="Choose what pulls your attention." />
+      <div className="settings-card-grid">
+        <SettingsChoiceCard
+          title="All new messages"
+          description="Every message in your channels and DMs."
+          selected={level === 'all'}
+          onClick={() => setNotificationLevel('all')}
+        />
+        <SettingsChoiceCard
+          title="Direct messages & mentions"
+          description="DMs, @mentions, and agent broadcasts only."
+          selected={level === 'mentions'}
+          onClick={() => setNotificationLevel('mentions')}
+        />
+        <SettingsChoiceCard
+          title="Nothing"
+          description="No notifications — catch up in the app."
+          selected={level === 'none'}
+          onClick={() => setNotificationLevel('none')}
+        />
+      </div>
+      <div className="settings-toggle-list">
+        <SettingsToggleRow title="Play a sound" description="A soft chime when a notification arrives." checked={sound} onCheckedChange={checked => toggle('notifications_sound', checked)} />
+        <SettingsToggleRow title="Desktop notifications" description="Show OS notifications when agensis is in the background." checked={desktop} onCheckedChange={checked => toggle('notifications_desktop', checked)} />
+        <SettingsToggleRow title="Agent events" description="Notify when remote agents connect, finish, or need attention." checked={agentEvents} onCheckedChange={checked => toggle('notifications_agent_events', checked)} />
+        <SettingsToggleRow title="Task reminders" description="Notify when assigned tasks are due soon." checked={taskReminders} onCheckedChange={checked => toggle('notifications_task_reminders', checked)} />
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanelHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="settings-panel-header">
+      <h2>{title}</h2>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function SettingsChoiceCard({ title, description, selected, onClick }: { title: string; description: string; selected: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className="settings-choice-card" data-selected={selected ? 'true' : undefined} onClick={onClick}>
+      <span className="settings-choice-radio" />
+      <span className="settings-choice-copy">
+        <span>{title}</span>
+        <small>{description}</small>
+      </span>
+    </button>
+  );
+}
+
+function SettingsToggleRow({ title, description, checked, onCheckedChange }: { title: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+  return (
+    <div className="settings-toggle-row">
+      <div>
+        <div className="settings-toggle-title">{title}</div>
+        <div className="settings-toggle-description">{description}</div>
+      </div>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  );
+}
+
 function AppearancePanel({
   workspace,
   onUpdateWorkspace,
@@ -229,7 +320,14 @@ function AppearancePanel({
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
 }) {
+  const initialSettings = getSettings();
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? 0.42) * 100));
+  const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
+  const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
+  const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
+  const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
+  const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
+  const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const backgroundImage = workspace?.background_image || '';
   const modes: Array<{ id: ThemeMode; label: string }> = [
@@ -241,10 +339,22 @@ function AppearancePanel({
     { id: 'neo-light', label: 'Neo Light' },
     { id: 'neo-dark', label: 'Neo Dark' },
   ];
+  const fontOptions: Array<{ id: UiFontFamily; label: string }> = [
+    { id: 'geist', label: 'Geist' },
+    { id: 'inter', label: 'Inter' },
+    { id: 'space-grotesk', label: 'Space Grotesk' },
+    { id: 'system', label: 'System' },
+    { id: 'mono', label: 'Mono' },
+  ];
 
   useEffect(() => {
     setBackgroundOpacity(Math.round((workspace?.background_opacity ?? 0.42) * 100));
   }, [workspace?.id, workspace?.background_opacity]);
+
+  const updateAppearanceSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+    setSetting(key, value);
+    applyUiAppearanceSettings(getSettings());
+  };
 
   const updateBackgroundImage = (nextImage: string) => {
     if (!workspace) return;
@@ -284,6 +394,118 @@ function AppearancePanel({
           ))}
         </ToggleGroup>
         <FieldDescription>System follows your OS setting. TinyWorld and Neo provide separate light and dark control palettes.</FieldDescription>
+      </Field>
+
+      <Field>
+        <FieldLabel>Accent color</FieldLabel>
+        <ToggleGroup
+          type="single"
+          value={themePreset}
+          onValueChange={value => {
+            if (!value) return;
+            setThemePreset(value);
+            setSetting('ui_theme_preset', value);
+            applyThemePreset(value);
+          }}
+          variant="outline"
+          className="grid w-full grid-cols-2 sm:grid-cols-3"
+        >
+          {THEME_PRESETS.map(preset => (
+            <ToggleGroupItem key={preset.id} value={preset.id} className="gap-2">
+              <span className="size-3 rounded-sm border border-border" style={{ background: preset.swatch }} />
+              {preset.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </Field>
+
+      <Field>
+        <FieldLabel htmlFor="ui-font-family">Font</FieldLabel>
+        <NativeSelect
+          id="ui-font-family"
+          value={fontFamily}
+          onChange={event => {
+            const next = event.target.value as UiFontFamily;
+            setFontFamily(next);
+            updateAppearanceSetting('ui_font_family', next);
+          }}
+        >
+          {fontOptions.map(option => (
+            <NativeSelectOption key={option.id} value={option.id}>{option.label}</NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Base font size</FieldLabel>
+          <Badge variant="secondary">{baseFontSize}px</Badge>
+        </div>
+        <Slider
+          value={[baseFontSize]}
+          min={12}
+          max={18}
+          step={1}
+          onValueChange={value => {
+            const next = value[0] ?? baseFontSize;
+            setBaseFontSize(next);
+            updateAppearanceSetting('ui_base_font_size', next);
+          }}
+        />
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Panel translucency</FieldLabel>
+          <Badge variant="secondary">{panelTranslucency}%</Badge>
+        </div>
+        <Slider
+          value={[panelTranslucency]}
+          min={35}
+          max={95}
+          step={1}
+          onValueChange={value => {
+            const next = value[0] ?? panelTranslucency;
+            setPanelTranslucency(next);
+            updateAppearanceSetting('ui_panel_translucency', next);
+          }}
+        />
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Sidebar translucency</FieldLabel>
+          <Badge variant="secondary">{sidebarTranslucency}%</Badge>
+        </div>
+        <Slider
+          value={[sidebarTranslucency]}
+          min={35}
+          max={95}
+          step={1}
+          onValueChange={value => {
+            const next = value[0] ?? sidebarTranslucency;
+            setSidebarTranslucency(next);
+            updateAppearanceSetting('ui_sidebar_translucency', next);
+          }}
+        />
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Glass blur</FieldLabel>
+          <Badge variant="secondary">{glassBlur}px</Badge>
+        </div>
+        <Slider
+          value={[glassBlur]}
+          min={0}
+          max={32}
+          step={1}
+          onValueChange={value => {
+            const next = value[0] ?? glassBlur;
+            setGlassBlur(next);
+            updateAppearanceSetting('ui_glass_blur', next);
+          }}
+        />
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">

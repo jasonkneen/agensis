@@ -125,9 +125,8 @@ import {
 } from '@/components/ui/dialog';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
-import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { isImageAvatar } from '../../lib/openpets';
+import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -159,6 +158,7 @@ interface ChatWindowContentProps {
   contextControls?: React.ReactNode;
   isDirectMessage?: boolean;
   onAgentProfile?: (agentIdOrHandle: string) => void;
+  onUpdateAgent?: (id: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
 }
 
 type ChannelPresenceUser = {
@@ -191,6 +191,11 @@ type ProjectFileSource = {
   label: string;
   root: string;
   files: ProjectFileEntry[];
+  agent_id?: string | null;
+  connection_id?: string | null;
+  handle?: string;
+  host?: string;
+  status?: string;
 };
 
 type LinkedFile = {
@@ -245,6 +250,7 @@ export function ChatWindowContent({
   systemCapabilities = null,
   contextControls,
   isDirectMessage: isDirectMessageProp = false,
+  onUpdateAgent,
 }: ChatWindowContentProps) {
   const [input, setInput] = useState('');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
@@ -325,7 +331,7 @@ export function ChatWindowContent({
         label: skill.label,
         detail: `${skill.count} item${skill.count === 1 ? '' : 's'}`,
       })) || [];
-    const fromAgents = Array.from(new Set(agents.flatMap(agent => agent.skills || []).filter(Boolean)))
+    const fromAgents = Array.from(new Set(agents.flatMap(agent => normalizeStringList(agent.skills))))
       .map(skill => ({ id: skill, label: skill, detail: 'Agent skill' }));
     return [...fromCapabilities, ...fromAgents].slice(0, 10);
   }, [agents, systemCapabilities]);
@@ -337,7 +343,7 @@ export function ChatWindowContent({
     const commands = systemCapabilities?.clis
       .filter(cli => cli.available)
       .map(cli => ({ id: cli.id, label: cli.label, detail: cli.command })) || [];
-    const agentTools = Array.from(new Set(agents.flatMap(agent => agent.tools || []).filter(Boolean)))
+    const agentTools = Array.from(new Set(agents.flatMap(agent => normalizeStringList(agent.tools))))
       .map(tool => ({ id: tool, label: tool, detail: 'Agent tool' }));
     const codexServer = systemCapabilities?.codexAppServer.available
       ? [{ id: 'codex-app-server', label: 'Codex app server', detail: systemCapabilities.codexAppServer.command }]
@@ -650,8 +656,8 @@ export function ChatWindowContent({
   }, [directProfileKey, isDirectMessage, sidePanel]);
 
   const participantCandidates = useMemo(
-    () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants, visibleMessages),
-    [agentConnections, agents, persistedParticipants, presenceUsers, visibleMessages],
+    () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants),
+    [agentConnections, agents, persistedParticipants, presenceUsers],
   );
 
   const participants = useMemo(() => {
@@ -671,31 +677,13 @@ export function ChatWindowContent({
         connected: Boolean(participant.status && participant.status !== 'offline'),
       });
     });
-    visibleMessages.forEach(message => {
-      if (message.sender_kind === 'agent' || message.role === 'assistant') {
-        const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:agensis-ai';
-        if (!map.has(id)) {
-          map.set(id, {
-            id,
-            name: message.sender_name || 'agensis AI',
-            kind: 'agent',
-            agent_id: message.sender_id || null,
-          });
-        }
-      } else {
-        const id = message.sender_id ? `user:${message.sender_id}` : 'user:you';
-        if (!map.has(id)) {
-          map.set(id, {
-            id,
-            name: message.sender_name || 'You',
-            kind: 'user',
-            user_id: message.sender_id || null,
-          });
-        }
-      }
-    });
     return Array.from(map.values()).slice(0, 6);
-  }, [agentConnections, agents, persistedParticipants, presenceUsers, visibleMessages]);
+  }, [agentConnections, agents, persistedParticipants, presenceUsers]);
+
+  const agentAvatarLookup = useMemo(
+    () => buildAgentAvatarLookup(agents, persistedParticipants),
+    [agents, persistedParticipants],
+  );
 
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
     if (channelMeta?.id) return channelMeta;
@@ -728,9 +716,10 @@ export function ChatWindowContent({
       setChannelActionStatus('Save unavailable until this channel exists.');
       return null;
     }
+    const normalizedUpdates = normalizeChannelSessionUpdates(updates);
     const { data, error } = await backendClient
       .from<ChannelSessionMeta>('chat_sessions')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update({ ...normalizedUpdates, updated_at: new Date().toISOString() })
       .eq('id', session.id)
       .select(CHANNEL_META_COLUMNS)
       .single();
@@ -738,7 +727,7 @@ export function ChatWindowContent({
       setChannelActionStatus(error?.message || 'Could not save channel changes.');
       return null;
     }
-    const next = normalizeChannelSessionMeta({ ...session, ...updates, ...data });
+    const next = normalizeChannelSessionMeta({ ...session, ...normalizedUpdates, ...data });
     setChannelMeta(next);
     return next;
   };
@@ -840,7 +829,14 @@ export function ChatWindowContent({
     if (sidePanel !== 'files' || !workspaceId) return;
     let cancelled = false;
     setProjectFilesLoading(true);
-    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/project-files`), {
+    const participantQuery = persistedParticipants
+      .filter(participant => participant.kind === 'agent')
+      .map(participant => participant.agent_id || participant.handle || participant.name)
+      .filter(Boolean)
+      .map(value => `agent=${encodeURIComponent(String(value))}`)
+      .join('&');
+    const query = participantQuery ? `?${participantQuery}` : '';
+    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/project-files${query}`), {
       headers: apiAuthHeaders(),
     })
       .then(response => response.json())
@@ -863,7 +859,7 @@ export function ChatWindowContent({
     return () => {
       cancelled = true;
     };
-  }, [sidePanel, workspaceId]);
+  }, [persistedParticipants, sidePanel, workspaceId]);
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -1024,6 +1020,7 @@ export function ChatWindowContent({
                       <MessageScrollerItem key={msg.id} scrollAnchor={idx === displayMessages.length - 1}>
                         <ChatMessageBubble
                           msg={msg}
+                          avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
                           isStreaming={streaming && idx === displayMessages.length - 1 && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
                           isEditing={editingMessageId === msg.id}
@@ -1121,8 +1118,8 @@ export function ChatWindowContent({
 
           <div className="relative">
             {showDocPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-3 max-h-[min(480px,calc(100vh-180px))] rounded-2xl border border-border bg-popover p-2 shadow-xl">
-                <CommandList className="max-h-[min(420px,calc(100vh-220px))]">
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] rounded-2xl border border-border bg-popover p-2 pt-3 shadow-xl">
+                <CommandList className="max-h-[min(240px,40vh)]">
                   <CommandEmpty>No agents or documents found.</CommandEmpty>
                   {filteredAgents.length > 0 && (
                     <CommandGroup heading="Agents" className="pb-2">
@@ -1172,8 +1169,8 @@ export function ChatWindowContent({
             )}
 
             {showGroupPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-3 max-h-[min(420px,calc(100vh-180px))] rounded-2xl border border-border bg-popover p-2 shadow-xl">
-                <CommandList className="max-h-[min(360px,calc(100vh-220px))]">
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] rounded-2xl border border-border bg-popover p-2 pt-3 shadow-xl">
+                <CommandList className="max-h-[min(240px,40vh)]">
                   <CommandEmpty>No groups found.</CommandEmpty>
                   <CommandGroup heading="Canvas groups">
                     {filteredGroups.map(group => {
@@ -1322,6 +1319,7 @@ export function ChatWindowContent({
               connections={agentConnections}
               lookupKey={profileAgentKey || directProfileKey}
               onClose={closeSidePanel}
+              onUpdateAgent={onUpdateAgent}
             />
           ) : sidePanel === 'thread' && activeThreadId && parentMessage && onSendThreadReply ? (
             <ChatThreadPanel
@@ -1455,8 +1453,23 @@ export function ChatWindowContent({
   );
 }
 
+function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initials: string; isAgent: boolean }) {
+  if (avatar && isPetSpritesheetAvatar(avatar)) {
+    return (
+      <span className="animated-pet-avatar-shell size-full">
+        <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(avatar)})` }} />
+      </span>
+    );
+  }
+  if (avatar && isImageAvatar(avatar)) {
+    return <img src={renderablePetAssetUrl(avatar)} alt="" className="size-full object-contain" loading="lazy" draggable={false} />;
+  }
+  return isAgent ? <Bot className="size-4" /> : <span>{initials}</span>;
+}
+
 function ChatMessageBubble({
   msg,
+  avatar,
   isStreaming,
   replyCount,
   isEditing,
@@ -1472,6 +1485,7 @@ function ChatMessageBubble({
   onAgentProfile,
 }: {
   msg: ChatMessage;
+  avatar?: string;
   isStreaming?: boolean;
   replyCount?: number;
   isEditing?: boolean;
@@ -1490,8 +1504,8 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
-  const senderName = msg.sender_name || (isUser ? 'You' : 'agensis AI');
-  const initials = isUser ? 'YO' : (senderName.slice(0, 2).toUpperCase() || 'AI');
+  const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
+  const initials = isUser ? 'You'.slice(0, 2).toUpperCase() : (senderName.slice(0, 2).toUpperCase() || 'AI');
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -1501,8 +1515,8 @@ function ChatMessageBubble({
 
   return (
     <div className="group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40">
-      <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold text-muted-foreground">
-        {msg.sender_kind === 'agent' || msg.role === 'assistant' ? <Bot className="size-4" /> : initials}
+      <div className="chat-message-avatar mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-[10px] font-semibold text-muted-foreground">
+        <MessageAvatar avatar={avatar} initials={initials} isAgent={msg.sender_kind === 'agent' || msg.role === 'assistant'} />
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-baseline gap-2">
@@ -1539,7 +1553,7 @@ function ChatMessageBubble({
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
             {displayContent ? (
-              <MarkdownContent content={displayContent} />
+              <MarkdownContent content={displayContent} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (
               <span className="flex items-center gap-2 text-muted-foreground">
                 <Spinner className="size-3" />
@@ -1651,7 +1665,7 @@ function ChannelSidePanel({
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         {!isPins && selectedFile ? (
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedFile(null)} aria-label="Back to files">
             <ArrowLeft />
@@ -1668,13 +1682,13 @@ function ChannelSidePanel({
           <X />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="channel-side-panel-body min-h-0 flex-1 overflow-auto p-2">
         {isPins ? (
           pinnedMessages.length > 0 ? (
             <div className="space-y-2">
               {pinnedMessages.map(message => (
                 <div key={message.id} className="rounded-md border bg-muted/40 p-2 text-sm">
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'agensis AI')}</div>
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'Assistant')}</div>
                   <MarkdownContent content={safeMessageText(message.content)} compact />
                 </div>
               ))}
@@ -1693,10 +1707,9 @@ function ChannelSidePanel({
         ) : loading ? (
           <p className="text-sm text-muted-foreground">Loading files...</p>
         ) : fileCount > 0 ? (
-          <div className="space-y-4">
+          <div className="file-tree">
             {uploadedFiles.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploaded</div>
+              <FileTreeSection title="Uploaded" count={uploadedFiles.length}>
                 {uploadedFiles.map(file => (
                   <UploadedFileRow
                     key={file.id}
@@ -1704,14 +1717,15 @@ function ChannelSidePanel({
                     onOpen={() => setSelectedFile({ kind: 'uploaded', file })}
                   />
                 ))}
-              </div>
+              </FileTreeSection>
             )}
             {projectGroups.map(group => (
-              <div key={group.source.id} className="space-y-2">
-                <div className="min-w-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  {group.source.label}
-                  {group.source.root && <span className="ml-1 normal-case tracking-normal">({group.source.root})</span>}
-                </div>
+              <FileTreeSection
+                key={group.source.id}
+                title={group.source.label}
+                detail={group.source.root}
+                count={group.files.length}
+              >
                 {group.files.map(file => (
                   <ProjectFileRow
                     key={`${group.source.id}:${file.path}`}
@@ -1720,7 +1734,7 @@ function ChannelSidePanel({
                     onOpen={() => setSelectedFile({ kind: 'project', file, source: group.source })}
                   />
                 ))}
-              </div>
+              </FileTreeSection>
             ))}
           </div>
         ) : (
@@ -1737,12 +1751,14 @@ function AgentProfileSidePanel({
   connections,
   lookupKey,
   onClose,
+  onUpdateAgent: _onUpdateAgent,
 }: {
   agent: WorkspaceAgent | null;
   participant: ChannelParticipant | null;
   connections: AgentConnection[];
   lookupKey?: string | null;
   onClose: () => void;
+  onUpdateAgent?: (id: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
 }) {
   const handle = agent?.handle || participant?.handle || (agent ? agentHandle(agent) : normalizeAgentLookupKey(participant?.name));
   const name = agent?.name || participant?.name || 'Agent';
@@ -1754,12 +1770,12 @@ function AgentProfileSidePanel({
   const status = activeConnection?.status || participant?.status || (agent?.run_mode === 'daemon' ? 'daemon' : 'built-in');
   const description = agent?.description || agent?.soul || '';
   const prompt = agent?.system_prompt || agent?.instructions || '';
-  const chips = [...(agent?.tools || []), ...(agent?.skills || [])].filter(Boolean);
+  const chips = [...normalizeStringList(agent?.tools), ...normalizeStringList(agent?.skills)];
   const AvatarIcon = getAgentAvatarIcon(agent?.avatar);
 
   return (
     <div className="flex h-full min-w-0 flex-col">
-      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Profile</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close profile">
@@ -1769,8 +1785,12 @@ function AgentProfileSidePanel({
       <div className="min-h-0 flex-1 overflow-auto p-4">
         <div className="flex flex-col items-center text-center">
           <div className="grid size-20 place-items-center overflow-hidden rounded-2xl border bg-muted text-2xl font-semibold">
-            {isImageAvatar(agent?.avatar) ? (
-              <img src={agent?.avatar || ''} alt="" className="size-full object-cover" draggable={false} />
+            {agent?.avatar && isPetSpritesheetAvatar(agent.avatar) ? (
+              <span className="animated-pet-avatar-shell size-full">
+                <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(agent.avatar)})` }} />
+              </span>
+            ) : isImageAvatar(agent?.avatar) ? (
+              <img src={renderablePetAssetUrl(agent?.avatar || '')} alt="" className="size-full object-cover" draggable={false} />
             ) : AvatarIcon ? (
               <AvatarIcon className="size-9 text-muted-foreground" />
             ) : (
@@ -1838,6 +1858,19 @@ function AgentProfileSidePanel({
   );
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map(item => item.trim()).filter(Boolean);
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
+  }
+  return [];
+}
+
 function AgentProfileField({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (
@@ -1852,29 +1885,43 @@ type SelectedPanelFile =
   | { kind: 'uploaded'; file: UploadedFile }
   | { kind: 'project'; file: ProjectFileEntry; source: ProjectFileSource };
 
-function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => void }) {
-  const isImage = (file.type || '').startsWith('image/');
-  const preview = useAuthenticatedObjectUrl(isImage ? apiUrl(`/backend/files/${encodeURIComponent(file.id)}/content`) : null);
+function FileTreeSection({
+  title,
+  detail,
+  count,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="file-tree-section">
+      <div className="file-tree-heading" title={detail || title}>
+        <ChevronDown className="size-3.5 shrink-0" />
+        <Folder className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="file-tree-count">{count}</span>
+      </div>
+      {detail && <div className="file-tree-root truncate">{detail}</div>}
+      <div className="file-tree-children">{children}</div>
+    </section>
+  );
+}
 
+function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => void }) {
   return (
     <button
       type="button"
-      className="flex w-full min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+      className="file-tree-row"
       onClick={onOpen}
       title={`Open ${file.name}`}
     >
-      <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md border bg-background">
-        {isImage && preview.src ? (
-          <img src={preview.src} alt="" className="size-full object-cover" draggable={false} />
-        ) : (
-          <Paperclip className="size-4 text-muted-foreground" />
-        )}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate">{file.name}</span>
-        <span className="block truncate text-xs text-muted-foreground">{file.type || 'File'}</span>
-      </span>
-      <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+      <Paperclip className="file-tree-icon" />
+      <span className="file-tree-name">{file.name}</span>
+      <span className="file-tree-meta">{file.type || 'File'}</span>
+      <span className="file-tree-size">{formatBytes(file.size || 0)}</span>
     </button>
   );
 }
@@ -2080,19 +2127,19 @@ function ComposerAddEmpty({ children }: { children: React.ReactNode }) {
 }
 
 function ProjectFileRow({ file, source, onOpen }: { file: ProjectFileEntry; source: ProjectFileSource; onOpen: () => void }) {
+  const displayName = file.path.split('/').filter(Boolean).pop() || file.name || file.path;
+  const folderPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : source.label;
   return (
     <button
       type="button"
-      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/40"
+      className="file-tree-row"
       onClick={onOpen}
       title={file.path}
     >
-      {source.kind === 'agent' ? <Bot className="size-4 shrink-0 text-muted-foreground" /> : <FileText className="size-4 shrink-0 text-muted-foreground" />}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate">{file.path}</span>
-        <span className="block truncate text-[11px] text-muted-foreground">{source.label}</span>
-      </span>
-      <span className="text-xs text-muted-foreground">{formatBytes(file.size || 0)}</span>
+      {source.kind === 'agent' ? <Bot className="file-tree-icon" /> : <FileText className="file-tree-icon" />}
+      <span className="file-tree-name">{displayName}</span>
+      <span className="file-tree-meta">{folderPath}</span>
+      <span className="file-tree-size">{formatBytes(file.size || 0)}</span>
     </button>
   );
 }
@@ -2304,6 +2351,14 @@ function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMe
   };
 }
 
+function normalizeChannelSessionUpdates(updates: Partial<ChannelSessionMeta>): Partial<ChannelSessionMeta> {
+  if (!('participants' in updates)) return updates;
+  return {
+    ...updates,
+    participants: normalizeChannelParticipants(updates.participants),
+  };
+}
+
 function normalizeChannelParticipants(value: unknown): ChannelParticipant[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap(item => {
@@ -2364,6 +2419,43 @@ function participantMatchesLookupKey(participant: ChannelParticipant, key?: stri
   ].some(value => normalizeAgentLookupKey(value) === normalizedKey);
 }
 
+function addAvatarAlias(map: Map<string, string>, alias: string | null | undefined, avatar: string | null | undefined) {
+  const normalized = normalizeAgentLookupKey(alias);
+  const value = stringValue(avatar);
+  if (normalized && value) map.set(normalized, value);
+}
+
+function buildAgentAvatarLookup(agents: WorkspaceAgent[], participants: ChannelParticipant[]) {
+  const map = new Map<string, string>();
+  agents.forEach(agent => {
+    const avatar = agent.avatar || '';
+    addAvatarAlias(map, agent.id, avatar);
+    addAvatarAlias(map, `agent:${agent.id}`, avatar);
+    addAvatarAlias(map, agent.name, avatar);
+    addAvatarAlias(map, agent.handle, avatar);
+    addAvatarAlias(map, agentHandle(agent), avatar);
+  });
+  participants.forEach(participant => {
+    if (participant.kind !== 'agent') return;
+    const agent = agents.find(item => participantMatchesLookupKey(participant, item.id) || agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+    if (!agent?.avatar) return;
+    addAvatarAlias(map, participant.id, agent.avatar);
+    addAvatarAlias(map, participant.agent_id, agent.avatar);
+    addAvatarAlias(map, participant.handle, agent.avatar);
+    addAvatarAlias(map, participant.name, agent.avatar);
+  });
+  return map;
+}
+
+function resolveMessageAvatar(message: ChatMessage, lookup: Map<string, string>) {
+  if (message.role === 'user' && message.sender_kind !== 'agent') return '';
+  for (const key of [message.sender_id, message.sender_name, message.sender_id ? `agent:${message.sender_id}` : '']) {
+    const avatar = lookup.get(normalizeAgentLookupKey(key));
+    if (avatar) return avatar;
+  }
+  return '';
+}
+
 function getAgentAvatarIcon(value?: string | null): LucideIcon | null {
   switch (normalizeAgentLookupKey(value)) {
     case 'icon:bot':
@@ -2420,17 +2512,20 @@ function withLiveParticipantStatus(
   if (participant.kind !== 'agent') return participant;
   const agentId = participant.agent_id || participant.id.replace(/^agent:/, '');
   const normalizedHandle = stringValue(participant.handle).toLowerCase();
+  const normalizedName = stringValue(participant.name).toLowerCase();
   const agent = agents.find(item => {
     if (item.id === agentId) return true;
     const handle = agentHandle(item).toLowerCase();
-    return Boolean(normalizedHandle && handle === normalizedHandle);
+    const name = stringValue(item.name).toLowerCase();
+    return Boolean((normalizedHandle && handle === normalizedHandle) || (normalizedName && name === normalizedName));
   });
   const resolvedAgentId = agent?.id || agentId;
   const connection = agentConnections.find(item => {
     if (item.status === 'offline') return false;
     if (item.agent_id && item.agent_id === resolvedAgentId) return true;
     const handle = stringValue(item.handle).toLowerCase();
-    return Boolean(normalizedHandle && handle === normalizedHandle);
+    const name = stringValue(item.name).toLowerCase();
+    return Boolean((normalizedHandle && handle === normalizedHandle) || (normalizedName && name === normalizedName));
   });
   const handle = participant.handle || (agent ? agentHandle(agent) : null);
   return {
@@ -2449,7 +2544,6 @@ function buildParticipantCandidates(
   agents: WorkspaceAgent[],
   agentConnections: AgentConnection[],
   persistedParticipants: ChannelParticipant[],
-  messages: ChatMessage[],
 ): ParticipantCandidate[] {
   const map = new Map<string, ParticipantCandidate>();
 
@@ -2478,30 +2572,21 @@ function buildParticipantCandidates(
     });
   });
 
-  messages.forEach(message => {
-    if (message.sender_kind === 'agent' || message.role === 'assistant') {
-      const id = message.sender_id ? `agent:${message.sender_id}` : 'agent:agensis-ai';
-      if (!map.has(id)) {
-        map.set(id, {
-          id,
-          name: message.sender_name || 'agensis AI',
-          kind: 'agent',
-          agent_id: message.sender_id || null,
-          user_id: null,
-        });
-      }
-      return;
-    }
-    const id = message.sender_id ? `user:${message.sender_id}` : 'user:you';
-    if (!map.has(id)) {
-      map.set(id, {
-        id,
-        name: message.sender_name || 'You',
-        kind: 'user',
-        user_id: message.sender_id || null,
-        agent_id: null,
-      });
-    }
+  agentConnections.forEach(connection => {
+    if (connection.status === 'offline') return;
+    const id = connection.agent_id ? `agent:${connection.agent_id}` : `agent-connection:${connection.id}`;
+    const handle = connection.handle || normalizeAgentLookupKey(connection.name);
+    map.set(id, {
+      id,
+      name: connection.name || handle || 'Remote agent',
+      kind: 'agent',
+      agent_id: connection.agent_id || null,
+      user_id: null,
+      handle,
+      status: connection.status,
+      subtitle: [`@${handle}`, connection.host || null, connection.cwd || null].filter(Boolean).join(' - '),
+      connected: true,
+    });
   });
 
   agents.forEach(agent => {

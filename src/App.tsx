@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -46,7 +46,8 @@ import {
 import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
 import { cn } from './lib/utils';
-import { getSetting } from './lib/settings';
+import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
+import { applyThemePreset } from './showcase/themePresets';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -373,6 +374,12 @@ export default function App() {
   const { files: uploadedFiles, uploadFiles } = useFiles(activeWorkspaceId);
   const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
   const { mode: themeMode, setTheme } = useTheme();
+
+  useEffect(() => {
+    const settings = getSettings();
+    applyUiAppearanceSettings(settings);
+    applyThemePreset(settings.ui_theme_preset);
+  }, []);
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
   const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindows();
   const canvasRef = useRef<HTMLElement>(null);
@@ -574,6 +581,8 @@ export default function App() {
   const viewedLayerId = focusedRemotePresence?.activeLayerId || activeLayerId;
   const viewedLayer = layers.find(layer => layer.id === viewedLayerId) || activeLayer;
   const workspaceBackdropImage = viewedLayer.background_image || activeWorkspace?.background_image || canvasGridBackground;
+  const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42));
+  const workspaceBackdropOverlayOpacity = Math.max(0, 1 - workspaceBackdropOpacity);
   const visibleCanvasObjects = canvasObjects.filter(
     obj => (obj.layer_id || 'base') === viewedLayerId,
   );
@@ -1024,9 +1033,10 @@ export default function App() {
       <img
         src={workspaceBackdropImage}
         alt=""
-        className="pointer-events-none absolute inset-0 z-0 size-full object-cover opacity-[var(--home-bg-image-opacity)]"
+        className="pointer-events-none absolute inset-0 z-0 size-full object-cover"
+        style={{ opacity: workspaceBackdropOpacity }}
       />
-      <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" />
+      <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
       <Sidebar
         workspace={activeWorkspace}
         activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
@@ -1065,7 +1075,7 @@ export default function App() {
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
 
-      <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
           online={online}
           syncing={syncing}
@@ -1075,21 +1085,36 @@ export default function App() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} data-workspace-viewport className="relative flex-1 overflow-hidden">
+        <main ref={canvasRef} data-workspace-viewport className="relative m-2 ml-0 min-h-0 flex-1 overflow-hidden rounded-none">
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
           >
-            <WorkspacePresenceAvatars
-              users={workspacePresenceUsers}
-              getMode={getPresenceMode}
-              onModeChange={setPresenceMode}
-              favoriteIds={presenceFavorites}
-              focusedUserId={focusedPresenceUserId}
-              onToggleFavorite={togglePresenceFavorite}
-              onFocusUser={setFocusedPresenceUserId}
-              onOpenRemoteWindow={handleOpenPresenceWindow}
-            />
+            <div className="workspace-top-controls absolute top-2 right-2 z-[11000] flex items-start gap-2">
+              {!drawingActive && (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="icon-lg"
+                  className="size-9 rounded-full shadow-lg transition-transform hover:scale-105"
+                  onClick={() => setDrawingActive(true)}
+                  title="Draw on canvas"
+                  aria-label="Draw on canvas"
+                >
+                  <Pencil data-icon="inline-start" className="size-4" />
+                </Button>
+              )}
+              <WorkspacePresenceAvatars
+                users={workspacePresenceUsers}
+                getMode={getPresenceMode}
+                onModeChange={setPresenceMode}
+                favoriteIds={presenceFavorites}
+                focusedUserId={focusedPresenceUserId}
+                onToggleFavorite={togglePresenceFavorite}
+                onFocusUser={setFocusedPresenceUserId}
+                onOpenRemoteWindow={handleOpenPresenceWindow}
+              />
+            </div>
 
             <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
 
@@ -1127,7 +1152,7 @@ export default function App() {
                 systemCapabilities={systemCapabilities}
                 getPresenceMode={getPresenceMode}
                 backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
-                backgroundImage={viewedLayer.background_image || activeWorkspace?.background_image || ''}
+                backgroundImage=""
                 contextCounts={contextCounts}
                 contextCountsTitle={contextCountsTitle}
                 onSelectAgent={setSelectedAgent}
@@ -1857,6 +1882,18 @@ function WorkspacePresenceAvatars({
   onOpenRemoteWindow: (win: FloatingWindow) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [expanded]);
 
   if (users.length === 0) return null;
 
@@ -1872,9 +1909,9 @@ function WorkspacePresenceAvatars({
     { value: 'hidden', label: 'Muted' },
   ];
   return (
-    <div data-presence-panel className="absolute top-3.5 left-1/2 z-[11000] flex -translate-x-1/2 flex-col items-center gap-2">
+    <div ref={panelRef} data-presence-panel className="relative flex flex-col items-end gap-2">
       {expanded && (
-        <div className="order-2 w-96 overflow-hidden rounded-lg border bg-popover/95 text-popover-foreground shadow-xl backdrop-blur">
+        <div className="absolute top-full right-0 z-10 mt-2 w-96 overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>

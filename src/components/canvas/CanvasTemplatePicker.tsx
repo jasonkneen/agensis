@@ -31,7 +31,7 @@ const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }:
         if (!nextOpen) onClose();
       }}
     >
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl p-0">
+      <DialogContent className="w-[min(920px,calc(100vw-2rem))] max-w-none p-0 sm:max-w-none">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle className="flex items-center gap-2">
             <LayoutTemplate data-icon="inline-start" />
@@ -44,7 +44,7 @@ const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }:
 
         <ScrollArea className="max-h-[min(62vh,520px)]">
           <div className="p-5">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <Card
                 role="button"
                 tabIndex={0}
@@ -58,14 +58,14 @@ const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }:
                   }
                 }}
               >
-                <CardContent className="flex min-h-32 flex-col justify-between gap-4 p-4">
+                <CardContent className="flex min-h-36 flex-col justify-between gap-4 p-4">
                   <div className="flex items-start gap-3">
                     <span className="grid size-9 shrink-0 place-items-center rounded-full border border-border bg-secondary text-secondary-foreground">
                       <Plus className="size-4" />
                     </span>
                     <div className="min-w-0">
                       <div className="text-base font-semibold leading-snug text-foreground">New applet</div>
-                      <div className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      <div className="mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
                         Open an applet-builder chat with the right SDK brief.
                       </div>
                     </div>
@@ -90,9 +90,9 @@ const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }:
                     }
                   }}
                 >
-                  <CardContent className="flex min-h-32 flex-col gap-3 p-4">
+                  <CardContent className="flex min-h-36 flex-col gap-3 p-4">
                     <span className="text-base font-semibold leading-snug text-foreground">{app.name}</span>
-                    <span className="text-sm leading-relaxed text-muted-foreground">{app.description}</span>
+                    <span className="max-w-sm text-sm leading-relaxed text-muted-foreground">{app.description}</span>
                     <Badge variant="secondary" className="mt-auto w-fit text-xs">
                       HTML applet
                     </Badge>
