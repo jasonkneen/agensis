@@ -1172,7 +1172,6 @@ export default function App() {
                 onToggleWorkspaceCtx={() => setUseWorkspaceCtx(v => !v)}
                 onHomeSendMessage={handleHomeSendMessage}
                 onNewDocument={handleNewDocument}
-                onNewChat={handleNewChat}
                 onCloseWindow={handleCloseWindow}
                 onFocusWindow={focusWindow}
                 onUpdateWindow={updateWindow}
@@ -1420,7 +1419,6 @@ function CanvasLayerScene({
   onToggleWorkspaceCtx,
   onHomeSendMessage,
   onNewDocument,
-  onNewChat,
   onCloseWindow,
   onFocusWindow,
   onUpdateWindow,
@@ -1490,7 +1488,6 @@ function CanvasLayerScene({
   onToggleWorkspaceCtx: () => void;
   onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
   onNewDocument: () => void;
-  onNewChat: () => void;
   onCloseWindow: (winId: string) => void;
   onFocusWindow: (winId: string) => void;
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;

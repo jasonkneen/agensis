@@ -148,6 +148,80 @@ Use this hierarchy to rank issues:
 - **Always report strengths** — a review that only lists problems is demoralizing and incomplete
 - **Phase the fix plan** — quick wins first (high impact, low effort), then decomposition, then polish
 
+## Phase 5: Systematic Implementation (if user says "do it")
+
+When the user wants you to implement the fixes, follow this execution procedure:
+
+### Execution Order
+
+1. **Quick wins first** (critical bugs with small diffs): memoization fixes, dead code removal, cache eviction
+2. **Shared extractions** (new files + import updates): shared types, shared utilities — these cascade to many files
+3. **Decompositions** (large function/component splits): break apart god-functions into named sub-callbacks
+4. **Security fixes** (auth, crypto, input validation): always verify call sites handle the new async/error signatures
+5. **Verify at the end**: `npm run typecheck` and `npm run lint` — expect zero NEW errors
+
+### Pre-Edit Checklist (per file)
+
+Before editing any file, always:
+1. **Re-read the file** to confirm its current state (it may have changed since your earlier exploration)
+2. **Search for all call sites** of any function you're changing (e.g., sync→async requires `await` at every callsite)
+3. **Check for unused imports** after removing local type declarations — the typecheck will catch these but it's faster to clean proactively
+
+### Hard-Won Implementation Lessons
+
+**Memoization fixes:**
+- Use `useMemo` for derived values (computed from props/state), `useCallback` for functions
+- An unmemoized value in a `useCallback` dependency array causes the callback to change identity every render, which cascades to `useEffect` re-runs and event listener thrashing
+- Fix the dependency chain: `displayName` → `sendCursor` → `handleMouseMove` → `useEffect` cleanup/setup
+
+**LRR cache with plain `Map`:**
+- `Map` insertion order = iteration order, so delete-and-re-insert gives LRU behavior
+- Evict by iterating `keys()` from the start (oldest first) until the excess is removed
+- Wrap in named helpers (`cacheGet`/`cacheSet`) rather than inline `Map` access
+
+**Async crypto migration:**
+- `promisify(crypto.scrypt)` returns a function that resolves to `Buffer` — same API shape as `scryptSync`
+- Every callsite must `await` the result; grep for all usages before editing
+- If the function is called inside a SQL parameter array (`[email, hashFn(password)]`), add `await` to the call expression
+
+**Shared type extraction:**
+- Create one canonical file (`src/types/realtime.ts`) with the most permissive union of all local variants
+- The `send` method should be required (not optional) if any consumer calls it — optional causes `TS2722` at callsites
+- After replacing local type declarations, run typecheck to find unused imports immediately
+
+**`stripHtml` shared utility:**
+- Use DOM-based stripping (`document.createElement('div')`) in browser for accuracy
+- Provide a regex fallback for SSR/non-browser contexts
+- Don't force-migrate all variants — if a local version is intentionally different (e.g., password normalization that preserves case), leave it alone
+
+**Queue flush skip-and-continue:**
+- Replace `break` on error with `continue` — one permanently-broken item should not block the entire queue
+- Track `failedCount` and report aggregate error message, not per-item message
+- Remove now-unused helper functions (`getErrorMessage`) to satisfy `noUnusedLocals`
+
+**Function decomposition pattern:**
+- Extract named `useCallback` functions for each concern: `insertUserMessage`, `autoTitleSession`, `dispatchToAgent`, `streamDirectAI`
+- The orchestrating function (`sendMessage`) becomes a readable sequence of calls
+- Each sub-callback gets a narrow dependency array; the orchestrator lists all sub-callbacks
+
+**Generic hook factory with config object:**
+- Define a `Config` interface with: `table`, `filterField`, `channelPrefix`, `buildInsertPayload`, `castRow`
+- The factory hook takes `config` + `filterValue` + `workspaceId` + `userId`
+- Concrete hooks become thin wrappers: `return useRealtimeComments<T>(config, ...)`
+- The `CommentRow` constraint interface should NOT use index signatures (`[key: string]: unknown`) — they conflict with concrete interfaces that lack them
+
+**Offline payload normalization:**
+- `offlineUpdate` must send the same field names to the server AND the queue
+- Add `updated_at` to both the server payload and the queued payload
+- The `id` goes in the queue payload (for replay) but is stripped from the server payload (the `.eq('id', id)` handles it)
+
+### Post-Implementation Verification
+
+After all fixes are applied:
+1. Run `npm run typecheck` — must pass with zero new errors
+2. Run `npm run lint` — must have zero new errors (warnings are acceptable if pre-existing)
+3. Common cleanup needed: remove unused imports (`BroadcastSendMessage`, `getErrorMessage`), remove unused destructured variables, fix `null` vs `undefined` in type signatures
+
 ## Anti-Patterns to Flag
 
 | Pattern | Where to look | Why it matters |

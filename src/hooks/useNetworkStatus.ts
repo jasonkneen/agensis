@@ -2,14 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { peekQueue, dequeue, clearQueue as clearOfflineQueue } from '../lib/offlineDb';
 
-function getErrorMessage(error: unknown) {
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return error.message;
-  }
-  if (typeof error === 'string') return error;
-  return 'Unknown sync error';
-}
-
 export function useNetworkStatus() {
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
@@ -60,7 +52,6 @@ export function useNetworkStatus() {
           setPendingCount(prev => Math.max(0, prev - 1));
         } catch (error) {
           failedCount++;
-          const message = getErrorMessage(error);
           console.error('[offline-sync] Failed to flush queued change (skipping)', {
             table: item.table,
             operation: item.operation,

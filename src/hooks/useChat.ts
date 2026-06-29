@@ -283,7 +283,7 @@ export function useChat(workspaceId: string | null) {
     docContext: string | null,
     workspaceContext?: WorkspaceContextSnapshot | null,
     agent?: WorkspaceAgent | null,
-    directParticipant?: { name?: string; handle?: string; agent_id?: string } | null,
+    directParticipant?: { name?: string | null; handle?: string | null; agent_id?: string | null } | null,
     threadParentId?: string | null,
   ) => {
     setStreaming(true);
@@ -418,7 +418,7 @@ export function useChat(workspaceId: string | null) {
     if (!session) return;
 
     if (!navigator.onLine) {
-      const userMsg = await insertUserMessage(session, content, threadParentId);
+      await insertUserMessage(session, content, threadParentId);
       const offlineReply: Message = {
         id: crypto.randomUUID(),
         session_id: session.id,
@@ -438,7 +438,7 @@ export function useChat(workspaceId: string | null) {
       ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
       : activeSession?.id === session.id ? messages : [];
 
-    const { memoryContext, docContext, messagesPayload } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
+    const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
 
     const hasMention = Boolean(firstAgentMention(content));
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
