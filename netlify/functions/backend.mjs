@@ -170,6 +170,10 @@ function normalizeBaseUrl(value) {
   }
 }
 
+function daemonBaseUrl() {
+  return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL || process.env.AGENSIS_WS_BASE_URL || '');
+}
+
 function requestBaseUrl(req) {
   const publicUrl = normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL || process.env.PUBLIC_URL || '');
   if (publicUrl) return publicUrl;
@@ -282,6 +286,10 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
     ...commandPermissionArgs,
   ].join(' ');
   return { localCommand: portableCommand, portableCommand };
+}
+
+function jsonErrorWithData(status, error, data = null) {
+  return json({ data, error: mapDbError(error) }, status);
 }
 
 function getAuthSecret() {
@@ -562,6 +570,7 @@ async function ensureAgentConnectionsTable() {
 async function handleSystemCapabilities(req) {
   const url = new URL(req.url);
   const workspacePath = url.searchParams.get('workspacePath') || '';
+  const configuredDaemonBaseUrl = daemonBaseUrl();
   return json({
     data: {
       checkedAt: new Date().toISOString(),
@@ -570,9 +579,10 @@ async function handleSystemCapabilities(req) {
       packages: [],
       skills: [],
       codexAppServer: {
-        available: false,
+        available: Boolean(configuredDaemonBaseUrl),
         command: '',
-        transports: [],
+        transports: configuredDaemonBaseUrl ? ['websocket'] : [],
+        daemonBaseUrl: configuredDaemonBaseUrl,
       },
     },
     error: null,
@@ -677,10 +687,21 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
   const agent = rows[0];
   if (!agent) return jsonError(404, new Error('Agent not found'));
   await assertWorkspaceRole({ userId, workspaceId: agent.workspace_id, capability: 'manage', db: query });
-  const token = createAgentConnectToken();
   const handle = slugHandle(body?.handle || agent.handle || agent.name);
   const model = resolveAnthropicModel(body?.model || agent.model);
   const permissionMode = normalizeAgentPermissionMode(body?.permissionMode || body?.permission_mode || agent.permission_mode);
+  const baseUrl = daemonBaseUrl();
+  if (!baseUrl) {
+    return jsonErrorWithData(
+      503,
+      new Error('Daemon websocket backend is not configured. Set AGENSIS_DAEMON_BASE_URL to a long-running Node backend that serves /backend/ws; Netlify Functions cannot host websocket upgrades.'),
+      {
+        websocketAvailable: false,
+        requiredEnv: 'AGENSIS_DAEMON_BASE_URL',
+      },
+    );
+  }
+  const token = createAgentConnectToken();
   const updateRows = await query(
     `update workspace_agents
      set handle = $2,
