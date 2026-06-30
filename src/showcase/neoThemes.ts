@@ -491,6 +491,7 @@ function currentScheme(): NeoScheme {
 export function clearNeoThemeVars() {
   const root = document.documentElement;
   for (const key of NEO_MANAGED_KEYS) root.style.removeProperty(key);
+  root.removeAttribute('data-neo-style');
 }
 
 /** Write a theme's palette + style tokens inline for the given scheme. */
@@ -502,6 +503,9 @@ function applyNeoThemeVars(theme: NeoTheme, scheme: NeoScheme) {
 
   // structural style profile: fonts, headings, shadow depth, radius, texture.
   const s = resolveNeoStyle(theme);
+  // Expose the profile to CSS so component treatments (badge rotation, switch
+  // knob, table chrome, button feel) can branch per style, not just per token.
+  root.setAttribute('data-neo-style', theme.style);
   for (const [k, v] of Object.entries(RADII[s.radius])) root.style.setProperty(k, v);
   root.style.setProperty('--neo-font', s.font);
   root.style.setProperty('--neo-display', s.display);

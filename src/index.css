@@ -3347,3 +3347,133 @@ select {
 [data-resize-handle] {
   touch-action: none;
 }
+
+/* ============================================================================
+   NEO — brutal component layer
+   Beyond palette/shadow tokens: the actual neo-brutal *component* language from
+   the reference mockups — stamped mono micro-labels, the pill switch with a
+   bordered knob, brutal tables, filled active tabs, marker highlights. Several
+   treatments branch on the active style profile via [data-neo-style].
+   ============================================================================ */
+
+:root[data-ui-theme="neo"] {
+  --neo-mono: 'IBM Plex Mono', 'Space Mono', ui-monospace, monospace;
+}
+
+/* ---- stamped badges: mono uppercase micro-labels with a hard shadow -------- */
+:root[data-ui-theme="neo"] [data-slot="badge"] {
+  font-family: var(--neo-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700 !important;
+  border-width: 2px !important;
+  border-color: var(--neo-ink) !important;
+  box-shadow: var(--neo-shadow-xs) !important;
+}
+/* profile flavours — square + airy for editorial/terminal, chunkier for the
+   loud profiles. (No rotation here: badges sit inline in dense UI.) */
+:root[data-ui-theme="neo"][data-neo-style="editorial"] [data-slot="badge"] {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  letter-spacing: 0.12em;
+}
+:root[data-ui-theme="neo"][data-neo-style="techno"] [data-slot="badge"],
+:root[data-ui-theme="neo"][data-neo-style="flat"] [data-slot="badge"] {
+  border-radius: 0 !important;
+}
+:root[data-ui-theme="neo"][data-neo-style="heavy"] [data-slot="badge"],
+:root[data-ui-theme="neo"][data-neo-style="sticker"] [data-slot="badge"] {
+  box-shadow: var(--neo-shadow-sm) !important;
+}
+
+/* ---- pill switch with a bordered circular knob (skill signature) ----------- */
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"] {
+  height: 26px !important;
+  width: 46px !important;
+  border: 2.5px solid var(--neo-ink) !important;
+  background: var(--canvas-elevated) !important;
+  box-shadow: var(--neo-shadow-xs);
+}
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"][data-state="checked"],
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"][data-checked] {
+  background: var(--primary) !important;
+}
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"] [data-slot="switch-thumb"] {
+  width: 18px !important;
+  height: 18px !important;
+  border: 2px solid var(--neo-ink) !important;
+  background: var(--error) !important; /* coral knob when off */
+  box-shadow: none !important;
+}
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"][data-state="checked"] [data-slot="switch-thumb"],
+:root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"][data-checked] [data-slot="switch-thumb"] {
+  background: var(--primary-foreground) !important; /* knob flips bright when on */
+}
+
+/* ---- brutal tables: filled header row + thick ink dividers ----------------- */
+:root[data-ui-theme="neo"] [data-slot="table-head"] {
+  background: color-mix(in srgb, var(--primary) 20%, var(--card)) !important;
+  border-bottom: 2.5px solid var(--neo-ink) !important;
+  color: var(--foreground) !important;
+  font-family: var(--neo-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+:root[data-ui-theme="neo"] [data-slot="table-cell"] {
+  border-bottom: 2px solid color-mix(in srgb, var(--neo-ink) 20%, transparent);
+}
+:root[data-ui-theme="neo"] [data-slot="table-row"]:hover [data-slot="table-cell"] {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+}
+
+/* ---- tabs: filled, stamped active trigger --------------------------------- */
+:root[data-ui-theme="neo"] [data-slot="tabs-list"] {
+  border: 2px solid var(--neo-ink);
+  border-radius: var(--radius-md);
+  background: var(--canvas-elevated);
+  box-shadow: var(--neo-shadow-xs);
+}
+:root[data-ui-theme="neo"] [data-slot="tabs-trigger"][data-state="active"] {
+  background: var(--primary) !important;
+  color: var(--primary-foreground) !important;
+  border: 2px solid var(--neo-ink);
+  box-shadow: var(--neo-shadow-xs);
+}
+
+/* ---- marker highlight: the yellow boxed word from the hero mockups --------- */
+:root[data-ui-theme="neo"] mark,
+:root[data-ui-theme="neo"] .neo-mark {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border: 2px solid var(--neo-ink);
+  box-shadow: var(--neo-shadow-xs);
+  padding: 0 0.28em;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+:root[data-ui-theme="neo"][data-neo-style="sticker"] mark,
+:root[data-ui-theme="neo"][data-neo-style="sticker"] .neo-mark {
+  display: inline-block;
+  transform: rotate(-1.5deg);
+}
+
+/* ---- opt-in sticker stamp: a rotated, hard-shadowed label (decor only) ----- */
+:root[data-ui-theme="neo"] .neo-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-family: var(--neo-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  font-size: 0.72rem;
+  background: var(--card);
+  color: var(--foreground);
+  border: 2.5px solid var(--neo-ink);
+  border-radius: var(--radius-sm);
+  padding: 0.28em 0.6em;
+  box-shadow: var(--neo-shadow-sm);
+  transform: rotate(-3deg);
+}
