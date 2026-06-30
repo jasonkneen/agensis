@@ -21,6 +21,8 @@ import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
+import { NotificationsBell } from './components/notifications/NotificationsBell';
+import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { inviteUrl } from './hooks/useWorkspaceUsers';
 import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
@@ -1048,19 +1050,10 @@ function AppContent() {
               className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
               style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET }}
             >
-              {!drawingActive && (
-                <Button
-                  type="button"
-                  variant="default"
-                  size="icon-lg"
-                  className="size-9 rounded-full shadow-lg transition-transform hover:scale-105"
-                  onClick={() => setDrawingActive(true)}
-                  title="Draw on canvas"
-                  aria-label="Draw on canvas"
-                >
-                  <Pencil data-icon="inline-start" className="size-4" />
-                </Button>
-              )}
+              <NotificationsBell
+                workspaceId={activeWorkspaceId || null}
+                agentConnections={agentConnections}
+              />
               <WorkspacePresenceAvatars
                 users={workspacePresenceUsers}
                 getMode={getPresenceMode}
@@ -1218,12 +1211,11 @@ function AppContent() {
               onCreateCustomApp={handleCreateCustomApplet}
             />
 
-            {dockWindows.length > 0 && (
-              <div
-                className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
-                style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
-              >
-                {dockWindows.map(win => {
+            <div
+              className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
+              style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
+            >
+              {dockWindows.map(win => {
                   const active = focusedDockWindow?.id === win.id;
                   const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
                   return (
@@ -1263,8 +1255,25 @@ function AppContent() {
                   </Button>
                   );
                 })}
+                {dockWindows.length > 0 && (
+                  <Separator orientation="vertical" className="mx-0.5 h-6" />
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setDrawingActive(prev => !prev)}
+                  className={cn(
+                    'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+                    drawingActive && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+                  )}
+                  title={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                  aria-label={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                  aria-pressed={drawingActive}
+                >
+                  <Pencil className="size-4" />
+                </Button>
               </div>
-            )}
 
           </CanvasDropZone>
         </main>
