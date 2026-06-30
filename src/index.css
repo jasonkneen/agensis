@@ -3589,3 +3589,8 @@ select {
 :root[data-ui-theme="neo"] .presence-avatar-trigger:hover {
   background: var(--muted) !important;
 }
+
+/* Light mode (base theme only — not neo, not tinyworld) panels get a white border */
+:root[data-theme="light"]:not([data-ui-theme="neo"]):not([data-ui-theme="tinyworld"]) [data-window-surface] {
+  border-color: rgba(255, 255, 255, 0.85) !important;
+}
