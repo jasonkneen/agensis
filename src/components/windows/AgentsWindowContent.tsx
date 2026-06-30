@@ -966,9 +966,7 @@ function AgentRow({
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
           </Badge>
           <Badge variant="outline">{displayModel(agent.model)}</Badge>
-          <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
-            {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
-          </Badge>
+          <ConnectionDot count={activeConnections.length} />
           {!agentActive && <Badge variant="secondary">deactivated</Badge>}
           {toolBadges.length > 0
             ? toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)
@@ -1319,9 +1317,7 @@ function AgentDetailPane({
                 {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
               </Badge>
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
-              <Badge variant={activeConnections.length > 0 ? 'default' : 'outline'}>
-                {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
-              </Badge>
+              <ConnectionDot count={activeConnections.length} />
               {!agentActive && <Badge variant="secondary">deactivated</Badge>}
             </div>
           </div>
@@ -1713,6 +1709,24 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
   );
 }
 
+function ConnectionDot({ count }: { count: number }) {
+  const connected = count > 0;
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1 px-1.5"
+      title={connected ? `${count} daemon ${count === 1 ? 'connection' : 'connections'}` : 'Not connected'}
+      aria-label={connected ? `${count} connected` : 'Not connected'}
+    >
+      <span
+        className={cn('size-1.5 rounded-full', connected ? 'bg-emerald-500' : 'bg-muted-foreground/40')}
+        aria-hidden
+      />
+      {connected && count > 1 ? count : null}
+    </Badge>
+  );
+}
+
 function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="agent-detail-section rounded-lg border bg-muted/25 p-3">
@@ -1803,19 +1817,44 @@ function splitList(value: string) {
 }
 
 function normalizeList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value.map(item => String(item || '').trim()).filter(s => s && s !== '[]' && s !== '{}');
-  }
+  const out: string[] = [];
 
-  if (typeof value === 'string') {
-    return value.split(',').map(item => item.trim()).filter(s => s && s !== '[]' && s !== '{}');
-  }
+  const visit = (input: unknown, depth: number) => {
+    if (input == null) return;
+    if (Array.isArray(input)) {
+      input.forEach(item => visit(item, depth));
+      return;
+    }
+    if (typeof input === 'object') {
+      Object.values(input).forEach(item => visit(item, depth));
+      return;
+    }
 
-  if (value && typeof value === 'object') {
-    return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
-  }
+    const str = String(input).trim();
+    if (!str) return;
 
-  return [];
+    // Unwrap values that have been JSON-stringified one or more times
+    // (e.g. `["[\"[]\"]"]`), which would otherwise leak through as literal tokens.
+    if (depth < 8 && (str.startsWith('[') || str.startsWith('{') || str.startsWith('"'))) {
+      try {
+        const parsed = JSON.parse(str);
+        if (typeof parsed !== 'string' || parsed !== str) {
+          visit(parsed, depth + 1);
+          return;
+        }
+      } catch {
+        // Not JSON — fall through and treat as a plain token.
+      }
+    }
+
+    for (const part of str.includes(',') ? str.split(',') : [str]) {
+      const token = part.trim();
+      if (token && token !== '[]' && token !== '{}' && token !== '""') out.push(token);
+    }
+  };
+
+  visit(value, 0);
+  return Array.from(new Set(out));
 }
 
 function joinList(value: unknown) {

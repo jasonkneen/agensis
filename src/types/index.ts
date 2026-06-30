@@ -292,9 +292,9 @@ export type AIModel = {
 
 export const AI_MODELS: AIModel[] = [
   { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
-  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', description: 'Most capable model' },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', description: 'Balanced performance' },
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', description: 'Fastest model' },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Most capable model' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', description: 'Balanced performance' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest model' },
 ];
 
 export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';
