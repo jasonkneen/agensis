@@ -1702,6 +1702,10 @@ function CanvasLayerScene({
               breadcrumb={workspaceName}
             >
               <MemorySection
+                workspaceId={workspaceId}
+                agents={agents}
+                userId={userId}
+                userEmail={userEmail}
                 facts={facts}
                 categories={categories}
                 onAdd={onAddFact}

@@ -80,6 +80,37 @@ export interface MemoryFact {
   updated_at: string;
 }
 
+export interface AgentMemoryFile {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  path: string;
+  kind: string;
+  summary: string;
+  content_cache: string;
+  byte_size: number;
+  editable: boolean;
+  last_synced: string;
+  version?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryFileComment {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  path: string;
+  user_id: string | null;
+  parent_id: string | null;
+  content: string;
+  anchor_text: string;
+  resolved: boolean;
+  version?: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UploadedFile {
   id: string;
   workspace_id: string;

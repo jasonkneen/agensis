@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Brain, Check, Pencil, Plus, Tag, Trash2, X } from 'lucide-react';
-import type { MemoryFact } from '../../types';
+import { Brain, Check, FileText, Pencil, Plus, Tag, Trash2, X } from 'lucide-react';
+import type { MemoryFact, WorkspaceAgent } from '../../types';
+import { AgentMemoryBrowser } from './AgentMemoryBrowser';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,9 +38,14 @@ interface MemorySectionProps {
   onAdd: (fact: string, category: string) => void;
   onUpdate: (id: string, fact: string, category: string) => void;
   onDelete: (id: string) => void;
+  workspaceId: string;
+  agents: WorkspaceAgent[];
+  userId: string;
+  userEmail: string;
 }
 
-export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: MemorySectionProps) {
+export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, workspaceId, agents, userId, userEmail }: MemorySectionProps) {
+  const [tab, setTab] = useState<'facts' | 'files'>('facts');
   const [newFact, setNewFact] = useState('');
   const [newCategory, setNewCategory] = useState('general');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -74,6 +80,31 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+      <div className="flex shrink-0 gap-1 border-b border-border bg-card px-2 pt-2">
+        <button
+          type="button"
+          onClick={() => setTab('facts')}
+          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        >
+          <Brain className="size-4" />
+          Team facts
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('files')}
+          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+        >
+          <FileText className="size-4" />
+          Agent files
+        </button>
+      </div>
+
+      {tab === 'files' ? (
+        <div className="min-h-0 flex-1">
+          <AgentMemoryBrowser workspaceId={workspaceId} agents={agents} userId={userId} userEmail={userEmail} />
+        </div>
+      ) : (
+      <>
       <div className="shrink-0 border-b border-border bg-card p-4">
         <div className="flex items-start gap-4">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -196,6 +227,8 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete }: 
           )}
         </div>
       </ScrollArea>
+      </>
+      )}
     </div>
   );
 }

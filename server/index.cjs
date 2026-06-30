@@ -3799,6 +3799,24 @@ function createApp() {
     }
   });
 
+  app.post('/backend/agents/:id/memory-refresh', requireAuth, async (req, res) => {
+    try {
+      const agentId = String(req.params.id || '').trim();
+      const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+      const agent = rows[0];
+      if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+      // "You can refresh what you can read" — matches agent_memory_files select:'read'.
+      await enforceWorkspaceRole(req.userId, agent.workspace_id, 'read');
+      // Fire-and-forget nudge: the daemon answers with an agent_memory_sync push that
+      // lands as a realtime change on agent_memory_files. The POST never blocks on it.
+      const connection = findConnectedAgent(agent.workspace_id, agent.id, agent.handle || agent.name);
+      if (connection) sendWs(connection.ws, { type: 'agent_memory_refresh' });
+      res.json({ data: { nudged: Boolean(connection) }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
     try {
       if (rateLimitBlocked(res, dispatchRateLimiter, req.userId || clientIpFromReq(req))) return;
