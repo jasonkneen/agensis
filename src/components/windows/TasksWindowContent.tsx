@@ -155,7 +155,13 @@ export function TasksWindowContent({
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
-    filteredTopLevel.forEach(task => groups[task.status].push(task));
+    filteredTopLevel.forEach(task => {
+      // Defensive: a task with an unknown/legacy status (e.g. from an offline
+      // cache or a future migration) would make groups[status] undefined and
+      // crash on .push. Fall unknown statuses back into 'todo'.
+      const bucket = groups[task.status] ?? groups.todo;
+      bucket.push(task);
+    });
     return groups;
   }, [filteredTopLevel]);
 
