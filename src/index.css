@@ -1540,6 +1540,24 @@
   background: var(--channel-composer) !important;
 }
 
+/* Keep the chat composer's typing surface legible. The input well and its
+   ghost icon buttons stack on top of the translucent composer + window glass,
+   which made them read as see-through. Render the well clearly more opaque
+   than the surrounding panels and give the ghost buttons a soft solid chip.
+   Scoped to the chat composer only — the shared InputGroup component (used by
+   search bars, command palettes, etc.) is untouched. */
+.channel-composer [data-slot="input-group"] {
+  background: color-mix(in srgb, var(--card) 95%, transparent) !important;
+}
+
+.channel-composer [data-slot="input-group"] [data-slot="button"][data-variant="ghost"] {
+  background: color-mix(in srgb, var(--muted) 85%, transparent);
+}
+
+.channel-composer [data-slot="input-group"] [data-slot="button"][data-variant="ghost"]:hover {
+  background: var(--muted);
+}
+
 .channel-side-panel {
   background: var(--channel-side) !important;
 }
