@@ -15,8 +15,17 @@ export function RegistrationApprovalPopup({ workspaceId }: { workspaceId: string
   const handle = req?.requested_handle || req?.requested_name || 'agent';
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o && req) deny(req.id); }}>
-      <DialogContent className="sm:max-w-md">
+    // Forced-choice dialog: the owner MUST explicitly Allow or Deny. We deliberately
+    // do NOT wire onOpenChange to deny — clicking the backdrop or pressing Esc used to
+    // silently deny a vital request. Outside-click, Esc, and the X are all blocked so
+    // the only way out is the two buttons below.
+    <Dialog open={open}>
+      <DialogContent
+        className="sm:max-w-md"
+        showCloseButton={false}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>Allow this agent to connect?</DialogTitle>
           <DialogDescription>

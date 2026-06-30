@@ -960,7 +960,7 @@ function AgentRow({
         ) : (
           <ItemDescription>No description</ItemDescription>
         )}
-        <div className="flex flex-wrap gap-1">
+        <div className="min-w-0 flex flex-wrap gap-1">
           <Badge variant="outline">@{agent.handle || agentHandle(agent.name)}</Badge>
           <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
@@ -977,9 +977,9 @@ function AgentRow({
             {activeConnections.slice(0, 3).map(connection => (
               <div key={connection.id} className="agent-meta-row flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
                 <Monitor className="size-3 shrink-0" />
-                <span className="font-medium text-foreground">Daemon</span>
-                <span className="truncate">{connection.status}</span>
-                <span className="truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
+                <span className="shrink-0 font-medium text-foreground">Daemon</span>
+                <span className="shrink-0">{connection.status}</span>
+                <span className="min-w-0 flex-1 truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
               </div>
             ))}
           </div>
