@@ -3813,7 +3813,23 @@ function createApp() {
         if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
           return jsonError(res, 404, new Error('File not found'));
         }
-        const content = fs.readFileSync(target, 'utf8').slice(0, 200_000);
+        // resolveWithinRoot only checks the lexical path — a symlink inside the
+        // workspace root could still point outside it. This branch reads raw
+        // file content (unlike the git-diff branch below, which stays inside
+        // git's own repository boundary), so re-validate against the real path
+        // right before reading.
+        let realTarget;
+        try {
+          realTarget = fs.realpathSync(target);
+        } catch {
+          return jsonError(res, 404, new Error('File not found'));
+        }
+        const realRoot = fs.realpathSync(root);
+        const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+        if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) {
+          return jsonError(res, 400, new Error('path must stay within the workspace project root'));
+        }
+        const content = fs.readFileSync(realTarget, 'utf8').slice(0, 200_000);
         return res.json({ data: { path: relativePath, untracked: true, diff: '', content }, error: null });
       }
 
