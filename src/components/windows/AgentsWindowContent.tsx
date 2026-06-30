@@ -970,7 +970,9 @@ function AgentRow({
             {activeConnections.length > 0 ? `${activeConnections.length} connected` : 'not connected'}
           </Badge>
           {!agentActive && <Badge variant="secondary">deactivated</Badge>}
-          {toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)}
+          {toolBadges.length > 0
+            ? toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)
+            : <Badge variant="secondary">None</Badge>}
         </div>
         {activeConnections.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
@@ -1802,11 +1804,11 @@ function splitList(value: string) {
 
 function normalizeList(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map(item => String(item || '').trim()).filter(Boolean);
+    return value.map(item => String(item || '').trim()).filter(s => s && s !== '[]' && s !== '{}');
   }
 
   if (typeof value === 'string') {
-    return value.split(',').map(item => item.trim()).filter(Boolean);
+    return value.split(',').map(item => item.trim()).filter(s => s && s !== '[]' && s !== '{}');
   }
 
   if (value && typeof value === 'object') {

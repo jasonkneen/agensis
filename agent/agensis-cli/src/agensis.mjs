@@ -340,7 +340,7 @@ function buildPrompt(config, job) {
     agent.instructions ? `Additional instructions:\n${agent.instructions}` : "",
     tools ? `Enabled tools:\n${tools}` : "",
     skills ? `Enabled skills:\n${skills}` : "",
-    "Respond with a clear channel-ready result. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
+    "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),
   ];
