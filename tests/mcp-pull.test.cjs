@@ -41,7 +41,7 @@ test.afterEach(() => resetTestState());
 
 test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
   use([{ match: /from workspace_invites where token = \$1 and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com' }] }]);
-  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com' });
+  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true });
 });
 
 test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {
@@ -176,4 +176,81 @@ test('finalizeAgentJobResult inserts a fresh message when there is no placeholde
   ]);
   await finalizeAgentJobResult({ id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', agent_name: 'Q', agent_handle: 'q', metadata: JSON.stringify({ mode: 'mcp' }) }, { responseText: 'fresh' });
   assert.equal(db.calls.find((c) => /^insert into messages/.test(c.n)).params[1], 'fresh');
+});
+
+// --- registration + approval (server functions) -----------------------------
+
+const { registerAgentRequest, finalizeRegistrationApproval, decideAgentRegistration, getRegistrationStatus, verifyWorkspaceMcpToken, verifyUserAuthMcpToken, createWorkspaceMcpToken, hashAgentToken } = __test;
+
+test('verifyWorkspaceMcpToken resolves the one workspace token + auto-approve flag', async () => {
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, mcp_auto_approve: true }] }]);
+  assert.deepEqual(await verifyWorkspaceMcpToken('agw_x'), { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: true });
+  resetTestState();
+  use([{ match: /from workspaces where mcp_token_hash/, rows: () => [] }]);
+  assert.equal(await verifyWorkspaceMcpToken('nope'), null);
+});
+
+test('createWorkspaceMcpToken mints an agw_ token', () => {
+  assert.match(createWorkspaceMcpToken(), /^agw_/);
+});
+
+test('registerAgentRequest (new agent, no auto-approve) creates a pending registration → popup', async () => {
+  const db = use([
+    { match: /^insert into agent_registrations/, rows: (p) => [{ id: 'reg-1', workspace_id: WS, agent_id: p[1], requested_handle: p[2], requested_name: p[3], status: p[5] }] },
+  ]);
+  const out = await registerAgentRequest({ workspaceId: WS, name: 'Cursor', autoApprove: false });
+  assert.equal(out.status, 'pending');
+  assert.equal(out.registrationId, 'reg-1');
+  assert.ok(db.calls.some((c) => /^insert into agent_registrations/.test(c.n)));
+});
+
+test('registerAgentRequest (auto-approve, new agent) creates the agent + approves', async () => {
+  const db = use([
+    { match: /^insert into agent_registrations/, rows: (p) => [{ id: 'reg-2', workspace_id: WS, agent_id: null, requested_handle: 'cursor', requested_name: 'Cursor', status: 'approved' }] },
+    { match: /^insert into workspace_agents/, rows: () => [{ id: 'new-agent', handle: 'cursor', name: 'Cursor' }] },
+    { match: /update agent_registrations set status = 'approved'/, rows: () => [{ id: 'reg-2', status: 'approved', agent_id: 'new-agent' }] },
+  ]);
+  const out = await registerAgentRequest({ workspaceId: WS, name: 'Cursor', autoApprove: true });
+  assert.equal(out.status, 'approved');
+  assert.equal(out.agentId, 'new-agent');
+  assert.ok(db.calls.some((c) => /^insert into workspace_agents/.test(c.n)), 'auto-approve must create the agent');
+});
+
+test('registerAgentRequest (as existing, already approved) short-circuits', async () => {
+  use([{ match: /from workspace_agents where workspace_id = \$1 and enabled/, rows: () => [{ id: 'a1', handle: 'q', name: 'Q', mcp_approved: true }] }]);
+  const out = await registerAgentRequest({ workspaceId: WS, asHandle: 'q' });
+  assert.equal(out.status, 'approved');
+  assert.equal(out.agentId, 'a1');
+});
+
+test('registerAgentRequest (as missing agent) errors', async () => {
+  use([{ match: /from workspace_agents where workspace_id = \$1 and enabled/, rows: () => [] }]);
+  await assert.rejects(() => registerAgentRequest({ workspaceId: WS, asHandle: 'ghost' }), /No agent/i);
+});
+
+test('finalizeRegistrationApproval enables an existing agent (sets mcp_approved)', async () => {
+  const db = use([
+    { match: /update workspace_agents set mcp_approved = true/, rows: () => [{ id: 'a1', handle: 'q', name: 'Q' }] },
+    { match: /update agent_registrations set status = 'approved'/, rows: () => [{ id: 'reg', status: 'approved', agent_id: 'a1' }] },
+  ]);
+  const out = await finalizeRegistrationApproval({ id: 'reg', agent_id: 'a1', requested_handle: 'q', requested_name: 'Q', workspace_id: WS });
+  assert.equal(out.agentId, 'a1');
+  assert.ok(db.calls.some((c) => /update workspace_agents set mcp_approved = true/.test(c.n)));
+});
+
+test('decideAgentRegistration deny marks it denied; approve runs the approval', async () => {
+  use([
+    { match: /select \* from agent_registrations where id = \$1/, rows: () => [{ id: 'reg', workspace_id: WS, status: 'pending', agent_id: 'a1', requested_handle: 'q', requested_name: 'Q' }] },
+    { match: /update agent_registrations set status = 'denied'/, rows: () => [{ id: 'reg', status: 'denied' }] },
+  ]);
+  const denied = await decideAgentRegistration({ registrationId: 'reg', approve: false });
+  assert.equal(denied.status, 'denied');
+});
+
+test('getRegistrationStatus returns the row, or errors if missing', async () => {
+  use([{ match: /from agent_registrations where id = \$1 and workspace_id = \$2/, rows: () => [{ id: 'reg', status: 'approved', agent_id: 'a1', requested_handle: 'q' }] }]);
+  assert.equal((await getRegistrationStatus({ workspaceId: WS, registrationId: 'reg' })).status, 'approved');
+  resetTestState();
+  use([{ match: /from agent_registrations where id/, rows: () => [] }]);
+  await assert.rejects(() => getRegistrationStatus({ workspaceId: WS, registrationId: 'x' }), /not found/i);
 });

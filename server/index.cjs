@@ -10,7 +10,7 @@ const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
-const { renderSkillMd, skillManifest } = require('./skills.cjs');
+const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -629,6 +629,27 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
+
+    -- MCP "connect a client" model. ONE workspace token (or your agensis login, or an
+    -- invite link) authenticates an MCP client; it then calls register_agent to become an
+    -- agent (new or existing). You approve via a popup unless auto-approve / invite link.
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_token_hash text DEFAULT '';
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_auto_approve boolean NOT NULL DEFAULT false;
+    -- An agent becomes claimable over MCP once its registration is approved.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS mcp_approved boolean NOT NULL DEFAULT false;
+    CREATE TABLE IF NOT EXISTS agent_registrations (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      requested_handle text DEFAULT '',
+      requested_name text DEFAULT '',
+      client_label text DEFAULT '',
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      decided_at timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
   `);
   // C3 — make message-activity logging idempotent. A retried daemon finalization
   // re-logs the same message id; the partial unique index lets the logging insert
@@ -1075,13 +1096,50 @@ async function verifyInviteToken(token) {
   );
   const invite = rows[0];
   if (!invite) return null;
-  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client' };
+  // An invite link is pre-authorization → a client joining through it is auto-approved.
+  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true };
 }
 
-// The MCP endpoint accepts either a per-agent connect token (acts AS that agent) or a
-// workspace invite token (acts in the workspace, choosing which agent to work as).
+// The one workspace MCP token (issued in settings). Authenticates any client into the
+// workspace; the client then registers as an agent (popup approval unless auto-approve).
+async function verifyWorkspaceMcpToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const rows = await getDb().unsafe(
+    `select id, mcp_auto_approve from workspaces where mcp_token_hash = $1 and mcp_token_hash <> '' limit 1`,
+    [hashAgentToken(token)],
+  );
+  const ws = rows[0];
+  if (!ws) return null;
+  return { kind: 'workspace', workspaceId: ws.id, name: 'MCP client', autoApprove: Boolean(ws.mcp_auto_approve) };
+}
+
+// "Agensis login": the client authenticates with the user's own auth token. Resolves to
+// the workspace they own (the common case is one). Registrations still pop up for them.
+async function verifyUserAuthMcpToken(token) {
+  const userId = await verifyToken(token);
+  if (!userId) return null;
+  const rows = await getDb().unsafe(
+    'select id, mcp_auto_approve from workspaces where user_id = $1 order by created_at asc limit 1',
+    [userId],
+  );
+  const ws = rows[0];
+  if (!ws) return null;
+  return { kind: 'user', userId, workspaceId: ws.id, name: 'MCP client', autoApprove: Boolean(ws.mcp_auto_approve) };
+}
+
+// The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS that
+// agent), the one workspace MCP token, an invite link (auto-approve), or the user's
+// agensis login. The latter three authenticate into the workspace; the client then
+// calls register_agent to become an agent.
 async function verifyMcpToken(token, req = null) {
-  return (await verifyAgentConnectToken(token, req)) || (await verifyInviteToken(token));
+  return (await verifyAgentConnectToken(token, req))
+    || (await verifyWorkspaceMcpToken(token))
+    || (await verifyInviteToken(token))
+    || (await verifyUserAuthMcpToken(token));
+}
+
+function createWorkspaceMcpToken() {
+  return `agw_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
 // In-memory MCP presence: which agents have a live MCP poller right now. A client
@@ -2161,6 +2219,91 @@ async function reapStuckMcpJobs() {
   } catch {
     // best effort
   }
+}
+
+// --- agent registration ("a client wants to register as an agent") ----------------
+// An authenticated MCP client (workspace token / agensis login / invite link) calls
+// register_agent to become an agent — a brand new one, or an existing one by handle.
+// Pending registrations raise an approval popup; invite/auto-approve skip straight to
+// approved. Approval is what flips an agent's mcp_approved flag so it can be worked as.
+
+async function finalizeRegistrationApproval(reg) {
+  let agentId = reg.agent_id;
+  let handle = reg.requested_handle;
+  let name = reg.requested_name;
+  if (agentId) {
+    const upd = await getDb().unsafe(
+      'update workspace_agents set mcp_approved = true, enabled = true, updated_at = now() where id = $1 returning *',
+      [agentId],
+    );
+    if (upd[0]) { notifyDbSubscribers('workspace_agents', 'UPDATE', upd); handle = slugHandle(upd[0].handle || upd[0].name); name = upd[0].name; }
+  } else {
+    const created = await getDb().unsafe(
+      `insert into workspace_agents (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, mcp_approved)
+       values ($1, $2, $3, '', '', 'auto', 'builtin', 'default', 'AI', '#00a95c', true, true)
+       returning *`,
+      [reg.workspace_id, name || handle || 'Agent', slugHandle(handle || name || 'agent')],
+    );
+    agentId = created[0].id;
+    handle = slugHandle(created[0].handle || created[0].name);
+    notifyDbSubscribers('workspace_agents', 'INSERT', created);
+  }
+  const updReg = await getDb().unsafe(
+    `update agent_registrations set status = 'approved', agent_id = $2, decided_at = now(), updated_at = now() where id = $1 returning *`,
+    [reg.id, agentId],
+  );
+  notifyDbSubscribers('agent_registrations', 'UPDATE', updReg);
+  return { agentId, handle, name };
+}
+
+async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false }) {
+  let agent = null;
+  if (asHandle) {
+    agent = await resolveWorkspaceAgentByHandle(workspaceId, asHandle);
+    if (!agent) throw badRequest(`No agent "@${slugHandle(asHandle)}" in this workspace`);
+    if (agent.mcp_approved) {
+      return { status: 'approved', agentId: agent.id, handle: slugHandle(agent.handle || agent.name) };
+    }
+  }
+  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
+  const reqName = agent ? agent.name : (name || reqHandle);
+  const rows = await getDb().unsafe(
+    `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status)
+     values ($1, $2, $3, $4, $5, $6) returning *`,
+    [workspaceId, agent ? agent.id : null, reqHandle, reqName, String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending'],
+  );
+  const reg = rows[0];
+  notifyDbSubscribers('agent_registrations', 'INSERT', rows);
+  if (autoApprove) {
+    const out = await finalizeRegistrationApproval(reg);
+    return { registrationId: reg.id, status: 'approved', agentId: out.agentId, handle: out.handle };
+  }
+  return { registrationId: reg.id, status: 'pending', handle: reqHandle };
+}
+
+// Poll target for the client between register_agent and approval.
+async function getRegistrationStatus({ workspaceId, registrationId }) {
+  const rows = await getDb().unsafe(
+    'select id, status, agent_id, requested_handle from agent_registrations where id = $1 and workspace_id = $2 limit 1',
+    [registrationId, workspaceId],
+  );
+  const reg = rows[0];
+  if (!reg) throw badRequest('Registration not found');
+  return { registrationId: reg.id, status: reg.status, agentId: reg.agent_id, handle: reg.requested_handle };
+}
+
+async function decideAgentRegistration({ registrationId, approve }) {
+  const rows = await getDb().unsafe('select * from agent_registrations where id = $1 limit 1', [registrationId]);
+  const reg = rows[0];
+  if (!reg) return null;
+  if (reg.status !== 'pending') return reg;
+  if (approve) return finalizeRegistrationApproval(reg);
+  const denied = await getDb().unsafe(
+    `update agent_registrations set status = 'denied', decided_at = now(), updated_at = now() where id = $1 returning *`,
+    [registrationId],
+  );
+  notifyDbSubscribers('agent_registrations', 'UPDATE', denied);
+  return denied[0];
 }
 
 async function handleAgentJobDelta(ws, message) {
@@ -3528,6 +3671,8 @@ function createApp() {
     claimMcpJob,
     submitMcpJobResult,
     resolveWorkspaceAgentByHandle,
+    registerAgentRequest,
+    getRegistrationStatus,
     rateLimiter: mcpRateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,
@@ -3854,6 +3999,85 @@ function createApp() {
     }
   });
 
+  // --- Connect an MCP client (one workspace token) + agent-registration approvals ---
+
+  // Generate/rotate the one workspace MCP token and return the ready-to-paste config.
+  app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const token = createWorkspaceMcpToken();
+      const rows = await getDb().unsafe(
+        'update workspaces set mcp_token_hash = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',
+        [workspaceId, hashAgentToken(token)],
+      );
+      if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
+      const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
+      res.json({
+        data: {
+          token,
+          autoApprove: Boolean(rows[0].mcp_auto_approve),
+          endpoint: mcpEndpoint(baseUrl),
+          config: configBlock(baseUrl, token),
+          claudeMcpAdd: claudeMcpAddCommand(baseUrl, token),
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // When on, a registering client is approved without a popup.
+  app.patch('/backend/workspaces/:id/mcp-auto-approve', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const autoApprove = req.body?.autoApprove === true || req.body?.auto_approve === true;
+      const rows = await getDb().unsafe(
+        'update workspaces set mcp_auto_approve = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',
+        [workspaceId, autoApprove],
+      );
+      if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
+      res.json({ data: { autoApprove: Boolean(rows[0].mcp_auto_approve) }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // Pending registrations drive the approval popup (realtime delivers new ones; this is
+  // the initial load / fallback).
+  app.get('/backend/workspaces/:id/agent-registrations', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const status = ['pending', 'approved', 'denied'].includes(req.query?.status) ? req.query.status : 'pending';
+      const rows = await getDb().unsafe(
+        'select id, agent_id, requested_handle, requested_name, client_label, status, created_at from agent_registrations where workspace_id = $1 and status = $2 order by created_at desc limit 50',
+        [workspaceId, status],
+      );
+      res.json({ data: { registrations: rows }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // Approve / deny a pending registration (the popup's buttons).
+  app.post('/backend/agent-registrations/:id/:action', requireAuth, async (req, res) => {
+    try {
+      const registrationId = String(req.params.id || '').trim();
+      const action = String(req.params.action || '').trim();
+      if (!['approve', 'deny'].includes(action)) return jsonError(res, 400, new Error('Unknown action'));
+      const found = await getDb().unsafe('select id, workspace_id from agent_registrations where id = $1 limit 1', [registrationId]);
+      if (!found[0]) return jsonError(res, 404, new Error('Registration not found'));
+      await enforceWorkspaceRole(req.userId, found[0].workspace_id, 'manage');
+      const result = await decideAgentRegistration({ registrationId, approve: action === 'approve' });
+      res.json({ data: { result }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/db/select', requireAuth, async (req, res) => {
     try {
       const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = req.body || {};
@@ -4137,15 +4361,22 @@ module.exports = {
     setTestDb,
     verifyToken,
     workspaceIdFromRealtimeChannel,
-    // MCP-over-invite (one link, human or agent) — exercised against a fake DB.
+    // MCP connect-a-client model — exercised against a fake DB.
     verifyInviteToken,
+    verifyWorkspaceMcpToken,
+    verifyUserAuthMcpToken,
     verifyMcpToken,
+    createWorkspaceMcpToken,
     runAgentTurn,
     claimMcpJob,
     submitMcpJobResult,
     reapStuckMcpJobs,
     finalizeAgentJobResult,
     resolveWorkspaceAgentByHandle,
+    registerAgentRequest,
+    finalizeRegistrationApproval,
+    decideAgentRegistration,
+    getRegistrationStatus,
     touchMcpPresence,
     hasMcpPresence,
   },

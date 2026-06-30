@@ -75,24 +75,30 @@ function optInt(value, fallback, max) {
 
 function buildTools() {
   const tools = [];
-  // A tool's `kinds` lists which identities may call it. 'agent' = a per-agent connect
-  // token (acts AS that agent). 'invite' = a workspace invite token used by an MCP client
-  // (works AS an agent it picks via `as`). Default: both. The handler enforces this.
-  const add = (def) => tools.push({ kinds: ['agent', 'invite'], ...def });
+  // A tool's `kinds` lists which identities may call it. Identity kinds:
+  //   'agent'     — a per-agent connect token; you ARE that agent.
+  //   'workspace' — the one workspace MCP token.
+  //   'user'      — your agensis login.
+  //   'invite'    — an invite link (auto-approve).
+  // The last three authenticate INTO a workspace; you then register_agent to become an
+  // agent. Default kinds = everything that can act in a workspace. Handler enforces it.
+  const CONNECTED = ['agent', 'workspace', 'user', 'invite'];
+  const add = (def) => tools.push({ kinds: CONNECTED, ...def });
 
   // -- Identity & discovery --------------------------------------------------
 
   add({
     name: 'whoami',
-    description: 'Return the identity this token authenticates as. kind="agent" means you ARE that agent; kind="invite" means you joined via an invite link and choose which agent to work as by passing `as` to claim_job.',
+    description: 'Return the identity this token authenticates as. kind="agent" means you ARE that agent. Otherwise you are connected to a workspace and must call register_agent to become an agent (new or existing), then work as it with claim_job.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, { identity }) {
-      if (identity.kind === 'invite') {
+      if (identity.kind !== 'agent') {
         return {
-          kind: 'invite',
+          kind: identity.kind,
           workspaceId: identity.workspaceId,
           name: identity.name,
-          note: 'Joined via invite link. Call claim_job({ as: "<agent handle>" }) to work as an agent (e.g. "q"). Multiple clients can work as the same agent.',
+          autoApprove: Boolean(identity.autoApprove),
+          note: 'Call register_agent({ name } or { as: "<handle>" }) to become an agent. You get approved via a popup (or automatically if you joined via an invite link). Then poll claim_job to work as that agent — multiple clients can work as the same one.',
         };
       }
       const a = identity.agent || {};
@@ -614,19 +620,75 @@ function buildTools() {
     },
   });
 
-  // --- work AS an agent over MCP (the pull loop) ----------------------------
-  // An MCP client backs an agent: poll claim_job, generate the reply from job.prompt,
-  // return it with submit_job_result (or fail_job). Multiple clients can work as the same
-  // agent — they share its queue, whoever claims a job answers it. A per-agent token works
-  // as itself; an invite-link client picks the agent with `as` (a handle).
+  // --- register as an agent, then work AS it over MCP -----------------------
+  // A connected client first calls register_agent (popup approval, or auto-approve via an
+  // invite link). Once approved, it polls claim_job, generates the reply, and returns it
+  // with submit_job_result (or fail_job). Multiple clients can work as the same agent —
+  // they share its queue, whoever claims a job answers it.
 
-  // Resolve which agent this caller is acting as → its id, or a clean ToolError.
+  add({
+    name: 'register_agent',
+    kinds: ['workspace', 'user', 'invite'],
+    description: 'Register this client as an agent — a brand new one (pass `name`/`handle`) or an existing one (pass `as: "<handle>"`). The workspace owner gets an approve popup; if you joined via an invite link it is auto-approved. Returns a registrationId and status — poll registration_status until "approved", then start claim_job. Call this once after connecting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        as: { type: 'string', description: 'Existing agent handle to work as (e.g. "q"). Omit to create a new agent.' },
+        name: { type: 'string', description: 'Display name for a NEW agent (e.g. "Cursor").' },
+        handle: { type: 'string', description: 'Handle for a NEW agent (defaults from name).' },
+        label: { type: 'string', description: 'Optional label for this client shown in the approval popup (e.g. "Cursor on laptop").' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const asHandle = (typeof args?.as === 'string' && args.as.trim()) ? args.as.trim() : null;
+      const name = (typeof args?.name === 'string' && args.name.trim()) ? args.name.trim() : null;
+      const handle = (typeof args?.handle === 'string' && args.handle.trim()) ? args.handle.trim() : null;
+      if (!asHandle && !name && !handle) throw new ToolError('Pass `as: "<handle>"` to work as an existing agent, or `name` to create a new one.');
+      try {
+        return await deps.registerAgentRequest({
+          workspaceId: identity.workspaceId,
+          asHandle, name, handle,
+          clientLabel: (typeof args?.label === 'string' ? args.label : identity.name) || '',
+          autoApprove: Boolean(identity.autoApprove),
+        });
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'register_agent failed');
+      }
+    },
+  });
+
+  add({
+    name: 'registration_status',
+    kinds: ['workspace', 'user', 'invite'],
+    description: 'Check whether your register_agent request has been approved. Poll this until status is "approved" (or "denied"), then begin claim_job.',
+    inputSchema: {
+      type: 'object',
+      properties: { registration_id: { type: 'string', description: 'The registrationId from register_agent.' } },
+      required: ['registration_id'],
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const registrationId = requireString(args, 'registration_id');
+      try {
+        return await deps.getRegistrationStatus({ workspaceId: identity.workspaceId, registrationId });
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'registration_status failed');
+      }
+    },
+  });
+
+  // Resolve which agent this caller is acting as → its id, or a clean ToolError. A
+  // connected (non-agent) client may only work as an agent it has had approved.
   async function resolveActingAgentId(identity, deps, asHandle) {
     if (identity.kind === 'agent') return identity.agentId;
     const handle = (typeof asHandle === 'string' && asHandle.trim()) ? asHandle.trim() : null;
     if (!handle) throw new ToolError('Pass `as: "<agent handle>"` to choose which agent to work as (e.g. as: "q").');
     const agent = await deps.resolveWorkspaceAgentByHandle(identity.workspaceId, handle);
     if (!agent) throw new ToolError(`No agent "@${handle}" in this workspace.`);
+    if (!agent.mcp_approved) throw new ToolError(`@${handle} has not been approved for MCP yet — call register_agent (as: "${handle}") and have it approved first.`);
     return agent.id;
   }
 

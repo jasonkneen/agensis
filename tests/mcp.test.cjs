@@ -5,7 +5,8 @@ const { createMcpHandler } = require('../server/mcp.cjs');
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
 const AGENT = { kind: 'agent', agentId: 'agent-1', workspaceId: WS, name: 'Coder', handle: 'coder', agent: { model: 'claude-opus-4-8', description: 'coding agent' } };
-const INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com' };
+const INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true };
+const WORKSPACE = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
 
 // Minimal fake postgres client. Recognizes only the statements the MCP tools
 // under test issue; everything else returns []. Channels: ch-1 in WS, ch-x in OTHER_WS.
@@ -37,7 +38,7 @@ function makeDb() {
 function makeDeps(overrides = {}) {
   const continueCalls = [];
   const notifyCalls = [];
-  const tokenMap = overrides.tokenMap || { 'good-token': AGENT, 'invite-token': INVITE };
+  const tokenMap = overrides.tokenMap || { 'good-token': AGENT, 'invite-token': INVITE, 'ws-token': WORKSPACE };
   const deps = {
     getDb: () => overrides.db,
     verifyMcpToken: async (token) => tokenMap[token] || null,
@@ -46,7 +47,9 @@ function makeDeps(overrides = {}) {
     slugHandle: (s) => String(s || '').toLowerCase().replace(/\s+/g, '-'),
     claimMcpJob: async () => null,
     submitMcpJobResult: async () => ({ jobId: 'x', status: 'done' }),
-    resolveWorkspaceAgentByHandle: async (_ws, handle) => (handle === 'coder' ? { id: 'agent-1', handle: 'coder', name: 'Coder' } : null),
+    resolveWorkspaceAgentByHandle: async (_ws, handle) => (handle === 'coder' ? { id: 'agent-1', handle: 'coder', name: 'Coder', mcp_approved: true } : null),
+    registerAgentRequest: async (arg) => ({ registrationId: 'reg-1', status: arg.autoApprove ? 'approved' : 'pending', handle: arg.asHandle || arg.handle || arg.name || 'agent' }),
+    getRegistrationStatus: async () => ({ registrationId: 'reg-1', status: 'approved', agentId: 'agent-1', handle: 'coder' }),
     rateLimiter: null,
     rateLimitBlocked: null,
     runtimeSchemaReady: Promise.resolve(),
@@ -290,4 +293,73 @@ test('submit_job_result forwards agentId + response; fail_job forwards errorText
   assert.deepEqual({ agentId: subs[0].agentId, jobId: subs[0].jobId, responseText: subs[0].responseText }, { agentId: 'agent-1', jobId: 'j1', responseText: 'hello' });
   await call(handler, { body: rpc('tools/call', { name: 'fail_job', arguments: { job_id: 'j2', error: 'timeout' } }) });
   assert.equal(subs[1].errorText, 'timeout');
+});
+
+// --- register_agent / approval ---------------------------------------------
+
+test('register_agent is available to workspace/invite, not to a per-agent token', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const asAgent = await call(handler, { body: rpc('tools/call', { name: 'register_agent', arguments: { name: 'X' } }) });
+  assert.equal(asAgent.body.result.isError, true);
+  assert.match(asAgent.body.result.content[0].text, /not available for a agent token/i);
+});
+
+test('a workspace client registers a new agent → pending (popup)', async () => {
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({ db, deps: { registerAgentRequest: async (a) => { calls.push(a); return { registrationId: 'reg-9', status: 'pending', handle: 'cursor' }; } } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'register_agent', arguments: { name: 'Cursor', label: 'laptop' } }) });
+  const payload = JSON.parse(res.body.result.content[0].text);
+  assert.equal(payload.status, 'pending');
+  assert.equal(calls[0].name, 'Cursor');
+  assert.equal(calls[0].autoApprove, false);
+});
+
+test('an invite client registers → auto-approved (autoApprove passed through)', async () => {
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({ db, deps: { registerAgentRequest: async (a) => { calls.push(a); return { registrationId: 'r', status: a.autoApprove ? 'approved' : 'pending', handle: 'q' }; } } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'invite-token', body: rpc('tools/call', { name: 'register_agent', arguments: { as: 'q' } }) });
+  assert.equal(JSON.parse(res.body.result.content[0].text).status, 'approved');
+  assert.equal(calls[0].autoApprove, true);
+});
+
+test('register_agent needs at least one of as/name/handle', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'register_agent', arguments: {} }) });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /work as an existing agent, or `name`/i);
+});
+
+test('registration_status returns the current status', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db, deps: { getRegistrationStatus: async () => ({ registrationId: 'reg-1', status: 'approved', handle: 'q' }) } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'registration_status', arguments: { registration_id: 'reg-1' } }) });
+  assert.equal(JSON.parse(res.body.result.content[0].text).status, 'approved');
+});
+
+test('a workspace client cannot claim as an UNapproved agent', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db, deps: { resolveWorkspaceAgentByHandle: async () => ({ id: 'a9', handle: 'new', name: 'New', mcp_approved: false }) } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'claim_job', arguments: { as: 'new' } }) });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /not been approved for MCP/i);
+});
+
+test('a workspace client CAN claim as an approved agent', async () => {
+  const db = makeDb();
+  const claims = [];
+  const { deps } = makeDeps({ db, deps: { claimMcpJob: async (a) => { claims.push(a); return null; } } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'claim_job', arguments: { as: 'coder' } }) });
+  assert.ok(!res.body.result.isError);
+  assert.equal(claims[0].agentId, 'agent-1');
 });
