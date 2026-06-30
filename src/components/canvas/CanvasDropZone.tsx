@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { Upload } from 'lucide-react';
 import type { CanvasObject, CanvasObjectType, UploadedFile } from '../../types';
 import { apiUrl } from '../../lib/backendClient';
@@ -21,6 +21,23 @@ export function CanvasDropZone({ onAddObject, onUploadFiles, children }: CanvasD
   const [dragging, setDragging] = useState(false);
   const counterRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Safety net: reset overlay whenever a drop completes anywhere in the document,
+  // including inside floating windows that may stop drag event propagation.
+  useEffect(() => {
+    const reset = () => {
+      counterRef.current = 0;
+      setDragging(false);
+    };
+    document.addEventListener('drop', reset);
+    // Also reset when the drag cursor leaves the browser window entirely.
+    const onRootLeave = (e: DragEvent) => { if (!e.relatedTarget) reset(); };
+    document.documentElement.addEventListener('dragleave', onRootLeave);
+    return () => {
+      document.removeEventListener('drop', reset);
+      document.documentElement.removeEventListener('dragleave', onRootLeave);
+    };
+  }, []);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();

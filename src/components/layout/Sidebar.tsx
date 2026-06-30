@@ -249,7 +249,7 @@ export function Sidebar({
     return (
       <aside
         data-sidebar-panel
-        className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl rounded-tl-none border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+        className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
         style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH }}
       >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
@@ -318,7 +318,7 @@ export function Sidebar({
     <aside
       ref={sidebarRef}
       data-sidebar-panel
-      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl rounded-tl-none border border-border bg-card/45 text-card-foreground shadow-xl"
+      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card/45 text-card-foreground shadow-xl"
       style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
     >
       <div className="px-2 pt-2 pb-3">
