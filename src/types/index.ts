@@ -269,6 +269,9 @@ export interface FloatingWindow {
   isPrivate?: boolean;
   locked?: boolean;
   shared?: boolean;
+  /** A task to scroll to and expand once the tasks window renders (e.g. from
+   *  search) — consumed and cleared by the window content, not persisted. */
+  focusTaskId?: string;
 }
 
 export type PresenceVisibilityMode = 'visible' | 'dimmed' | 'hidden';

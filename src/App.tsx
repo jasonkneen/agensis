@@ -607,15 +607,16 @@ function AppContent() {
     openWindow('memory', { title: 'Memory', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
-  const handleOpenTasks = useCallback(() => {
+  const handleOpenTasks = useCallback((taskId?: string) => {
     const existing = windows.find(w => w.type === 'tasks');
     if (existing) {
       focusWindow(existing.id);
       if (existing.minimized) minimizeWindow(existing.id);
+      if (taskId) updateWindow(existing.id, { focusTaskId: taskId });
       return;
     }
-    openWindow('tasks', { title: 'Tasks', canvasId: activeLayerId, ownerUserId: user?.id });
-  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+    openWindow('tasks', { title: 'Tasks', canvasId: activeLayerId, ownerUserId: user?.id, focusTaskId: taskId });
+  }, [windows, openWindow, focusWindow, minimizeWindow, updateWindow, activeLayerId, user?.id]);
 
   const handleOpenActivity = useCallback(() => {
     const existing = windows.find(w => w.type === 'activity');
@@ -1294,7 +1295,7 @@ function AppContent() {
         tasks={tasks}
         onDocumentOpen={handleDocumentOpen}
         onSessionOpen={handleSessionOpen}
-        onTaskOpen={() => handleOpenTasks()}
+        onTaskOpen={(task) => handleOpenTasks(task.id)}
         onViewChange={(view) => {
           if (view === 'tasks') handleOpenTasks();
           else if (view === 'activity') handleOpenActivity();
@@ -1742,6 +1743,8 @@ function CanvasLayerScene({
                 onUpdateTask={onUpdateTask}
                 onToggleStatus={onToggleTaskStatus}
                 onDeleteTask={onDeleteTask}
+                focusTaskId={win.focusTaskId}
+                onFocusTaskConsumed={() => onUpdateWindow(win.id, { focusTaskId: undefined })}
               />
             </FloatingWindowShell>
           );

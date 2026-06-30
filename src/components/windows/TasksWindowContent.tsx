@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -64,6 +64,10 @@ interface TasksWindowContentProps {
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
   onToggleStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
+  /** A task to scroll to and expand once it's in view (e.g. opened from search). */
+  focusTaskId?: string;
+  /** Called once the focus has been applied, so the caller can clear it. */
+  onFocusTaskConsumed?: () => void;
 }
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -103,6 +107,8 @@ export function TasksWindowContent({
   onUpdateTask,
   onToggleStatus,
   onDeleteTask,
+  focusTaskId,
+  onFocusTaskConsumed,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
@@ -158,6 +164,28 @@ export function TasksWindowContent({
   };
 
   const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+
+  // A focused task may be a subtask (rendered inside its parent's expanded
+  // row, not as its own top-level row) — resolve to the row that actually
+  // needs to scroll/expand.
+  const focusRowId = useMemo(() => {
+    if (!focusTaskId) return undefined;
+    const target = tasks.find(t => t.id === focusTaskId);
+    return target?.parent_id || focusTaskId;
+  }, [focusTaskId, tasks]);
+
+  useEffect(() => {
+    if (!focusRowId) return;
+    // The current assignment filter may hide the focused task's row entirely.
+    if (filter !== 'all' && !filteredTopLevel.some(task => task.id === focusRowId)) {
+      setFilter('all');
+      return; // re-run once the wider list renders
+    }
+    const node = document.getElementById(`task-row-${focusRowId}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    onFocusTaskConsumed?.();
+  }, [focusRowId, filter, filteredTopLevel, onFocusTaskConsumed]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
@@ -258,6 +286,7 @@ export function TasksWindowContent({
                         workspaceId={workspaceId}
                         currentUserId={currentUserId}
                         currentUserEmail={currentUserEmail}
+                        autoExpand={task.id === focusRowId}
                         onToggle={() => onToggleStatus(task)}
                         onDelete={() => onDeleteTask(task.id)}
                         onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
@@ -286,6 +315,7 @@ function TaskRow({
   workspaceId,
   currentUserId,
   currentUserEmail,
+  autoExpand,
   onToggle,
   onDelete,
   onChangeStatus,
@@ -301,6 +331,7 @@ function TaskRow({
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
+  autoExpand?: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
@@ -313,8 +344,14 @@ function TaskRow({
   const done = task.status === 'done';
   const doneSubs = subtasks.filter(subtask => subtask.status === 'done').length;
 
+  // Re-expand whenever this row becomes the search/focus target — covers both
+  // first mount and a second click on an already-mounted row.
+  useEffect(() => {
+    if (autoExpand) setExpanded(true);
+  }, [autoExpand]);
+
   return (
-    <div className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
+    <div id={`task-row-${task.id}`} className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
       <Item variant="outline" className="task-row items-center">
         <ItemActions className="gap-1">
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
