@@ -51,7 +51,7 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
         {!info ? (
           <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3 overflow-hidden">
             <Row label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
             <Row label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
             <Row label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
@@ -73,7 +73,7 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
 
 function Row({ label, value, secret, copied, onCopy }: { label: string; value: string; secret?: boolean; copied: boolean; onCopy: () => void }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <span className="w-28 shrink-0 text-xs text-muted-foreground">{label}</span>
       <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs">{secret ? `${value.slice(0, 10)}…${value.slice(-4)}` : value}</code>
       <Button type="button" size="sm" variant="ghost" onClick={onCopy} aria-label={`Copy ${label}`}>{copied ? <Check /> : <Copy />}</Button>
