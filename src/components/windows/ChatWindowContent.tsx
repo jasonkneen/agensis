@@ -1448,6 +1448,7 @@ export function ChatWindowContent({
           ) : (
             <ChannelSidePanel
               type={sidePanel}
+              workspaceId={workspaceId}
               pinnedMessages={pinnedMessages}
               uploadedFiles={uploadedFiles}
               projectFiles={projectFiles}
@@ -1758,6 +1759,7 @@ function ChatMessageBubble({
 
 function ChannelSidePanel({
   type,
+  workspaceId,
   pinnedMessages,
   uploadedFiles,
   projectFiles,
@@ -1770,6 +1772,7 @@ function ChannelSidePanel({
   onClose,
 }: {
   type: 'files' | 'pins' | 'thread';
+  workspaceId?: string | null;
   pinnedMessages: ChatMessage[];
   uploadedFiles: UploadedFile[];
   projectFiles: ProjectFileEntry[];
@@ -1785,6 +1788,7 @@ function ChannelSidePanel({
   const isFiles = type === 'files';
   const [selectedFile, setSelectedFile] = useState<SelectedPanelFile | null>(null);
   const [filesDropActive, setFilesDropActive] = useState(false);
+  const [filesTab, setFilesTab] = useState<'files' | 'changes'>('files');
 
   // Scoped drop target: stopPropagation so dropping files here uploads/links
   // them instead of falling through to the canvas-wide drop handler.
@@ -1854,12 +1858,34 @@ function ChannelSidePanel({
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {isPins ? 'Pinned messages' : selectedFile ? panelFileName(selectedFile) : 'Files'}
         </span>
+        {isFiles && !selectedFile && (
+          <div className="flex items-center gap-1 rounded-md border bg-muted/40 p-0.5">
+            <Button
+              type="button"
+              size="xs"
+              variant={filesTab === 'files' ? 'secondary' : 'ghost'}
+              onClick={() => setFilesTab('files')}
+            >
+              Files
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant={filesTab === 'changes' ? 'secondary' : 'ghost'}
+              onClick={() => setFilesTab('changes')}
+            >
+              Changes
+            </Button>
+          </div>
+        )}
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close side panel">
           <X />
         </Button>
       </div>
       <div className="channel-side-panel-body min-h-0 flex-1 overflow-auto p-2">
-        {isPins ? (
+        {isFiles && filesTab === 'changes' && !selectedFile ? (
+          <GitChangesView workspaceId={workspaceId} />
+        ) : isPins ? (
           pinnedMessages.length > 0 ? (
             <div className="space-y-2">
               {pinnedMessages.map(message => (
@@ -1917,6 +1943,161 @@ function ChannelSidePanel({
           <p className="text-sm text-muted-foreground">No uploaded, workspace, or agent files found.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+interface GitChangeEntry {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed';
+  staged: boolean;
+  agentId?: string | null;
+  agentLabel?: string | null;
+}
+
+const GIT_STATUS_LABEL: Record<GitChangeEntry['status'], string> = {
+  modified: 'M',
+  added: 'A',
+  deleted: 'D',
+  untracked: 'U',
+  renamed: 'R',
+};
+
+const GIT_STATUS_CLASS: Record<GitChangeEntry['status'], string> = {
+  modified: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+  added: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+  deleted: 'bg-red-500/15 text-red-700 dark:text-red-400',
+  untracked: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
+  renamed: 'bg-violet-500/15 text-violet-700 dark:text-violet-400',
+};
+
+// Read-only working-tree diff view for a workspace's git repo. Status/diff are
+// fetched from the new /backend/workspaces/:id/git/status and /git/diff
+// endpoints (server-side, since the browser has no filesystem/git access).
+// Intentionally read-only for now — staging and commit would mutate the
+// user's real repository and need their own review pass before landing.
+function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
+  const [loading, setLoading] = useState(true);
+  const [branch, setBranch] = useState('');
+  const [files, setFiles] = useState<GitChangeEntry[]>([]);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState<GitChangeEntry | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffText, setDiffText] = useState('');
+  const [diffIsUntracked, setDiffIsUntracked] = useState(false);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError('');
+    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/status`), {
+      headers: apiAuthHeaders(),
+    })
+      .then(response => response.json())
+      .then(payload => {
+        if (cancelled) return;
+        setBranch(typeof payload?.data?.branch === 'string' ? payload.data.branch : '');
+        setFiles(Array.isArray(payload?.data?.files) ? payload.data.files : []);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load git status for this workspace.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  const openDiff = (entry: GitChangeEntry) => {
+    setSelected(entry);
+    if (!workspaceId) return;
+    setDiffLoading(true);
+    setDiffText('');
+    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/diff?path=${encodeURIComponent(entry.path)}`), {
+      headers: apiAuthHeaders(),
+    })
+      .then(response => response.json())
+      .then(payload => {
+        setDiffIsUntracked(Boolean(payload?.data?.untracked));
+        setDiffText(payload?.data?.untracked ? (payload?.data?.content || '') : (payload?.data?.diff || ''));
+      })
+      .catch(() => setDiffText('Could not load diff for this file.'))
+      .finally(() => setDiffLoading(false));
+  };
+
+  if (!workspaceId) return <p className="text-sm text-muted-foreground">No workspace context for git changes.</p>;
+  if (loading) return <p className="text-sm text-muted-foreground">Checking git status...</p>;
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+
+  if (selected) {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelected(null)} aria-label="Back to changes">
+            <ArrowLeft />
+          </Button>
+          <Badge variant="outline" className={GIT_STATUS_CLASS[selected.status]}>{GIT_STATUS_LABEL[selected.status]}</Badge>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">{selected.path}</span>
+        </div>
+        {diffLoading ? (
+          <p className="text-sm text-muted-foreground">Loading diff...</p>
+        ) : !diffText ? (
+          <p className="text-sm text-muted-foreground">No changes to show for this file.</p>
+        ) : (
+          <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs leading-relaxed">
+            {diffText.split('\n').map((line, idx) => (
+              <div
+                key={idx}
+                className={
+                  diffIsUntracked
+                    ? ''
+                    : line.startsWith('+') && !line.startsWith('+++')
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                      : line.startsWith('-') && !line.startsWith('---')
+                        ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                        : line.startsWith('@@')
+                          ? 'text-muted-foreground'
+                          : ''
+                }
+              >
+                {line || ' '}
+              </div>
+            ))}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {branch && <div className="px-1 text-xs text-muted-foreground">On branch <span className="font-mono">{branch}</span></div>}
+      {files.length === 0 ? (
+        <p className="px-1 text-sm text-muted-foreground">Working tree clean — no changes.</p>
+      ) : (
+        <div className="flex flex-col gap-0.5">
+          {files.map(entry => (
+            <button
+              key={entry.path}
+              type="button"
+              onClick={() => openDiff(entry)}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+            >
+              <Badge variant="outline" className={cn('shrink-0', GIT_STATUS_CLASS[entry.status])}>{GIT_STATUS_LABEL[entry.status]}</Badge>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.path}</span>
+              {entry.agentLabel && (
+                <Badge variant="secondary" className="shrink-0 text-[10px]">{entry.agentLabel}</Badge>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

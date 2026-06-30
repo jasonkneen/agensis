@@ -3536,3 +3536,22 @@ select {
 :root[data-ui-theme="neo"] [data-window-view-mode="floating"] [data-window-surface] {
   background: color-mix(in srgb, var(--card) 94%, transparent) !important;
 }
+
+/* ---- dock toolbar + presence avatars: thin glass borders -> brutal -------- */
+:root[data-ui-theme="neo"] .workspace-window-dock {
+  background: var(--card) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 2.5px solid var(--neo-ink) !important;
+  box-shadow: var(--neo-shadow-md) !important;
+}
+
+:root[data-ui-theme="neo"] .presence-avatar-group [data-slot="avatar"],
+:root[data-ui-theme="neo"] .presence-avatar-overflow {
+  border: 2px solid var(--neo-ink) !important;
+  box-shadow: var(--neo-shadow-xs) !important;
+}
+
+:root[data-ui-theme="neo"] .presence-avatar-trigger:hover {
+  background: var(--muted) !important;
+}

@@ -3697,6 +3697,136 @@ function createApp() {
     }
   });
 
+  // Resolve a workspace's git root and validate that `relativePath` (a path the
+  // client supplied) stays inside it — without this, a diff/status endpoint that
+  // takes an arbitrary path query param would let any authenticated workspace
+  // member read files anywhere on the host's filesystem via `../../` traversal.
+  async function fetchWorkspaceRow(workspaceId) {
+    const rows = await getDb().unsafe(
+      'select id, local_path, git_root from workspaces where id = $1 limit 1',
+      [workspaceId],
+    );
+    return rows[0] || null;
+  }
+
+  function gitRootOf(workspace) {
+    if (!workspace) return null;
+    const root = String(workspace.git_root || workspace.local_path || '').trim();
+    return root ? path.resolve(root) : null;
+  }
+
+  function resolveWithinRoot(root, relativePath) {
+    const resolved = path.resolve(root, String(relativePath || ''));
+    const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+    if (resolved !== root && !resolved.startsWith(rootWithSep)) return null;
+    return resolved;
+  }
+
+  // Lightweight parser for `git status --porcelain=v1 -z`: two status chars per
+  // entry (index, worktree) followed by the path, NUL-separated (handles paths
+  // with spaces/newlines safely, unlike the newline-delimited non -z format).
+  function parsePorcelainStatus(raw) {
+    return raw
+      .split('\0')
+      .filter(Boolean)
+      .map((entry) => {
+        const indexState = entry[0];
+        const worktreeState = entry[1];
+        const filePath = entry.slice(3);
+        let status = 'modified';
+        if (indexState === '?' && worktreeState === '?') status = 'untracked';
+        else if (indexState === 'A') status = 'added';
+        else if (indexState === 'D' || worktreeState === 'D') status = 'deleted';
+        else if (indexState === 'R') status = 'renamed';
+        return { path: filePath, status, staged: indexState !== ' ' && indexState !== '?' };
+      });
+  }
+
+  app.get('/backend/workspaces/:id/git/status', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const workspaceRow = await fetchWorkspaceRow(workspaceId);
+      const root = gitRootOf(workspaceRow);
+      if (!root || !fs.existsSync(root)) return res.json({ data: { root: '', files: [], branch: '' }, error: null });
+      let branch = '';
+      try {
+        const { stdout } = await execFileAsync('git', ['-C', root, 'branch', '--show-current'], { timeout: 5000 });
+        branch = stdout.trim();
+      } catch {
+        return res.json({ data: { root, files: [], branch: '' }, error: null });
+      }
+      const { stdout } = await execFileAsync(
+        'git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+        { timeout: 8000, maxBuffer: 8 * 1024 * 1024 },
+      );
+      const files = parsePorcelainStatus(stdout);
+
+      // Attribute each changed file to the agent connection whose cwd contains it
+      // (best-effort — same source data the Files panel already uses), so the UI
+      // can show "changed by Atlas" rather than just a bare path.
+      let sources = [];
+      try {
+        sources = await workspaceProjectFileSources(workspaceId, workspaceRow, {});
+      } catch {
+        // attribution is best-effort; status itself still returns
+      }
+      const attributed = files.map((file) => {
+        const abs = path.resolve(root, file.path);
+        const owner = sources.find((source) => source.kind === 'agent' && abs.startsWith(`${path.resolve(source.root)}${path.sep}`));
+        return { ...file, agentId: owner?.agent_id || null, agentLabel: owner?.label || null };
+      });
+
+      res.json({ data: { root, branch, files: attributed }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/workspaces/:id/git/diff', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      const relativePath = String(req.query.path || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      if (!relativePath) return jsonError(res, 400, new Error('path is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const root = gitRootOf(await fetchWorkspaceRow(workspaceId));
+      if (!root) return jsonError(res, 404, new Error('Workspace has no project path configured'));
+      const target = resolveWithinRoot(root, relativePath);
+      if (!target) return jsonError(res, 400, new Error('path must stay within the workspace project root'));
+
+      // Untracked files have no HEAD to diff against — `git diff` is silent for
+      // them, so surface the working-tree content directly (capped) instead.
+      let isUntracked = false;
+      try {
+        const { stdout } = await execFileAsync(
+          'git', ['-C', root, 'status', '--porcelain=v1', '-z', '--', relativePath],
+          { timeout: 5000 },
+        );
+        isUntracked = stdout.startsWith('??');
+      } catch {
+        // fall through to diff attempt below
+      }
+
+      if (isUntracked) {
+        if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
+          return jsonError(res, 404, new Error('File not found'));
+        }
+        const content = fs.readFileSync(target, 'utf8').slice(0, 200_000);
+        return res.json({ data: { path: relativePath, untracked: true, diff: '', content }, error: null });
+      }
+
+      const { stdout } = await execFileAsync(
+        'git', ['-C', root, 'diff', 'HEAD', '--', relativePath],
+        { timeout: 8000, maxBuffer: 8 * 1024 * 1024 },
+      );
+      res.json({ data: { path: relativePath, untracked: false, diff: stdout, content: '' }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agent-webhooks', requireAuth, async (req, res) => {
     try {
       const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
