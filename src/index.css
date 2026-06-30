@@ -1550,6 +1550,10 @@
    search bars, command palettes, etc.) is untouched. */
 .channel-composer [data-slot="input-group"] {
   background: color-mix(in srgb, var(--card) 95%, transparent) !important;
+  /* The well is rounded-lg, but its inner children (textarea + bottom button
+     row) render square corners that poke past the rounded edge now that the
+     well is opaque. Clip them to the well's radius. */
+  overflow: hidden;
 }
 
 .channel-composer [data-slot="input-group"] [data-slot="button"][data-variant="ghost"] {

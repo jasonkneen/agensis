@@ -65,7 +65,7 @@ function CommandInput({
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-input/40 bg-input/35 px-3 shadow-none">
+      <div className="flex h-10 min-w-0 items-center gap-2 rounded-lg border border-input bg-card/95 px-3 shadow-none">
         <SearchIcon className="size-4 shrink-0 opacity-60" />
         <CommandPrimitive.Input
           data-slot="command-input"
