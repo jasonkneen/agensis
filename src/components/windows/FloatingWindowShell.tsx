@@ -259,6 +259,7 @@ interface FloatingWindowShellProps {
   breadcrumb?: string;
   children: React.ReactNode;
   isSelected?: boolean;
+  adjacentEdges?: Set<'left' | 'right' | 'top' | 'bottom'>;
 }
 
 export function FloatingWindowShell({
@@ -275,6 +276,7 @@ export function FloatingWindowShell({
   breadcrumb,
   children,
   isSelected = false,
+  adjacentEdges,
 }: FloatingWindowShellProps) {
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
@@ -516,6 +518,16 @@ export function FloatingWindowShell({
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
       };
 
+  const cornerClass = (() => {
+    if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-lg';
+    const corners: string[] = [];
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-lg');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('top')) corners.push('rounded-tr-lg');
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) corners.push('rounded-bl-lg');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) corners.push('rounded-br-lg');
+    return corners.join(' ');
+  })();
+
   return (
     <>
       {isDragging && snapPreview && (
@@ -541,13 +553,13 @@ export function FloatingWindowShell({
         onDragEnter={e => e.stopPropagation()}
         onDragLeave={e => e.stopPropagation()}
         onDrop={e => e.stopPropagation()}
-        className="flex flex-col overflow-visible rounded-lg text-card-foreground"
+        className={cn('flex flex-col overflow-visible text-card-foreground', cornerClass)}
         style={shellStyle}
         >
         <div
           data-window-surface
           className={cn(
-            'flex h-full min-h-0 flex-col overflow-hidden rounded-lg border shadow-xl backdrop-blur-xl',
+            cn('flex h-full min-h-0 flex-col overflow-hidden border shadow-xl backdrop-blur-xl', cornerClass),
             isFullView ? 'bg-card' : 'bg-card/45',
             isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}

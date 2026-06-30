@@ -152,6 +152,21 @@ function renderDockButton(
   );
 }
 
+const ADJACENT_EDGE_TOLERANCE = 2;
+
+function computeAdjacentEdges(win: FloatingWindow, allWindows: FloatingWindow[]): Set<'left' | 'right' | 'top' | 'bottom'> {
+  const edges = new Set<'left' | 'right' | 'top' | 'bottom'>();
+  if (!win.groupId) return edges;
+  const siblings = allWindows.filter(w => w.id !== win.id && w.groupId === win.groupId && !w.minimized);
+  for (const sib of siblings) {
+    if (Math.abs((win.x + win.width) - sib.x) <= ADJACENT_EDGE_TOLERANCE) edges.add('right');
+    if (Math.abs((sib.x + sib.width) - win.x) <= ADJACENT_EDGE_TOLERANCE) edges.add('left');
+    if (Math.abs((win.y + win.height) - sib.y) <= ADJACENT_EDGE_TOLERANCE) edges.add('bottom');
+    if (Math.abs((sib.y + sib.height) - win.y) <= ADJACENT_EDGE_TOLERANCE) edges.add('top');
+  }
+  return edges;
+}
+
 // Windows tiled together (drag-to-split) share a groupId — cluster them into
 // one dock entry, at the position of the group's first member, so they're
 // drawn together with a surrounding frame instead of as separate icons.
@@ -1611,6 +1626,7 @@ function CanvasLayerScene({
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
+        const adjacentEdges = computeAdjacentEdges(win, windows);
 
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
@@ -1619,6 +1635,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1733,6 +1750,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1777,6 +1795,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1809,6 +1828,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1845,6 +1865,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1870,6 +1891,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1902,6 +1924,7 @@ function CanvasLayerScene({
               key={win.id}
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
