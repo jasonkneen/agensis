@@ -43,6 +43,30 @@ function pickColor(userId: string): string {
   return COLORS[Math.abs(hash) % COLORS.length];
 }
 
+function publicWindowSnapshot(win: FloatingWindow, ownerUserId?: string): FloatingWindow {
+  return {
+    id: win.id,
+    type: win.type,
+    title: win.title,
+    x: win.x,
+    y: win.y,
+    width: win.width,
+    height: win.height,
+    zIndex: win.zIndex,
+    minimized: win.minimized,
+    maximized: !!win.maximized,
+    restoreBounds: win.restoreBounds ? { ...win.restoreBounds } : undefined,
+    canvasId: win.canvasId,
+    sessionId: win.sessionId,
+    documentId: win.documentId,
+    ownerUserId: ownerUserId || win.ownerUserId || null,
+    isPrivate: !!win.isPrivate,
+    locked: !!win.locked,
+    shared: !!win.shared,
+    layoutGroupId: win.layoutGroupId,
+  };
+}
+
 export function useItemPresence(
   workspaceId: string | null,
   windows: FloatingWindow[],
@@ -102,10 +126,7 @@ export function useItemPresence(
     return windowsRef.current
       .filter(win => !win.isPrivate)
       .filter(win => shareMode === 'all' || win.shared)
-      .map(win => ({
-        ...win,
-        ownerUserId: userId || win.ownerUserId || null,
-      }));
+      .map(win => publicWindowSnapshot(win, userId));
   }, [shareMode, userId]);
 
   const sendSnapshot = useCallback(() => {

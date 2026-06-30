@@ -68,6 +68,46 @@ type BroadcastSendMessage = {
   payload: unknown;
 };
 
+function stringifyRealtimeMessage(message: Record<string, unknown>): string | null {
+  try {
+    return JSON.stringify(toRealtimeJson(message));
+  } catch (error) {
+    console.warn('Dropping realtime message with non-serializable payload', {
+      action: message.action,
+      channel: message.channel,
+      event: message.event,
+      error,
+    });
+    return null;
+  }
+}
+
+function toRealtimeJson(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value == null) return value;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'undefined') return undefined;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof Element !== 'undefined' && value instanceof Element) return undefined;
+  if (typeof Event !== 'undefined' && value instanceof Event) return undefined;
+  if (Array.isArray(value)) {
+    return value
+      .map(item => toRealtimeJson(item, seen))
+      .filter(item => item !== undefined);
+  }
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key.startsWith('__react')) continue;
+    const next = toRealtimeJson(item, seen);
+    if (next !== undefined) output[key] = next;
+  }
+  return output;
+}
+
 type BackendClient = {
   from<T = LooseJson>(table: string): QueryBuilder<T>;
   rpc<T = unknown>(name: string, params: Record<string, unknown>): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }>;
@@ -456,7 +496,8 @@ class RealtimeManager {
       this.scheduleUnavailableRetry();
       return;
     }
-    const encoded = JSON.stringify(message);
+    const encoded = stringifyRealtimeMessage(message);
+    if (!encoded) return;
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(encoded);
       return;
