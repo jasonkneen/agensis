@@ -112,7 +112,7 @@ export function CanvasSelectionLayer() {
       <div
         ref={layerRef}
         className="pointer-events-auto absolute inset-0"
-        style={{ zIndex: 5 }}
+        style={{ zIndex: 0 }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
