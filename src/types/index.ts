@@ -274,6 +274,8 @@ export interface FloatingWindow {
   /** A task to scroll to and expand once the tasks window renders (e.g. from
    *  search) — consumed and cleared by the window content, not persisted. */
   focusTaskId?: string;
+  /** Groups this window with others into a named layout (client-side only). */
+  layoutGroupId?: string;
 }
 
 export type PresenceVisibilityMode = 'visible' | 'dimmed' | 'hidden';

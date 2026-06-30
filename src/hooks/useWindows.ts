@@ -331,6 +331,7 @@ function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
 
 export function useWindows() {
   const [windows, setWindows] = useState<FloatingWindow[]>([]);
+  const [selectedWindowIds, setSelectedWindowIds] = useState<string[]>([]);
   const lastBoundsByWindowKey = useRef<Record<string, WindowBounds>>({});
   const nextZIndexRef = useRef(100);
 
@@ -441,5 +442,16 @@ export function useWindows() {
     );
   }, []);
 
-  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow };
+  const groupWindows = useCallback((ids: string[]) => {
+    if (ids.length < 2) return;
+    const groupId = `layout_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setWindows(prev => prev.map(w => ids.includes(w.id) ? { ...w, layoutGroupId: groupId } : w));
+    setSelectedWindowIds([]);
+  }, []);
+
+  const ungroupWindows = useCallback((groupId: string) => {
+    setWindows(prev => prev.map(w => w.layoutGroupId === groupId ? { ...w, layoutGroupId: undefined } : w));
+  }, []);
+
+  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, ungroupWindows };
 }

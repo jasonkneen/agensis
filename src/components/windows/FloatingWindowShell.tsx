@@ -249,6 +249,7 @@ interface FloatingWindowShellProps {
   titleIcon?: React.ReactNode;
   breadcrumb?: string;
   children: React.ReactNode;
+  isSelected?: boolean;
 }
 
 export function FloatingWindowShell({
@@ -264,6 +265,7 @@ export function FloatingWindowShell({
   titleIcon,
   breadcrumb,
   children,
+  isSelected = false,
 }: FloatingWindowShellProps) {
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
@@ -527,8 +529,9 @@ export function FloatingWindowShell({
         <div
           data-window-surface
           className={cn(
-            'flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border shadow-xl backdrop-blur-xl',
+            'flex h-full min-h-0 flex-col overflow-hidden rounded-lg border shadow-xl backdrop-blur-xl',
             isFullView ? 'bg-card' : 'bg-card/45',
+            isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}
         >
         <div

@@ -18,6 +18,7 @@ import { ShareDialog } from './components/sharing/ShareDialog';
 import { CreateWorkspaceDialog } from './components/sharing/CreateWorkspaceDialog';
 import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
+import { CanvasSelectionLayer } from './components/canvas/CanvasSelectionLayer';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
@@ -1512,6 +1513,8 @@ function CanvasLayerScene({
     onConfirm: () => void | Promise<void>;
   }) => void;
 }) {
+  const { selectedWindowIds } = useWindowManager();
+
   return (
     <>
       <HomeCanvas
@@ -1524,6 +1527,8 @@ function CanvasLayerScene({
         backgroundImage={backgroundImage}
       />
 
+      <CanvasSelectionLayer />
+
       {windows.filter(win => !win.minimized).map(win => {
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
@@ -1535,6 +1540,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1648,6 +1654,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1691,6 +1698,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1722,6 +1730,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1757,6 +1766,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1781,6 +1791,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -1812,6 +1823,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
