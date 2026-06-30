@@ -11,11 +11,14 @@ type Block =
 interface MarkdownContentProps {
   content: string;
   compact?: boolean;
+  /** While true, the content is an in-progress stream: close dangling inline
+   *  markers on the tail so partial `**`/`` ` `` don't flash as raw markdown. */
+  streaming?: boolean;
   onMentionClick?: (mention: string) => void;
 }
 
-export function MarkdownContent({ content, compact = false, onMentionClick }: MarkdownContentProps) {
-  const blocks = parseBlocks(content);
+export function MarkdownContent({ content, compact = false, streaming = false, onMentionClick }: MarkdownContentProps) {
+  const blocks = parseBlocks(streaming ? closeOpenMarkers(content) : content);
   return (
     <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
       {blocks.map((block, index) => renderBlock(block, index, onMentionClick))}
@@ -107,6 +110,42 @@ function parseBlocks(content: string): Block[] {
   return blocks;
 }
 
+// During streaming the tail often ends mid-token (`**bold` with no closer yet),
+// which would render as literal asterisks until the next delta arrives. Close the
+// most common dangling markers on the last line so formatting appears as it streams.
+// Only invoked while streaming — finished messages are rendered verbatim, so a
+// legitimately-odd marker (e.g. "2 * 3") is never altered.
+function closeOpenMarkers(content: string): string {
+  const text = content;
+  // Inside an open code fence: the block parser already renders the remainder as
+  // code, so leave it untouched.
+  if (((text.match(/^```/gm) || []).length) % 2 === 1) return text;
+
+  const nlIndex = text.lastIndexOf('\n');
+  const head = nlIndex === -1 ? '' : text.slice(0, nlIndex + 1);
+  let tail = nlIndex === -1 ? text : text.slice(nlIndex + 1);
+
+  if (((tail.match(/`/g) || []).length) % 2 === 1) {
+    tail += '`';
+  } else if (((tail.match(/\*\*/g) || []).length) % 2 === 1) {
+    tail += '**';
+  }
+  return head + tail;
+}
+
+// Render a block's text with single newlines as hard breaks. The block parser joins
+// soft-wrapped lines with "\n"; without this they collapse to spaces (CommonMark soft
+// break) and fuse separate sentences into one running paragraph.
+function renderInlineLines(text: string, onMentionClick?: (mention: string) => void): React.ReactNode[] {
+  const lines = text.split('\n');
+  const out: React.ReactNode[] = [];
+  lines.forEach((line, idx) => {
+    if (idx > 0) out.push(<br key={`br-${idx}`} />);
+    out.push(<React.Fragment key={`ln-${idx}`}>{renderInline(line, onMentionClick)}</React.Fragment>);
+  });
+  return out;
+}
+
 function splitTableRow(row: string) {
   return row
     .trim()
@@ -140,7 +179,7 @@ function renderBlock(block: Block, index: number, onMentionClick?: (mention: str
       );
     }
     case 'blockquote':
-      return <blockquote key={index}>{renderInline(block.content, onMentionClick)}</blockquote>;
+      return <blockquote key={index}>{renderInlineLines(block.content, onMentionClick)}</blockquote>;
     case 'table':
       return (
         <div key={index} className="chat-markdown-table-wrap">
@@ -159,7 +198,7 @@ function renderBlock(block: Block, index: number, onMentionClick?: (mention: str
         </div>
       );
     case 'paragraph':
-      return <p key={index}>{renderInline(block.content, onMentionClick)}</p>;
+      return <p key={index}>{renderInlineLines(block.content, onMentionClick)}</p>;
     default:
       return null;
   }

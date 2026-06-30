@@ -279,7 +279,7 @@ async function runAgentJob(config, job, { signal }) {
         latest = latestLine(`${latest}\n${chunk}`);
       }
       const now = Date.now();
-      if (now - lastDeltaAt > 500) {
+      if (now - lastDeltaAt > 150) {
         lastDeltaAt = now;
         sendDelta(fullContent);
       }

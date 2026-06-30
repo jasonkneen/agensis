@@ -1671,7 +1671,7 @@ function ChatMessageBubble({
             {isThinkingPlaceholder ? (
               <ThinkingIndicator startedAt={msg.created_at} />
             ) : displayContent ? (
-              <MarkdownContent content={displayContent} onMentionClick={onAgentProfile} />
+              <MarkdownContent content={displayContent} streaming={isStreaming} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (
               <ThinkingIndicator startedAt={msg.created_at} />
             ) : (
