@@ -39,6 +39,8 @@ const ALLOWED_TABLES = new Set([
   'agent_jobs',
   'agent_registrations',
   'activity_events',
+  'agent_memory_files',
+  'memory_file_comments',
 ]);
 
 const VERSIONED_TABLES = new Set([
@@ -54,6 +56,8 @@ const VERSIONED_TABLES = new Set([
   'task_comments',
   'workspace_agents',
   'agent_webhooks',
+  'agent_memory_files',
+  'memory_file_comments',
 ]);
 
 const JSON_COLUMNS_BY_TABLE = {
@@ -264,6 +268,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
   'agent_connections', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
+  'agent_memory_files', 'memory_file_comments',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -297,6 +302,10 @@ const DB_TABLE_ACCESS = {
   activity_events: DEFAULT_TABLE_ACCESS,
   document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+  // The file mirror is daemon-owned (written via the agent_memory_sync WS action),
+  // so the REST/browser path is read-only; writes require manage to keep it server-side.
+  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
 };
@@ -596,6 +605,45 @@ async function ensureRuntimeSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
+
+    CREATE TABLE IF NOT EXISTS agent_memory_files (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      path text NOT NULL,
+      kind text NOT NULL DEFAULT 'memory',
+      summary text DEFAULT '',
+      content_cache text DEFAULT '',
+      byte_size bigint DEFAULT 0,
+      editable boolean NOT NULL DEFAULT false,
+      last_synced timestamptz DEFAULT now(),
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (agent_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_files_workspace_id ON agent_memory_files(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_memory_files_agent_id ON agent_memory_files(agent_id);
+
+    CREATE TABLE IF NOT EXISTS memory_file_comments (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      path text NOT NULL,
+      user_id uuid,
+      parent_id uuid REFERENCES memory_file_comments(id) ON DELETE CASCADE,
+      content text NOT NULL,
+      anchor_text text DEFAULT '',
+      resolved boolean DEFAULT false,
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_comments(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
+    CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
   `);
   await db.unsafe(`
     CREATE TABLE IF NOT EXISTS workspace_secrets (
@@ -1137,7 +1185,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -1148,7 +1196,7 @@ async function verifyAgentConnectToken(token, req = null) {
     const { workspaceId, agentId } = agentIdsFromWsRequest(req);
     if (workspaceId && agentId) {
       const fallbackRows = await getDb().unsafe(
-        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, permission_mode, version, enabled
+        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -2190,6 +2238,60 @@ async function updateAgentHeartbeat(ws, metadata = {}) {
     [connectionId, metadata.busy ? 'busy' : 'online', JSON.stringify(metadata || {})],
   );
   notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+}
+
+// Ingest a full snapshot of an agent's file-memory palace pushed by its daemon.
+// Read-only mirror: UPSERT every file by the stable UNIQUE(agent_id, path) identity
+// (so comments anchored to (agent_id, path) stay attached), then prune rows for files
+// the daemon no longer reports. The daemon is the only writer — the browser path is
+// read-only (see DB_TABLE_ACCESS).
+async function handleAgentMemorySync(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth) throw forbidden('Agent token is required');
+  const workspaceId = ws.workspaceId || auth.workspaceId;
+  const agentId = ws.agentId || auth.agentId;
+  if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
+
+  const incoming = Array.isArray(message.files) ? message.files : [];
+  const db = getDb();
+  const upserted = [];
+  const keptPaths = [];
+  for (const file of incoming) {
+    const filePath = String(file?.path || '').slice(0, 1024);
+    if (!filePath) continue;
+    const kind = String(file?.kind || 'memory').slice(0, 40);
+    const content = String(file?.content || '');
+    const byteSize = Number.isFinite(file?.byteSize) ? Math.trunc(file.byteSize) : Buffer.byteLength(content);
+    const summary = String(file?.summary || '').slice(0, 2000);
+    keptPaths.push(filePath);
+    const rows = await db.unsafe(
+      `insert into agent_memory_files (workspace_id, agent_id, path, kind, summary, content_cache, byte_size, editable, last_synced, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, false, now(), now())
+       on conflict (agent_id, path) do update set
+         kind = excluded.kind,
+         summary = excluded.summary,
+         content_cache = excluded.content_cache,
+         byte_size = excluded.byte_size,
+         last_synced = now(),
+         updated_at = now(),
+         version = agent_memory_files.version + 1
+       returning *`,
+      [workspaceId, agentId, filePath, kind, summary, content, byteSize],
+    );
+    if (rows[0]) upserted.push(rows[0]);
+  }
+
+  // Prune rows for files the daemon no longer reports (comments survive — they key on
+  // (agent_id, path), not a FK to these rows).
+  const pruned = keptPaths.length > 0
+    ? await db.unsafe(
+        `delete from agent_memory_files where agent_id = $1 and path <> all($2::text[]) returning *`,
+        [agentId, keptPaths],
+      )
+    : await db.unsafe(`delete from agent_memory_files where agent_id = $1 returning *`, [agentId]);
+
+  if (upserted.length > 0) notifyDbSubscribers('agent_memory_files', 'INSERT', upserted);
+  if (pruned.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', pruned);
 }
 
 // Finalize ONE agent job (daemon push OR MCP pull) with its result, then resume the
@@ -3366,6 +3468,10 @@ function attachRealtime(server) {
         }
         if (message.action === 'agent_job_delta') {
           await handleAgentJobDelta(ws, message);
+          return;
+        }
+        if (message.action === 'agent_memory_sync') {
+          await handleAgentMemorySync(ws, message);
           return;
         }
       } catch (error) {

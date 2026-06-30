@@ -109,6 +109,30 @@ CREATE TABLE IF NOT EXISTS memory_facts (
 
 CREATE INDEX IF NOT EXISTS idx_memory_facts_workspace_id ON memory_facts(workspace_id);
 
+-- Agent file-memory mirror: read-only snapshots of the memory files an agent's
+-- daemon enumerates from its palace dir. Pushed up by the daemon; never edited
+-- in-app in phase 1. UPSERTed by UNIQUE(agent_id, path) so re-syncs update rows
+-- in place (comments anchor to the stable (agent_id, path) identity, not the row).
+CREATE TABLE IF NOT EXISTS agent_memory_files (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  path text NOT NULL,
+  kind text NOT NULL DEFAULT 'memory',
+  summary text DEFAULT '',
+  content_cache text DEFAULT '',
+  byte_size bigint DEFAULT 0,
+  editable boolean NOT NULL DEFAULT false,
+  last_synced timestamptz DEFAULT now(),
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (agent_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_memory_files_workspace_id ON agent_memory_files(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_files_agent_id ON agent_memory_files(agent_id);
+
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -227,6 +251,28 @@ CREATE INDEX IF NOT EXISTS idx_document_comments_document_id ON document_comment
 CREATE INDEX IF NOT EXISTS idx_document_comments_workspace_id ON document_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_parent_id ON document_comments(parent_id);
 
+-- Comments layered on agent memory files. Anchored to the stable (agent_id, path)
+-- identity rather than a FK to agent_memory_files.id, so comments survive a re-sync
+-- that rewrites file rows or even a file being removed from the mirror.
+CREATE TABLE IF NOT EXISTS memory_file_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  path text NOT NULL,
+  user_id uuid,
+  parent_id uuid REFERENCES memory_file_comments(id) ON DELETE CASCADE,
+  content text NOT NULL,
+  anchor_text text DEFAULT '',
+  resolved boolean DEFAULT false,
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_comments(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
+CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
+
 CREATE TABLE IF NOT EXISTS workspace_agents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -244,6 +290,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
   run_mode text NOT NULL DEFAULT 'builtin',
+  memory_dir text DEFAULT '',
   enabled boolean NOT NULL DEFAULT true,
   permission_mode text NOT NULL DEFAULT 'default',
   version integer NOT NULL DEFAULT 1,

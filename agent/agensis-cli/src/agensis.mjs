@@ -3,6 +3,7 @@ import process from "node:process";
 import WebSocket from "ws";
 import { runCli } from "./cli.mjs";
 import { createQueue } from "./queue.mjs";
+import { deriveMemoryRoot, snapshotMemory } from "./memory.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
@@ -98,11 +99,16 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (message.type === "agent_registered") {
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
+        void pushMemorySnapshot(ws, config);
         return;
       }
       if (message.type === "agent_config") {
         applyAgentConfig(config, message.agent);
         log(`Updated config for @${config.handle || "agent"}: model=${config.model}, permission=${config.permissionMode}`);
+        return;
+      }
+      if (message.type === "agent_memory_refresh") {
+        void pushMemorySnapshot(ws, config);
         return;
       }
       if (message.type === "error") {
@@ -499,6 +505,30 @@ function applyAgentConfig(config, agent) {
   if (agent.model) config.model = resolveModel(agent.model);
   const permissionMode = agent.permissionMode || agent.permission_mode;
   if (permissionMode) config.permissionMode = normalizePermissionMode(permissionMode);
+  if (agent.memory_dir !== undefined || agent.memoryDir !== undefined) {
+    config.memoryDir = String(agent.memory_dir ?? agent.memoryDir ?? "").trim();
+  }
+}
+
+// Push a read-only snapshot of this agent's file-memory palace to the server so the
+// app can mirror it. Fire-and-forget: failures (no palace, fs errors) are logged, not
+// fatal. The root is the explicit memory_dir or the derived Claude palace for cwd.
+async function pushMemorySnapshot(ws, config) {
+  try {
+    const root = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir });
+    if (!root) return;
+    const files = await snapshotMemory(root);
+    send(ws, {
+      action: "agent_memory_sync",
+      workspaceId: config.workspace,
+      agentId: config.agent,
+      root,
+      files,
+    });
+    log(`Synced ${files.length} memory file${files.length === 1 ? "" : "s"} from ${root}`);
+  } catch (error) {
+    log(`Memory sync skipped: ${error?.message || error}`);
+  }
 }
 
 function stripManagedFlags(args) {
