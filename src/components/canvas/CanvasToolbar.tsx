@@ -69,7 +69,7 @@ export function CanvasToolbar({
   onExitDrawing,
 }: CanvasToolbarProps) {
   return (
-    <div className="canvas-toolbar absolute bottom-4 left-1/2 z-[600] flex -translate-x-1/2 items-center gap-1.5 rounded-xl border bg-popover/95 px-2.5 py-1.5 text-popover-foreground shadow-lg backdrop-blur">
+    <div className="canvas-toolbar absolute bottom-4 left-1/2 z-[11500] flex -translate-x-1/2 items-center gap-1.5 rounded-xl border bg-popover/95 px-2.5 py-1.5 text-popover-foreground shadow-lg backdrop-blur">
       <ToggleGroup
         type="single"
         value={activeTool}
