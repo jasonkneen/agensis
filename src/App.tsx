@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -102,6 +102,77 @@ function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
   return <FileText className="size-4" />;
+}
+
+type DockEntry =
+  | { kind: 'window'; win: FloatingWindow }
+  | { kind: 'group'; groupId: string; members: FloatingWindow[] };
+
+function renderDockButton(
+  win: FloatingWindow,
+  focusedDockWindow: FloatingWindow | null,
+  handlers: { onOpen: () => void; onHide: () => void; onFocus: () => void },
+) {
+  const active = focusedDockWindow?.id === win.id;
+  const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
+  return (
+    <Button
+      key={win.id}
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={() => {
+        if (win.minimized) {
+          handlers.onOpen();
+          return;
+        }
+        if (active) {
+          handlers.onHide();
+          return;
+        }
+        handlers.onFocus();
+      }}
+      className={cn(
+        'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+        active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+        win.minimized && 'text-muted-foreground',
+      )}
+      title={`${dockActionLabel} ${windowLabel(win)}`}
+      aria-label={`${dockActionLabel} ${windowLabel(win)}`}
+    >
+      {windowDockIcon(win.type)}
+      <span
+        aria-hidden
+        className={cn(
+          'absolute bottom-0.5 left-1/2 h-1 w-2 -translate-x-1/2 rounded-[2px]',
+          active ? 'bg-foreground' : win.minimized ? 'bg-muted-foreground/55' : 'bg-primary/65',
+        )}
+      />
+    </Button>
+  );
+}
+
+// Windows tiled together (drag-to-split) share a groupId — cluster them into
+// one dock entry, at the position of the group's first member, so they're
+// drawn together with a surrounding frame instead of as separate icons.
+function groupDockWindows(dockWindows: FloatingWindow[]): DockEntry[] {
+  const entries: DockEntry[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const win of dockWindows) {
+    if (!win.groupId) {
+      entries.push({ kind: 'window', win });
+      continue;
+    }
+    const existingIndex = groupIndex.get(win.groupId);
+    if (existingIndex !== undefined) {
+      const entry = entries[existingIndex];
+      if (entry.kind === 'group') entry.members.push(win);
+      continue;
+    }
+    groupIndex.set(win.groupId, entries.length);
+    entries.push({ kind: 'group', groupId: win.groupId, members: [win] });
+  }
+  return entries;
 }
 
 type PresenceVisibilityMap = Record<string, PresenceVisibilityMode>;
@@ -343,7 +414,17 @@ function AppContent() {
     applyNeoTheme(settings.ui_neo_theme);
   }, []);
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
-  const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindowManager();
+  const {
+    windows,
+    openWindow,
+    closeWindow,
+    focusWindow,
+    updateWindow,
+    minimizeWindow,
+    focusWindowGroup,
+    minimizeWindowGroup,
+    ungroupWindows,
+  } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
   const { cursors } = useMultiplayerCursors(
     activeWorkspaceId,
@@ -504,6 +585,7 @@ function AppContent() {
     .reduce<FloatingWindow | null>((topWindow, win) => (
       !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
     ), null);
+  const dockEntries = groupDockWindows(dockWindows);
   const canEditCanvasObject = useCallback((obj: CanvasObject) => !obj.user_id || obj.user_id === user?.id, [user?.id]);
   const settingsLayer = layers.find(layer => layer.id === (settingsLayerId || activeLayerId)) || activeLayer;
   const settingsWorkspace = useMemo<Workspace | null>(() => {
@@ -1221,44 +1303,39 @@ function AppContent() {
               className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
               style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
             >
-              {dockWindows.map(win => {
-                  const active = focusedDockWindow?.id === win.id;
-                  const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
+              {dockEntries.map(entry => {
+                  if (entry.kind === 'window') {
+                    const win = entry.win;
+                    return renderDockButton(win, focusedDockWindow, {
+                      onOpen: () => { focusWindow(win.id); minimizeWindow(win.id); },
+                      onHide: () => minimizeWindow(win.id),
+                      onFocus: () => focusWindow(win.id),
+                    });
+                  }
+                  const { groupId, members } = entry;
                   return (
-                  <Button
-                    key={win.id}
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      if (win.minimized) {
-                        focusWindow(win.id);
-                        minimizeWindow(win.id);
-                        return;
-                      }
-                      if (active) {
-                        minimizeWindow(win.id);
-                        return;
-                      }
-                      focusWindow(win.id);
-                    }}
-                    className={cn(
-                      'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
-                      active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
-                      win.minimized && 'text-muted-foreground',
-                    )}
-                    title={`${dockActionLabel} ${windowLabel(win)}`}
-                    aria-label={`${dockActionLabel} ${windowLabel(win)}`}
-                  >
-                    {windowDockIcon(win.type)}
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'absolute bottom-0.5 left-1/2 h-1 w-2 -translate-x-1/2 rounded-[2px]',
-                        active ? 'bg-foreground' : win.minimized ? 'bg-muted-foreground/55' : 'bg-primary/65',
-                      )}
-                    />
-                  </Button>
+                    <div
+                      key={groupId}
+                      className="dock-window-group flex items-center gap-0.5 rounded-2xl border border-border/60 bg-background/40 p-0.5"
+                      title={`Grouped: ${members.map(windowLabel).join(' + ')}`}
+                    >
+                      {members.map(member => renderDockButton(member, focusedDockWindow, {
+                        onOpen: () => focusWindowGroup(groupId, member.id),
+                        onHide: () => minimizeWindowGroup(groupId),
+                        onFocus: () => focusWindowGroup(groupId, member.id),
+                      }))}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => ungroupWindows(groupId)}
+                        className="size-5 rounded-lg text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                        title="Ungroup windows"
+                        aria-label="Ungroup windows"
+                      >
+                        <Ungroup className="size-3" />
+                      </Button>
+                    </div>
                   );
                 })}
                 {dockWindows.length > 0 && (
