@@ -784,6 +784,7 @@ function AppContent() {
     const session = await createSession('auto', {
       title,
       folder: 'Direct messages',
+      conversation_mode: 'auto',
       participants: [participant],
     });
     if (!session) return;
