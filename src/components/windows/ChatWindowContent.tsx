@@ -131,6 +131,7 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
+import { cn } from '@/lib/utils';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -419,9 +420,7 @@ export function ChatWindowContent({
     inputRef.current?.focus();
   };
 
-  const handleUploadSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
-    event.target.value = '';
+  const uploadAndLinkFiles = async (files: File[]) => {
     if (!files.length || !onUploadFiles) return;
     setUploadStatus('Uploading...');
     try {
@@ -442,6 +441,37 @@ export function ChatWindowContent({
     } finally {
       inputRef.current?.focus();
     }
+  };
+
+  const handleUploadSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await uploadAndLinkFiles(files);
+  };
+
+  // Paste/drop scoped to the composer: stopPropagation so dropping or pasting
+  // a file here attaches it to the message instead of falling through to the
+  // canvas-wide CanvasDropZone, which would otherwise create a new canvas object.
+  const handleComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void uploadAndLinkFiles(files);
+  };
+
+  const handleComposerDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void uploadAndLinkFiles(files);
   };
 
   const handleAgentSelect = (agent: WorkspaceAgent) => {
@@ -1198,7 +1228,7 @@ export function ChatWindowContent({
             </AttachmentGroup>
           )}
 
-          <div className="relative">
+          <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
             {showDocPicker && (
               <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                 <CommandList className="max-h-[min(240px,40vh)]">
@@ -1288,6 +1318,7 @@ export function ChatWindowContent({
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
+                onPaste={handleComposerPaste}
                 placeholder={isDirectMessage
                   ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
                   : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
@@ -1410,6 +1441,7 @@ export function ChatWindowContent({
               streaming={streaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
+              onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded
             />
@@ -1424,6 +1456,7 @@ export function ChatWindowContent({
               agents={agents}
               loading={projectFilesLoading}
               onCreateTask={onCreateTask}
+              onUploadFiles={uploadAndLinkFiles}
               onClose={closeSidePanel}
             />
           )}
@@ -1733,6 +1766,7 @@ function ChannelSidePanel({
   agents,
   loading,
   onCreateTask,
+  onUploadFiles,
   onClose,
 }: {
   type: 'files' | 'pins' | 'thread';
@@ -1744,10 +1778,32 @@ function ChannelSidePanel({
   agents: WorkspaceAgent[];
   loading: boolean;
   onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
+  onUploadFiles?: (files: File[]) => void | Promise<unknown>;
   onClose: () => void;
 }) {
   const isPins = type === 'pins';
+  const isFiles = type === 'files';
   const [selectedFile, setSelectedFile] = useState<SelectedPanelFile | null>(null);
+  const [filesDropActive, setFilesDropActive] = useState(false);
+
+  // Scoped drop target: stopPropagation so dropping files here uploads/links
+  // them instead of falling through to the canvas-wide drop handler.
+  const handlePanelDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFiles || !onUploadFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setFilesDropActive(true);
+  };
+  const handlePanelDragLeave = () => setFilesDropActive(false);
+  const handlePanelDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    setFilesDropActive(false);
+    if (!isFiles || !onUploadFiles) return;
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void onUploadFiles(files);
+  };
   const projectGroups = useMemo(() => {
     if (projectFileSources.length > 0) {
       return projectFileSources
@@ -1779,7 +1835,12 @@ function ChannelSidePanel({
   const fileCount = uploadedFiles.length + projectGroups.reduce((sum, group) => sum + group.files.length, 0);
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
+    <div
+      className={cn('flex h-full min-w-0 flex-col', filesDropActive && 'outline-2 outline-dashed outline-primary -outline-offset-2')}
+      onDragOver={handlePanelDragOver}
+      onDragLeave={handlePanelDragLeave}
+      onDrop={handlePanelDrop}
+    >
       <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         {!isPins && selectedFile ? (
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedFile(null)} aria-label="Back to files">

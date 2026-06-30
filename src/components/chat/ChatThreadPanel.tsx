@@ -33,6 +33,7 @@ interface ChatThreadPanelProps {
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
   onSendReply: (content: string, model: string) => void;
+  onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
 }
@@ -43,6 +44,7 @@ export function ChatThreadPanel({
   streaming,
   resolveMessageAccent,
   onSendReply,
+  onAgentProfile,
   onClose,
   embedded = false,
 }: ChatThreadPanelProps) {
@@ -78,7 +80,7 @@ export function ChatThreadPanel({
       </div>
 
       <div className="border-b border-border p-3">
-        <ThreadBubble msg={parentMessage} accent={resolveMessageAccent?.(parentMessage)} isParent />
+        <ThreadBubble msg={parentMessage} accent={resolveMessageAccent?.(parentMessage)} onAgentProfile={onAgentProfile} isParent />
       </div>
 
       <MessageScrollerProvider autoScroll={autoScroll}>
@@ -99,6 +101,7 @@ export function ChatThreadPanel({
                       <ThreadBubble
                         msg={msg}
                         accent={resolveMessageAccent?.(msg)}
+                        onAgentProfile={onAgentProfile}
                         isStreaming={streaming && idx === replies.length - 1 && msg.role === 'assistant'}
                       />
                     </MessageScrollerItem>
@@ -154,11 +157,13 @@ export function ChatThreadPanel({
 function ThreadBubble({
   msg,
   accent,
+  onAgentProfile,
   isStreaming,
   isParent,
 }: {
   msg: ChatMessage;
   accent?: string;
+  onAgentProfile?: (agentIdOrHandle: string) => void;
   isStreaming?: boolean;
   isParent?: boolean;
 }) {
@@ -170,6 +175,8 @@ function ThreadBubble({
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
+  const canOpenAgentProfile = msg.sender_kind === 'agent' && Boolean(msg.sender_id || msg.sender_name);
+  const agentProfileKey = msg.sender_id || msg.sender_name || '';
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -190,7 +197,18 @@ function ThreadBubble({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
+          {canOpenAgentProfile && onAgentProfile ? (
+            <button
+              type="button"
+              className="truncate text-xs font-semibold text-foreground hover:underline"
+              style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}
+              onClick={() => onAgentProfile(agentProfileKey)}
+            >
+              {senderName}
+            </button>
+          ) : (
+            <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
+          )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
         <div className="mt-0.5 text-xs leading-relaxed text-foreground">

@@ -127,23 +127,23 @@ export function ActivityWindowContent({ events, loading }: ActivityWindowContent
 
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-4 p-3">
+      <div className="flex flex-col gap-3 p-3">
         {groupByDay(events).map(group => (
-          <section key={group.label} className="flex flex-col gap-2">
+          <section key={group.label} className="flex flex-col gap-1.5">
             <Marker variant="separator">
               <MarkerContent>{group.label}</MarkerContent>
             </Marker>
-            <ItemGroup className="gap-1">
+            <ItemGroup className="gap-0.5">
               {group.items.map(event => (
-                <Item key={event.id} variant="default" className="hover:bg-muted/50">
-                  <ItemMedia variant="icon" className="size-8 rounded-full bg-muted">
+                <Item key={event.id} variant="default" size="xs" className="hover:bg-muted/50">
+                  <ItemMedia variant="icon" className="size-6 rounded-full bg-muted [&_svg]:size-3.5">
                     {iconFor(event.event_type)}
                   </ItemMedia>
-                  <ItemContent className="min-w-0">
-                    <ItemTitle className="max-w-full truncate">{event.title}</ItemTitle>
-                    <ItemDescription>{formatTime(event.created_at)}</ItemDescription>
+                  <ItemContent className="min-w-0 flex-row items-baseline gap-1.5">
+                    <ItemTitle className="min-w-0 max-w-full flex-1 truncate">{event.title}</ItemTitle>
+                    <ItemDescription className="shrink-0 text-xs">{formatTime(event.created_at)}</ItemDescription>
                   </ItemContent>
-                  <Badge variant="secondary">{event.event_type.replace(/_/g, ' ')}</Badge>
+                  <Badge variant="secondary" className="shrink-0">{event.event_type.replace(/_/g, ' ')}</Badge>
                 </Item>
               ))}
             </ItemGroup>

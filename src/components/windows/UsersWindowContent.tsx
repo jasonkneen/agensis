@@ -113,7 +113,7 @@ export function UsersWindowContent({
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto p-4">
         {loading && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Spinner className="size-3.5" />
@@ -129,13 +129,13 @@ export function UsersWindowContent({
           </div>
 
           {members.length === 0 ? (
-            <Empty className="border-0 py-8">
+            <Empty className="border-0 py-6">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   <Users />
                 </EmptyMedia>
                 <EmptyTitle>No members yet</EmptyTitle>
-                <EmptyDescription>People who join {workspaceName} will appear here.</EmptyDescription>
+                <EmptyDescription>Invite people below to start collaborating in {workspaceName}.</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -244,13 +244,13 @@ export function UsersWindowContent({
           </div>
 
           {invites.length === 0 ? (
-            <Empty className="border-0 py-8">
+            <Empty className="border-0 py-5">
               <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Link2 />
+                <EmptyMedia variant="icon" className="size-9">
+                  <Link2 className="size-4" />
                 </EmptyMedia>
-                <EmptyTitle>No invite links yet</EmptyTitle>
-                <EmptyDescription>Create an invite link to add people to {workspaceName}.</EmptyDescription>
+                <EmptyTitle className="text-sm">No invite links yet</EmptyTitle>
+                <EmptyDescription>Links you create will appear here.</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
