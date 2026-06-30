@@ -20,6 +20,7 @@
   },
   "scripts": {
     "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs",
+    "link": "npm link && bun link",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm run check",
     "prepublishOnly": "npm run check"

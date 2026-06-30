@@ -182,18 +182,32 @@ async function listManagedSecrets(workspaceId = null) {
 // ============================================================
 
 let cachedAuthSecret = null;
+let cachedAuthSecretSource = '';
 
-// HMAC signing secret, persisted in the DB so tokens survive restarts and work
-// on serverless (no writable .env). Generated once on first use.
+// HMAC signing secret. In the split deploy (static frontend on Netlify + this
+// long-running backend on Fly), Netlify signs user tokens with process.env.AUTH_SECRET
+// and proxies dispatch here carrying the same Bearer token. To verify those tokens we
+// MUST use the same secret, so an explicit env var wins. Only when no env secret is
+// configured (local / single-process dev) do we fall back to one persisted in the DB,
+// generating it on first use. Without this, the Netlify-issued token fails verifyToken
+// here (401) and every DM / @mention dispatch is silently dropped — the daemon stays
+// "connected" (its aga_ token is a separate DB-hash auth) but never receives a job.
 async function getAuthSecret() {
   if (cachedAuthSecret) return cachedAuthSecret;
+  const envSecret = process.env.AGENSIS_AUTH_SECRET || process.env.AUTH_SECRET || '';
+  if (envSecret) {
+    cachedAuthSecret = envSecret;
+    cachedAuthSecretSource = 'env';
+    return cachedAuthSecret;
+  }
   let secret = await getSettingValue('AUTH_SECRET').catch(() => '');
   if (!secret) {
     secret = crypto.randomBytes(32).toString('hex');
     await setSettingValue('AUTH_SECRET', secret);
   }
   cachedAuthSecret = secret;
-  return secret;
+  cachedAuthSecretSource = 'db';
+  return cachedAuthSecret;
 }
 
 async function issueToken(userId) {
@@ -4370,11 +4384,13 @@ if (require.main === module) {
 function setTestDb(nextDb) {
   db = nextDb;
   cachedAuthSecret = null;
+  cachedAuthSecretSource = '';
 }
 
 function resetTestState() {
   db = undefined;
   cachedAuthSecret = null;
+  cachedAuthSecretSource = '';
   websocketClients = new Set();
   envLoaded = false;
 }
