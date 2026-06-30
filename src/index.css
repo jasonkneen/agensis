@@ -1,10 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
-/* General UI font picker (Settings -> Font) — distinct from the neo theme's own
-   lazy-loaded display faces in neoThemes.ts. Loaded eagerly like the families
-   above, since this picker is theme-independent and the choice should render
-   immediately on selection. */
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&family=Work+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Sora:wght@400;500;600;700&family=Lexend:wght@400;500;600;700&family=Albert+Sans:wght@400;500;600;700&family=Bricolage+Grotesque:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* The general UI font picker's remaining 13 families (Settings -> Font) load
+   lazily, one at a time, only for whichever font is actually selected — see
+   ensureUiFontLoaded() in lib/settings.ts. An eager combined @import here was
+   tried and reverted: it cost ~40 render-blocking font-weight requests for
+   fonts most users never picked (measured ~17 Lighthouse performance points). */
 
 @import "tailwindcss";
 @import "tw-animate-css";

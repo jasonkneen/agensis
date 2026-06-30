@@ -109,11 +109,46 @@ export function fontFamilyCss(value: UiFontFamily): string {
   }
 }
 
+// geist/inter/space-grotesk are already loaded eagerly (fontsource + the
+// index.css @import) since they're the long-standing defaults; system/mono
+// need no webfont. Only the 13 newer picker options load on demand, one
+// family per <link>, so picking one font doesn't pull in the other twelve.
+const UI_FONT_GOOGLE_FAMILY: Partial<Record<UiFontFamily, string>> = {
+  manrope: 'Manrope:wght@400;500;600;700',
+  'dm-sans': 'DM+Sans:wght@400;500;700',
+  'work-sans': 'Work+Sans:wght@400;500;600;700',
+  'plus-jakarta': 'Plus+Jakarta+Sans:wght@400;500;600;700',
+  outfit: 'Outfit:wght@400;500;600;700',
+  sora: 'Sora:wght@400;500;600;700',
+  lexend: 'Lexend:wght@400;500;600;700',
+  'albert-sans': 'Albert+Sans:wght@400;500;600;700',
+  bricolage: 'Bricolage+Grotesque:wght@400;500;600;700',
+  schibsted: 'Schibsted+Grotesk:wght@400;500;600;700',
+  hanken: 'Hanken+Grotesk:wght@400;500;600;700',
+  figtree: 'Figtree:wght@400;500;600;700',
+  'jetbrains-mono': 'JetBrains+Mono:wght@400;500;600;700',
+};
+
+const loadedUiFonts = new Set<UiFontFamily>();
+
+function ensureUiFontLoaded(value: UiFontFamily) {
+  const family = UI_FONT_GOOGLE_FAMILY[value];
+  if (!family || loadedUiFonts.has(value) || typeof document === 'undefined') return;
+  loadedUiFonts.add(value);
+  if (document.querySelector(`link[data-ui-font="${value}"]`)) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${family}&display=swap`;
+  link.setAttribute('data-ui-font', value);
+  document.head.appendChild(link);
+}
+
 export function applyUiAppearanceSettings(settings: Pick<AppSettings, 'ui_font_family' | 'ui_base_font_size' | 'ui_panel_translucency' | 'ui_sidebar_translucency' | 'ui_glass_blur'> = readAll()) {
   const root = document.documentElement;
   const panel = Math.min(92, Math.max(18, settings.ui_panel_translucency || DEFAULTS.ui_panel_translucency));
   const sidebar = Math.min(92, Math.max(18, settings.ui_sidebar_translucency || DEFAULTS.ui_sidebar_translucency));
   const blur = Math.min(32, Math.max(0, settings.ui_glass_blur ?? DEFAULTS.ui_glass_blur));
+  ensureUiFontLoaded(settings.ui_font_family);
   root.style.setProperty('--agensis-ui-font-family', fontFamilyCss(settings.ui_font_family));
   root.style.setProperty('--agensis-ui-font-size', `${Math.min(18, Math.max(12, settings.ui_base_font_size || DEFAULTS.ui_base_font_size))}px`);
   root.style.setProperty('--agensis-panel-alpha', `${panel}%`);
