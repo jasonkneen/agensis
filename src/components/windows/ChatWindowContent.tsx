@@ -12,11 +12,13 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  GitCommitHorizontal,
   Globe,
   Hash,
   HardDrive,
   Layers,
   Link2,
+  Loader2,
   MessageSquare,
   Mic,
   Monitor,
@@ -126,6 +128,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
@@ -1971,11 +1974,12 @@ const GIT_STATUS_CLASS: Record<GitChangeEntry['status'], string> = {
   renamed: 'bg-violet-500/15 text-violet-700 dark:text-violet-400',
 };
 
-// Read-only working-tree diff view for a workspace's git repo. Status/diff are
-// fetched from the new /backend/workspaces/:id/git/status and /git/diff
-// endpoints (server-side, since the browser has no filesystem/git access).
-// Intentionally read-only for now — staging and commit would mutate the
-// user's real repository and need their own review pass before landing.
+// Working-tree diff + stage/commit view for a workspace's git repo. Status/diff
+// are read from /backend/workspaces/:id/git/status and /git/diff; staging and
+// committing post to /git/stage, /git/unstage and /git/commit. All five are
+// Express-only (no filesystem/git access from the browser, and no persistent
+// working tree on the Netlify serverless deploy target) — requests there 404
+// and surface as the inline error states below rather than crashing the panel.
 function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
   const [loading, setLoading] = useState(true);
   const [branch, setBranch] = useState('');
@@ -1985,6 +1989,26 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffText, setDiffText] = useState('');
   const [diffIsUntracked, setDiffIsUntracked] = useState(false);
+  const [pendingPaths, setPendingPaths] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState('');
+  const [commitMessage, setCommitMessage] = useState('');
+  const [committing, setCommitting] = useState(false);
+
+  const refreshStatus = useCallback(() => {
+    if (!workspaceId) return Promise.resolve();
+    setError('');
+    return fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/status`), {
+      headers: apiAuthHeaders(),
+    })
+      .then(response => response.json())
+      .then(payload => {
+        setBranch(typeof payload?.data?.branch === 'string' ? payload.data.branch : '');
+        setFiles(Array.isArray(payload?.data?.files) ? payload.data.files : []);
+      })
+      .catch(() => {
+        setError('Could not load git status for this workspace.');
+      });
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!workspaceId) {
@@ -1993,26 +2017,62 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
     }
     let cancelled = false;
     setLoading(true);
-    setError('');
-    fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/status`), {
-      headers: apiAuthHeaders(),
-    })
-      .then(response => response.json())
-      .then(payload => {
-        if (cancelled) return;
-        setBranch(typeof payload?.data?.branch === 'string' ? payload.data.branch : '');
-        setFiles(Array.isArray(payload?.data?.files) ? payload.data.files : []);
-      })
-      .catch(() => {
-        if (!cancelled) setError('Could not load git status for this workspace.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    refreshStatus().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, refreshStatus]);
+
+  const setPathPending = (paths: string[], pending: boolean) => {
+    setPendingPaths(prev => {
+      const next = new Set(prev);
+      paths.forEach(path => (pending ? next.add(path) : next.delete(path)));
+      return next;
+    });
+  };
+
+  const setStaged = async (paths: string[], staged: boolean) => {
+    if (!workspaceId || paths.length === 0) return;
+    setActionError('');
+    setPathPending(paths, true);
+    try {
+      const response = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/${staged ? 'stage' : 'unstage'}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ paths }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message || 'Failed to update staging');
+      setFiles(prev => prev.map(file => (paths.includes(file.path) ? { ...file, staged } : file)));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to update staging');
+    } finally {
+      setPathPending(paths, false);
+    }
+  };
+
+  const submitCommit = async () => {
+    if (!workspaceId || !commitMessage.trim()) return;
+    setActionError('');
+    setCommitting(true);
+    try {
+      const response = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/git/commit`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ message: commitMessage.trim() }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message || 'Commit failed');
+      setCommitMessage('');
+      await refreshStatus();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Commit failed');
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   const openDiff = (entry: GitChangeEntry) => {
     setSelected(entry);
@@ -2036,6 +2096,7 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
   if (error) return <p className="text-sm text-destructive">{error}</p>;
 
   if (selected) {
+    const isPending = pendingPaths.has(selected.path);
     return (
       <div className="flex h-full min-h-0 flex-col gap-2">
         <div className="flex items-center gap-2">
@@ -2044,6 +2105,18 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
           </Button>
           <Badge variant="outline" className={GIT_STATUS_CLASS[selected.status]}>{GIT_STATUS_LABEL[selected.status]}</Badge>
           <span className="min-w-0 flex-1 truncate font-mono text-xs">{selected.path}</span>
+          <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Checkbox
+              checked={selected.staged}
+              disabled={isPending}
+              onCheckedChange={checked => {
+                const staged = checked === true;
+                setSelected(prev => (prev ? { ...prev, staged } : prev));
+                void setStaged([selected.path], staged);
+              }}
+            />
+            Staged
+          </label>
         </div>
         {diffLoading ? (
           <p className="text-sm text-muted-foreground">Loading diff...</p>
@@ -2075,27 +2148,85 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
     );
   }
 
+  const stagedFiles = files.filter(file => file.staged);
+  const unstagedFiles = files.filter(file => !file.staged);
+
   return (
-    <div className="flex flex-col gap-2">
-      {branch && <div className="px-1 text-xs text-muted-foreground">On branch <span className="font-mono">{branch}</span></div>}
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 px-1">
+        {branch ? (
+          <span className="text-xs text-muted-foreground">On branch <span className="font-mono">{branch}</span></span>
+        ) : <span />}
+        {files.length > 0 && (
+          <div className="flex shrink-0 gap-1">
+            {unstagedFiles.length > 0 && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setStaged(unstagedFiles.map(f => f.path), true)}>
+                Stage all
+              </Button>
+            )}
+            {stagedFiles.length > 0 && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setStaged(stagedFiles.map(f => f.path), false)}>
+                Unstage all
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+
       {files.length === 0 ? (
         <p className="px-1 text-sm text-muted-foreground">Working tree clean — no changes.</p>
       ) : (
-        <div className="flex flex-col gap-0.5">
-          {files.map(entry => (
-            <button
-              key={entry.path}
-              type="button"
-              onClick={() => openDiff(entry)}
-              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50"
-            >
-              <Badge variant="outline" className={cn('shrink-0', GIT_STATUS_CLASS[entry.status])}>{GIT_STATUS_LABEL[entry.status]}</Badge>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.path}</span>
-              {entry.agentLabel && (
-                <Badge variant="secondary" className="shrink-0 text-[10px]">{entry.agentLabel}</Badge>
-              )}
-            </button>
-          ))}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="flex flex-col gap-0.5">
+            {files.map(entry => (
+              <div
+                key={entry.path}
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/50"
+              >
+                <Checkbox
+                  checked={entry.staged}
+                  disabled={pendingPaths.has(entry.path)}
+                  onCheckedChange={checked => setStaged([entry.path], checked === true)}
+                  aria-label={entry.staged ? `Unstage ${entry.path}` : `Stage ${entry.path}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => openDiff(entry)}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <Badge variant="outline" className={cn('shrink-0', GIT_STATUS_CLASS[entry.status])}>{GIT_STATUS_LABEL[entry.status]}</Badge>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.path}</span>
+                  {entry.agentLabel && (
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">{entry.agentLabel}</Badge>
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {actionError && <p className="px-1 text-xs text-destructive">{actionError}</p>}
+
+      {stagedFiles.length > 0 && (
+        <div className="flex shrink-0 flex-col gap-1.5 border-t border-border pt-2">
+          <Textarea
+            value={commitMessage}
+            onChange={e => setCommitMessage(e.target.value)}
+            placeholder={`Commit message for ${stagedFiles.length} staged file${stagedFiles.length === 1 ? '' : 's'}...`}
+            rows={2}
+            className="resize-none text-sm"
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={submitCommit}
+            disabled={committing || !commitMessage.trim()}
+            className="self-end gap-1.5"
+          >
+            {committing ? <Loader2 className="size-3.5 animate-spin" /> : <GitCommitHorizontal className="size-3.5" />}
+            {committing ? 'Committing…' : `Commit ${stagedFiles.length}`}
+          </Button>
         </div>
       )}
     </div>

@@ -3846,6 +3846,87 @@ function createApp() {
     }
   });
 
+  // Resolves a workspace's git root for a write (stage/unstage/commit) request:
+  // checks 'write' capability (stricter than the read-only status/diff routes
+  // above) and 404s if the workspace has no project path configured.
+  async function requireWritableGitRoot(req, workspaceId) {
+    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+    const root = gitRootOf(await fetchWorkspaceRow(workspaceId));
+    if (!root || !fs.existsSync(root)) {
+      const error = new Error('Workspace has no project path configured');
+      error.status = 404;
+      throw error;
+    }
+    return root;
+  }
+
+  // Normalizes a stage/unstage request body into a validated list of paths
+  // resolved within the workspace root — reuses the same traversal guard the
+  // read-only diff endpoint relies on.
+  function resolveStagePaths(root, body) {
+    const raw = Array.isArray(body?.paths) ? body.paths : (body?.path !== undefined ? [body.path] : []);
+    const relativePaths = raw.map((value) => String(value || '').trim()).filter(Boolean);
+    if (relativePaths.length === 0) throw badRequest('path or paths is required');
+    for (const relativePath of relativePaths) {
+      if (!resolveWithinRoot(root, relativePath)) throw badRequest('path must stay within the workspace project root');
+    }
+    return relativePaths;
+  }
+
+  app.post('/backend/workspaces/:id/git/stage', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      const root = await requireWritableGitRoot(req, workspaceId);
+      const relativePaths = resolveStagePaths(root, req.body);
+      await execFileAsync('git', ['-C', root, 'add', '--', ...relativePaths], { timeout: 8000 });
+      res.json({ data: { staged: relativePaths }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/workspaces/:id/git/unstage', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      const root = await requireWritableGitRoot(req, workspaceId);
+      const relativePaths = resolveStagePaths(root, req.body);
+      await execFileAsync('git', ['-C', root, 'reset', 'HEAD', '--', ...relativePaths], { timeout: 8000 });
+      res.json({ data: { unstaged: relativePaths }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/workspaces/:id/git/commit', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      const message = String(req.body?.message || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+      if (!message) return jsonError(res, 400, new Error('A commit message is required'));
+      const root = await requireWritableGitRoot(req, workspaceId);
+
+      const { stdout: stagedOut } = await execFileAsync('git', ['-C', root, 'diff', '--cached', '--name-only'], { timeout: 5000 });
+      if (!stagedOut.trim()) return jsonError(res, 400, new Error('No staged changes to commit'));
+
+      const userRows = await getDb().unsafe('select email, display_name from app_users where id = $1 limit 1', [req.userId]);
+      const committer = userRows[0] || {};
+      const authorName = String(committer.display_name || '').trim() || String(committer.email || '').split('@')[0] || 'Agensis user';
+      const authorEmail = String(committer.email || 'agensis@local').trim();
+
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', root, '-c', `user.name=${authorName}`, '-c', `user.email=${authorEmail}`, 'commit', '-m', message],
+        { timeout: 10000 },
+      );
+      const { stdout: shaOut } = await execFileAsync('git', ['-C', root, 'rev-parse', 'HEAD'], { timeout: 5000 });
+      res.json({ data: { sha: shaOut.trim(), summary: stdout.trim() }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agent-webhooks', requireAuth, async (req, res) => {
     try {
       const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
