@@ -89,7 +89,9 @@ test('runAgentTurn enqueues an MCP pull job when a client is working as the agen
   const res = await runAgentTurn(agent(), { workspaceId: WS, sessionId: 'ch-1' });
   assert.deepEqual(res, { ok: true, pending: true });
   const job = db.calls.find((c) => /^insert into agent_jobs/.test(c.n));
-  assert.match(job.params[5], /"mode":"mcp"/);
+  // metadata is passed as a real object (not JSON.stringify'd) so postgres.js stores a
+  // proper jsonb object and `metadata->>'mode'` works in SQL.
+  assert.equal(job.params[5].mode, 'mcp');
 });
 
 test('runAgentTurn (no MCP presence) does NOT enqueue an MCP job', async () => {

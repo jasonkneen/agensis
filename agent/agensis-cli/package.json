@@ -1,6 +1,6 @@
 {
   "name": "agensis-cli",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Run a local agensis workspace agent daemon. It connects to a workspace, receives @mention jobs, runs a configured coding CLI in the local folder, and posts results back to agensis.",
   "homepage": "https://agensis.io",
   "repository": {

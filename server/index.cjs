@@ -1690,7 +1690,10 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
        returning *`,
       [
         workspaceId, agent.id, sessionId, createdBy, prompt,
-        JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' }),
+        // Pass the OBJECT (not JSON.stringify'd): postgres.js encodes it as a real jsonb
+        // object, so `metadata->>'mode'` in claimMcpJob/reaper matches. JSON.stringify here
+        // would double-encode into a jsonb STRING scalar and the SQL key lookup returns null.
+        { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' },
       ],
     );
     notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
