@@ -766,6 +766,76 @@ function buildTools() {
     },
   });
 
+  // Bootstrap an always-on runtime over MCP: instead of an interactive client
+  // trying to hold the agent's connection itself (a turn-based client can't keep
+  // claim_job presence alive, so DMs hang), it asks here for the daemon connect
+  // command and launches it as a background process. The daemon then holds the
+  // WebSocket, shows the agent as "Connected", and answers turns via `claude -p`.
+  add({
+    name: 'get_connect_command',
+    // Minting a full-permission daemon token is a workspace-admin action. Exclude
+    // 'invite' (a transient join secret must not be able to mint daemon tokens for
+    // arbitrary agents or rotate a running daemon's token). Per-kind authorization
+    // is enforced in run(): agent→self, user→manage role, workspace→owner-level.
+    kinds: ['agent', 'workspace', 'user'],
+    description: 'Get the daemon connect command for an agent so a host can launch an always-on runtime that backs it. Registering as an agent over MCP does NOT make it "connected" — only a running daemon does. Call this, then run the returned `command` as a long-running background process on the machine where the agent should execute; it holds the connection (the agent shows "Connected") and answers turns via `claude -p`. Returns the full `agensis connect …` command, a freshly-minted aga_ token (shown once), and the resolved model / permission settings. NOTE: this ROTATES the agent\'s connect token (restart any existing daemon with the new one) and sets the agent to daemon run-mode.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        as: { type: 'string', description: 'Handle of the agent to connect (e.g. "claude"). Required for a workspace/user/invite token; ignored for a per-agent token (which targets itself).' },
+        model: { type: 'string', description: 'Override the model the daemon runs (default: the agent\'s configured model).' },
+        permission_mode: { type: 'string', description: 'Daemon permission mode: "yolo" (full access, default), "accept_edits", or "default".' },
+        base_url: { type: 'string', description: 'Override the backend --url the daemon connects to (default: the server\'s configured daemon base URL).' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      if (typeof deps.getAgentConnectionCommand !== 'function') {
+        throw new ToolError('This server does not support get_connect_command.');
+      }
+      const targetHandle = (typeof args?.as === 'string' && args.as.trim()) ? args.as.trim() : null;
+      try {
+        let agentId;
+        if (identity.kind === 'agent') {
+          // A per-agent token may only bootstrap ITS OWN daemon (the "auth'd shoe-in").
+          agentId = identity.agentId;
+        } else {
+          if (!targetHandle) throw new ToolError('Pass `as: "<agent handle>"` to choose which agent to connect (e.g. as: "claude").');
+          // A user token must hold the manage role (mirrors the HTTP connection-command
+          // route). The workspace MCP token is the owner-level control-plane secret —
+          // it already gates agent creation and auto-approve — so it may target any
+          // agent in its workspace without a per-user role lookup.
+          if (identity.kind === 'user') {
+            if (typeof deps.enforceWorkspaceRole !== 'function') throw new ToolError('Not permitted to mint a connect command.');
+            await deps.enforceWorkspaceRole(identity.userId, identity.workspaceId, 'manage');
+          }
+          const agent = await deps.resolveWorkspaceAgentByHandle(identity.workspaceId, targetHandle);
+          if (!agent) throw new ToolError(`No agent "@${targetHandle}" in this workspace.`);
+          agentId = agent.id;
+        }
+        const payload = await deps.getAgentConnectionCommand({
+          agentId,
+          workspaceId: identity.workspaceId,
+          handle: targetHandle,
+          model: (typeof args?.model === 'string' && args.model.trim()) ? args.model.trim() : null,
+          permissionMode: (typeof args?.permission_mode === 'string' && args.permission_mode.trim()) ? args.permission_mode.trim() : null,
+          baseUrl: (typeof args?.base_url === 'string' && args.base_url.trim()) ? args.base_url.trim() : null,
+        });
+        return {
+          ...payload,
+          instructions: [
+            `Run "command" on the machine where @${payload.handle} should execute, as a long-running background process — it must keep running to stay connected.`,
+            'While it runs, the daemon holds the connection (the agent shows "Connected") and answers each turn via `claude -p`.',
+            'The token is shown once and replaces any previous one; if another daemon is already running for this agent, restart it with this command.',
+          ],
+        };
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'get_connect_command failed');
+      }
+    },
+  });
+
   return tools;
 }
 

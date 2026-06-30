@@ -1070,6 +1070,70 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   return { localCommand: portableCommand, portableCommand };
 }
 
+// Mint a daemon connect token for an agent and return the full connect payload
+// (command + one-time token + resolved settings). Shared by the HTTP
+// connection-command route and the MCP `get_connect_command` tool so the two can
+// never drift. Side effects: ROTATES the agent's connect token (any running daemon
+// must be restarted with the new one) and flips run_mode to 'daemon' so a connected
+// daemon takes over from the builtin server runner. Authorization is the caller's
+// responsibility (HTTP route enforces manage role; MCP scopes by workspace token).
+async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null } = {}) {
+  const id = String(agentId || '').trim();
+  if (!id) throw new Error('agentId is required');
+  const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
+  const agent = rows[0];
+  if (!agent) throw new Error('Agent not found');
+  if (workspaceId && agent.workspace_id !== workspaceId) throw new Error('Agent is not in this workspace');
+  if (!isAgentEnabled(agent)) throw new Error('Agent is deactivated');
+  const token = createAgentConnectToken();
+  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
+  const resolvedModel = resolveAnthropicModel(model || agent.model);
+  // Remote daemons run on the user's own machine and need full access to do real
+  // work, so the connect command defaults to yolo unless a safer mode is requested.
+  let resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode || agent.permission_mode);
+  if (resolvedPermissionMode === 'default') resolvedPermissionMode = 'yolo';
+  const updateRows = await getDb().unsafe(
+    `update workspace_agents
+     set handle = $2,
+         connect_token_hash = $3,
+         run_mode = 'daemon',
+         model = $4,
+         permission_mode = $5,
+         updated_at = now(),
+         version = coalesce(version, 0) + 1
+     where id = $1
+     returning *`,
+    [id, resolvedHandle, hashAgentToken(token), resolvedModel, resolvedPermissionMode],
+  );
+  notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
+  const resolvedBaseUrl = normalizeAgentBackendBaseUrl(baseUrl)
+    || normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+    || '';
+  const commands = agentConnectionCommand({
+    baseUrl: resolvedBaseUrl,
+    token,
+    workspaceId: agent.workspace_id,
+    agentId: id,
+    handle: resolvedHandle,
+    name: updateRows[0]?.name || agent.name,
+    model: resolvedModel,
+    permissionMode: resolvedPermissionMode,
+  });
+  return {
+    agent: updateRows[0],
+    handle: resolvedHandle,
+    token,
+    command: commands.portableCommand,
+    localCommand: commands.localCommand,
+    portableCommand: commands.portableCommand,
+    baseUrl: resolvedBaseUrl,
+    model: resolvedModel,
+    permissionMode: resolvedPermissionMode,
+    permission_mode: resolvedPermissionMode,
+    permissionFlags: agentPermissionFlags(resolvedPermissionMode),
+  };
+}
+
 async function verifyAgentConnectToken(token, req = null) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
@@ -3608,60 +3672,22 @@ function createApp() {
       if (!agent) return jsonError(res, 404, new Error('Agent not found'));
       if (!isAgentEnabled(agent)) return jsonError(res, 403, new Error('Agent is deactivated'));
       await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
-      const token = createAgentConnectToken();
-      const handle = slugHandle(req.body?.handle || agent.handle || agent.name);
-      const model = resolveAnthropicModel(req.body?.model || agent.model);
-      let permissionMode = normalizeAgentPermissionMode(req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode);
-      // Remote daemons run on the user's own machine and need full access to do real
-      // work, so the connect command defaults to yolo (full permissions, no sandbox)
-      // unless an explicitly safer mode (e.g. accept_edits) was requested.
-      if (permissionMode === 'default') permissionMode = 'yolo';
-      const updateRows = await getDb().unsafe(
-        `update workspace_agents
-         set handle = $2,
-             connect_token_hash = $3,
-             run_mode = 'daemon',
-             model = $4,
-             permission_mode = $5,
-             updated_at = now(),
-             version = coalesce(version, 0) + 1
-         where id = $1
-         returning *`,
-        [agentId, handle, hashAgentToken(token), model, permissionMode],
-      );
-      notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
       // Daemons connect over WebSocket, which the Netlify deploy can't host. When
       // AGENSIS_DAEMON_BASE_URL is set (e.g. the Fly backend), emit it as the
       // connect --url so the daemon targets the WS-capable host, not the app origin.
       const baseUrl = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
         || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
         || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
-      const commands = agentConnectionCommand({
-        baseUrl,
-        token,
-        workspaceId: agent.workspace_id,
+      // Shared with the MCP `get_connect_command` tool so the two never drift.
+      const payload = await buildAgentConnectionCommand({
         agentId,
-        handle,
-        name: updateRows[0]?.name || agent.name,
-        model: updateRows[0]?.model || agent.model,
-        permissionMode: updateRows[0]?.permission_mode || agent.permission_mode,
+        workspaceId: agent.workspace_id,
+        handle: req.body?.handle,
+        model: req.body?.model,
+        permissionMode: req.body?.permissionMode || req.body?.permission_mode,
+        baseUrl,
       });
-      res.json({
-        data: {
-          agent: updateRows[0],
-          handle,
-          token,
-          command: commands.portableCommand,
-          localCommand: commands.localCommand,
-          portableCommand: commands.portableCommand,
-          baseUrl,
-          model,
-          permissionMode,
-          permission_mode: permissionMode,
-          permissionFlags: agentPermissionFlags(permissionMode),
-        },
-        error: null,
-      });
+      res.json({ data: payload, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -3725,6 +3751,8 @@ function createApp() {
     resolveWorkspaceAgentByHandle,
     registerAgentRequest,
     getRegistrationStatus,
+    getAgentConnectionCommand: buildAgentConnectionCommand,
+    enforceWorkspaceRole,
     rateLimiter: mcpRateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,
