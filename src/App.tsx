@@ -1736,6 +1736,7 @@ function CanvasLayerScene({
               <TasksWindowContent
                 tasks={tasks}
                 members={members}
+                agents={agents}
                 currentUserEmail={userEmail}
                 workspaceId={workspaceId}
                 currentUserId={userId}
@@ -1743,6 +1744,7 @@ function CanvasLayerScene({
                 onUpdateTask={onUpdateTask}
                 onToggleStatus={onToggleTaskStatus}
                 onDeleteTask={onDeleteTask}
+                onUpdateAgent={onUpdateAgent}
                 focusTaskId={win.focusTaskId}
                 onFocusTaskConsumed={() => onUpdateWindow(win.id, { focusTaskId: undefined })}
               />

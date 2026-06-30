@@ -27,6 +27,15 @@ export function agentAccentColor(agent: Pick<WorkspaceAgent, 'id' | 'name' | 'ha
   return agentAccentPaletteColor(hashString(`${agent.id || ''}:${agent.handle || ''}:${agent.name || ''}`));
 }
 
+export function agentHandle(agent: Pick<WorkspaceAgent, 'handle' | 'name'>): string {
+  return String(agent.handle || agent.name || 'agent')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'agent';
+}
+
 export type AgentAccentStyle = CSSProperties & { '--agent-accent'?: string };
 
 export function agentAccentStyle(agent: Pick<WorkspaceAgent, 'id' | 'name' | 'handle' | 'accent_color'>): AgentAccentStyle {
