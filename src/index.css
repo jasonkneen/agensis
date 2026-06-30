@@ -3085,10 +3085,6 @@ select {
   border-radius: 12px !important;
 }
 
-:root[data-ui-theme="neo"] [data-sidebar-panel] {
-  border-top-left-radius: 0 !important;
-}
-
 /* Brutalist rows (neo + tinyworld) have a hard OFFSET shadow that extends down-right.
    The sidebar scroll viewport clips overflow-x, so each row must reserve right+bottom
    room or the shadow's right edge gets cut flat (the reported clipping). */
