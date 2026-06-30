@@ -328,7 +328,7 @@ export function Sidebar({
           </Button>
           <button
             type="button"
-            className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={onOpenWorkspaceGrid || onCreateWorkspace}
             aria-label="Switch workspace"
           >

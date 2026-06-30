@@ -351,8 +351,21 @@ function AppearancePanel({
     { id: 'geist', label: 'Geist' },
     { id: 'inter', label: 'Inter' },
     { id: 'space-grotesk', label: 'Space Grotesk' },
+    { id: 'manrope', label: 'Manrope' },
+    { id: 'dm-sans', label: 'DM Sans' },
+    { id: 'work-sans', label: 'Work Sans' },
+    { id: 'plus-jakarta', label: 'Plus Jakarta Sans' },
+    { id: 'outfit', label: 'Outfit' },
+    { id: 'sora', label: 'Sora' },
+    { id: 'lexend', label: 'Lexend' },
+    { id: 'albert-sans', label: 'Albert Sans' },
+    { id: 'bricolage', label: 'Bricolage Grotesque' },
+    { id: 'schibsted', label: 'Schibsted Grotesk' },
+    { id: 'hanken', label: 'Hanken Grotesk' },
+    { id: 'figtree', label: 'Figtree' },
     { id: 'system', label: 'System' },
     { id: 'mono', label: 'Mono' },
+    { id: 'jetbrains-mono', label: 'JetBrains Mono' },
   ];
 
   useEffect(() => {

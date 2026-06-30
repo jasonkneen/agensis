@@ -1,5 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
+/* General UI font picker (Settings -> Font) — distinct from the neo theme's own
+   lazy-loaded display faces in neoThemes.ts. Loaded eagerly like the families
+   above, since this picker is theme-independent and the choice should render
+   immediately on selection. */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&family=Work+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Sora:wght@400;500;600;700&family=Lexend:wght@400;500;600;700&family=Albert+Sans:wght@400;500;600;700&family=Bricolage+Grotesque:wght@400;500;600;700&family=Schibsted+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -674,6 +680,15 @@
   background: var(--card);
 }
 
+/* "default" (filled/primary) and "destructive" inherit the shared button base's
+   border-transparent and never get a border-color override elsewhere, so the
+   border-width set above for non-ghost buttons was invisible on them — they had
+   a shadow but no visible ink border, unlike every other bordered surface. */
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"],
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="destructive"] {
+  border-color: var(--neo-ink);
+}
+
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"]:hover,
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"]:hover,
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"]:hover,
@@ -1308,7 +1323,6 @@
   border: 2px solid var(--border) !important;
   background: color-mix(in srgb, var(--card) 82%, var(--canvas-base)) !important;
   box-shadow: var(--neo-shadow-md) !important;
-  margin-right: 4px;
   margin-bottom: 5px;
 }
 

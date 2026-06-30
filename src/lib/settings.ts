@@ -2,7 +2,11 @@
 // defaults live here; secret keys are managed server-side via /backend/settings.
 
 export type NotificationLevel = 'all' | 'mentions' | 'none';
-export type UiFontFamily = 'geist' | 'inter' | 'space-grotesk' | 'system' | 'mono';
+export type UiFontFamily =
+  | 'geist' | 'inter' | 'space-grotesk' | 'system' | 'mono'
+  | 'manrope' | 'dm-sans' | 'work-sans' | 'plus-jakarta' | 'outfit'
+  | 'sora' | 'lexend' | 'albert-sans' | 'bricolage' | 'schibsted'
+  | 'hanken' | 'figtree' | 'jetbrains-mono';
 
 export interface AppSettings {
   ai_default_model: string;
@@ -73,6 +77,32 @@ export function fontFamilyCss(value: UiFontFamily): string {
       return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     case 'mono':
       return "'SFMono-Regular', 'JetBrains Mono', Consolas, monospace";
+    case 'manrope':
+      return "'Manrope', 'Geist Variable', system-ui, sans-serif";
+    case 'dm-sans':
+      return "'DM Sans', 'Geist Variable', system-ui, sans-serif";
+    case 'work-sans':
+      return "'Work Sans', 'Geist Variable', system-ui, sans-serif";
+    case 'plus-jakarta':
+      return "'Plus Jakarta Sans', 'Geist Variable', system-ui, sans-serif";
+    case 'outfit':
+      return "'Outfit', 'Geist Variable', system-ui, sans-serif";
+    case 'sora':
+      return "'Sora', 'Geist Variable', system-ui, sans-serif";
+    case 'lexend':
+      return "'Lexend', 'Geist Variable', system-ui, sans-serif";
+    case 'albert-sans':
+      return "'Albert Sans', 'Geist Variable', system-ui, sans-serif";
+    case 'bricolage':
+      return "'Bricolage Grotesque', 'Geist Variable', system-ui, sans-serif";
+    case 'schibsted':
+      return "'Schibsted Grotesk', 'Geist Variable', system-ui, sans-serif";
+    case 'hanken':
+      return "'Hanken Grotesk', 'Geist Variable', system-ui, sans-serif";
+    case 'figtree':
+      return "'Figtree', 'Geist Variable', system-ui, sans-serif";
+    case 'jetbrains-mono':
+      return "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace";
     case 'geist':
     default:
       return "'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
