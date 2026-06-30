@@ -133,7 +133,7 @@ export function CanvasSelectionLayer() {
 
       {actionBubble && (
         <div
-          className="absolute flex items-center gap-2 rounded-full border border-border bg-popover px-3 py-1.5 shadow-lg"
+          className="absolute flex items-center gap-1.5 rounded-md border border-border bg-popover px-2 py-1 shadow-md"
           style={{
             left: actionBubble.x,
             top: actionBubble.y,
