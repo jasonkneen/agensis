@@ -519,12 +519,12 @@ export function FloatingWindowShell({
       };
 
   const cornerClass = (() => {
-    if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-lg';
+    if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-xl';
     const corners: string[] = [];
-    if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-lg');
-    if (!adjacentEdges.has('right') && !adjacentEdges.has('top')) corners.push('rounded-tr-lg');
-    if (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) corners.push('rounded-bl-lg');
-    if (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) corners.push('rounded-br-lg');
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-xl');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('top')) corners.push('rounded-tr-xl');
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) corners.push('rounded-bl-xl');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) corners.push('rounded-br-xl');
     return corners.join(' ');
   })();
 
@@ -532,7 +532,7 @@ export function FloatingWindowShell({
     <>
       {isDragging && snapPreview && (
         <div
-          className="pointer-events-none absolute rounded-lg border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
+          className="pointer-events-none absolute rounded-xl border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
           style={{
             left: snapPreview.x,
             top: snapPreview.y,
