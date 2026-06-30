@@ -87,17 +87,21 @@ const STORAGE_KEY = 'agensis_theme_preset';
 export function applyThemePreset(id: string) {
   const preset = THEME_PRESETS.find((p) => p.id === id) ?? THEME_PRESETS[0];
   const root = document.documentElement;
+  try {
+    localStorage.setItem(STORAGE_KEY, preset.id);
+  } catch {
+    /* ignore */
+  }
+  // The Neo family owns its full palette via the neo theme registry
+  // (neoThemes.ts). Leave its inline overrides untouched so a brand-hue preset
+  // can't clobber the active neo theme; the choice is still persisted above.
+  if (root.getAttribute('data-ui-theme') === 'neo') return;
   // Clear any prior preset overrides first so switching presets is clean.
   for (const key of MANAGED_KEYS) root.style.removeProperty(key);
   if (!preset.reset) {
     for (const [key, value] of Object.entries(preset.vars)) {
       root.style.setProperty(key, value);
     }
-  }
-  try {
-    localStorage.setItem(STORAGE_KEY, preset.id);
-  } catch {
-    /* ignore */
   }
 }
 

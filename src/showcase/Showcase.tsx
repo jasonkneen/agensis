@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { Button } from '@/components/ui/button';
 import { useTheme, type ThemeMode } from '@/hooks/useTheme';
 import { THEME_PRESETS, applyThemePreset, getStoredPreset } from './themePresets';
+import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, getStoredNeoTheme } from './neoThemes';
 
 import ActionsSection from './sections/Actions';
 import InputsSection from './sections/Inputs';
@@ -43,10 +44,20 @@ const MODES: Array<{ id: ThemeMode; icon: typeof Sun; label: string }> = [
 export function Showcase() {
   const { mode, setTheme } = useTheme();
   const [preset, setPreset] = useState(getStoredPreset);
+  const [neo, setNeo] = useState(getStoredNeoTheme);
+  const neoActive = mode === 'neo-light' || mode === 'neo-dark';
 
   useEffect(() => {
     applyThemePreset(preset);
   }, [preset]);
+
+  const pickNeo = (id: string) => {
+    setNeo(id);
+    const dark = mode === 'dark' || mode === 'neo-dark'
+      || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    setTheme(dark ? 'neo-dark' : 'neo-light');
+    applyNeoTheme(id);
+  };
 
   return (
     <TooltipProvider>
@@ -95,6 +106,22 @@ export function Showcase() {
                   />
                 ))}
               </div>
+              {/* Neo theme gallery */}
+              <select
+                value={neoActive ? neo : ''}
+                onChange={(e) => e.target.value && pickNeo(e.target.value)}
+                title="Neo-brutal theme"
+                className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+              >
+                <option value="">Neo theme…</option>
+                {NEO_GROUPS.map((group) => (
+                  <optgroup key={group} label={group}>
+                    {NEO_THEMES.filter((t) => t.group === group).map((t) => (
+                      <option key={t.id} value={t.id}>{t.label}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
             </div>
           </div>
         </header>
