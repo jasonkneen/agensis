@@ -6,6 +6,10 @@ import { createQueue } from "./queue.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
+// How many conversations may run at once. Each DM / channel / thread is its own
+// serial lane; this caps how many lanes run in parallel so we never spawn an
+// unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
+const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
 export const AGENSIS_CLI_VERSION = "0.1.14";
 
@@ -33,6 +37,9 @@ export async function runAgensisDaemon(rawConfig = {}) {
   };
 
   queue = createQueue({
+    // --once is a one-shot: keep it strictly serial so we run exactly one job
+    // then drain. Otherwise run conversations in parallel up to the cap.
+    concurrency: config.once ? 1 : config.maxConcurrency,
     runJob: async (job, ctx) => {
       await runAgentJob(config, job, ctx);
       if (config.once) stop();
@@ -103,7 +110,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
         return;
       }
       if (message.type === "agent_job" && message.job?.id) {
-        const result = queue.enqueue({ ...message.job, key: message.job.id, ws });
+        const result = queue.enqueue({ ...message.job, key: message.job.id, lane: laneKeyForJob(message.job), ws });
         if (result.accepted) {
           acceptedJobCount += 1;
           log(`Queued job ${message.job.id} at position ${result.position}`);
@@ -175,6 +182,7 @@ function normalizeConfig(raw) {
     permissionMode: normalizePermissionMode(raw.permissionMode || raw.permission_mode || raw.permission || process.env.AGENSIS_PERMISSION_MODE || "default"),
     timeoutMs: Number(raw.timeoutMs || process.env.AGENSIS_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     heartbeatMs: Number(raw.heartbeatMs || process.env.AGENSIS_HEARTBEAT_MS || DEFAULT_HEARTBEAT_MS),
+    maxConcurrency: Math.max(1, Number(raw.maxConcurrency || process.env.AGENSIS_MAX_CONCURRENCY || DEFAULT_MAX_CONCURRENCY) || DEFAULT_MAX_CONCURRENCY),
     once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
   };
@@ -217,6 +225,16 @@ function isLocalBackendUrl(baseUrl) {
   } catch {
     return false;
   }
+}
+
+// One lane per conversation. A DM and every channel are distinct chat sessions,
+// and a thread within a channel is distinct again — matching the server's own
+// per-conversation lock granularity (sessionId::threadParentId). Same lane → runs
+// in order; different lanes → run in parallel.
+function laneKeyForJob(job) {
+  const session = String(job?.sessionId || "");
+  const thread = String(job?.threadParentId || "");
+  return `${session}::${thread}`;
 }
 
 async function runAgentJob(config, job, { signal }) {

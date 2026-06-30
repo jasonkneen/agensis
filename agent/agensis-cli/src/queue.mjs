@@ -48,14 +48,23 @@ export function looksLikeCancel(text) {
 }
 
 /**
- * In-process FIFO worker. `runJob(job, { signal })` is awaited one at a time
- * (concurrency 1 — parallel CLI runs on one checkout would collide on git state).
+ * In-process lane-aware worker. `runJob(job, { signal })` runs jobs serially
+ * WITHIN a lane and in parallel ACROSS lanes, up to `concurrency` jobs in flight.
+ *
+ * A "lane" is one conversation: pass `job.lane` (e.g. `sessionId::threadParentId`).
+ * DMs, each channel, and each thread are distinct lanes, so a slow turn in one
+ * never blocks another — while two messages in the SAME conversation still run in
+ * order. Jobs with no `job.lane` share a single default lane ("") — the original
+ * strictly-serial behaviour.
  *
  * - enqueue(job) → { accepted, deduped, position, startedImmediately }. `job.key`
- *   (optional) dedupes against the active + queued jobs.
- * - cancelActive(reason) aborts ONLY the in-flight job's AbortSignal; queued jobs
- *   are untouched.
- * - idle() resolves when nothing is active or queued (used to drain on --once).
+ *   (optional) dedupes against every active + queued job in all lanes. `position`
+ *   is 1-based within the job's own lane.
+ * - cancelActive(reason, laneKey?) aborts in-flight jobs' AbortSignals; queued
+ *   jobs are untouched. With no laneKey it cancels every lane's active job; with a
+ *   laneKey it cancels only that conversation's active job.
+ * - idle() resolves when nothing is active or queued anywhere (used to drain on
+ *   --once). active() is the total in-flight count; size() the total queued.
  */
 /**
  * @param {{
@@ -64,37 +73,61 @@ export function looksLikeCancel(text) {
  * }} [opts]
  */
 export function createQueue(opts = {}) {
-  const { runJob, concurrency = 1 } = opts;
-  void concurrency; // single-slot in v1; documented in the ticket.
-  const queued = [];
-  let active = null; // { job, controller }
-  let draining = false;
+  const { runJob } = opts;
+  const maxConcurrency = Math.max(1, Number(opts.concurrency) || 1);
+  const lanes = new Map(); // laneKey -> { queued: [], active: { job, controller, cancelled } | null }
+  let running = 0; // total in-flight across all lanes
   let idleResolvers = [];
+
+  function laneOf(key) {
+    let lane = lanes.get(key);
+    if (!lane) {
+      lane = { queued: [], active: null };
+      lanes.set(key, lane);
+    }
+    return lane;
+  }
 
   function has(key) {
     if (key == null) return false;
     // A cancelled job is on its way out (it stays in `active` until its abort
     // tears the run down), so it must NOT dedupe-block a re-ask of the same thing
     // — otherwise "stop" + re-issue the same task gets silently swallowed.
-    if (active && !active.cancelled && active.job.key === key) return true;
-    return queued.some((j) => j.key === key);
+    for (const lane of lanes.values()) {
+      if (lane.active && !lane.active.cancelled && lane.active.job.key === key) return true;
+      if (lane.queued.some((j) => j.key === key)) return true;
+    }
+    return false;
   }
 
-  async function drain() {
-    if (draining) return;
-    draining = true;
-    while (queued.length) {
-      const job = queued.shift();
+  // Start as many lane-head jobs as the global cap allows. Lanes are walked in
+  // insertion order for rough fairness; only lanes with no active job are eligible.
+  function pump() {
+    for (const [laneKey, lane] of lanes) {
+      if (running >= maxConcurrency) break;
+      if (lane.active || lane.queued.length === 0) continue;
+      const job = lane.queued.shift();
       const controller = new AbortController();
-      active = { job, controller };
-      try {
-        await runJob(job, { signal: controller.signal });
-      } catch {
-        // runJob is expected to handle its own errors; never break the loop.
-      }
-      active = null;
+      lane.active = { job, controller, cancelled: false };
+      running += 1;
+      Promise.resolve()
+        .then(() => runJob(job, { signal: controller.signal }))
+        .catch(() => {
+          // runJob is expected to handle its own errors; never break the pump.
+        })
+        .finally(() => {
+          lane.active = null;
+          running -= 1;
+          if (lane.queued.length === 0 && !lane.active) lanes.delete(laneKey);
+          pump();
+          maybeResolveIdle();
+        });
     }
-    draining = false;
+  }
+
+  function maybeResolveIdle() {
+    if (running > 0) return;
+    for (const lane of lanes.values()) if (lane.queued.length) return;
     const resolvers = idleResolvers;
     idleResolvers = [];
     for (const r of resolvers) r();
@@ -104,28 +137,38 @@ export function createQueue(opts = {}) {
     if (job && job.key != null && has(job.key)) {
       return { accepted: false, deduped: true, position: 0, startedImmediately: false };
     }
-    const startedImmediately = !active && queued.length === 0;
-    queued.push(job);
-    const position = queued.length + (active ? 1 : 0); // 1-based, including active
-    void drain();
+    const laneKey = job && job.lane != null ? String(job.lane) : "";
+    const lane = laneOf(laneKey);
+    const startedImmediately = !lane.active && lane.queued.length === 0 && running < maxConcurrency;
+    lane.queued.push(job);
+    const position = lane.queued.length + (lane.active ? 1 : 0); // 1-based within the lane
+    pump();
     return { accepted: true, deduped: false, position, startedImmediately };
   }
 
-  function cancelActive(reason) {
-    if (!active) return false;
-    active.cancelled = true; // stop it from dedupe-blocking a same-key re-ask
-    active.controller.abort(reason || "cancelled");
-    return true;
+  function cancelActive(reason, laneKey) {
+    let cancelled = false;
+    for (const [key, lane] of lanes) {
+      if (laneKey != null && key !== String(laneKey)) continue;
+      if (lane.active) {
+        lane.active.cancelled = true; // stop it from dedupe-blocking a same-key re-ask
+        lane.active.controller.abort(reason || "cancelled");
+        cancelled = true;
+      }
+    }
+    return cancelled;
   }
 
   function size() {
-    return queued.length;
+    let total = 0;
+    for (const lane of lanes.values()) total += lane.queued.length;
+    return total;
   }
   function activeCount() {
-    return active ? 1 : 0;
+    return running;
   }
   function idle() {
-    if (!active && queued.length === 0) return Promise.resolve();
+    if (running === 0 && size() === 0) return Promise.resolve();
     return new Promise((r) => idleResolvers.push(r));
   }
 
