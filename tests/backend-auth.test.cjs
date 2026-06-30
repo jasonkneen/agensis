@@ -286,6 +286,71 @@ test('issued auth tokens verify against the persisted auth secret', async () => 
   assert.equal(await __test.verifyToken(`${token}tampered`), null);
 });
 
+test('AUTH_SECRET env var takes precedence over the DB-persisted secret', async () => {
+  // DB carries one secret; env carries another. Env must win so a token signed
+  // by the Netlify function (env) verifies on the Fly backend (env) even when a
+  // stale/random DB secret exists from a prior local-dev run.
+  installDb({ authSecret: 'db-fallback-secret' });
+  const prev = process.env.AUTH_SECRET;
+  try {
+    process.env.AUTH_SECRET = 'env-shared-secret';
+    __test.resetTestState();
+    installDb({ authSecret: 'db-fallback-secret' });
+
+    const token = await __test.issueToken('user-1');
+    assert.equal(await __test.verifyToken(token), 'user-1');
+    // A token signed with the DB secret must NOT verify once env is authoritative.
+    const dbSig = require('crypto').createHmac('sha256', 'db-fallback-secret').update('user-1').digest('base64url');
+    assert.equal(await __test.verifyToken(`user-1.${dbSig}`), null);
+  } finally {
+    if (prev === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = prev;
+    __test.resetTestState();
+  }
+});
+
+test('AGENSIS_AUTH_SECRET env var is preferred over AUTH_SECRET', async () => {
+  installDb({ authSecret: 'db-fallback-secret' });
+  const prevA = process.env.AGENSIS_AUTH_SECRET;
+  const prevB = process.env.AUTH_SECRET;
+  try {
+    process.env.AGENSIS_AUTH_SECRET = 'agensis-pref';
+    process.env.AUTH_SECRET = 'plain-auth';
+    __test.resetTestState();
+    installDb({ authSecret: 'db-fallback-secret' });
+
+    const token = await __test.issueToken('user-1');
+    const expectedSig = require('crypto').createHmac('sha256', 'agensis-pref').update('user-1').digest('base64url');
+    assert.equal(token, `user-1.${expectedSig}`);
+    assert.equal(await __test.verifyToken(token), 'user-1');
+  } finally {
+    if (prevA === undefined) delete process.env.AGENSIS_AUTH_SECRET;
+    else process.env.AGENSIS_AUTH_SECRET = prevA;
+    if (prevB === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = prevB;
+    __test.resetTestState();
+  }
+});
+
+test('falls back to DB-persisted secret when no env secret is configured', async () => {
+  installDb({ authSecret: 'db-only-secret' });
+  const prevA = process.env.AGENSIS_AUTH_SECRET;
+  const prevB = process.env.AUTH_SECRET;
+  try {
+    delete process.env.AGENSIS_AUTH_SECRET;
+    delete process.env.AUTH_SECRET;
+    __test.resetTestState();
+    installDb({ authSecret: 'db-only-secret' });
+
+    const token = await __test.issueToken('user-1');
+    assert.equal(await __test.verifyToken(token), 'user-1');
+  } finally {
+    if (prevA !== undefined) process.env.AGENSIS_AUTH_SECRET = prevA;
+    if (prevB !== undefined) process.env.AUTH_SECRET = prevB;
+    __test.resetTestState();
+  }
+});
+
 test('settings secrets route requires authentication and supports app-level secrets', async () => {
   installDb({ authSecret: 'fixed-test-secret' });
 

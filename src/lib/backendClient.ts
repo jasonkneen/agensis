@@ -692,22 +692,46 @@ export const backendClient: BackendClient = {
       };
     },
     async signInWithOAuthSession() {
-      const result = await postJson<{ user: SessionLike['user']; token: string }>('/backend/auth/oauth', {});
-      if (result.error || !result.data?.user) {
+      // The OAuth callback must hit the Netlify function (same origin), not the
+      // Fly API backend (BACKEND_BASE). It relies on @netlify/identity's getUser()
+      // which reads Netlify's edge-injected identity context — only present on the
+      // Netlify origin. Routing this through BACKEND_BASE (Fly) 404s and breaks
+      // social login. In Electron (file://) there is no same-origin function, so
+      // fall back to BACKEND_BASE (the local sidecar).
+      const oauthUrl = (typeof window !== 'undefined' && window.location.protocol.startsWith('http'))
+        ? '/backend/auth/oauth'
+        : backendUrl('/backend/auth/oauth');
+      try {
+        const response = await fetch(oauthUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({}),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.data?.user) {
+          return {
+            data: { user: null, session: null },
+            error: payload?.error || { message: 'OAuth sign-in failed', code: null },
+          };
+        }
+        const session: SessionLike = {
+          access_token: payload.data.token,
+          user: payload.data.user,
+        };
+        setStoredSession(session, 'SIGNED_IN');
+        return {
+          data: { user: session.user, session },
+          error: null,
+        };
+      } catch (error) {
         return {
           data: { user: null, session: null },
-          error: result.error,
+          error: {
+            message: error instanceof Error ? error.message : 'Network error',
+            code: null,
+          },
         };
       }
-      const session: SessionLike = {
-        access_token: result.data.token,
-        user: result.data.user,
-      };
-      setStoredSession(session, 'SIGNED_IN');
-      return {
-        data: { user: session.user, session },
-        error: null,
-      };
     },
     async signOut() {
       setStoredSession(null, 'SIGNED_OUT');
