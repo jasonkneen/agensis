@@ -60,6 +60,7 @@ import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
 import { useChat } from './hooks/useChat';
+import { useSessionMessages } from './hooks/useSessionMessages';
 import { useMemory } from './hooks/useMemory';
 import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
@@ -1542,6 +1543,38 @@ function CanvasLayerScene({
               breadcrumb={workspaceName}
             >
               {canControlWindow ? (
+                winSession && activeSession?.id !== win.sessionId ? (
+                  <InactiveChatWindow
+                    session={winSession}
+                    windowTitle={win.title}
+                    facts={facts}
+                    documents={documents}
+                    agents={agents}
+                    agentConnections={agentConnections}
+                    presenceUsers={presenceUsers}
+                    selectedAgent={selectedAgent}
+                    onSelectAgent={onSelectAgent}
+                    onAgentProfile={onAgentProfile}
+                    canvasGroups={canvasGroups}
+                    canvasObjects={canvasObjects}
+                    workspaceId={workspaceId}
+                    uploadedFiles={uploadedFiles}
+                    onUploadFiles={onUploadFiles}
+                    onCreateTask={onCreateTask}
+                    systemCapabilities={systemCapabilities}
+                    contextControls={(
+                      <KnowledgeContextControl
+                        counts={contextCounts}
+                        enabled={useWorkspaceCtx}
+                        title={contextCountsTitle}
+                        onToggle={onToggleWorkspaceCtx}
+                      />
+                    )}
+                    onSetActiveSession={onSetActiveSession}
+                    onSendMessage={onSendMessage}
+                    onOpenThread={onOpenThread}
+                  />
+                ) : (
                 <ChatWindowContent
                   messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
                   topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
@@ -1585,6 +1618,7 @@ function CanvasLayerScene({
                   }}
                   channelTitle={winSession?.title || win.title}
                 />
+                )
               ) : (
                 <ReadOnlyChatWindowContent
                   sessionId={win.sessionId || null}
@@ -1855,6 +1889,103 @@ function ReadOnlyChatWindowContent({
       uploadedFiles={uploadedFiles}
       onSendMessage={() => {}}
       readOnly
+    />
+  );
+}
+
+// An owned chat window that is NOT the globally-active session. It loads and
+// live-subscribes to its own session's messages (via useSessionMessages) so a
+// second open agent DM still shows history and receives replies in realtime.
+// It stays interactive: sending or opening a thread first promotes this session
+// to active, after which the live `useChat`-backed path takes over (including
+// token streaming).
+function InactiveChatWindow({
+  session,
+  windowTitle,
+  facts,
+  documents,
+  agents,
+  agentConnections,
+  presenceUsers,
+  selectedAgent,
+  onSelectAgent,
+  onAgentProfile,
+  canvasGroups,
+  canvasObjects,
+  workspaceId,
+  uploadedFiles,
+  onUploadFiles,
+  onCreateTask,
+  systemCapabilities,
+  contextControls,
+  onSetActiveSession,
+  onSendMessage,
+  onOpenThread,
+}: {
+  session: ChatSession;
+  windowTitle: string;
+  facts: MemoryFact[];
+  documents: Document[];
+  agents: WorkspaceAgent[];
+  agentConnections: AgentConnection[];
+  presenceUsers: WorkspacePresenceUser[];
+  selectedAgent: WorkspaceAgent | null;
+  onSelectAgent: (agent: WorkspaceAgent | null) => void;
+  onAgentProfile: (agentIdOrHandle?: string | null) => void;
+  canvasGroups: CanvasGroup[];
+  canvasObjects: CanvasObject[];
+  workspaceId: string;
+  uploadedFiles: UploadedFile[];
+  onUploadFiles: (files: File[]) => Promise<UploadedFile[]>;
+  onCreateTask: (input: CreateTaskInput) => void;
+  systemCapabilities: SystemCapabilities | null;
+  contextControls: React.ReactNode;
+  onSetActiveSession: (session: ChatSession) => void;
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
+  onOpenThread: (messageId: string) => void;
+}) {
+  const messages = useSessionMessages(session.id);
+  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
+  const threadReplyCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    messages.forEach(m => {
+      if (m.thread_parent_id) counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
+    });
+    return counts;
+  }, [messages]);
+
+  return (
+    <ChatWindowContent
+      messages={messages as never[]}
+      topLevelMessages={topLevelMessages}
+      threadReplyCounts={threadReplyCounts}
+      streaming={false}
+      memoryFacts={facts}
+      documents={documents}
+      agents={agents}
+      agentConnections={agentConnections}
+      presenceUsers={presenceUsers}
+      selectedAgent={selectedAgent}
+      onSelectAgent={onSelectAgent}
+      onAgentProfile={onAgentProfile}
+      isDirectMessage={isDirectChatSession(session)}
+      canvasGroups={canvasGroups}
+      canvasObjects={canvasObjects}
+      workspaceId={workspaceId}
+      uploadedFiles={uploadedFiles}
+      onUploadFiles={onUploadFiles}
+      onCreateTask={onCreateTask}
+      systemCapabilities={systemCapabilities}
+      contextControls={contextControls}
+      onSendMessage={(content, model, mf, docs) => {
+        onSetActiveSession(session);
+        onSendMessage(content, model, mf, docs, null, session);
+      }}
+      onOpenThread={(messageId) => {
+        onSetActiveSession(session);
+        onOpenThread(messageId);
+      }}
+      channelTitle={session.title || windowTitle}
     />
   );
 }
