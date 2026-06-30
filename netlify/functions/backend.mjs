@@ -646,20 +646,54 @@ async function ensureAgentRuntimeTables() {
 }
 
 async function handleAgentDispatch(req, userId) {
-  const { workspaceId, sessionId, content } = await readBody(req);
+  const body = await readBody(req);
+  const { workspaceId, sessionId, content } = body || {};
   if (!workspaceId || !sessionId || !content) {
     return jsonError(400, new Error('workspaceId, sessionId, and content are required'));
   }
   await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
+  const baseUrl = daemonBaseUrl();
+  if (baseUrl && req.headers.get('x-agensis-dispatch-proxy') !== '1') {
+    return proxyAgentDispatchToDaemon(req, baseUrl, body);
+  }
   // Serverless deployments cannot hold the local daemon orchestration loop open.
-  // Return a positive contract response so the client can fall back to the
-  // regular AI completion path without logging a route 404.
+  // Without a websocket-capable daemon backend there is nowhere to deliver the
+  // job, so keep the explicit fallback contract.
   return json({
     data: {
       dispatched: false,
-      reason: 'serverless_dispatch_unavailable',
+      reason: baseUrl ? 'daemon_dispatch_proxy_loop' : 'serverless_dispatch_unavailable',
+      requiredEnv: baseUrl ? null : 'AGENSIS_DAEMON_BASE_URL',
     },
     error: null,
+  });
+}
+
+async function proxyAgentDispatchToDaemon(req, baseUrl, body) {
+  let upstream;
+  try {
+    upstream = await fetch(`${baseUrl}/backend/agents/dispatch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: req.headers.get('authorization') || '',
+        'X-Agensis-Dispatch-Proxy': '1',
+      },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (error) {
+    return jsonErrorWithData(
+      502,
+      new Error(`Daemon dispatch backend is unreachable: ${error?.message || error}`),
+      { dispatched: false, daemonBaseUrl: baseUrl },
+    );
+  }
+
+  const text = await upstream.text();
+  const contentType = upstream.headers.get('content-type') || 'application/json';
+  return new Response(text, {
+    status: upstream.status,
+    headers: { 'Content-Type': contentType },
   });
 }
 

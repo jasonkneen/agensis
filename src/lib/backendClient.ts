@@ -729,7 +729,8 @@ function shouldUseLocalSidecar(path: string) {
   if (BACKEND_BASE) return false;
   const { hostname, port } = window.location;
   if (!isLoopbackHost(hostname) || port !== '8888') return false;
-  return /^\/backend\/files\//.test(path)
+  return /^\/backend\/agents(?:\/|$)/.test(path)
+    || /^\/backend\/files\//.test(path)
     || /^\/backend\/workspaces\/[^/]+\/project-files(?:\?|$)/.test(path)
     || path.startsWith('/backend/system/inspect-path');
 }

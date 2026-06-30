@@ -10,7 +10,7 @@ const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
-const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
+const { renderSkillMd, skillManifest } = require('./skills.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -560,31 +560,6 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_agent_id ON agent_jobs(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_session_id ON agent_jobs(session_id);
 
-    -- External MCP runtimes ("members of the club"). A client joins with the workspace
-    -- join token, is minted a per-runtime token + a pending row, and (once approved)
-    -- pulls jobs for the agents mapped to it. last_seen_at is the DB-backed presence
-    -- signal (multi-instance safe, unlike per-process state).
-    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS runtime_join_token_hash text DEFAULT '';
-    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS runtime_auto_approve boolean NOT NULL DEFAULT false;
-    CREATE TABLE IF NOT EXISTS agent_runtimes (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      name text NOT NULL DEFAULT 'Runtime',
-      token_hash text NOT NULL DEFAULT '',
-      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'revoked')),
-      host text DEFAULT '',
-      metadata jsonb DEFAULT '{}'::jsonb,
-      last_seen_at timestamptz,
-      approved_at timestamptz,
-      created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    );
-    CREATE INDEX IF NOT EXISTS idx_agent_runtimes_workspace_id ON agent_runtimes(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_agent_runtimes_token_hash ON agent_runtimes(token_hash);
-    -- L3: which runtime backs this agent (null = builtin/daemon or legacy per-agent external).
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS runtime_id uuid REFERENCES agent_runtimes(id) ON DELETE SET NULL;
-    CREATE INDEX IF NOT EXISTS idx_workspace_agents_runtime_id ON workspace_agents(runtime_id);
-
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
@@ -911,18 +886,6 @@ function createAgentConnectToken() {
   return `aga_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
-// A per-runtime credential (one connected MCP client = one runtime). Minted when a
-// client joins the club, then used as its Bearer for claim_job/submit_job_result.
-function createRuntimeToken() {
-  return `agr_${crypto.randomBytes(32).toString('base64url')}`;
-}
-
-// The single per-workspace bootstrap secret. Any client presenting it can call
-// register_runtime to mint itself a runtime token (pending approval by default).
-function createRuntimeJoinToken() {
-  return `agj_${crypto.randomBytes(32).toString('base64url')}`;
-}
-
 function normalizeBaseUrl(value) {
   const text = String(value || '').trim().replace(/\/+$/, '');
   if (!text) return '';
@@ -934,6 +897,25 @@ function normalizeBaseUrl(value) {
     return url.toString().replace(/\/+$/, '');
   } catch {
     return '';
+  }
+}
+
+function normalizeAgentBackendBaseUrl(value) {
+  const baseUrl = normalizeBaseUrl(value);
+  if (!baseUrl) return '';
+  try {
+    const url = new URL(baseUrl);
+    if (
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '0.0.0.0')
+      && (url.port === '8888' || url.port === '5173')
+    ) {
+      url.protocol = 'http:';
+      url.hostname = '127.0.0.1';
+      url.port = String(DEFAULT_PORT);
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return baseUrl;
   }
 }
 
@@ -1080,45 +1062,50 @@ async function verifyAgentConnectToken(token, req = null) {
   };
 }
 
-// Resolve a per-runtime token -> runtime identity. Revoked runtimes resolve to null
-// (token dead); pending ones resolve but carry status so tools can gate on approval.
-async function verifyRuntimeToken(token) {
+// The SAME invite link a human accepts can be used by an MCP client as its Bearer.
+// It grants workspace access; the client then works AS an agent (claim_job { as }).
+async function verifyInviteToken(token) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, status from agent_runtimes where token_hash = $1 limit 1`,
-    [hashAgentToken(token)],
+    `select id, workspace_id, email from workspace_invites
+      where token = $1 and status in ('pending', 'accepted')
+        and (expires_at is null or expires_at > now())
+      limit 1`,
+    [token],
   );
-  const runtime = rows[0];
-  if (!runtime || runtime.status === 'revoked') return null;
-  return {
-    kind: 'runtime',
-    runtimeId: runtime.id,
-    workspaceId: runtime.workspace_id,
-    name: runtime.name,
-    status: runtime.status,
-  };
+  const invite = rows[0];
+  if (!invite) return null;
+  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client' };
 }
 
-// Resolve a workspace join token -> a join identity. Only register_runtime accepts it.
-async function verifyRuntimeJoinToken(token) {
-  if (!token || typeof token !== 'string') return null;
-  const rows = await getDb().unsafe(
-    `select id, runtime_auto_approve from workspaces where runtime_join_token_hash = $1 and runtime_join_token_hash <> '' limit 1`,
-    [hashAgentToken(token)],
-  );
-  const ws = rows[0];
-  if (!ws) return null;
-  return { kind: 'join', workspaceId: ws.id, autoApprove: Boolean(ws.runtime_auto_approve) };
-}
-
-// The MCP endpoint accepts three Bearer credential kinds, tried most-specific first:
-// a per-agent connect token, a per-runtime token, or the workspace join token.
+// The MCP endpoint accepts either a per-agent connect token (acts AS that agent) or a
+// workspace invite token (acts in the workspace, choosing which agent to work as).
 async function verifyMcpToken(token, req = null) {
-  return (
-    (await verifyAgentConnectToken(token, req))
-    || (await verifyRuntimeToken(token))
-    || (await verifyRuntimeJoinToken(token))
+  return (await verifyAgentConnectToken(token, req)) || (await verifyInviteToken(token));
+}
+
+// In-memory MCP presence: which agents have a live MCP poller right now. A client
+// "working as @q" stamps this every time it polls claim_job; dispatch enqueues a pull
+// job when an agent is present, and any number of polling clients drain that queue —
+// so "3× Q all working as Q" just works. Process-local, like the daemon connection map.
+const mcpAgentPresence = new Map(); // agentId -> last-seen ms
+const MCP_PRESENCE_TTL_MS = 40_000;
+function touchMcpPresence(agentId) {
+  if (agentId) mcpAgentPresence.set(String(agentId), Date.now());
+}
+function hasMcpPresence(agentId) {
+  const seen = mcpAgentPresence.get(String(agentId));
+  return Boolean(seen && (Date.now() - seen) < MCP_PRESENCE_TTL_MS);
+}
+
+async function resolveWorkspaceAgentByHandle(workspaceId, handle) {
+  if (!handle) return null;
+  const wanted = slugHandle(handle);
+  const rows = await getDb().unsafe(
+    'select * from workspace_agents where workspace_id = $1 and enabled = true',
+    [workspaceId],
   );
+  return rows.find((a) => slugHandle(a.handle || a.name) === wanted) || null;
 }
 
 function agentTokenFromWsRequest(req) {
@@ -1217,81 +1204,6 @@ async function disconnectAgentDaemons(agentId, workspaceId) {
   }
 }
 
-// An agent's run_mode selects who generates its replies:
-//   'builtin'  — the server calls Anthropic inline (no external process).
-//   'daemon'   — a local daemon CLI connected over WebSocket; the server PUSHES jobs.
-//   'external' — a connected MCP runtime (Claude Code/Cursor/Codex) that PULLS jobs
-//                via claim_job and answers with submit_job_result.
-// Anything unrecognized falls back to 'builtin' (fail safe, never errors a turn).
-const RUN_MODES = new Set(['builtin', 'daemon', 'external']);
-function normalizeRunMode(value) {
-  return RUN_MODES.has(value) ? value : 'builtin';
-}
-
-// --- external (MCP-runtime) presence ----------------------------------------
-// The MCP transport is stateless HTTP, so there is no held socket to prove an
-// external runtime is alive. Instead a runtime continuously polls claim_job;
-// every poll stamps this in-memory map (agentId -> last-seen ms). Dispatch fails
-// fast when no runtime has polled recently, exactly like the daemon "no daemon
-// connected" message, so an external-mode chat never hangs on a dead spinner.
-// In-memory is consistent with `connectedAgents` (also process-local, single node).
-const externalAgentPresence = new Map();
-const EXTERNAL_PRESENCE_TTL_MS = 40_000;
-function touchExternalPresence(agentIds) {
-  const now = Date.now();
-  for (const id of agentIds || []) {
-    if (id) externalAgentPresence.set(String(id), now);
-  }
-}
-function hasExternalPresence(agentId) {
-  const seen = externalAgentPresence.get(String(agentId));
-  return Boolean(seen && (Date.now() - seen) < EXTERNAL_PRESENCE_TTL_MS);
-}
-
-// DB-backed presence for the runtime ("club") model — multi-instance safe, unlike the
-// in-memory map above. A runtime stamps last_seen_at every time it polls claim_job.
-async function touchRuntimePresence(runtimeId) {
-  if (!runtimeId) return;
-  try {
-    await getDb().unsafe('update agent_runtimes set last_seen_at = now(), updated_at = now() where id = $1', [runtimeId]);
-  } catch {
-    // best effort
-  }
-}
-
-// Is a live runtime available to serve this agent's external turn? Mapped agents
-// (runtime_id set) require their runtime to be approved and recently seen (DB-backed).
-// Unmapped agents fall back to the legacy per-agent in-memory presence (L1 path).
-async function hasExternalRuntime(agent) {
-  if (agent.runtime_id) {
-    const rows = await getDb().unsafe(
-      `select 1 from agent_runtimes
-        where id = $1 and workspace_id = $2 and status = 'approved'
-          and last_seen_at is not null
-          and last_seen_at > now() - interval '${Math.round(EXTERNAL_PRESENCE_TTL_MS / 1000)} seconds'
-        limit 1`,
-      [agent.runtime_id, agent.workspace_id],
-    );
-    return rows.length > 0;
-  }
-  return hasExternalPresence(agent.id);
-}
-
-// Mint (or re-attach) a runtime for a client presenting the workspace join token.
-// Auto-approve makes it usable immediately; otherwise it waits for owner approval.
-async function registerRuntime({ workspaceId, name, host = '', autoApprove = false }) {
-  const token = createRuntimeToken();
-  const status = autoApprove ? 'approved' : 'pending';
-  const rows = await getDb().unsafe(
-    `insert into agent_runtimes (workspace_id, name, token_hash, status, host, approved_at, last_seen_at)
-     values ($1, $2, $3, $4, $5, ${autoApprove ? 'now()' : 'null'}, now())
-     returning id, workspace_id, name, status, host, created_at`,
-    [workspaceId, String(name || 'Runtime').slice(0, 120) || 'Runtime', hashAgentToken(token), status, String(host || '').slice(0, 180)],
-  );
-  notifyDbSubscribers('agent_runtimes', 'INSERT', rows);
-  return { runtime: rows[0], token };
-}
-
 function findConnectedAgent(workspaceId, agentId, handle) {
   const wantedHandle = slugHandle(handle);
   for (const entry of connectedAgents.values()) {
@@ -1320,7 +1232,7 @@ function agentRuntimePayload(agent) {
     tools: parseJsonArray(agent.tools),
     skills: parseJsonArray(agent.skills),
     model: resolveAnthropicModel(agent.model),
-    run_mode: normalizeRunMode(agent.run_mode),
+    run_mode: agent.run_mode === 'daemon' ? 'daemon' : 'builtin',
     permissionMode,
     permission_mode: permissionMode,
     permissionFlags: agentPermissionFlags(permissionMode),
@@ -1670,12 +1582,39 @@ async function hasActiveBurstJob(sessionId, agentId) {
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
-  const runMode = normalizeRunMode(agent.run_mode);
+  const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
   const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
   const agentContext = agentContextFromRow(agent, coParticipants);
   const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
   if (recentActivity && agentContext) {
     agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's DMs and channels. Recent activity elsewhere (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
+  }
+
+  // If one or more MCP clients are working AS this agent (joined via the invite link and
+  // polling claim_job), serve this turn through the pull queue: enqueue a job; whichever
+  // client claims it answers. Takes precedence over builtin/daemon. This is what makes
+  // "@q answers via MCP" and "3× Q all working as Q" work, with zero per-agent config.
+  if (hasMcpPresence(agent.id)) {
+    const responseMessageId = crypto.randomUUID();
+    const pendingRows = await getDb().unsafe(
+      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
+       returning *`,
+      [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+    );
+    notifyDbSubscribers('messages', 'INSERT', pendingRows);
+    const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
+    const jobRows = await getDb().unsafe(
+      `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
+       values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
+       returning *`,
+      [
+        workspaceId, agent.id, sessionId, createdBy, prompt,
+        JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' }),
+      ],
+    );
+    notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+    return { ok: true, pending: true }; // a polling client will claim it; conversation resumes on submit
   }
 
   if (runMode === 'builtin') {
@@ -1725,53 +1664,6 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
       notifyDbSubscribers('messages', 'INSERT', messageRows);
       return { ok: false, pending: false };
     }
-  }
-
-  // External (MCP-runtime) mode: the server does not push — it ENQUEUES a job that a
-  // connected MCP runtime pulls via claim_job and answers via submit_job_result. Fail
-  // fast (mirroring the daemon "no daemon" message) when no runtime has polled recently,
-  // so the chat never hangs on a spinner that nobody will ever pick up.
-  if (runMode === 'external') {
-    if (!(await hasExternalRuntime(agent))) {
-      const assistantRows = await getDb().unsafe(
-        `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-         values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-         returning *`,
-        [
-          sessionId,
-          `@${handle} is configured for an external MCP runtime, but none is connected. Open it in your MCP client (e.g. Claude Code, Cursor, Codex) and keep it running so it can pick up work.`,
-          threadParentId || null,
-          String(agent.id),
-          agent.name,
-        ],
-      );
-      notifyDbSubscribers('messages', 'INSERT', assistantRows);
-      return { ok: false, pending: false };
-    }
-    const externalMessageId = crypto.randomUUID();
-    const externalPendingRows = await getDb().unsafe(
-      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
-       returning *`,
-      [externalMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
-    );
-    notifyDbSubscribers('messages', 'INSERT', externalPendingRows);
-    const externalPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
-    const externalJobRows = await getDb().unsafe(
-      `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
-       values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
-       returning *`,
-      [
-        workspaceId,
-        agent.id,
-        sessionId,
-        createdBy,
-        externalPrompt,
-        JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId: externalMessageId, mode: 'external' }),
-      ],
-    );
-    notifyDbSubscribers('agent_jobs', 'INSERT', externalJobRows);
-    return { ok: true, pending: true }; // a runtime will claim it; conversation resumes on submit
   }
 
   const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
@@ -2139,19 +2031,15 @@ async function updateAgentHeartbeat(ws, metadata = {}) {
   notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
 }
 
-// Finalize ONE agent job (daemon or external) with its result, then resume the
-// conversation. Shared by the daemon WebSocket path (handleAgentJobResult) and the
-// external MCP path (submit_job_result) so both render replies identically: mark the
-// job done/error, rewrite the "Thinking …" placeholder (or insert a fresh message),
-// log to Activity, and continue the channel turn loop. The `job` row must already
-// carry agent_name/agent_handle (join when loading it).
+// Finalize ONE agent job (daemon push OR MCP pull) with its result, then resume the
+// conversation. Shared so both paths render replies identically: mark the job done/error,
+// rewrite the "Thinking …" placeholder (or insert a fresh message), log to Activity, and
+// continue the channel turn loop. `job` must carry agent_name/agent_handle (join on load).
 async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null } = {}) {
   const status = errorText ? 'error' : 'done';
   const updatedRows = await getDb().unsafe(
-    `update agent_jobs
-     set status = $2, response = $3, error = $4, finished_at = now(), updated_at = now()
-     where id = $1
-     returning *`,
+    `update agent_jobs set status = $2, response = $3, error = $4, finished_at = now(), updated_at = now()
+     where id = $1 returning *`,
     [job.id, status, responseText, errorText],
   );
   notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
@@ -2166,36 +2054,24 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   const responseMessageId = jobMetadata.responseMessageId || null;
   if (responseMessageId) {
     const messageRows = await getDb().unsafe(
-      `update messages
-       set content = $2,
-           sender_kind = 'agent',
-           sender_id = $3,
-           sender_name = $4
-       where id = $1 and session_id = $5
-       returning *`,
+      `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4
+       where id = $1 and session_id = $5 returning *`,
       [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id],
     );
     if (messageRows.length > 0) {
       notifyDbSubscribers('messages', 'UPDATE', messageRows);
-      // Daemon/external replies only ever land via this finalizing UPDATE (the INSERT
-      // was a "Thinking 0s" placeholder), so log the real reply to Activity here.
       void logMessageActivity(messageRows);
     }
   } else {
     const messageRows = await getDb().unsafe(
       `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-       returning *`,
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
       [job.session_id, content, threadParentId, String(job.agent_id || ''), senderName],
     );
     notifyDbSubscribers('messages', 'INSERT', messageRows);
   }
-  // Resume the channel conversation now that this turn has landed.
-  void continueConversation({
-    workspaceId: job.workspace_id,
-    sessionId: job.session_id,
-    threadParentId,
-  }).catch((error) => console.error('continueConversation (job finalize) failed', error));
+  void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
+    .catch((error) => console.error('continueConversation (job finalize) failed', error));
 }
 
 async function handleAgentJobResult(ws, message) {
@@ -2205,10 +2081,8 @@ async function handleAgentJobResult(ws, message) {
   if (!jobId) throw badRequest('jobId is required');
   const rows = await getDb().unsafe(
     `select j.*, a.name as agent_name, a.handle as agent_handle
-     from agent_jobs j
-     left join workspace_agents a on a.id = j.agent_id
-     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
-     limit 1`,
+     from agent_jobs j left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3 limit 1`,
     [jobId, auth.agentId, auth.workspaceId],
   );
   const job = rows[0];
@@ -2222,41 +2096,27 @@ async function handleAgentJobResult(ws, message) {
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => {});
 }
 
-// --- external job worker API (backs the MCP claim_job / submit_job_result tools) ---
-
-// An MCP runtime polls claimExternalJob to pull the next queued external job for the
-// agents it serves. The poll itself refreshes presence (so dispatch knows a runtime is
-// alive even when idle), and the claim is atomic — FOR UPDATE SKIP LOCKED guarantees two
-// fast polls never grab the same job. `agentIds` scopes the claim: a per-agent token
-// passes its single agent; a runtime token passes the set it's mapped to. A runtime with
-// nothing mapped claims nothing. `runtimeId`, when present, drives DB-backed presence.
-async function claimExternalJob({ workspaceId, agentIds = [], runtimeId = null }) {
-  const ids = (agentIds || []).map(String).filter(Boolean);
-  if (runtimeId) await touchRuntimePresence(runtimeId);
-  else touchExternalPresence(ids);
-  // The claim is always scoped to the caller's agent set. A caller that resolves to zero
-  // agents (idle runtime, no mapping) claims nothing — never a workspace-wide grab.
-  if (ids.length === 0) return null;
-  const claimedRows = await getDb().unsafe(
-    `update agent_jobs
-       set status = 'running', started_at = now(), updated_at = now()
+// --- MCP pull worker API (backs the claim_job / submit_job_result tools) ----------
+// A client working AS an agent polls claimMcpJob; the poll refreshes presence (so
+// dispatch keeps enqueuing) and atomically claims the oldest queued MCP job for that
+// agent. FOR UPDATE SKIP LOCKED means N clients polling as the same agent never double-
+// claim — that's how "3× Q" share one queue.
+async function claimMcpJob({ workspaceId, agentId }) {
+  if (!agentId) return null;
+  touchMcpPresence(agentId);
+  const claimed = await getDb().unsafe(
+    `update agent_jobs set status = 'running', started_at = now(), updated_at = now()
      where id = (
        select id from agent_jobs
-        where workspace_id = $1
-          and status = 'queued'
-          and (metadata->>'mode') = 'external'
-          and agent_id = any($2)
-        order by created_at asc
-        limit 1
-        for update skip locked
-     )
-     returning *`,
-    [workspaceId, ids],
+        where workspace_id = $1 and agent_id = $2 and status = 'queued' and (metadata->>'mode') = 'mcp'
+        order by created_at asc limit 1 for update skip locked
+     ) returning *`,
+    [workspaceId, agentId],
   );
-  const job = claimedRows[0];
+  const job = claimed[0];
   if (!job) return null;
-  notifyDbSubscribers('agent_jobs', 'UPDATE', claimedRows);
-  const agentRows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [job.agent_id]);
+  notifyDbSubscribers('agent_jobs', 'UPDATE', claimed);
+  const agentRows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
   const meta = parseJsonObject(job.metadata);
   return {
     jobId: job.id,
@@ -2267,70 +2127,36 @@ async function claimExternalJob({ workspaceId, agentIds = [], runtimeId = null }
   };
 }
 
-// A runtime returns a job's result (or a failure). Scoped to the workspace and, when
-// `agentIds` is given, to that agent set (a per-agent token passes [its agent]; a runtime
-// token passes its mapped set). Reuses the shared finalize so the reply renders and the
-// conversation resumes exactly like the daemon path.
-async function submitExternalJobResult({ workspaceId, jobId, responseText = '', errorText = '', agentIds = [], runtimeId = null }) {
+async function submitMcpJobResult({ workspaceId, agentId, jobId, responseText = '', errorText = '' }) {
   if (!jobId) throw badRequest('jobId is required');
-  // Always scoped to the caller's agent set (agent token → [its agent]; runtime → its
-  // mapped set). An empty set can match no job.
-  const ids = (agentIds || []).map(String).filter(Boolean);
-  if (ids.length === 0) throw badRequest('Agent job not found');
+  if (!agentId) throw badRequest('Agent job not found');
   const rows = await getDb().unsafe(
     `select j.*, a.name as agent_name, a.handle as agent_handle
-       from agent_jobs j
-       left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.workspace_id = $2 and j.agent_id = any($3)
-      limit 1`,
-    [jobId, workspaceId, ids],
+     from agent_jobs j left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.workspace_id = $2 and j.agent_id = $3 limit 1`,
+    [jobId, workspaceId, agentId],
   );
   const job = rows[0];
   if (!job) throw badRequest('Agent job not found');
-  if (parseJsonObject(job.metadata).mode !== 'external') throw badRequest('Job is not an external job');
+  if (parseJsonObject(job.metadata).mode !== 'mcp') throw badRequest('Job is not an MCP job');
   if (job.status !== 'running') throw badRequest(`Job is ${job.status}, not awaiting a result`);
-  // A submitting runtime is by definition alive — refresh presence so a long generation
-  // (which isn't polling claim_job meanwhile) doesn't lapse the TTL and spuriously
-  // report "no runtime connected" for a concurrent mention.
-  if (runtimeId) await touchRuntimePresence(runtimeId);
-  else if (job.agent_id) touchExternalPresence([job.agent_id]);
+  touchMcpPresence(agentId); // a submitting client is alive
   await finalizeAgentJobResult(job, { responseText, errorText });
   return { jobId: job.id, status: errorText ? 'error' : 'done' };
 }
 
-// Resolve the external agent ids a runtime is mapped to (optionally filtered to a set of
-// handles via `only`). Used by claim_job/submit_job_result for runtime-token callers.
-async function externalAgentIdsForRuntime(runtimeId, only = null) {
-  if (!runtimeId) return [];
-  const rows = await getDb().unsafe(
-    `select id, handle, name from workspace_agents
-      where runtime_id = $1 and run_mode = 'external' and enabled = true`,
-    [runtimeId],
-  );
-  let agents = rows;
-  if (Array.isArray(only) && only.length > 0) {
-    const wanted = new Set(only.map((h) => slugHandle(h)));
-    agents = agents.filter((a) => wanted.has(slugHandle(a.handle || a.name)));
-  }
-  return agents.map((a) => String(a.id));
-}
-
-// Backstop for external jobs whose runtime vanished mid-flight (crashed before claiming,
-// or claimed and never submitted). Mirrors reapStuckAgentJobs but uses the valid 'error'
-// status and the shared finalize so the placeholder gets a clear message and the loop
-// resumes instead of hanging forever on "Thinking …".
-async function reapStuckExternalJobs() {
+// Backstop: an MCP job whose client vanished mid-flight (or nobody ever claimed it)
+// gets finalized with an error so the chat doesn't hang on "Thinking …".
+async function reapStuckMcpJobs() {
   try {
     const rows = await getDb().unsafe(
       `select j.*, a.name as agent_name, a.handle as agent_handle
-         from agent_jobs j
-         left join workspace_agents a on a.id = j.agent_id
-        where (j.metadata->>'mode') = 'external'
-          and j.status in ('queued', 'running')
-          and j.created_at < now() - interval '180 seconds'`,
+       from agent_jobs j left join workspace_agents a on a.id = j.agent_id
+       where (j.metadata->>'mode') = 'mcp' and j.status in ('queued', 'running')
+         and j.created_at < now() - interval '180 seconds'`,
     );
     for (const job of rows) {
-      await finalizeAgentJobResult(job, { errorText: 'the external runtime stopped responding' }).catch(() => {});
+      await finalizeAgentJobResult(job, { errorText: 'the MCP client stopped responding' }).catch(() => {});
     }
   } catch {
     // best effort
@@ -3595,28 +3421,26 @@ function createApp() {
       // work, so the connect command defaults to yolo (full permissions, no sandbox)
       // unless an explicitly safer mode (e.g. accept_edits) was requested.
       if (permissionMode === 'default') permissionMode = 'yolo';
-      // 'daemon' (default) = local WebSocket CLI; 'external' = the agent runs in a
-      // connected MCP runtime that pulls jobs via claim_job. Both use the same connect
-      // token — the MCP path passes it as `Authorization: Bearer <token>`.
-      const runMode = req.body?.mode === 'external' ? 'external' : 'daemon';
       const updateRows = await getDb().unsafe(
         `update workspace_agents
          set handle = $2,
              connect_token_hash = $3,
-             run_mode = $6,
+             run_mode = 'daemon',
              model = $4,
              permission_mode = $5,
              updated_at = now(),
              version = coalesce(version, 0) + 1
          where id = $1
          returning *`,
-        [agentId, handle, hashAgentToken(token), model, permissionMode, runMode],
+        [agentId, handle, hashAgentToken(token), model, permissionMode],
       );
       notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
       // Daemons connect over WebSocket, which the Netlify deploy can't host. When
       // AGENSIS_DAEMON_BASE_URL is set (e.g. the Fly backend), emit it as the
       // connect --url so the daemon targets the WS-capable host, not the app origin.
-      const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
+      const baseUrl = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+        || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
+        || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
       const commands = agentConnectionCommand({
         baseUrl,
         token,
@@ -3643,138 +3467,6 @@ function createApp() {
         },
         error: null,
       });
-    } catch (error) {
-      jsonError(res, error.status || 500, error);
-    }
-  });
-
-  // --- External runtime ("club") management (L2/L3) -------------------------
-
-  // Mint or rotate the workspace join token, and return the ready-to-paste MCP config.
-  // Any client configured with this token can call register_runtime to join the club.
-  app.post('/backend/workspaces/:id/runtime-join-token', requireAuth, async (req, res) => {
-    try {
-      const workspaceId = String(req.params.id || '').trim();
-      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-      const token = createRuntimeJoinToken();
-      const rows = await getDb().unsafe(
-        `update workspaces set runtime_join_token_hash = $2, updated_at = now() where id = $1 returning id, runtime_auto_approve`,
-        [workspaceId, hashAgentToken(token)],
-      );
-      if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
-      const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
-      res.json({
-        data: {
-          token,
-          autoApprove: Boolean(rows[0].runtime_auto_approve),
-          endpoint: mcpEndpoint(baseUrl),
-          config: configBlock(baseUrl, token),
-          claudeMcpAdd: claudeMcpAddCommand(baseUrl, token),
-        },
-        error: null,
-      });
-    } catch (error) {
-      jsonError(res, error.status || 500, error);
-    }
-  });
-
-  // Toggle auto-approve: when on, a joining runtime is usable immediately.
-  app.patch('/backend/workspaces/:id/runtime-auto-approve', requireAuth, async (req, res) => {
-    try {
-      const workspaceId = String(req.params.id || '').trim();
-      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-      const autoApprove = req.body?.autoApprove === true || req.body?.auto_approve === true;
-      const rows = await getDb().unsafe(
-        `update workspaces set runtime_auto_approve = $2, updated_at = now() where id = $1 returning id, runtime_auto_approve`,
-        [workspaceId, autoApprove],
-      );
-      if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
-      res.json({ data: { autoApprove: Boolean(rows[0].runtime_auto_approve) }, error: null });
-    } catch (error) {
-      jsonError(res, error.status || 500, error);
-    }
-  });
-
-  // List the workspace's runtimes (the club roster) with live presence + mapped agents.
-  app.get('/backend/workspaces/:id/runtimes', requireAuth, async (req, res) => {
-    try {
-      const workspaceId = String(req.params.id || '').trim();
-      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-      const rows = await getDb().unsafe(
-        `select r.id, r.name, r.status, r.host, r.last_seen_at, r.approved_at, r.created_at,
-                (r.last_seen_at is not null and r.last_seen_at > now() - interval '${Math.round(EXTERNAL_PRESENCE_TTL_MS / 1000)} seconds') as online,
-                coalesce(
-                  (select json_agg(json_build_object('id', a.id, 'name', a.name, 'handle', a.handle))
-                     from workspace_agents a where a.runtime_id = r.id), '[]'::json) as agents
-           from agent_runtimes r
-          where r.workspace_id = $1 and r.status <> 'revoked'
-          order by r.created_at asc`,
-        [workspaceId],
-      );
-      res.json({ data: { runtimes: rows }, error: null });
-    } catch (error) {
-      jsonError(res, error.status || 500, error);
-    }
-  });
-
-  // Approve or revoke a runtime. Revoking also unmaps any agents pointing at it so they
-  // stop dispatching into a dead runtime.
-  app.post('/backend/runtimes/:id/:action', requireAuth, async (req, res) => {
-    try {
-      const runtimeId = String(req.params.id || '').trim();
-      const action = String(req.params.action || '').trim();
-      if (!['approve', 'revoke'].includes(action)) return jsonError(res, 400, new Error('Unknown action'));
-      const found = await getDb().unsafe('select id, workspace_id from agent_runtimes where id = $1 limit 1', [runtimeId]);
-      if (!found[0]) return jsonError(res, 404, new Error('Runtime not found'));
-      await enforceWorkspaceRole(req.userId, found[0].workspace_id, 'manage');
-      const status = action === 'approve' ? 'approved' : 'revoked';
-      const rows = await getDb().unsafe(
-        `update agent_runtimes set status = $2, approved_at = ${action === 'approve' ? 'now()' : 'approved_at'}, updated_at = now()
-         where id = $1 returning id, name, status, last_seen_at, approved_at`,
-        [runtimeId, status],
-      );
-      if (action === 'revoke') {
-        const unmapped = await getDb().unsafe(
-          'update workspace_agents set runtime_id = null, updated_at = now() where runtime_id = $1 returning *',
-          [runtimeId],
-        );
-        if (unmapped.length > 0) notifyDbSubscribers('workspace_agents', 'UPDATE', unmapped);
-      }
-      notifyDbSubscribers('agent_runtimes', 'UPDATE', rows);
-      res.json({ data: { runtime: rows[0] }, error: null });
-    } catch (error) {
-      jsonError(res, error.status || 500, error);
-    }
-  });
-
-  // Map an agent to a runtime (L3). Setting a runtime also flips the agent to external
-  // mode; clearing it (runtimeId null) leaves run_mode as-is for the caller to manage.
-  app.post('/backend/agents/:id/runtime', requireAuth, async (req, res) => {
-    try {
-      const agentId = String(req.params.id || '').trim();
-      const found = await getDb().unsafe('select id, workspace_id from workspace_agents where id = $1 limit 1', [agentId]);
-      if (!found[0]) return jsonError(res, 404, new Error('Agent not found'));
-      await enforceWorkspaceRole(req.userId, found[0].workspace_id, 'manage');
-      const runtimeIdRaw = req.body?.runtimeId ?? req.body?.runtime_id ?? null;
-      const runtimeId = runtimeIdRaw ? String(runtimeIdRaw).trim() : null;
-      if (runtimeId) {
-        const rt = await getDb().unsafe(
-          'select id from agent_runtimes where id = $1 and workspace_id = $2 and status <> $3 limit 1',
-          [runtimeId, found[0].workspace_id, 'revoked'],
-        );
-        if (!rt[0]) return jsonError(res, 400, new Error('Runtime not found in this workspace'));
-      }
-      const rows = await getDb().unsafe(
-        `update workspace_agents
-         set runtime_id = $2,
-             run_mode = case when $2 is not null then 'external' else run_mode end,
-             updated_at = now(),
-             version = coalesce(version, 0) + 1
-         where id = $1 returning *`,
-        [agentId, runtimeId],
-      );
-      notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
-      res.json({ data: { agent: rows[0] }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -3833,10 +3525,9 @@ function createApp() {
     continueConversation,
     notifyDbSubscribers,
     slugHandle,
-    claimExternalJob,
-    submitExternalJobResult,
-    externalAgentIdsForRuntime,
-    registerRuntime,
+    claimMcpJob,
+    submitMcpJobResult,
+    resolveWorkspaceAgentByHandle,
     rateLimiter: mcpRateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,
@@ -4401,7 +4092,7 @@ function startBackendServer(port = DEFAULT_PORT) {
     console.log(`[backend] listening on http://${host}:${port}`);
   });
   void reconcileAgentConnectionsAtStartup();
-  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckExternalJobs(); void pruneOfflineConnections(); }, 30_000);
+  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void pruneOfflineConnections(); }, 30_000);
   if (jobReaper.unref) jobReaper.unref();
   server.on('close', () => {
     wss.close();
@@ -4446,20 +4137,16 @@ module.exports = {
     setTestDb,
     verifyToken,
     workspaceIdFromRealtimeChannel,
-    // External-runtime engine (L1/L2/L3) — exercised directly against a fake DB.
-    normalizeRunMode,
-    runAgentTurn,
-    claimExternalJob,
-    submitExternalJobResult,
-    externalAgentIdsForRuntime,
-    registerRuntime,
-    hasExternalRuntime,
-    touchExternalPresence,
-    reapStuckExternalJobs,
-    verifyRuntimeToken,
-    verifyRuntimeJoinToken,
+    // MCP-over-invite (one link, human or agent) — exercised against a fake DB.
+    verifyInviteToken,
     verifyMcpToken,
+    runAgentTurn,
+    claimMcpJob,
+    submitMcpJobResult,
+    reapStuckMcpJobs,
     finalizeAgentJobResult,
-    hashAgentToken,
+    resolveWorkspaceAgentByHandle,
+    touchMcpPresence,
+    hasMcpPresence,
   },
 };
