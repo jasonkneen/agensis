@@ -20,6 +20,7 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { inviteUrl } from './hooks/useWorkspaceUsers';
 import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
@@ -1347,6 +1348,7 @@ function AppContent() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
     <Toaster />
     </TooltipProvider>
   );

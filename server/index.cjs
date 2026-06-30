@@ -37,6 +37,7 @@ const ALLOWED_TABLES = new Set([
   'agent_webhooks',
   'agent_connections',
   'agent_jobs',
+  'agent_registrations',
   'activity_events',
 ]);
 
@@ -68,6 +69,13 @@ let envLoaded = false;
 let db;
 let websocketClients = new Set();
 const connectedAgents = new Map();
+
+// Heartbeat cadence for agent sockets. An ungraceful drop (laptop sleep, network
+// loss) leaves ws.readyState === 1 until a ping goes unanswered, so detection
+// latency is ~1-2x this interval. 15s → a dead socket is terminated within ~30s,
+// which fires 'close' → markAgentConnectionOffline → failConnectionJobs, turning
+// what used to be a 240s silent "Thinking…" hang into a fast, explicit failure.
+const LIVENESS_PING_INTERVAL_MS = 15_000;
 
 function applyEnvFile(envPath) {
   if (!fs.existsSync(envPath)) return false;
@@ -241,7 +249,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'agent_connections', 'agent_jobs', 'activity_events', 'workspace_members',
+  'agent_connections', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -1271,6 +1279,20 @@ function findConnectedAgent(workspaceId, agentId, handle) {
     if (wantedHandle && slugHandle(entry.handle) === wantedHandle) return entry;
   }
   return null;
+}
+
+// Badge-only liveness check. A connection is "really" reachable only if its socket
+// is OPEN *and* answered the last heartbeat ping (isAlive). This is deliberately
+// MORE pessimistic than findConnectedAgent (which gates dispatch on readyState
+// alone): a healthy socket sits isAlive===false for the few ms between ping-sent
+// and pong, so gating dispatch on it would manufacture false "no daemon" replies.
+// For the badge that momentary flicker is harmless and self-corrects on next read,
+// while catching a half-open socket a full interval before 'close' fires.
+// Single-process only — consistent with reconcileAgentConnectionsAtStartup, which
+// already assumes one backend owns the connectedAgents map.
+function isConnectionSocketLive(connectionId) {
+  const entry = connectedAgents.get(connectionId);
+  return Boolean(entry && entry.ws?.readyState === 1 && entry.ws.isAlive !== false);
 }
 
 function agentRuntimePayload(agent) {
@@ -3278,10 +3300,11 @@ function attachRealtime(server) {
     });
   });
 
-  // Ping connected sockets every 30s; terminate any that didn't answer the previous
-  // ping. terminate() fires 'close', which marks the agent connection offline — this
-  // catches daemons that vanish without a clean disconnect (sleep, network loss,
-  // kill -9) and would otherwise show as "online" forever.
+  // Ping connected sockets on every LIVENESS_PING_INTERVAL_MS; terminate any that
+  // didn't answer the previous ping. terminate() fires 'close', which marks the
+  // agent connection offline — this catches daemons that vanish without a clean
+  // disconnect (sleep, network loss, kill -9) and would otherwise show as "online"
+  // forever. The interval also drives isConnectionSocketLive's isAlive flag.
   const livenessInterval = setInterval(() => {
     for (const client of wss.clients) {
       if (client.isAlive === false) {
@@ -3291,7 +3314,7 @@ function attachRealtime(server) {
       client.isAlive = false;
       try { client.ping(); } catch { /* socket already closing */ }
     }
-  }, 30000);
+  }, LIVENESS_PING_INTERVAL_MS);
   livenessInterval.unref?.();
   wss.on('close', () => clearInterval(livenessInterval));
 
@@ -3526,7 +3549,19 @@ function createApp() {
          order by status = 'online' desc, status = 'busy' desc, last_seen_at desc`,
         [workspaceId],
       );
-      res.json({ data: rows.map(publicAgentConnection), error: null });
+      // The DB status lags reality: an ungraceful drop stays 'online'/'busy' until
+      // the heartbeat terminates the socket. Reconcile each row against the live
+      // socket so the badge never claims an agent is reachable when dispatch would
+      // find no live connection. Pessimistic: only socket-OPEN + pong-answered rows
+      // keep their online/busy status; everything else reads offline.
+      const reconciled = rows.map((row) => {
+        const connection = publicAgentConnection(row);
+        if ((connection.status === 'online' || connection.status === 'busy') && !isConnectionSocketLive(connection.id)) {
+          return { ...connection, status: 'offline' };
+        }
+        return connection;
+      });
+      res.json({ data: reconciled, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }

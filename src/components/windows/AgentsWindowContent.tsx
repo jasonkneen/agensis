@@ -71,6 +71,7 @@ import { cn } from '@/lib/utils';
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
+import { ConnectMcpDialog } from '../agents/ConnectMcpDialog';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -126,6 +127,7 @@ export function AgentsWindowContent({
   onUpdateWebhook,
 }: AgentsWindowContentProps) {
   const [showCreate, setShowCreate] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
   const [newOpenPetAvatarId, setNewOpenPetAvatarId] = useState('');
@@ -213,6 +215,15 @@ export function AgentsWindowContent({
         <Button
           type="button"
           size="sm"
+          variant="outline"
+          onClick={() => setConnectOpen(true)}
+        >
+          <Plug data-icon="inline-start" />
+          Connect a client
+        </Button>
+        <Button
+          type="button"
+          size="sm"
           variant={showCreate ? 'outline' : 'default'}
           onClick={() => setShowCreate(!showCreate)}
         >
@@ -220,6 +231,7 @@ export function AgentsWindowContent({
           Create Agent
         </Button>
       </div>
+      <ConnectMcpDialog workspaceId={agents[0]?.workspace_id ?? null} open={connectOpen} onOpenChange={setConnectOpen} />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-2">
         <div className="agents-master-detail h-full min-h-0">
