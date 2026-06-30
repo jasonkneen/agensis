@@ -264,16 +264,19 @@
 :root[data-ui-theme="neo"] h2,
 :root[data-ui-theme="neo"] h3 {
   font-family: var(--neo-display, var(--neo-font, 'Space Grotesk', system-ui, -apple-system, sans-serif));
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-weight: var(--neo-display-weight, 700);
+  letter-spacing: var(--neo-display-spacing, -0.01em);
+  text-transform: var(--neo-display-transform, none);
 }
 
-/* Brutal paper texture — a subtle dot grid behind the neo workspace. Colour is
-   per-theme (--neo-dot); sits under every opaque surface, showing only in
-   gutters and the canvas, so it never competes with text. */
+/* Brutal paper texture behind the neo workspace. The pattern (--neo-texture)
+   and density (--neo-texture-size) come from the active theme's style profile —
+   dots / grid / hatch / none — and the colour (--neo-dot) is per-theme. It sits
+   under every opaque surface, showing only in gutters and the canvas, so it
+   never competes with text. */
 :root[data-ui-theme="neo"] body {
-  background-image: radial-gradient(var(--neo-dot, color-mix(in srgb, var(--neo-ink) 13%, transparent)) 1.1px, transparent 1.1px);
-  background-size: var(--neo-dot-size, 22px) var(--neo-dot-size, 22px);
+  background-image: var(--neo-texture, radial-gradient(var(--neo-dot, color-mix(in srgb, var(--neo-ink) 13%, transparent)) 1.1px, transparent 1.1px));
+  background-size: var(--neo-texture-size, var(--neo-dot-size, 22px) var(--neo-dot-size, 22px));
   background-position: -11px -11px;
 }
 
