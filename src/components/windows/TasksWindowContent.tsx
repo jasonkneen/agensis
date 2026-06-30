@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -12,14 +13,24 @@ import {
   Send,
   Trash2,
   User,
+  UserPlus,
+  X,
 } from 'lucide-react';
-import type { Task, TaskComment, TaskPriority, TaskStatus } from '../../types';
+import type { Task, TaskComment, TaskPriority, TaskStatus, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useTaskComments } from '../../hooks/useTaskComments';
+import { agentHandle } from '../../lib/agentAccent';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import {
   Empty,
   EmptyDescription,
@@ -57,6 +68,7 @@ import { cn } from '@/lib/utils';
 interface TasksWindowContentProps {
   tasks: Task[];
   members: WorkspaceMember[];
+  agents: WorkspaceAgent[];
   currentUserEmail: string;
   workspaceId: string;
   currentUserId?: string;
@@ -64,6 +76,7 @@ interface TasksWindowContentProps {
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
   onToggleStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   /** A task to scroll to and expand once it's in view (e.g. opened from search). */
   focusTaskId?: string;
   /** Called once the focus has been applied, so the caller can clear it. */
@@ -100,6 +113,7 @@ type AssignmentFilter = 'all' | 'mine' | 'others';
 export function TasksWindowContent({
   tasks,
   members,
+  agents,
   currentUserEmail,
   workspaceId,
   currentUserId,
@@ -107,6 +121,7 @@ export function TasksWindowContent({
   onUpdateTask,
   onToggleStatus,
   onDeleteTask,
+  onUpdateAgent,
   focusTaskId,
   onFocusTaskConsumed,
 }: TasksWindowContentProps) {
@@ -160,7 +175,12 @@ export function TasksWindowContent({
   const memberLabel = (assigneeId: string | null) => {
     if (!assigneeId) return null;
     const member = members.find(item => item.user_id === assigneeId);
-    return member?.email?.split('@')[0] || 'Someone';
+    if (member) return member.email?.split('@')[0] || 'Someone';
+    // assignee_id has no FK to a single table — it may point at an agent
+    // instead of a workspace member (e.g. assigned via @mention).
+    const agent = agents.find(item => item.id === assigneeId);
+    if (agent) return agent.name || agentHandle(agent);
+    return 'Someone';
   };
 
   const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
@@ -283,6 +303,8 @@ export function TasksWindowContent({
                         subtasks={childrenMap[task.id] || []}
                         assigneeLabel={memberLabel(task.assignee_id)}
                         members={members}
+                        agents={agents}
+                        onUpdateAgent={onUpdateAgent}
                         workspaceId={workspaceId}
                         currentUserId={currentUserId}
                         currentUserEmail={currentUserEmail}
@@ -312,6 +334,8 @@ function TaskRow({
   subtasks,
   assigneeLabel,
   members,
+  agents,
+  onUpdateAgent,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -328,6 +352,8 @@ function TaskRow({
   subtasks: Task[];
   assigneeLabel: string | null;
   members: WorkspaceMember[];
+  agents: WorkspaceAgent[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -436,6 +462,9 @@ function TaskRow({
           task={task}
           subtasks={subtasks}
           members={members}
+          agents={agents}
+          onUpdateAgent={onUpdateAgent}
+          onChangeAssignee={onChangeAssignee}
           workspaceId={workspaceId}
           currentUserId={currentUserId}
           currentUserEmail={currentUserEmail}
@@ -452,6 +481,9 @@ function TaskDetail({
   task,
   subtasks,
   members,
+  agents,
+  onUpdateAgent,
+  onChangeAssignee,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -462,6 +494,9 @@ function TaskDetail({
   task: Task;
   subtasks: Task[];
   members: WorkspaceMember[];
+  agents: WorkspaceAgent[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onChangeAssignee: (assigneeId: string | null) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -471,6 +506,11 @@ function TaskDetail({
 }) {
   const [subInput, setSubInput] = useState('');
   const [commentInput, setCommentInput] = useState('');
+  const [showMentionPicker, setShowMentionPicker] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionStart, setMentionStart] = useState(-1);
+  const [pendingMentionAgent, setPendingMentionAgent] = useState<WorkspaceAgent | null>(null);
+  const commentInputRef = useRef<HTMLInputElement>(null);
   const { comments, createComment, deleteComment } = useTaskComments(task.id, workspaceId, currentUserId);
 
   const addSub = () => {
@@ -479,10 +519,90 @@ function TaskDetail({
     setSubInput('');
   };
 
+  // @mentioning an agent or teammate in a comment assigns the task to them —
+  // mirrors the chat composer's @-mention convention. Agents not yet enabled
+  // for this workspace still show up so they can be added on the fly.
+  const filteredMentionAgents = useMemo(() => {
+    const q = mentionQuery.toLowerCase();
+    return agents.filter(agent => agent.name.toLowerCase().includes(q) || agentHandle(agent).includes(q));
+  }, [agents, mentionQuery]);
+
+  const filteredMentionMembers = useMemo(() => {
+    const q = mentionQuery.toLowerCase();
+    return members.filter(member => (member.email || '').toLowerCase().includes(q));
+  }, [members, mentionQuery]);
+
+  const closeMentionPicker = () => {
+    setShowMentionPicker(false);
+    setMentionQuery('');
+    setMentionStart(-1);
+  };
+
+  const handleCommentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setCommentInput(value);
+
+    if (showMentionPicker && mentionStart >= 0) {
+      const afterAt = value.slice(mentionStart + 1);
+      if (afterAt.indexOf(' ') === -1) {
+        setMentionQuery(afterAt);
+      } else {
+        closeMentionPicker();
+      }
+    }
+
+    const cursor = e.target.selectionStart || 0;
+    if (value[cursor - 1] === '@' && !showMentionPicker) {
+      setShowMentionPicker(true);
+      setMentionQuery('');
+      setMentionStart(cursor - 1);
+    }
+  };
+
+  const insertMentionHandle = (handle: string) => {
+    const selectionEnd = commentInputRef.current?.selectionStart || commentInput.length;
+    const before = commentInput.slice(0, Math.max(0, mentionStart));
+    const after = commentInput.slice(selectionEnd);
+    const suffix = after.startsWith(' ') || after.length === 0 ? after : ` ${after}`;
+    setCommentInput(`${before}@${handle} ${suffix}`.replace(/\s+$/, ' '));
+    closeMentionPicker();
+    commentInputRef.current?.focus();
+  };
+
+  const selectMentionAgent = (agent: WorkspaceAgent) => insertMentionHandle(agentHandle(agent));
+  const selectMentionMember = (member: WorkspaceMember) => insertMentionHandle((member.email?.split('@')[0] || 'member').toLowerCase());
+
   const addComment = () => {
-    if (!commentInput.trim()) return;
-    createComment({ content: commentInput.trim() });
+    const content = commentInput.trim();
+    if (!content) return;
+    createComment({ content });
     setCommentInput('');
+    closeMentionPicker();
+
+    const tokens = Array.from(content.matchAll(/@([a-z0-9_.-]+)/gi)).map(m => m[1].toLowerCase());
+    for (const token of tokens) {
+      const member = members.find(item => (item.email?.split('@')[0] || '').toLowerCase() === token);
+      if (member) {
+        onChangeAssignee(member.user_id);
+        return;
+      }
+      const agent = agents.find(item => agentHandle(item) === token);
+      if (agent) {
+        if (agent.enabled === false) {
+          setPendingMentionAgent(agent);
+        } else {
+          onChangeAssignee(agent.id);
+        }
+        return;
+      }
+    }
+  };
+
+  const addMentionedAgent = () => {
+    if (!pendingMentionAgent) return;
+    onUpdateAgent(pendingMentionAgent.id, { enabled: true });
+    onChangeAssignee(pendingMentionAgent.id);
+    setPendingMentionAgent(null);
   };
 
   return (
@@ -559,21 +679,110 @@ function TaskDetail({
             ))}
           </ItemGroup>
         )}
-        <InputGroup className="task-input-group">
-          <InputGroupInput
-            value={commentInput}
-            onChange={e => setCommentInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') addComment();
-            }}
-            placeholder="Write a comment..."
-          />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton size="icon-xs" onClick={addComment} disabled={!commentInput.trim()} aria-label="Send comment">
-              <Send />
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
+        {pendingMentionAgent && (
+          <div className="task-mention-invite flex items-center gap-2 rounded-md border border-dashed border-border px-2 py-1.5 text-xs">
+            <UserPlus className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">
+              <strong className="text-foreground">{pendingMentionAgent.name}</strong> isn&apos;t active in this workspace yet.
+            </span>
+            <Button type="button" size="sm" onClick={addMentionedAgent}>
+              Add &amp; assign
+            </Button>
+            <Button type="button" variant="ghost" size="icon-xs" onClick={() => setPendingMentionAgent(null)} aria-label="Dismiss">
+              <X />
+            </Button>
+          </div>
+        )}
+        <div className="relative">
+          {showMentionPicker && (filteredMentionAgents.length > 0 || filteredMentionMembers.length > 0) && (
+            <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+              <CommandList className="max-h-[min(220px,38vh)]">
+                <CommandEmpty>No agents or teammates found.</CommandEmpty>
+                {filteredMentionAgents.length > 0 && (
+                  <CommandGroup heading="Agents">
+                    {filteredMentionAgents.map(agent => {
+                      const inactive = agent.enabled === false;
+                      return (
+                        <CommandItem
+                          key={agent.id}
+                          value={`${agent.name} ${agentHandle(agent)}`}
+                          className="rounded-lg px-2 py-1.5"
+                          onSelect={() => selectMentionAgent(agent)}
+                        >
+                          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                            <Bot className="size-4" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">{agent.name}</span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {inactive ? 'Not in this channel — adds them on send' : (agent.description || agent.model || 'Agent')}
+                            </span>
+                          </span>
+                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                )}
+                {filteredMentionMembers.length > 0 && (
+                  <CommandGroup heading="Teammates">
+                    {filteredMentionMembers.map(member => (
+                      <CommandItem
+                        key={member.user_id}
+                        value={member.email || member.user_id}
+                        className="rounded-lg px-2 py-1.5"
+                        onSelect={() => selectMentionMember(member)}
+                      >
+                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                          <User className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{member.email?.split('@')[0] || 'Member'}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{member.email}</span>
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+          )}
+          <InputGroup className="task-input-group">
+            <InputGroupInput
+              ref={commentInputRef}
+              value={commentInput}
+              onChange={handleCommentChange}
+              onKeyDown={e => {
+                if (showMentionPicker) {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeMentionPicker();
+                    return;
+                  }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                    if (filteredMentionAgents.length > 0) {
+                      e.preventDefault();
+                      selectMentionAgent(filteredMentionAgents[0]);
+                      return;
+                    }
+                    if (filteredMentionMembers.length > 0) {
+                      e.preventDefault();
+                      selectMentionMember(filteredMentionMembers[0]);
+                      return;
+                    }
+                  }
+                }
+                if (e.key === 'Enter' && !e.shiftKey) addComment();
+              }}
+              placeholder="Write a comment... @mention to assign"
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton size="icon-xs" onClick={addComment} disabled={!commentInput.trim()} aria-label="Send comment">
+                <Send />
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </div>
       </section>
     </div>
   );

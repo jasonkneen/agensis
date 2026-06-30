@@ -207,7 +207,9 @@ export interface TaskComment {
 
 export interface DocumentComment {
   id: string;
-  document_id: string;
+  // Optional so MemoryFileComment (anchored to a workspace file, not a
+  // document) can also flow through DocumentComments without a shim type.
+  document_id?: string;
   workspace_id: string;
   user_id: string | null;
   parent_id: string | null;

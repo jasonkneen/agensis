@@ -130,7 +130,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
-import { agentAccentColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
+import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { cn } from '@/lib/utils';
 
 interface ChatWindowContentProps {
@@ -3278,14 +3278,6 @@ function safeMessageText(value: unknown): string {
   return String(value);
 }
 
-function agentHandle(agent: WorkspaceAgent): string {
-  return String(agent.handle || agent.name || 'agent')
-    .toLowerCase()
-    .replace(/^@+/, '')
-    .replace(/[^a-z0-9_.-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64) || 'agent';
-}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
