@@ -1154,10 +1154,7 @@ function AppContent() {
               className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
               style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET }}
             >
-              <NotificationsBell
-                workspaceId={activeWorkspaceId || null}
-                agentConnections={agentConnections}
-              />
+              <NotificationsBell workspaceId={activeWorkspaceId || null} />
               <WorkspacePresenceAvatars
                 users={workspacePresenceUsers}
                 getMode={getPresenceMode}

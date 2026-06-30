@@ -233,7 +233,9 @@ export type ActivityEventType =
   | 'memory_added'
   | 'member_joined'
   | 'canvas_updated'
-  | 'message_sent';
+  | 'message_sent'
+  | 'agent_connected'
+  | 'agent_disconnected';
 
 export interface ActivityEvent {
   id: string;

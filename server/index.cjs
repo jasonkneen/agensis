@@ -2145,6 +2145,7 @@ async function markAgentConnectionOffline(ws) {
       [connectionId],
     );
     notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+    if (rows.length > 0) void logConnectionActivity(rows[0], 'agent_disconnected');
   } catch {
     // best effort during socket close
   }
@@ -2227,6 +2228,7 @@ async function registerAgentConnection(ws, message) {
   ws.workspaceId = workspaceId;
   connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, agent: auth.agent });
   notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
+  void logConnectionActivity(connection, 'agent_connected');
   sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
 }
 
@@ -3150,6 +3152,41 @@ async function logMessageActivity(rows) {
     } catch (error) {
       console.error('logMessageActivity failed', error);
     }
+  }
+}
+
+// Logs an `activity_events` row when an agent daemon connects or disconnects, so
+// the notifications bell can show a timestamped connection history (one row per
+// event) instead of a single collapsing per-agent entry. Fire-and-forget — never
+// blocks the connect/disconnect path. Only real connects and real socket-close
+// disconnects are logged; the process-start mass-offline sweep is intentionally
+// excluded so a daemon restart doesn't spam a disconnect storm into the bell.
+async function logConnectionActivity(connection, eventType) {
+  try {
+    if (!connection || typeof connection !== 'object') return;
+    const workspaceId = connection.workspace_id;
+    if (!workspaceId) return;
+    const handle = connection.handle || '';
+    const name = connection.name || handle || 'Agent';
+    const verb = eventType === 'agent_connected' ? 'connected' : 'disconnected';
+    const title = `@${handle || name} ${verb}`.slice(0, 120);
+    const metadata = {
+      handle,
+      name,
+      agent_id: connection.agent_id || '',
+      status: connection.status || (eventType === 'agent_connected' ? 'online' : 'offline'),
+    };
+    const inserted = await getDb().unsafe(
+      `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+       values ($1, null, $2, 'agent', $3, $4, $5::jsonb, now())
+       returning *`,
+      [workspaceId, eventType, connection.agent_id != null ? String(connection.agent_id) : null, title, JSON.stringify(metadata)],
+    );
+    if (inserted.length > 0) {
+      notifyDbSubscribers('activity_events', 'INSERT', inserted);
+    }
+  } catch (error) {
+    console.error('logConnectionActivity failed', error);
   }
 }
 

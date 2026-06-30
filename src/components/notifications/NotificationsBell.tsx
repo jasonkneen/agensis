@@ -6,14 +6,16 @@ import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } 
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
-import type { AgentConnection } from '../../types';
+import { useActivity } from '../../hooks/useActivity';
 
-// A notification item is either a pending agent-registration request (needs the owner's
-// decision) or an agent connection state (online/offline). Approvals are surfaced read-only
-// here — the forced-choice RegistrationApprovalPopup is what actually collects the decision.
+// A notification item is either a pending agent-registration request (needs the
+// owner's decision) or a single timestamped agent connect/disconnect event.
+// Approvals are surfaced read-only here — the forced-choice RegistrationApprovalPopup
+// is what actually collects the decision. Connection events are a true history
+// (one row per connect/disconnect), sourced from the activity feed.
 type NotificationItem =
   | { kind: 'approval'; id: string; handle: string; label: string; isNew: boolean; at: string }
-  | { kind: 'connection'; id: string; handle: string; name: string; status: AgentConnection['status']; at: string };
+  | { kind: 'connection'; id: string; handle: string; connected: boolean; at: string };
 
 function relative(at: string): string {
   const ms = new Date(at).getTime();
@@ -25,14 +27,13 @@ function relative(at: string): string {
   }
 }
 
-function StatusDot({ tone }: { tone: 'online' | 'offline' | 'busy' | 'pending' }) {
+function StatusDot({ tone }: { tone: 'online' | 'offline' | 'pending' }) {
   return (
     <span
       aria-hidden
       className={cn(
         'mt-1.5 size-2 shrink-0 rounded-full',
         tone === 'online' && 'bg-emerald-500',
-        tone === 'busy' && 'bg-amber-500',
         tone === 'offline' && 'bg-muted-foreground/40',
         tone === 'pending' && 'bg-amber-500',
       )}
@@ -40,14 +41,9 @@ function StatusDot({ tone }: { tone: 'online' | 'offline' | 'busy' | 'pending' }
   );
 }
 
-export function NotificationsBell({
-  workspaceId,
-  agentConnections,
-}: {
-  workspaceId: string | null;
-  agentConnections: AgentConnection[];
-}) {
+export function NotificationsBell({ workspaceId }: { workspaceId: string | null }) {
   const { pending } = useAgentRegistrations(workspaceId);
+  const { events } = useActivity(workspaceId);
 
   const items = useMemo<NotificationItem[]>(() => {
     const approvals: NotificationItem[] = pending.map((req) => ({
@@ -59,25 +55,32 @@ export function NotificationsBell({
       at: req.created_at,
     }));
 
-    const connections: NotificationItem[] = [...agentConnections]
-      .sort((a, b) => {
-        // Online first, then most-recently-seen.
-        if ((a.status === 'online') !== (b.status === 'online')) return a.status === 'online' ? -1 : 1;
-        return new Date(b.last_seen_at).getTime() - new Date(a.last_seen_at).getTime();
-      })
-      .map((conn) => ({
-        kind: 'connection',
-        id: `connection:${conn.id}`,
-        handle: conn.handle,
-        name: conn.name,
-        status: conn.status,
-        at: conn.status === 'online' ? conn.connected_at : conn.last_seen_at,
-      }));
+    // Connect/disconnect history — events arrive newest-first from useActivity.
+    // Capped so a chatty workspace doesn't make the list unbounded.
+    const connections: NotificationItem[] = events
+      .filter((e) => e.event_type === 'agent_connected' || e.event_type === 'agent_disconnected')
+      .slice(0, 30)
+      .map((e) => {
+        const meta = (e.metadata ?? {}) as { handle?: unknown; name?: unknown };
+        const handle =
+          (typeof meta.handle === 'string' && meta.handle) ||
+          (typeof meta.name === 'string' && meta.name) ||
+          e.title.replace(/^@/, '').replace(/\s+(connected|disconnected)$/i, '') ||
+          'agent';
+        return {
+          kind: 'connection',
+          id: `connection:${e.id}`,
+          handle,
+          connected: e.event_type === 'agent_connected',
+          at: e.created_at,
+        };
+      });
 
     return [...approvals, ...connections];
-  }, [pending, agentConnections]);
+  }, [pending, events]);
 
   // The badge counts only things that need attention — pending approvals.
+  // Connection events are informational, so they never light the badge.
   const badgeCount = pending.length;
 
   return (
@@ -113,7 +116,7 @@ export function NotificationsBell({
           ) : (
             items.map((item) => (
               <div key={item.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
-                <StatusDot tone={item.kind === 'approval' ? 'pending' : item.status} />
+                <StatusDot tone={item.kind === 'approval' ? 'pending' : item.connected ? 'online' : 'offline'} />
                 <div className="min-w-0 flex-1">
                   {item.kind === 'approval' ? (
                     <p className="leading-snug">
@@ -127,9 +130,7 @@ export function NotificationsBell({
                   ) : (
                     <p className="leading-snug">
                       <span className="font-medium">@{item.handle}</span>{' '}
-                      <span className="text-muted-foreground">
-                        {item.status === 'online' ? 'connected' : item.status === 'busy' ? 'is busy' : 'disconnected'}
-                      </span>
+                      <span className="text-muted-foreground">{item.connected ? 'connected' : 'disconnected'}</span>
                     </p>
                   )}
                   {item.at && <p className="mt-0.5 text-[11px] text-muted-foreground">{relative(item.at)}</p>}
