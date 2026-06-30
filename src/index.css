@@ -1714,17 +1714,8 @@
   flex-shrink: 0;
 }
 
-.agents-list-card {
-  border-left-color: color-mix(in srgb, var(--agent-accent, var(--primary)) 70%, var(--border)) !important;
-  border-left-width: 3px !important;
-}
-
 .agents-list-card[data-agent-selected="true"] {
   background: color-mix(in srgb, var(--agent-accent, var(--primary)) 10%, var(--card)) !important;
-}
-
-.agent-detail-summary {
-  border-color: color-mix(in srgb, var(--agent-accent, var(--primary)) 52%, var(--border)) !important;
 }
 
 .agent-detail-avatar,
@@ -1734,18 +1725,9 @@
   box-shadow: none !important;
 }
 
-.agent-detail-section,
-.agent-profile-card,
-.agent-profile-stat {
-  border-left-color: color-mix(in srgb, var(--agent-accent, var(--primary)) 64%, var(--border)) !important;
-  border-left-width: 3px !important;
-}
-
 .agent-detail-summary,
 .agent-profile-card:first-of-type {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--agent-accent, var(--primary)) 12%, transparent), transparent 44%),
-    color-mix(in srgb, var(--muted) 25%, transparent) !important;
+  background: color-mix(in srgb, var(--muted) 25%, transparent) !important;
 }
 
 :root[data-ui-theme="neo"] .agents-list-card,
@@ -3362,8 +3344,10 @@ select {
   --neo-mono: 'IBM Plex Mono', 'Space Mono', ui-monospace, monospace;
 }
 
-/* ---- stamped badges: mono uppercase micro-labels with a hard shadow -------- */
-:root[data-ui-theme="neo"] [data-slot="badge"] {
+/* ---- stamped badges: mono uppercase micro-labels with a hard shadow --------
+   Skip "ghost"/"link" — both are deliberately invisible-until-hover/plain-text
+   variants (see badge.tsx); forcing a border+shadow on them defeats the point. */
+:root[data-ui-theme="neo"] [data-slot="badge"]:not([data-variant="ghost"]):not([data-variant="link"]) {
   font-family: var(--neo-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -3429,14 +3413,16 @@ select {
   background: color-mix(in srgb, var(--primary) 9%, transparent);
 }
 
-/* ---- tabs: filled, stamped active trigger --------------------------------- */
-:root[data-ui-theme="neo"] [data-slot="tabs-list"] {
+/* ---- tabs: filled, stamped active trigger ---------------------------------
+   Skip variant="line" — that variant is deliberately a borderless underline
+   strip (see tabs.tsx), so the brutal pill/box treatment would defeat it. */
+:root[data-ui-theme="neo"] [data-slot="tabs-list"]:not([data-variant="line"]) {
   border: 2px solid var(--neo-ink);
   border-radius: var(--radius-md);
   background: var(--canvas-elevated);
   box-shadow: var(--neo-shadow-xs);
 }
-:root[data-ui-theme="neo"] [data-slot="tabs-trigger"][data-state="active"] {
+:root[data-ui-theme="neo"] [data-slot="tabs-list"]:not([data-variant="line"]) [data-slot="tabs-trigger"][data-state="active"] {
   background: var(--primary) !important;
   color: var(--primary-foreground) !important;
   border: 2px solid var(--neo-ink);

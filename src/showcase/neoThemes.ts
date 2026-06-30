@@ -305,10 +305,14 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   const overlay = card;
   const textSecondary = mix(ink, 78, `${paper} 22%`);
   const textMuted = mix(ink, 52, `${paper} 48%`);
-  // Light: the hard shadow is solid ink — the classic neo offset. Dark: a
-  // translucent black, so the offset reads as real depth (a darkened gap) under
-  // the bright border, instead of the muddy light "halo" a mixed ink produced.
-  const shadow = dark ? 'rgba(0,0,0,0.6)' : (seed.shadow ?? ink);
+  // Light: the hard shadow is solid ink — the classic neo offset. Dark: prefer
+  // a theme's own hand-tuned shadow ink when set; otherwise derive a quieter
+  // ink-tinted neutral (much less ink than the light-mode 100%) so the offset
+  // stays visible against near-black pages without washing out as a bright
+  // "halo". A flat translucent black was tried here and reverted — composited
+  // over the near-black canvas most dark themes use, it reads as ~1.1:1
+  // contrast (invisible) instead of a hard shadow.
+  const shadow = seed.shadow ?? (dark ? mix(ink, 22, `${paper} 78%`) : ink);
   const dot = seed.dot ?? mix(ink, dark ? 15 : 13, 'transparent');
   const success = seed.success ?? (dark ? '#00e08a' : '#00c875');
   const warning = seed.warning ?? (dark ? '#ffd166' : '#f5d95f');
