@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import type { WorkspaceAgent } from '../types';
+import type { WorkspaceAgent, AgentRunMode } from '../types';
 
 export interface CreateAgentInput {
   name: string;
@@ -17,7 +17,7 @@ export interface CreateAgentInput {
   skills?: string[];
   handle?: string;
   model?: string;
-  run_mode?: 'builtin' | 'daemon';
+  run_mode?: AgentRunMode;
 }
 
 function agentHandle(value: string) {

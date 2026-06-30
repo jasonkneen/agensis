@@ -71,6 +71,10 @@ import { cn } from '@/lib/utils';
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
+import { RuntimesPanel } from './RuntimesPanel';
+import { useRuntimes } from '../../hooks/useRuntimes';
+import { runtimeOptionsForAgent, describeRunMode, mapAgentRuntime } from '../../lib/runtimes';
+import type { AgentRunMode } from '../../types';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -90,7 +94,7 @@ interface AgentsWindowContentProps {
     skills?: string[];
     handle?: string;
     model?: string;
-    run_mode?: 'builtin' | 'daemon';
+    run_mode?: AgentRunMode;
   }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
@@ -138,7 +142,8 @@ export function AgentsWindowContent({
   const [newTools, setNewTools] = useState('');
   const [newSkills, setNewSkills] = useState('');
   const [newModel, setNewModel] = useState('auto');
-  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon'>('builtin');
+  const [newRunMode, setNewRunMode] = useState<AgentRunMode>('builtin');
+  const [showRuntimes, setShowRuntimes] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -146,6 +151,7 @@ export function AgentsWindowContent({
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || focusedAgent || agents[0] || null;
+  const workspaceId = agents[0]?.workspace_id ?? null;
 
   useEffect(() => {
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
@@ -213,14 +219,28 @@ export function AgentsWindowContent({
         <Button
           type="button"
           size="sm"
+          variant={showRuntimes ? 'default' : 'outline'}
+          onClick={() => { setShowRuntimes(v => !v); setShowCreate(false); }}
+        >
+          <Plug data-icon="inline-start" />
+          Runtimes
+        </Button>
+        <Button
+          type="button"
+          size="sm"
           variant={showCreate ? 'outline' : 'default'}
-          onClick={() => setShowCreate(!showCreate)}
+          onClick={() => { setShowCreate(!showCreate); setShowRuntimes(false); }}
         >
           <Plus data-icon="inline-start" />
           Create Agent
         </Button>
       </div>
 
+      {showRuntimes ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <RuntimesPanel workspaceId={workspaceId} />
+        </div>
+      ) : (
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-2">
         <div className="agents-master-detail h-full min-h-0">
           <div className="agents-list-pane min-h-0 overflow-y-auto pr-2 pb-2">
@@ -390,6 +410,48 @@ export function AgentsWindowContent({
           </aside>
         </div>
       </div>
+      )}
+    </div>
+  );
+}
+
+// L3 mapping: pick which connected runtime backs this external agent. One runtime can
+// back many agents; only approved runtimes are offered. Persists via the dedicated
+// /backend/agents/:id/runtime endpoint (which also keeps run_mode = 'external').
+export function AgentRuntimeField({ agent }: { agent: WorkspaceAgent }) {
+  const { runtimes } = useRuntimes(agent.workspace_id);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const options = runtimeOptionsForAgent(runtimes);
+  const onChange = async (value: string) => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await mapAgentRuntime(agent.id, value || null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to map runtime');
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Backed by runtime</span>
+      <NativeSelect
+        value={agent.runtime_id ?? ''}
+        disabled={saving}
+        onChange={(e) => void onChange(e.target.value)}
+        aria-label="Backing runtime"
+      >
+        <NativeSelectOption value="">Unassigned</NativeSelectOption>
+        {options.map((o) => (
+          <NativeSelectOption key={o.value} value={o.value}>{o.label}</NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {options.length === 0 && (
+        <span className="text-[11px] text-muted-foreground">No approved runtimes yet — add one from the Runtimes panel.</span>
+      )}
+      {err && <span className="text-[11px] text-destructive">{err}</span>}
     </div>
   );
 }
@@ -439,7 +501,7 @@ function AgentForm({
   tools: string;
   skills: string;
   model: string;
-  runMode: 'builtin' | 'daemon';
+  runMode: AgentRunMode;
   capabilities: SystemCapabilities | null;
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
@@ -453,7 +515,7 @@ function AgentForm({
   onToolsChange: (value: string) => void;
   onSkillsChange: (value: string) => void;
   onModelChange: (value: string) => void;
-  onRunModeChange: (value: 'builtin' | 'daemon') => void;
+  onRunModeChange: (value: AgentRunMode) => void;
   onCancel: () => void;
   onSubmit: () => void;
   submitLabel: string;
@@ -713,13 +775,14 @@ function AgentForm({
       <div className="flex flex-wrap items-center gap-2">
         <NativeSelect
           value={runMode}
-          onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
+          onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : e.target.value === 'external' ? 'external' : 'builtin')}
           size="sm"
           className="max-w-48"
           aria-label="Agent runtime"
         >
           <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
           <NativeSelectOption value="daemon">Remote daemon</NativeSelectOption>
+          <NativeSelectOption value="external">External MCP runtime</NativeSelectOption>
         </NativeSelect>
         <NativeSelect
           value={model}
@@ -797,7 +860,7 @@ function AgentRow({
   const [editTools, setEditTools] = useState(joinList(agent.tools));
   const [editSkills, setEditSkills] = useState(joinList(agent.skills));
   const [editModel, setEditModel] = useState(agent.model || 'auto');
-  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
+  const [editRunMode, setEditRunMode] = useState<AgentRunMode>(agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'external' ? 'external' : 'builtin');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [connectionCommand, setConnectionCommand] = useState('');
   const [connectionError, setConnectionError] = useState('');
@@ -1124,7 +1187,7 @@ function AgentDetailPane({
   const [editTools, setEditTools] = useState('');
   const [editSkills, setEditSkills] = useState('');
   const [editModel, setEditModel] = useState('auto');
-  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>('builtin');
+  const [editRunMode, setEditRunMode] = useState<AgentRunMode>('builtin');
   const [creatingWebhook, setCreatingWebhook] = useState(false);
   const [connectionCommand, setConnectionCommand] = useState('');
   const [connectionError, setConnectionError] = useState('');
@@ -1381,9 +1444,10 @@ function AgentDetailPane({
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in'} />
+            <AgentDetailField label="Mode" value={describeRunMode(agent.run_mode)} />
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
+            {agent.run_mode === 'external' && <AgentRuntimeField agent={agent} />}
           </AgentDetailSection>
 
           {activeConnections.length > 0 && (

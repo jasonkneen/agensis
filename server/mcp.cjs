@@ -20,12 +20,17 @@ const PROTOCOL_VERSION_DEFAULT = '2024-11-05';
 const SERVER_NAME = 'agensis';
 
 const SERVER_INSTRUCTIONS = [
-  'You are connected to an agensis workspace as a named agent (see whoami).',
+  'You are connected to an agensis workspace (see whoami for your identity and kind).',
   'Collaborate with the team: read channels, post messages, and @mention',
   'teammates by handle. Use post_message to speak; use dispatch_agent when you',
   'want a message to actively wake mentioned/auto/direct agents into responding.',
   'All tools are scoped to your workspace. Docs, tasks, and workspace memory are',
   'shared with the whole team.',
+  'If you authenticated with a workspace JOIN token, call register_runtime first to',
+  'mint your own runtime token, switch your Authorization to it, then poll claim_job.',
+  'As a RUNTIME you back one or more external agents: loop on claim_job, generate each',
+  "agent's reply from the returned prompt, and return it with submit_job_result (or",
+  'fail_job on error).',
 ].join(' ');
 
 // --- small helpers ----------------------------------------------------------
@@ -75,17 +80,38 @@ function optInt(value, fallback, max) {
 
 function buildTools() {
   const tools = [];
-  const add = (def) => tools.push(def);
+  // Every tool declares which identity kinds may call it (default: agent + runtime —
+  // workspace-scoped reads and the worker loop). Agent-only tools act AS a specific
+  // agent; join-only tools bootstrap a runtime. The handler enforces this per call.
+  const add = (def) => tools.push({ kinds: ['agent', 'runtime'], ...def });
 
   // -- Identity & discovery --------------------------------------------------
 
   add({
     name: 'whoami',
-    description: 'Return the identity and profile of the agent this token authenticates as (id, name, handle, workspace, model).',
+    kinds: ['agent', 'runtime', 'join'],
+    description: 'Return the identity this token authenticates as: kind ("agent" | "runtime" | "join") plus the relevant id/name/workspace. Call this first to learn whether you should act as an agent or register as a runtime.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, { identity }) {
+      if (identity.kind === 'runtime') {
+        return {
+          kind: 'runtime',
+          runtimeId: identity.runtimeId,
+          name: identity.name,
+          workspaceId: identity.workspaceId,
+          status: identity.status,
+        };
+      }
+      if (identity.kind === 'join') {
+        return {
+          kind: 'join',
+          workspaceId: identity.workspaceId,
+          note: 'Join token. Call register_runtime to mint a runtime token, then switch your Authorization header to it.',
+        };
+      }
       const a = identity.agent || {};
       return {
+        kind: 'agent',
         agentId: identity.agentId,
         name: identity.name,
         handle: identity.handle,
@@ -240,6 +266,7 @@ function buildTools() {
 
   add({
     name: 'post_message',
+    kinds: ['agent'],
     description: 'Post a message into a channel as this agent. Pure "speak" — it does NOT trigger other agents to respond. Use dispatch_agent if you want @mentioned/direct/auto agents to act on it.',
     inputSchema: {
       type: 'object',
@@ -263,6 +290,7 @@ function buildTools() {
 
   add({
     name: 'dispatch_agent',
+    kinds: ['agent'],
     description: 'Post a message into a channel as this agent AND advance the conversation, so @mentioned, direct, or auto-mode agents respond. Use this to delegate work or ask a teammate. Returns immediately; replies arrive asynchronously.',
     inputSchema: {
       type: 'object',
@@ -600,6 +628,155 @@ function buildTools() {
     },
   });
 
+  // --- joining the workspace as a runtime -----------------------------------
+
+  add({
+    name: 'register_runtime',
+    kinds: ['join'],
+    description: 'Join this workspace as an external runtime ("a member of the club"). Call ONCE while authenticated with the workspace join token; you receive a per-runtime token — switch your Authorization header to "Bearer <that token>" for ALL subsequent calls. The runtime starts pending approval unless the workspace has auto-approve on. After approval, poll claim_job for the agents mapped to you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'A label for this runtime, e.g. "Cursor (GPT-5.5)" or "Claude Code @ laptop".' },
+      },
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const name = (typeof args?.name === 'string' && args.name.trim()) ? args.name.trim() : 'Runtime';
+      try {
+        const { runtime, token } = await deps.registerRuntime({
+          workspaceId: identity.workspaceId,
+          name,
+          autoApprove: Boolean(identity.autoApprove),
+        });
+        return {
+          runtimeId: runtime.id,
+          token,
+          status: runtime.status,
+          next: runtime.status === 'approved'
+            ? 'Approved. Set Authorization: Bearer <token> and start polling claim_job.'
+            : 'Pending approval. Set Authorization: Bearer <token>; once an admin approves you in the web UI, claim_job will start returning work.',
+        };
+      } catch (err) {
+        throw new ToolError(err && err.message ? err.message : 'register_runtime failed');
+      }
+    },
+  });
+
+  // --- external runtime worker loop -----------------------------------------
+  // These tools let an MCP client BE one or more external agents: poll claim_job for
+  // work, generate the reply, return it with submit_job_result (or fail_job). This is
+  // the pull-based bridge for the stateless MCP transport — the server enqueues a job
+  // when an external-mode agent is @mentioned and the runtime picks it up here.
+  //   • agent token  → serves just its own agent.
+  //   • runtime token → serves every agent mapped to it (filter with `only`).
+
+  // Resolve which agent ids this caller may act on, or throw a clean ToolError.
+  async function resolveWorkerAgentIds(identity, deps, only = null) {
+    if (identity.kind === 'runtime') {
+      if (identity.status !== 'approved') {
+        throw new ToolError('This runtime is pending approval — ask a workspace admin to approve it in the web UI.');
+      }
+      return deps.externalAgentIdsForRuntime(identity.runtimeId, only);
+    }
+    return identity.agentId ? [identity.agentId] : [];
+  }
+
+  add({
+    name: 'claim_job',
+    description: 'Pull the next queued job for the external agent(s) you serve and mark it running. Returns { job: null } when nothing is queued. Poll this on a loop (every ~5–10s): polling also marks you "present" so the workspace knows a runtime is alive and routes @mentions here. When you receive a job, generate the agent\'s reply from job.prompt (job.agent tells you which agent/persona), then call submit_job_result (or fail_job on error).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        only: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional agent handles to restrict which jobs to claim. Only meaningful for a runtime token serving multiple agents; an agent token always claims just its own agent.',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const only = Array.isArray(args?.only) ? args.only : null;
+      try {
+        const agentIds = await resolveWorkerAgentIds(identity, deps, only);
+        const job = await deps.claimExternalJob({
+          workspaceId: identity.workspaceId,
+          agentIds,
+          runtimeId: identity.kind === 'runtime' ? identity.runtimeId : null,
+        });
+        return { job: job || null };
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'claim_job failed');
+      }
+    },
+  });
+
+  add({
+    name: 'submit_job_result',
+    description: 'Return a completed job\'s reply. Posts it into the channel as the job\'s agent and resumes the conversation. Call after generating the response for a job returned by claim_job.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'The jobId from claim_job.' },
+        response: { type: 'string', description: 'The agent\'s reply text to post.' },
+      },
+      required: ['job_id', 'response'],
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const jobId = requireString(args, 'job_id');
+      const response = requireString(args, 'response');
+      try {
+        const agentIds = await resolveWorkerAgentIds(identity, deps, null);
+        return await deps.submitExternalJobResult({
+          workspaceId: identity.workspaceId,
+          jobId,
+          responseText: response,
+          agentIds,
+          runtimeId: identity.kind === 'runtime' ? identity.runtimeId : null,
+        });
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'submit_job_result failed');
+      }
+    },
+  });
+
+  add({
+    name: 'fail_job',
+    description: 'Report that a job returned by claim_job could not be completed. Posts a short failure note as the job\'s agent and resumes the conversation so the chat does not hang.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_id: { type: 'string', description: 'The jobId from claim_job.' },
+        error: { type: 'string', description: 'Short reason the job failed.' },
+      },
+      required: ['job_id'],
+      additionalProperties: false,
+    },
+    async run(args, { identity, deps }) {
+      const jobId = requireString(args, 'job_id');
+      const error = (typeof args?.error === 'string' && args.error.trim())
+        ? args.error.trim()
+        : 'the runtime could not complete the job';
+      try {
+        const agentIds = await resolveWorkerAgentIds(identity, deps, null);
+        return await deps.submitExternalJobResult({
+          workspaceId: identity.workspaceId,
+          jobId,
+          errorText: error,
+          agentIds,
+          runtimeId: identity.kind === 'runtime' ? identity.runtimeId : null,
+        });
+      } catch (err) {
+        if (err instanceof ToolError) throw err;
+        throw new ToolError(err && err.message ? err.message : 'fail_job failed');
+      }
+    },
+  });
+
   return tools;
 }
 
@@ -631,7 +808,7 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId) {
 function createMcpHandler(deps) {
   const {
     getDb,
-    verifyAgentConnectToken,
+    verifyMcpToken,
     rateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,
@@ -677,6 +854,13 @@ function createMcpHandler(deps) {
         const params = rpc.params || {};
         const tool = TOOL_MAP.get(params.name);
         if (!tool) return jsonrpcResult(id, toolError(`Unknown tool: ${params.name}`));
+        const kinds = tool.kinds || ['agent', 'runtime'];
+        if (!kinds.includes(identity.kind)) {
+          const hint = identity.kind === 'join'
+            ? ' Call register_runtime first, then switch to your runtime token.'
+            : '';
+          return jsonrpcResult(id, toolError(`Tool "${tool.name}" is not available for a ${identity.kind} token.${hint}`));
+        }
         const args = params.arguments && typeof params.arguments === 'object' ? params.arguments : {};
         try {
           const value = await tool.run(args, { db: getDb(), identity, deps });
@@ -697,16 +881,17 @@ function createMcpHandler(deps) {
     try {
       if (runtimeSchemaReady) await runtimeSchemaReady;
 
-      // Auth: Bearer agent connect token -> agent identity. Required for everything.
+      // Auth: Bearer token -> agent | runtime | join identity. Required for everything.
       const header = req.headers['authorization'] || '';
       const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-      const identity = token ? await verifyAgentConnectToken(token, req) : null;
+      const identity = token ? await verifyMcpToken(token, req) : null;
       if (!identity) {
         res.setHeader('WWW-Authenticate', 'Bearer realm="agensis-mcp"');
-        return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid agent Bearer token required'));
+        return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid agent, runtime, or join Bearer token required'));
       }
 
-      if (rateLimiter && rateLimitBlocked && rateLimitBlocked(res, rateLimiter, `mcp:${identity.agentId}`)) return;
+      const rateKey = identity.agentId || identity.runtimeId || identity.workspaceId;
+      if (rateLimiter && rateLimitBlocked && rateLimitBlocked(res, rateLimiter, `mcp:${rateKey}`)) return;
 
       const body = req.body;
       if (Array.isArray(body)) {

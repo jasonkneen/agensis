@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(ls *)",
+      "Bash(npm *)",
+      "Bash(which *)",
+      "Read(//Users/jkneen/.local/lib/qwen-code/lib/chunks/**)",
+      "Bash(cat *)"
     ]
-  }
+  },
+  "$version": 4
 }

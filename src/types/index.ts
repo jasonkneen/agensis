@@ -291,13 +291,32 @@ export interface WorkspaceAgent {
   skills?: string[];
   handle?: string | null;
   model: string;
-  run_mode?: 'builtin' | 'daemon';
+  run_mode?: AgentRunMode;
+  runtime_id?: string | null;
   enabled?: boolean;
   permission_mode?: AgentPermissionMode;
   version?: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// How an agent's replies are generated: server-side (builtin), a local WebSocket daemon
+// CLI (daemon), or a connected MCP runtime that pulls jobs (external).
+export type AgentRunMode = 'builtin' | 'daemon' | 'external';
+
+// A connected MCP client ("member of the club") that can back one or more external
+// agents by polling claim_job. last_seen_at drives presence; status gates work.
+export interface AgentRuntime {
+  id: string;
+  name: string;
+  status: 'pending' | 'approved' | 'revoked';
+  host?: string;
+  last_seen_at?: string | null;
+  approved_at?: string | null;
+  created_at?: string;
+  online?: boolean;
+  agents?: Array<{ id: string; name: string; handle?: string | null }>;
 }
 
 export interface AgentConnection {
