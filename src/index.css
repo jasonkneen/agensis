@@ -370,8 +370,10 @@
   --sh-border: var(--neo-ink);
   --input: var(--neo-ink);
   --ring: var(--neo-ink);
-  --home-bg-image-opacity: 0.34;
-  --home-bg-overlay: linear-gradient(to bottom, rgba(20,20,20,0.08) 0%, rgba(20,20,20,0.3) 68%, var(--canvas-base) 100%);
+  /* Keep the workspace photo subtle in neo dark — brutal wants a clean,
+     high-contrast canvas, not a muddy photo bleeding under the panels. */
+  --home-bg-image-opacity: 0.14;
+  --home-bg-overlay: linear-gradient(to bottom, rgba(20,20,20,0.3) 0%, rgba(20,20,20,0.55) 60%, var(--canvas-base) 100%);
 }
 
 :root[data-ui-theme="tinyworld"] body,
@@ -3503,4 +3505,48 @@ select {
 /* the window title reads as a mono room label */
 :root[data-ui-theme="neo"] [data-window-titlebar] .truncate {
   letter-spacing: 0.02em;
+}
+
+/* ============================================================================
+   NEO — solid surfaces (anti-glass)
+   Neo-brutal is solid blocks, not glass over a photo. The app's translucency
+   slider + backdrop blur make dark mode read as muddy frosted panels over the
+   workspace image. For the neo family, force the chrome opaque and drop the
+   blur so every card/panel/window is a flat, high-contrast block. This is the
+   single biggest dark-mode legibility win — and it's on-brand for both schemes.
+   ============================================================================ */
+:root[data-ui-theme="neo"] .channel-shell {
+  --channel-surface: var(--card) !important;
+  --channel-header: var(--card) !important;
+  --channel-composer: var(--card) !important;
+  --channel-side: var(--card) !important;
+}
+:root[data-ui-theme="neo"] .channel-shell,
+:root[data-ui-theme="neo"] .channel-message-surface,
+:root[data-ui-theme="neo"] .channel-header,
+:root[data-ui-theme="neo"] .channel-composer,
+:root[data-ui-theme="neo"] .channel-side-panel,
+:root[data-ui-theme="neo"] .settings-dialog,
+:root[data-ui-theme="neo"] .settings-dialog-header,
+:root[data-ui-theme="neo"] .settings-dialog-nav,
+:root[data-ui-theme="neo"] .settings-dialog-content,
+:root[data-ui-theme="neo"] .settings-dialog-scroll,
+:root[data-ui-theme="neo"] [data-slot="dialog-content"],
+:root[data-ui-theme="neo"] [data-slot="popover-content"],
+:root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
+:root[data-ui-theme="neo"] [data-slot="card"],
+:root[data-ui-theme="neo"] [data-sidebar-panel] {
+  background: var(--card) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* The full-view window surface is opaque card; the floating one keeps a hair of
+   translucency so it still reads as floating, but no blur and far more solid. */
+:root[data-ui-theme="neo"] [data-window-surface] {
+  background: var(--card) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+:root[data-ui-theme="neo"] [data-window-view-mode="floating"] [data-window-surface] {
+  background: color-mix(in srgb, var(--card) 94%, transparent) !important;
 }

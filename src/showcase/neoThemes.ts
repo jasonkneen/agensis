@@ -47,14 +47,57 @@ export interface NeoTheme {
   dark: NeoSeed;
 }
 
-// ---- font stacks (loaded via the @import in index.css) -------------------
+// ---- font stacks ----------------------------------------------------------
+// Base faces ship in index.css's @import; the rest are lazy-loaded by
+// ensureNeoFonts() the first time a neo theme is applied (see below), so
+// non-neo users never download them.
+const SANS = 'system-ui, -apple-system, sans-serif';
+const MONO = 'ui-monospace, monospace';
 const F = {
-  grotesk: "'Space Grotesk', system-ui, -apple-system, sans-serif",
-  archivo: "'Archivo Black', 'Space Grotesk', system-ui, sans-serif",
-  mono: "'IBM Plex Mono', 'Space Mono', ui-monospace, monospace",
-  spaceMono: "'Space Mono', 'IBM Plex Mono', ui-monospace, monospace",
-  inter: "'Inter', system-ui, -apple-system, sans-serif",
+  // base (always available)
+  grotesk: `'Space Grotesk', ${SANS}`,
+  archivo: `'Archivo Black', 'Space Grotesk', ${SANS}`,
+  mono: `'IBM Plex Mono', 'Space Mono', ${MONO}`,
+  spaceMono: `'Space Mono', 'IBM Plex Mono', ${MONO}`,
+  inter: `'Inter', ${SANS}`,
+  // display faces (lazy)
+  anton: `'Anton', 'Archivo Black', ${SANS}`,
+  bungee: `'Bungee', 'Archivo Black', ${SANS}`,
+  syne: `'Syne', 'Space Grotesk', ${SANS}`,
+  unbounded: `'Unbounded', 'Archivo Black', ${SANS}`,
+  bebas: `'Bebas Neue', 'Archivo Black', ${SANS}`,
+  staatliches: `'Staatliches', 'Archivo Black', ${SANS}`,
+  rubikMono: `'Rubik Mono One', 'Space Mono', ${MONO}`,
+  bricolage: `'Bricolage Grotesque', 'Space Grotesk', ${SANS}`,
+  bigShoulders: `'Big Shoulders Display', 'Archivo Black', ${SANS}`,
+  darker: `'Darker Grotesque', 'Space Grotesk', ${SANS}`,
+  // body faces (lazy)
+  hanken: `'Hanken Grotesk', ${SANS}`,
+  dmSans: `'DM Sans', ${SANS}`,
+  workSans: `'Work Sans', ${SANS}`,
+  manrope: `'Manrope', ${SANS}`,
+  schibsted: `'Schibsted Grotesk', ${SANS}`,
+  figtree: `'Figtree', ${SANS}`,
+  jetbrains: `'JetBrains Mono', 'IBM Plex Mono', ${MONO}`,
 };
+
+// Google Fonts loaded on demand (the new faces only; base faces are in the
+// index.css @import). Injected once when the first neo theme is applied.
+const NEO_FONT_HREF =
+  'https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Big+Shoulders+Display:wght@700;800;900&family=Bricolage+Grotesque:wght@500;600;700;800&family=Bungee&family=Darker+Grotesque:wght@600;700;800;900&family=DM+Sans:wght@400;500;700&family=Figtree:wght@400;600;700&family=Hanken+Grotesk:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Manrope:wght@400;600;700;800&family=Rubik+Mono+One&family=Schibsted+Grotesk:wght@400;600;700;800&family=Staatliches&family=Syne:wght@600;700;800&family=Unbounded:wght@600;700;900&family=Work+Sans:wght@400;600;700&display=swap';
+
+let neoFontsInjected = false;
+/** Inject the lazy neo font stylesheet once (no-op if already present). */
+function ensureNeoFonts() {
+  if (neoFontsInjected || typeof document === 'undefined') return;
+  neoFontsInjected = true;
+  if (document.querySelector('link[data-neo-fonts]')) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = NEO_FONT_HREF;
+  link.setAttribute('data-neo-fonts', '');
+  document.head.appendChild(link);
+}
 
 // hard offset shadow of size n, keeping the per-theme shadow ink.
 const sh = (n: number) => `${n}px ${n}px 0 var(--neo-shadow-ink)`;
@@ -144,6 +187,78 @@ export const STYLE_PROFILES: Record<string, NeoStyleProfile> = {
     shadow: { xs: sh(2), sm: sh(3), md: sh(4), lg: sh(6), x: '4px', y: '4px' },
     ...dots(28),
   },
+
+  // ---- font-forward profiles: each anchored on a distinctive display face ----
+  // tall condensed caps — billboard
+  billboard: {
+    label: 'Billboard', font: F.hanken, display: F.anton,
+    weight: '400', spacing: '0.01em', transform: 'uppercase', radius: 'default',
+    shadow: { xs: sh(2), sm: sh(3), md: sh(4), lg: sh(6), x: '4px', y: '4px' },
+    ...dots(24),
+  },
+  // Bungee signage — arcade
+  arcade: {
+    label: 'Arcade', font: F.grotesk, display: F.bungee,
+    weight: '400', spacing: '0', transform: 'uppercase', radius: 'default',
+    shadow: { xs: sh(2), sm: sh(3), md: sh(4), lg: sh(6), x: '4px', y: '4px' },
+    ...dots(26),
+  },
+  // Syne — gallery / art-book
+  gallery: {
+    label: 'Gallery', font: F.inter, display: F.syne,
+    weight: '800', spacing: '-0.01em', transform: 'none', radius: 'sharp',
+    shadow: { xs: '0 0 0 var(--neo-shadow-ink)', sm: sh(1), md: sh(2), lg: sh(2), x: '2px', y: '2px' },
+    ...noTexture,
+  },
+  // Unbounded — rounded heavy balloon
+  balloon: {
+    label: 'Balloon', font: F.dmSans, display: F.unbounded,
+    weight: '700', spacing: '-0.01em', transform: 'none', radius: 'soft',
+    shadow: { xs: sh(2), sm: sh(3), md: sh(4), lg: sh(6), x: '3px', y: '3px' },
+    ...dots(22),
+  },
+  // Bebas Neue — tall marquee caps
+  marquee: {
+    label: 'Marquee', font: F.workSans, display: F.bebas,
+    weight: '400', spacing: '0.04em', transform: 'uppercase', radius: 'sharp',
+    shadow: { xs: sh(1), sm: sh(2), md: sh(2), lg: sh(3), x: '2px', y: '2px' },
+    ...grid(24),
+  },
+  // Staatliches — condensed stencil caps
+  stencil: {
+    label: 'Stencil', font: F.hanken, display: F.staatliches,
+    weight: '400', spacing: '0.03em', transform: 'uppercase', radius: 'default',
+    shadow: { xs: sh(1.5), sm: sh(2), md: sh(3), lg: sh(4), x: '3px', y: '3px' },
+    ...hatch,
+  },
+  // Rubik Mono One — blocky monospace slab
+  block: {
+    label: 'Block', font: F.spaceMono, display: F.rubikMono,
+    weight: '400', spacing: '0', transform: 'uppercase', radius: 'sharp',
+    shadow: { xs: sh(1), sm: sh(2), md: sh(2), lg: sh(3), x: '2px', y: '2px' },
+    ...grid(22),
+  },
+  // Bricolage Grotesque — modern press / editorial-tech
+  press: {
+    label: 'Press', font: F.schibsted, display: F.bricolage,
+    weight: '800', spacing: '-0.015em', transform: 'none', radius: 'default',
+    shadow: { xs: sh(1.5), sm: sh(2), md: sh(3), lg: sh(4), x: '3px', y: '3px' },
+    ...dots(20),
+  },
+  // Big Shoulders Display — industrial transit
+  transit: {
+    label: 'Transit', font: F.manrope, display: F.bigShoulders,
+    weight: '900', spacing: '0.01em', transform: 'uppercase', radius: 'sharp',
+    shadow: { xs: sh(1.5), sm: sh(2), md: sh(3), lg: sh(4), x: '3px', y: '3px' },
+    ...grid(24),
+  },
+  // Darker Grotesque — high-contrast magazine
+  mag: {
+    label: 'Mag', font: F.figtree, display: F.darker,
+    weight: '900', spacing: '-0.02em', transform: 'none', radius: 'sharp',
+    shadow: { xs: '0 0 0 var(--neo-shadow-ink)', sm: sh(1), md: sh(2), lg: sh(2), x: '2px', y: '2px' },
+    ...noTexture,
+  },
 };
 
 export function resolveNeoStyle(theme: NeoTheme): NeoStyleProfile {
@@ -190,7 +305,10 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   const overlay = card;
   const textSecondary = mix(ink, 78, `${paper} 22%`);
   const textMuted = mix(ink, 52, `${paper} 48%`);
-  const shadow = seed.shadow ?? (dark ? mix(ink, 40, `${paper} 60%`) : ink);
+  // Light: the hard shadow is solid ink — the classic neo offset. Dark: a
+  // translucent black, so the offset reads as real depth (a darkened gap) under
+  // the bright border, instead of the muddy light "halo" a mixed ink produced.
+  const shadow = dark ? 'rgba(0,0,0,0.6)' : (seed.shadow ?? ink);
   const dot = seed.dot ?? mix(ink, dark ? 15 : 13, 'transparent');
   const success = seed.success ?? (dark ? '#00e08a' : '#00c875');
   const warning = seed.warning ?? (dark ? '#ffd166' : '#f5d95f');
@@ -248,31 +366,31 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#160d14', ink: '#ffeaf6', primary: '#ff6bcb', onPrimary: INK, card: '#21141d', raised: '#2b1b26' },
   },
   {
-    id: 'mint-fresh', label: 'Mint Fresh', group: 'Pop', style: 'soft',
+    id: 'mint-fresh', label: 'Mint Fresh', group: 'Pop', style: 'balloon',
     swatch: ['#5be3b0', '#ff6b5f', PAPER2],
     light: { paper: '#f3fff9', ink: INK, primary: '#5be3b0', onPrimary: INK },
     dark: { paper: '#0d1714', ink: '#e9fff5', primary: '#5be3b0', onPrimary: INK, card: '#13211c', raised: '#1b2c26' },
   },
   {
-    id: 'tangerine', label: 'Tangerine', group: 'Pop', style: 'heavy',
+    id: 'tangerine', label: 'Tangerine', group: 'Pop', style: 'billboard',
     swatch: ['#ff7a1a', '#a98cff', CREAM],
     light: { paper: CREAM, ink: INK, primary: '#ff8a2b', onPrimary: INK },
     dark: { paper: '#17110a', ink: '#ffeede', primary: '#ff8a2b', onPrimary: INK, card: '#221810', raised: '#2d2014' },
   },
   {
-    id: 'lagoon', label: 'Lagoon', group: 'Pop', style: 'techno',
+    id: 'lagoon', label: 'Lagoon', group: 'Pop', style: 'block',
     swatch: ['#28c7e8', '#ffe45c', '#eafbff'],
     light: { paper: '#eafbff', ink: INK, primary: '#2fd0ef', onPrimary: INK },
     dark: { paper: '#08161b', ink: '#e2fbff', primary: '#2fd0ef', onPrimary: INK, card: '#0e2129', raised: '#142d36' },
   },
   {
-    id: 'grape-soda', label: 'Grape Soda', group: 'Pop', style: 'sticker',
+    id: 'grape-soda', label: 'Grape Soda', group: 'Pop', style: 'arcade',
     swatch: ['#a98cff', '#b6ff6c', '#f4f0ff'],
     light: { paper: '#f4f0ff', ink: INK, primary: '#a98cff', onPrimary: INK },
     dark: { paper: '#120f1c', ink: '#efe9ff', primary: '#a98cff', onPrimary: INK, card: '#1b1630', raised: '#241d3f' },
   },
   {
-    id: 'lime-punch', label: 'Lime Punch', group: 'Pop', style: 'heavy',
+    id: 'lime-punch', label: 'Lime Punch', group: 'Pop', style: 'transit',
     swatch: ['#b6ff6c', '#ff4da6', '#ffffff'],
     light: { paper: '#fbffef', ink: INK, primary: '#aef25f', onPrimary: INK },
     dark: { paper: '#10140a', ink: '#f1ffe0', primary: '#aef25f', onPrimary: INK, card: '#1a2010', raised: '#232b16' },
@@ -284,7 +402,7 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#180e0c', ink: '#ffe9e4', primary: '#ff7468', onPrimary: INK, card: '#231411', raised: '#2e1b17' },
   },
   {
-    id: 'sky-pop', label: 'Sky Pop', group: 'Pop', style: 'flat',
+    id: 'sky-pop', label: 'Sky Pop', group: 'Pop', style: 'brutal',
     swatch: ['#6fb7ff', '#ffd84a', '#eef6ff'],
     light: { paper: '#eef6ff', ink: INK, primary: '#6fb7ff', onPrimary: INK },
     dark: { paper: '#0a1018', ink: '#e6f1ff', primary: '#6fb7ff', onPrimary: INK, card: '#101a26', raised: '#172435' },
@@ -304,25 +422,25 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#0b0f0e', ink: '#e9fff6', primary: '#3ff0ad', onPrimary: INK, card: '#121916', raised: '#19231f', shadow: '#4a6258' },
   },
   {
-    id: 'vapor', label: 'Vapor', group: 'Dark', style: 'sticker',
+    id: 'vapor', label: 'Vapor', group: 'Dark', style: 'marquee',
     swatch: ['#ff6bcb', '#56e0ff', '#140b18'],
     light: { paper: '#fdf2ff', ink: '#1a0f1f', primary: '#ff6bcb', onPrimary: INK },
     dark: { paper: '#140b18', ink: '#ffe9fb', primary: '#ff6bcb', onPrimary: INK, card: '#1f1226', raised: '#2a1933', shadow: '#6a4d72' },
   },
   {
-    id: 'electric-violet', label: 'Electric Violet', group: 'Dark', style: 'editorial',
+    id: 'electric-violet', label: 'Electric Violet', group: 'Dark', style: 'gallery',
     swatch: ['#7c5cff', '#b6ff6c', '#0d0b16'],
     light: { paper: '#f3f1ff', ink: '#0d0b16', primary: '#7c5cff', onPrimary: '#ffffff' },
     dark: { paper: '#0d0b16', ink: '#ece8ff', primary: '#8f72ff', onPrimary: '#ffffff', card: '#161224', raised: '#1f1a32', shadow: '#534c7a' },
   },
   {
-    id: 'toxic-lime', label: 'Toxic Lime', group: 'Dark', style: 'techno',
+    id: 'toxic-lime', label: 'Toxic Lime', group: 'Dark', style: 'block',
     swatch: ['#c6ff4d', '#ff3b8d', '#0c0f08'],
     light: { paper: '#fbffee', ink: INK, primary: '#9fe800', onPrimary: INK },
     dark: { paper: '#0c0f08', ink: '#eeffda', primary: '#c6ff4d', onPrimary: INK, card: '#131810', raised: '#1b2116', shadow: '#566049' },
   },
   {
-    id: 'ember', label: 'Ember', group: 'Dark', style: 'heavy',
+    id: 'ember', label: 'Ember', group: 'Dark', style: 'transit',
     swatch: ['#ff6a2b', '#ffd166', '#130c08'],
     light: { paper: '#fff5ee', ink: '#190d06', primary: '#ff6a2b', onPrimary: '#ffffff' },
     dark: { paper: '#130c08', ink: '#ffe9da', primary: '#ff7a3d', onPrimary: INK, card: '#1d130c', raised: '#281b12', shadow: '#6e5240' },
@@ -348,7 +466,7 @@ export const NEO_THEMES: NeoTheme[] = [
 
   // ───────────────────────── MONO & PRINT — ink-forward ───────────────────
   {
-    id: 'xerox', label: 'Xerox', group: 'Mono & Print', style: 'flat',
+    id: 'xerox', label: 'Xerox', group: 'Mono & Print', style: 'mag',
     swatch: ['#0a0a0a', '#ff3b30', '#ffffff'],
     light: { paper: '#ffffff', ink: INK, primary: INK, onPrimary: '#ffffff', raised: '#ededed', muted: '#f2f2f2', dot: mix(INK, 9, 'transparent') },
     dark: { paper: '#0c0c0c', ink: '#f4f4f4', primary: '#f4f4f4', onPrimary: INK, card: '#161616', raised: '#222222', shadow: '#555555' },
@@ -360,19 +478,19 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#15130f', ink: '#efe7d8', primary: '#efe7d8', onPrimary: '#15130f', card: '#1f1c16', raised: '#2a2620', shadow: '#615b4e' },
   },
   {
-    id: 'blueprint', label: 'Blueprint', group: 'Mono & Print', style: 'techno',
+    id: 'blueprint', label: 'Blueprint', group: 'Mono & Print', style: 'press',
     swatch: ['#ffffff', '#7de3ff', '#0d2440'],
     light: { paper: '#eef4fb', ink: '#0d2440', primary: '#1f4f86', onPrimary: '#ffffff', dot: mix('#0d2440', 16, 'transparent') },
     dark: { paper: '#0b1f38', ink: '#dfecfb', primary: '#8fd3ff', onPrimary: '#0b1f38', card: '#102744', raised: '#163251', shadow: '#3f5c80', dot: mix('#8fd3ff', 14, 'transparent') },
   },
   {
-    id: 'riso-red', label: 'Riso Red', group: 'Mono & Print', style: 'print',
+    id: 'riso-red', label: 'Riso Red', group: 'Mono & Print', style: 'marquee',
     swatch: ['#ff4438', '#2a4bd7', '#f6efe2'],
     light: { paper: '#f7f0e3', ink: '#1c1208', primary: '#ff4438', onPrimary: '#fff', success: '#2a4bd7' },
     dark: { paper: '#16100b', ink: '#ffe6e1', primary: '#ff5547', onPrimary: '#fff', card: '#201610', raised: '#2b1e16', shadow: '#6c4a40' },
   },
   {
-    id: 'riso-blue', label: 'Riso Blue', group: 'Mono & Print', style: 'print',
+    id: 'riso-blue', label: 'Riso Blue', group: 'Mono & Print', style: 'press',
     swatch: ['#2a4bd7', '#ff4438', '#f6efe2'],
     light: { paper: '#f4f0e6', ink: '#0c1330', primary: '#2a4bd7', onPrimary: '#fff', error: '#ff4438' },
     dark: { paper: '#0b0f1f', ink: '#e2e8ff', primary: '#6a82ff', onPrimary: '#0b0f1f', card: '#11172b', raised: '#182039', shadow: '#444f78' },
@@ -386,13 +504,13 @@ export const NEO_THEMES: NeoTheme[] = [
 
   // ───────────────────────── PASTEL — soft paper, candy accents ───────────
   {
-    id: 'cotton-candy', label: 'Cotton Candy', group: 'Pastel', style: 'soft',
+    id: 'cotton-candy', label: 'Cotton Candy', group: 'Pastel', style: 'mag',
     swatch: ['#ff9ad2', '#9be8ff', '#fff0f8'],
     light: { paper: '#fff0f8', ink: '#3a1730', primary: '#ff9ad2', onPrimary: '#3a1730' },
     dark: { paper: '#1a1018', ink: '#ffe6f4', primary: '#ff9ad2', onPrimary: '#3a1730', card: '#241620', raised: '#2f1d2a' },
   },
   {
-    id: 'pistachio', label: 'Pistachio', group: 'Pastel', style: 'soft',
+    id: 'pistachio', label: 'Pistachio', group: 'Pastel', style: 'stencil',
     swatch: ['#a8e6a1', '#ffcf6b', '#f0f7e9'],
     light: { paper: '#f0f7e9', ink: '#1a2a14', primary: '#9bd98f', onPrimary: '#16240f' },
     dark: { paper: '#101610', ink: '#e8f5e2', primary: '#9bd98f', onPrimary: '#16240f', card: '#172017', raised: '#1f2a1e' },
@@ -404,7 +522,7 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#1a110c', ink: '#ffe7db', primary: '#ffab8a', onPrimary: '#3a1d12', card: '#241812', raised: '#2f201a' },
   },
   {
-    id: 'lavender-haze', label: 'Lavender Haze', group: 'Pastel', style: 'soft',
+    id: 'lavender-haze', label: 'Lavender Haze', group: 'Pastel', style: 'balloon',
     swatch: ['#c4b1ff', '#ffd6a8', '#f3effc'],
     light: { paper: '#f3effc', ink: '#241a3a', primary: '#c4b1ff', onPrimary: '#241a3a' },
     dark: { paper: '#14111e', ink: '#ece6ff', primary: '#c4b1ff', onPrimary: '#241a3a', card: '#1d1830', raised: '#26203f' },
@@ -416,7 +534,7 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#17130a', ink: '#fff3d6', primary: '#ffe08a', onPrimary: '#3a2c0e', card: '#211a0f', raised: '#2c2315' },
   },
   {
-    id: 'cloud-nine', label: 'Cloud Nine', group: 'Pastel', style: 'soft',
+    id: 'cloud-nine', label: 'Cloud Nine', group: 'Pastel', style: 'gallery',
     swatch: ['#a8d0ff', '#ffb3c1', '#eef5ff'],
     light: { paper: '#eef5ff', ink: '#142440', primary: '#a8d0ff', onPrimary: '#142440' },
     dark: { paper: '#0d121c', ink: '#e6efff', primary: '#a8d0ff', onPrimary: '#142440', card: '#131b29', raised: '#1a2536' },
@@ -430,7 +548,7 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#1a0f08', ink: '#f6e3cf', primary: '#e07a4e', onPrimary: '#1a0f08', card: '#23160d', raised: '#2e1f14', shadow: '#6f5341' },
   },
   {
-    id: 'mustard', label: 'Mustard Field', group: 'Earth & Retro', style: 'heavy',
+    id: 'mustard', label: 'Mustard Field', group: 'Earth & Retro', style: 'stencil',
     swatch: ['#e3b007', '#3f7d4f', '#f3ead2'],
     light: { paper: '#f3ead2', ink: '#2a230c', primary: '#e8b81c', onPrimary: '#2a230c', success: '#3f7d4f' },
     dark: { paper: '#161206', ink: '#f4ecca', primary: '#e8b81c', onPrimary: '#2a230c', card: '#1f1a0c', raised: '#2a2312', shadow: '#62593b' },
@@ -442,13 +560,13 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#0b150f', ink: '#e4f1e6', primary: '#48b277', onPrimary: '#0b150f', card: '#111e16', raised: '#18291e', shadow: '#41604c' },
   },
   {
-    id: 'cocoa', label: 'Cocoa', group: 'Earth & Retro', style: 'heavy',
+    id: 'cocoa', label: 'Cocoa', group: 'Earth & Retro', style: 'billboard',
     swatch: ['#c98a4b', '#7bb89a', '#1a120c'],
     light: { paper: '#f6ecdf', ink: '#231509', primary: '#b9743a', onPrimary: '#fff6ec' },
     dark: { paper: '#1a120c', ink: '#f1e2d0', primary: '#d29355', onPrimary: '#1a120c', card: '#241910', raised: '#302216', shadow: '#6c5340' },
   },
   {
-    id: 'sunset', label: 'Sunset Strip', group: 'Earth & Retro', style: 'sticker',
+    id: 'sunset', label: 'Sunset Strip', group: 'Earth & Retro', style: 'arcade',
     swatch: ['#ff7a59', '#ff3d9a', '#ffeede'],
     light: { paper: '#ffeede', ink: '#2c1230', primary: '#ff7a59', onPrimary: '#fff', error: '#ff3d9a' },
     dark: { paper: '#190b14', ink: '#ffe6dc', primary: '#ff8a6a', onPrimary: '#190b14', card: '#23121b', raised: '#2e1a25', shadow: '#6e4658' },
@@ -497,6 +615,7 @@ export function clearNeoThemeVars() {
 /** Write a theme's palette + style tokens inline for the given scheme. */
 function applyNeoThemeVars(theme: NeoTheme, scheme: NeoScheme) {
   const root = document.documentElement;
+  ensureNeoFonts();
   clearNeoThemeVars();
   const vars = expand(scheme === 'dark' ? theme.dark : theme.light, scheme);
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
