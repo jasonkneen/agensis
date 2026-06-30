@@ -517,6 +517,10 @@ export function FloatingWindowShell({
         data-floating-window-id={win.id}
         data-window-view-mode={isFullView ? 'full' : 'floating'}
         onPointerDown={() => onFocus(win.id)}
+        onDragOver={e => e.stopPropagation()}
+        onDragEnter={e => e.stopPropagation()}
+        onDragLeave={e => e.stopPropagation()}
+        onDrop={e => e.stopPropagation()}
         className="flex flex-col overflow-visible rounded-lg text-card-foreground"
         style={shellStyle}
         >
