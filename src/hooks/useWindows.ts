@@ -316,6 +316,71 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
   }));
 }
 
+// If `after`'s resize moved an edge that used to touch `sibling` (they were
+// tiled flush against each other), move sibling's matching edge to follow —
+// reproduces "drag the shared divider" so a tiled pair resizes as one unit.
+// Returns null when this sibling doesn't share a moved edge with `before`.
+function mirrorResizeOntoSibling(before: WindowBounds, after: WindowBounds, sibling: WindowBounds): WindowBounds | null {
+  let result: WindowBounds | null = null;
+
+  const leftMoved = Math.abs(after.x - before.x) > TILE_TOLERANCE;
+  const rightHeld = Math.abs((after.x + after.width) - (before.x + before.width)) <= TILE_TOLERANCE;
+  const rightMoved = Math.abs((after.x + after.width) - (before.x + before.width)) > TILE_TOLERANCE;
+  const leftHeld = Math.abs(after.x - before.x) <= TILE_TOLERANCE;
+
+  if (leftMoved && rightHeld && Math.abs((sibling.x + sibling.width) - before.x) <= TILE_TOLERANCE) {
+    result = { ...sibling, width: Math.max(MIN_WINDOW_WIDTH, after.x - sibling.x) };
+  } else if (rightMoved && leftHeld && Math.abs(sibling.x - (before.x + before.width)) <= TILE_TOLERANCE) {
+    const newX = after.x + after.width;
+    result = { ...sibling, x: newX, width: Math.max(MIN_WINDOW_WIDTH, (sibling.x + sibling.width) - newX) };
+  }
+
+  const topMoved = Math.abs(after.y - before.y) > TILE_TOLERANCE;
+  const bottomHeld = Math.abs((after.y + after.height) - (before.y + before.height)) <= TILE_TOLERANCE;
+  const bottomMoved = Math.abs((after.y + after.height) - (before.y + before.height)) > TILE_TOLERANCE;
+  const topHeld = Math.abs(after.y - before.y) <= TILE_TOLERANCE;
+
+  if (topMoved && bottomHeld && Math.abs((sibling.y + sibling.height) - before.y) <= TILE_TOLERANCE) {
+    result = { ...(result || sibling), height: Math.max(MIN_WINDOW_HEIGHT, after.y - sibling.y) };
+  } else if (bottomMoved && topHeld && Math.abs(sibling.y - (before.y + before.height)) <= TILE_TOLERANCE) {
+    const newY = after.y + after.height;
+    result = { ...(result || sibling), y: newY, height: Math.max(MIN_WINDOW_HEIGHT, (sibling.y + sibling.height) - newY) };
+  }
+
+  return result;
+}
+
+// Keeps a tiled group moving/resizing as one unit: a plain drag translates
+// every sibling by the same delta; a resize mirrors the moved edge onto
+// whichever sibling shares it, so the shared divider tracks the drag.
+function syncGroupBounds(
+  windows: FloatingWindow[],
+  before: FloatingWindow,
+  after: FloatingWindow,
+  interaction?: WindowUpdateOptions['interaction'],
+): FloatingWindow[] {
+  const groupId = after.groupId;
+  if (!groupId) return windows;
+
+  const beforeBounds = getVisibleBounds(before);
+  const afterBounds = getVisibleBounds(after);
+  const dx = afterBounds.x - beforeBounds.x;
+  const dy = afterBounds.y - beforeBounds.y;
+  const resized = afterBounds.width !== beforeBounds.width || afterBounds.height !== beforeBounds.height;
+
+  return windows.map(w => {
+    if (w.id === after.id || w.groupId !== groupId) return w;
+
+    if (interaction === 'resize' && resized) {
+      const mirrored = mirrorResizeOntoSibling(beforeBounds, afterBounds, getVisibleBounds(w));
+      return mirrored ? { ...w, ...clampToViewport(mirrored), maximized: false } : w;
+    }
+
+    if (dx === 0 && dy === 0) return w;
+    return { ...w, ...clampToViewport({ x: w.x + dx, y: w.y + dy, width: w.width, height: w.height }), maximized: false };
+  });
+}
+
 function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
   const visibleByCanvas = windows.reduce<Record<string, FloatingWindow[]>>((groups, win) => {
     if (win.minimized) return groups;
@@ -456,16 +521,24 @@ export function useWindows() {
     setWindows(prev => prev.map(w => (w.groupId === groupId ? { ...w, minimized: true } : w)));
   }, []);
 
-  const ungroupWindows = useCallback((groupId: string) => {
+  const ungroupTiledWindows = useCallback((groupId: string) => {
     setWindows(prev => prev.map(w => (w.groupId === groupId ? { ...w, groupId: null } : w)));
   }, []);
 
   const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>, options?: WindowUpdateOptions) => {
     setWindows(prev => {
+      const before = prev.find(w => w.id === id);
       const updated = prev.map(w => w.id === id ? applyWindowBoundsUpdate(w, updates) : w);
-      if (options?.interaction !== 'drag' || !hasWindowBoundsUpdate(updates)) {
-        return updated;
+      if (!hasWindowBoundsUpdate(updates)) return updated;
+
+      // Already-grouped windows move/resize as a unit instead of going through
+      // split-detection again — the group itself was formed by an earlier drag.
+      if (before?.groupId) {
+        const after = updated.find(w => w.id === id);
+        return after ? syncGroupBounds(updated, before, after, options?.interaction) : updated;
       }
+
+      if (options?.interaction !== 'drag') return updated;
       return maybeSplitPartner(prev, updated, id);
     });
   }, []);
@@ -492,5 +565,5 @@ export function useWindows() {
     setWindows(prev => prev.map(w => w.layoutGroupId === groupId ? { ...w, layoutGroupId: undefined } : w));
   }, []);
 
-  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupWindows };
+  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows };
 }

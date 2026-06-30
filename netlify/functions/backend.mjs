@@ -610,6 +610,16 @@ async function handleAgentConnections(req, userId) {
   return json({ data: rows.map(publicAgentConnection), error: null });
 }
 
+let appUserProfileColumnsEnsured = false;
+async function ensureAppUserProfileColumns() {
+  if (appUserProfileColumnsEnsured) return;
+  await query(`
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
+  `);
+  appUserProfileColumnsEnsured = true;
+}
+
 async function ensureAgentRuntimeTables() {
   await query(`
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
@@ -784,6 +794,7 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
 }
 
 async function handleAuth(pathname, req) {
+  await ensureAppUserProfileColumns();
   const body = await readBody(req);
   const email = String(body?.email || '').trim().toLowerCase();
   const password = String(body?.password || '');
@@ -795,34 +806,85 @@ async function handleAuth(pathname, req) {
     if (existing.length > 0) return jsonError(409, new Error('An account with that email already exists'));
 
     const rows = await query(
-      'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
+      'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
       [email, createPasswordHash(password)],
     );
     const user = rows[0];
     return json({ data: { user, token: issueToken(user.id) }, error: null });
   }
 
-  const rows = await query('select id, email, password_hash, created_at from app_users where email = $1 limit 1', [email]);
+  const rows = await query('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
   const user = rows[0];
   if (!user || !verifyPassword(password, user.password_hash)) {
     return jsonError(401, new Error('Invalid email or password'));
   }
-  const sessionUser = { id: user.id, email: user.email, created_at: user.created_at };
+  const sessionUser = { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at };
   return json({ data: { user: sessionUser, token: issueToken(sessionUser.id) }, error: null });
 }
 
 async function handleOAuthAuth() {
+  await ensureAppUserProfileColumns();
   const identityUser = await getUser();
   const email = String(identityUser?.email || '').trim().toLowerCase();
   if (!email) return jsonError(401, new Error('Social login was not completed'));
 
-  const existing = await query('select id, email, created_at from app_users where email = $1 limit 1', [email]);
+  const existing = await query('select id, email, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
   const user = existing[0] || (await query(
-    'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
+    'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
     [email, `oauth:netlify:${identityUser.id}`],
   ))[0];
 
   return json({ data: { user, token: issueToken(user.id) }, error: null });
+}
+
+async function handleGetMyProfile(userId) {
+  await ensureAppUserProfileColumns();
+  const rows = await query('select id, email, display_name, accent_color, created_at from app_users where id = $1 limit 1', [userId]);
+  if (!rows[0]) return jsonError(404, new Error('User not found'));
+  return json({ data: rows[0], error: null });
+}
+
+async function handleUpdateMyProfile(req, userId) {
+  await ensureAppUserProfileColumns();
+  const body = await readBody(req);
+  const updates = {};
+  if (body?.display_name !== undefined) {
+    updates.display_name = String(body.display_name || '').trim().slice(0, 80);
+  }
+  if (body?.accent_color !== undefined) {
+    const color = String(body.accent_color || '').trim();
+    if (color && !/^#[0-9a-f]{6}$/i.test(color)) {
+      return jsonError(400, new Error('accent_color must be a #rrggbb hex value'));
+    }
+    updates.accent_color = color;
+  }
+  const fields = Object.keys(updates);
+  if (fields.length === 0) return jsonError(400, new Error('No fields to update'));
+
+  const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
+  const rows = await query(
+    `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, created_at`,
+    [userId, ...fields.map(field => updates[field])],
+  );
+  if (!rows[0]) return jsonError(404, new Error('User not found'));
+  return json({ data: rows[0], error: null });
+}
+
+async function handleChangeMyPassword(req, userId) {
+  const body = await readBody(req);
+  const currentPassword = String(body?.currentPassword || '');
+  const newPassword = String(body?.newPassword || '');
+  if (!currentPassword || !newPassword) return jsonError(400, new Error('Current and new password are required'));
+  if (newPassword.length < 6) return jsonError(400, new Error('New password must be at least 6 characters'));
+
+  const rows = await query('select id, password_hash from app_users where id = $1 limit 1', [userId]);
+  const user = rows[0];
+  if (!user || !verifyPassword(currentPassword, user.password_hash)) {
+    return jsonError(401, new Error('Current password is incorrect'));
+  }
+
+  await query('update app_users set password_hash = $2 where id = $1', [userId, createPasswordHash(newPassword)]);
+  return json({ data: { ok: true }, error: null });
 }
 
 // Logs an `activity_events` row for each inserted chat message so it surfaces in
@@ -1209,6 +1271,15 @@ async function route(req) {
     const lookupEmail = String(body?.lookup_email || '').trim().toLowerCase();
     const rows = await query('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
     return json({ data: rows, error: null });
+  }
+  if (req.method === 'GET' && pathname === '/backend/users/me') {
+    return handleGetMyProfile(requireUserId(req));
+  }
+  if (req.method === 'PATCH' && pathname === '/backend/users/me') {
+    return handleUpdateMyProfile(req, requireUserId(req));
+  }
+  if (req.method === 'POST' && pathname === '/backend/users/me/change-password') {
+    return handleChangeMyPassword(req, requireUserId(req));
   }
   if (req.method === 'POST' && pathname.startsWith('/backend/db/')) {
     return handleDb(pathname, req, requireUserId(req));

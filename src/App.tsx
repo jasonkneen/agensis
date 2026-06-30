@@ -423,7 +423,7 @@ function AppContent() {
     minimizeWindow,
     focusWindowGroup,
     minimizeWindowGroup,
-    ungroupWindows,
+    ungroupTiledWindows,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
   const { cursors } = useMultiplayerCursors(
@@ -1115,6 +1115,7 @@ function AppContent() {
         themeMode={themeMode}
         onThemeChange={setTheme}
         userEmail={user.email || ''}
+        userId={user.id}
         onSignOut={signOut}
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
@@ -1328,7 +1329,7 @@ function AppContent() {
                         type="button"
                         variant="ghost"
                         size="icon-xs"
-                        onClick={() => ungroupWindows(groupId)}
+                        onClick={() => ungroupTiledWindows(groupId)}
                         className="size-5 rounded-lg text-muted-foreground hover:bg-background/70 hover:text-foreground"
                         title="Ungroup windows"
                         aria-label="Ungroup windows"

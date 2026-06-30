@@ -126,6 +126,15 @@ function syncShellBounds(shell: HTMLElement, bounds: WindowBounds) {
   shell.style.height = `${bounds.height}px`;
 }
 
+// Other windows tiled into the same group, so a drag can move them in lockstep
+// (the real bounds update lands on drop via useWindows' syncGroupBounds).
+function groupSiblingShells(shell: HTMLElement | null, groupId: string | null | undefined, ownId: string): HTMLElement[] {
+  if (!shell || !groupId) return [];
+  const root = shell.closest('[data-workspace-viewport]') || document;
+  return Array.from(root.querySelectorAll<HTMLElement>(`[data-window-group="${CSS.escape(groupId)}"]`))
+    .filter(el => el.dataset.floatingWindowId !== ownId);
+}
+
 function splitBounds(bounds: WindowBounds, edge: 'left' | 'right' | 'top' | 'bottom'): WindowBounds {
   if (edge === 'left') {
     return { x: bounds.x, y: bounds.y, width: Math.max(MIN_WINDOW_WIDTH, Math.round(bounds.width / 2)), height: bounds.height };
@@ -313,11 +322,17 @@ export function FloatingWindowShell({
     };
     setIsDragging(true);
 
+    const siblings = groupSiblingShells(shellRef.current, win.groupId, win.id);
+
     const onMove = (ev: PointerEvent) => {
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
-      shellRef.current?.style.setProperty('transform', `translate3d(${dx}px, ${dy}px, 0)`);
+      const transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      shellRef.current?.style.setProperty('transform', transform);
+      // A tiled group moves as one unit — drag every sibling's shell in lockstep
+      // so the gesture reads as dragging a single combined view, not two windows.
+      siblings.forEach(sibling => sibling.style.setProperty('transform', transform));
       setSnapPreview(getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current));
     };
 
@@ -339,6 +354,7 @@ export function FloatingWindowShell({
           shellRef.current.style.height = `${next.height}px`;
           shellRef.current.style.removeProperty('transform');
         }
+        siblings.forEach(sibling => sibling.style.removeProperty('transform'));
         onUpdate(win.id, {
           ...next,
           maximized: false,
@@ -355,6 +371,7 @@ export function FloatingWindowShell({
 
     const onCancel = () => {
       shellRef.current?.style.removeProperty('transform');
+      siblings.forEach(sibling => sibling.style.removeProperty('transform'));
       dragRef.current = null;
       setSnapPreview(null);
       setIsDragging(false);
@@ -517,6 +534,7 @@ export function FloatingWindowShell({
         ref={shellRef}
         data-floating-window
         data-floating-window-id={win.id}
+        data-window-group={win.groupId || undefined}
         data-window-view-mode={isFullView ? 'full' : 'floating'}
         onPointerDown={() => onFocus(win.id)}
         onDragOver={e => e.stopPropagation()}

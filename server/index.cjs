@@ -497,6 +497,9 @@ function getAnthropicApiKey(workspaceId = null) {
 async function ensureRuntimeSchema() {
   const db = getDb();
   await db.unsafe(`
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
+
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS local_path text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
@@ -4161,7 +4164,7 @@ function createApp() {
       if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));
 
       const rows = await getDb().unsafe(
-        'insert into app_users (email, password_hash) values ($1, $2) returning id, email, created_at',
+        'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
         [email, await createPasswordHash(password)],
       );
 
@@ -4178,13 +4181,13 @@ function createApp() {
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
 
-      const rows = await getDb().unsafe('select id, email, password_hash, created_at from app_users where email = $1 limit 1', [email]);
+      const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
       if (!user || !(await verifyPassword(password, user.password_hash))) return jsonError(res, 401, new Error('Invalid email or password'));
 
       res.json({
         data: {
-          user: { id: user.id, email: user.email, created_at: user.created_at },
+          user: { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at },
           token: await issueToken(user.id),
         },
         error: null,
@@ -4199,6 +4202,69 @@ function createApp() {
       const lookupEmail = String(req.body?.lookup_email || '').trim().toLowerCase();
       const rows = await getDb().unsafe('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
       res.json({ data: rows, error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  // ── Account profile (display name, accent color, password) ──────────────
+
+  app.get('/backend/users/me', requireAuth, async (req, res) => {
+    try {
+      const rows = await getDb().unsafe(
+        'select id, email, display_name, accent_color, created_at from app_users where id = $1 limit 1',
+        [req.userId],
+      );
+      if (!rows[0]) return jsonError(res, 404, new Error('User not found'));
+      res.json({ data: rows[0], error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.patch('/backend/users/me', requireAuth, async (req, res) => {
+    try {
+      const updates = {};
+      if (req.body?.display_name !== undefined) {
+        updates.display_name = String(req.body.display_name || '').trim().slice(0, 80);
+      }
+      if (req.body?.accent_color !== undefined) {
+        const color = String(req.body.accent_color || '').trim();
+        if (color && !/^#[0-9a-f]{6}$/i.test(color)) {
+          return jsonError(res, 400, new Error('accent_color must be a #rrggbb hex value'));
+        }
+        updates.accent_color = color;
+      }
+      const fields = Object.keys(updates);
+      if (fields.length === 0) return jsonError(res, 400, new Error('No fields to update'));
+
+      const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
+      const rows = await getDb().unsafe(
+        `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, created_at`,
+        [req.userId, ...fields.map(field => updates[field])],
+      );
+      if (!rows[0]) return jsonError(res, 404, new Error('User not found'));
+      res.json({ data: rows[0], error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  app.post('/backend/users/me/change-password', requireAuth, async (req, res) => {
+    try {
+      const currentPassword = String(req.body?.currentPassword || '');
+      const newPassword = String(req.body?.newPassword || '');
+      if (!currentPassword || !newPassword) return jsonError(res, 400, new Error('Current and new password are required'));
+      if (newPassword.length < 6) return jsonError(res, 400, new Error('New password must be at least 6 characters'));
+
+      const rows = await getDb().unsafe('select id, password_hash from app_users where id = $1 limit 1', [req.userId]);
+      const user = rows[0];
+      if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
+        return jsonError(res, 401, new Error('Current password is incorrect'));
+      }
+
+      await getDb().unsafe('update app_users set password_hash = $2 where id = $1', [req.userId, await createPasswordHash(newPassword)]);
+      res.json({ data: { ok: true }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }
