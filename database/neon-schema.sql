@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS app_users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text NOT NULL UNIQUE,
   password_hash text NOT NULL,
+  display_name text DEFAULT '',
+  accent_color text DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 

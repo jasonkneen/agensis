@@ -6,6 +6,7 @@ import {
   Brain,
   ChevronRight,
   Copy,
+  CreditCard,
   FileText,
   Folder,
   Hash,
@@ -49,6 +50,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { AccountDialog } from '../account/AccountDialog';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 
@@ -111,6 +113,7 @@ interface SidebarProps {
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
   userEmail: string;
+  userId?: string | null;
   onSignOut: () => void;
   onOpenSettings: () => void;
 }
@@ -150,8 +153,15 @@ export function Sidebar({
   onThemeChange,
   onOpenSettings,
   userEmail,
+  userId,
   onSignOut,
 }: SidebarProps) {
+  const [accountDialogOpen, setAccountDialogOpen] = React.useState(false);
+  const [accountDialogTab, setAccountDialogTab] = React.useState<'profile' | 'billing'>('profile');
+  const openAccountDialog = (tab: 'profile' | 'billing') => {
+    setAccountDialogTab(tab);
+    setAccountDialogOpen(true);
+  };
   const [sidebarWidth, setSidebarWidth] = React.useState(() => {
     if (typeof localStorage === 'undefined') return 280;
     const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
@@ -550,20 +560,49 @@ export function Sidebar({
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
         <div className="flex items-center gap-2">
-          <Avatar size="sm">
-            <AvatarFallback>{userInitial}</AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-xs font-medium">{userEmail}</div>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition hover:bg-muted/60"
+                aria-label="Account menu"
+              >
+                <Avatar size="sm">
+                  <AvatarFallback>{userInitial}</AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-medium">{userEmail}</div>
+                </div>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" className="w-56">
+              <DropdownMenuItem onSelect={() => openAccountDialog('profile')}>
+                <UserRound className="size-4" />
+                Edit profile
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => openAccountDialog('billing')}>
+                <CreditCard className="size-4" />
+                Billing
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onSignOut}>
+                <LogOut className="size-4" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <ThemeToggle mode={themeMode} onModeChange={onThemeChange} />
           <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="App settings">
             <Settings className="size-4" />
           </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onSignOut} aria-label="Sign out">
-            <LogOut className="size-4" />
-          </Button>
         </div>
+        <AccountDialog
+          open={accountDialogOpen}
+          onOpenChange={setAccountDialogOpen}
+          userId={userId}
+          userEmail={userEmail}
+          defaultTab={accountDialogTab}
+        />
       </div>
       <div
         role="separator"

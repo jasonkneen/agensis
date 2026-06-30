@@ -15,11 +15,25 @@ const WindowManagerContext = createContext<WindowManagerValue | null>(null);
  */
 export function WindowManagerProvider({ children }: { children: ReactNode }) {
   const windowManager = useWindows();
-  const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, ungroupWindows } = windowManager;
+  const {
+    windows,
+    openWindow,
+    closeWindow,
+    focusWindow,
+    updateWindow,
+    minimizeWindow,
+    selectedWindowIds,
+    setSelectedWindowIds,
+    groupWindows,
+    focusWindowGroup,
+    minimizeWindowGroup,
+    ungroupTiledWindows,
+    ungroupWindows,
+  } = windowManager;
 
   const value = useMemo<WindowManagerValue>(
-    () => ({ windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, ungroupWindows }),
-    [windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, ungroupWindows],
+    () => ({ windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows }),
+    [windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows],
   );
 
   return <WindowManagerContext.Provider value={value}>{children}</WindowManagerContext.Provider>;
