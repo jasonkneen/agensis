@@ -3114,6 +3114,178 @@ select {
   transform: translate(1px, 1px) !important;
 }
 
+/* Neo / TinyWorld: section headers and folder triggers match action-row card style */
+
+/* ── Neo: section-header card (trigger + optional + button share the same card) ── */
+:root[data-ui-theme="neo"] .sidebar-section-header {
+  box-sizing: border-box;
+  width: calc(100% - 6px) !important;
+  max-width: calc(100% - 6px) !important;
+  margin-right: 6px !important;
+  margin-bottom: 6px !important;
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: var(--border) !important;
+  border-radius: 9px !important;
+  background: var(--card) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
+  min-height: 2.55rem;
+  padding-inline: 0.3rem 0.2rem !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-section-header:hover {
+  background: var(--secondary) !important;
+  transform: translate(1px, 1px) !important;
+}
+
+/* Trigger inside header owns no border/shadow — the header card does */
+:root[data-ui-theme="neo"] .sidebar-section-header .sidebar-section-trigger {
+  width: auto !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  margin-bottom: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  font-size: 0.82rem !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-section-header .sidebar-section-trigger:hover {
+  background: transparent !important;
+  transform: none !important;
+}
+
+/* Folder triggers are standalone buttons — same card frame */
+:root[data-ui-theme="neo"] .sidebar-folder-trigger {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: var(--border) !important;
+  background: var(--card) !important;
+  box-shadow: var(--neo-shadow-sm) !important;
+  min-height: 2.3rem !important;
+  font-size: 0.82rem !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-folder-trigger:hover {
+  background: var(--secondary) !important;
+  transform: translate(1px, 1px) !important;
+}
+
+/* ── TinyWorld: section-header card ── */
+:root[data-ui-theme="tinyworld"] .sidebar-section-header {
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  width: calc(100% - 6px) !important;
+  max-width: calc(100% - 6px) !important;
+  margin-right: 6px !important;
+  margin-bottom: 4px !important;
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: var(--tw-control-outline) !important;
+  border-radius: 10px !important;
+  min-height: 2.4rem;
+  color: var(--text-secondary) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
+    var(--tw-control-fill) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 var(--tw-control-bevel),
+    var(--tw-control-shadow) !important;
+  padding-inline: 0.3rem 0.2rem !important;
+}
+
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-section-header {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
+    var(--tw-accent-fill) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.26),
+    0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
+}
+
+:root[data-ui-theme="tinyworld"] .sidebar-section-header:hover {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
+  color: var(--tw-accent-outline) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
+    var(--tw-accent-hover) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
+    var(--tw-control-shadow) !important;
+}
+
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-section-header:hover {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
+    var(--tw-accent-hover) !important;
+}
+
+/* Trigger inside TW header owns no border/shadow */
+:root[data-ui-theme="tinyworld"] .sidebar-section-header .sidebar-section-trigger {
+  width: auto !important;
+  max-width: none !important;
+  margin-right: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-ui-theme="tinyworld"] .sidebar-section-header .sidebar-section-trigger:hover {
+  background: transparent !important;
+}
+
+/* TW folder triggers: card style */
+:root[data-ui-theme="tinyworld"] .sidebar-folder-trigger {
+  position: relative;
+  overflow: hidden;
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-color: var(--tw-control-outline) !important;
+  color: var(--text-secondary) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
+    var(--tw-control-fill) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 var(--tw-control-bevel),
+    var(--tw-control-shadow) !important;
+  min-height: 2.15rem !important;
+}
+
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
+    var(--tw-accent-fill) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
+    inset 0 -4px 0 rgba(0, 0, 0, 0.26),
+    0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
+}
+
+:root[data-ui-theme="tinyworld"] .sidebar-folder-trigger:hover {
+  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
+  color: var(--tw-accent-outline) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
+    var(--tw-accent-hover) !important;
+  box-shadow:
+    inset 0 1px 0 var(--tw-control-inset),
+    inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
+    var(--tw-control-shadow) !important;
+}
+
+:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger:hover {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
+    var(--tw-accent-hover) !important;
+}
+
 /* Final glass binding: panel translucency slider must affect every major panel. */
 .channel-shell {
   --channel-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
