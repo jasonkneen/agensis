@@ -18,6 +18,7 @@ import type { ThemeMode } from '../../hooks/useTheme';
 import { AI_MODELS, type Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
+import { NEO_THEMES, NEO_GROUPS, applyNeoTheme } from '../../showcase/neoThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -330,6 +331,8 @@ function AppearancePanel({
   const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
+  const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
+  const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
   const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
   const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
@@ -422,6 +425,52 @@ function AppearancePanel({
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
+      </Field>
+
+      <Field>
+        <FieldLabel>Neo theme</FieldLabel>
+        <div className="max-h-80 space-y-4 overflow-y-auto pr-1">
+          {NEO_GROUPS.map(group => (
+            <div key={group} className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {NEO_THEMES.filter(t => t.group === group).map(t => {
+                  const active = neoTheme === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setNeoTheme(t.id);
+                        setSetting('ui_neo_theme', t.id);
+                        applyNeoTheme(t.id);
+                        if (!isNeoFamily) {
+                          const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                          onThemeChange(dark ? 'neo-dark' : 'neo-light');
+                        }
+                      }}
+                      aria-pressed={active}
+                      title={t.label}
+                      className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-foreground ring-1 ring-foreground' : 'border-border hover:bg-accent'}`}
+                    >
+                      <span className="flex shrink-0 overflow-hidden rounded-[5px] border border-border">
+                        {t.swatch.map((c, i) => (
+                          <span key={i} className="size-3.5" style={{ background: c }} />
+                        ))}
+                      </span>
+                      <span className="truncate font-medium">{t.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+        <FieldDescription>
+          {isNeoFamily
+            ? 'Repaints the whole app. Each theme has matching light and dark variants — toggle Neo Light / Neo Dark above to switch.'
+            : 'Picking a theme switches you into the Neo family. Each theme has matching light and dark variants.'}
+        </FieldDescription>
       </Field>
 
       <Field>

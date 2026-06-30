@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -257,14 +257,27 @@
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="popover-content"] {
-  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  font-family: var(--neo-font, 'Space Grotesk', system-ui, -apple-system, sans-serif);
 }
 
 :root[data-ui-theme="neo"] h1,
 :root[data-ui-theme="neo"] h2,
 :root[data-ui-theme="neo"] h3 {
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-family: var(--neo-display, var(--neo-font, 'Space Grotesk', system-ui, -apple-system, sans-serif));
+  font-weight: var(--neo-display-weight, 700);
+  letter-spacing: var(--neo-display-spacing, -0.01em);
+  text-transform: var(--neo-display-transform, none);
+}
+
+/* Brutal paper texture behind the neo workspace. The pattern (--neo-texture)
+   and density (--neo-texture-size) come from the active theme's style profile —
+   dots / grid / hatch / none — and the colour (--neo-dot) is per-theme. It sits
+   under every opaque surface, showing only in gutters and the canvas, so it
+   never competes with text. */
+:root[data-ui-theme="neo"] body {
+  background-image: var(--neo-texture, radial-gradient(var(--neo-dot, color-mix(in srgb, var(--neo-ink) 13%, transparent)) 1.1px, transparent 1.1px));
+  background-size: var(--neo-texture-size, var(--neo-dot-size, 22px) var(--neo-dot-size, 22px));
+  background-position: -11px -11px;
 }
 
 :root[data-ui-theme="neo"][data-theme="light"] {

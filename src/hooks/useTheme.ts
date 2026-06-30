@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { syncNeoTheme, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
 
 export type ThemeMode = 'light' | 'dark' | 'system' | 'tinyworld-light' | 'tinyworld-dark' | 'neo-light' | 'neo-dark';
 
@@ -21,14 +22,25 @@ function applyTheme(mode: ThemeMode) {
   const { scheme, family } = resolveTheme(mode);
   document.documentElement.setAttribute('data-theme', scheme);
   document.documentElement.setAttribute('data-ui-theme', family);
+  let neoBg = scheme === 'dark' ? '#141414' : '#fff9df';
+  if (family === 'neo') {
+    // Match the html fallback / mobile status-bar colour to the active neo
+    // theme's paper when it's a plain colour (skip derived color-mix values).
+    const paper = findNeoTheme(getStoredNeoTheme())[scheme].paper;
+    if (/^#|^rgb|^hsl|^oklch/.test(paper)) neoBg = paper;
+  }
   const bg = family === 'tinyworld'
     ? (scheme === 'dark' ? '#181714' : '#f4ede0')
     : family === 'neo'
-      ? (scheme === 'dark' ? '#141414' : '#fff9df')
+      ? neoBg
       : (scheme === 'dark' ? '#0c0c0c' : '#f8f8f8');
   document.documentElement.style.background = bg;
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', bg);
+  // Reconcile the neo palette layer now that family + scheme are settled.
+  // For the neo family this applies the stored neo theme's matching light/dark
+  // seed; for other families it clears neo overrides and restores the accent.
+  syncNeoTheme();
 }
 
 export function useTheme() {

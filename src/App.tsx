@@ -55,6 +55,7 @@ import { Toaster } from './components/ui/sonner';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
+import { applyNeoTheme } from './showcase/neoThemes';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -337,6 +338,8 @@ function AppContent() {
     const settings = getSettings();
     applyUiAppearanceSettings(settings);
     applyThemePreset(settings.ui_theme_preset);
+    // Seed the persisted neo theme so it's ready when the neo family activates.
+    applyNeoTheme(settings.ui_neo_theme);
   }, []);
   const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
   const { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow } = useWindowManager();

@@ -15,6 +15,7 @@ export interface AppSettings {
   ui_font_family: UiFontFamily;
   ui_base_font_size: number;
   ui_theme_preset: string;
+  ui_neo_theme: string;
   ui_panel_translucency: number;
   ui_sidebar_translucency: number;
   ui_glass_blur: number;
@@ -31,6 +32,7 @@ const DEFAULTS: AppSettings = {
   ui_font_family: 'geist',
   ui_base_font_size: 15,
   ui_theme_preset: 'neutral',
+  ui_neo_theme: 'classic',
   ui_panel_translucency: 76,
   ui_sidebar_translucency: 74,
   ui_glass_blur: 14,
