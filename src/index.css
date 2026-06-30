@@ -3556,6 +3556,12 @@ select {
   box-shadow: var(--neo-shadow-md) !important;
 }
 
+:root[data-ui-theme="neo"] .dock-window-group {
+  border: 2px solid var(--neo-ink) !important;
+  background: var(--muted) !important;
+  box-shadow: var(--neo-shadow-xs) !important;
+}
+
 :root[data-ui-theme="neo"] .presence-avatar-group [data-slot="avatar"],
 :root[data-ui-theme="neo"] .presence-avatar-overflow {
   border: 2px solid var(--neo-ink) !important;

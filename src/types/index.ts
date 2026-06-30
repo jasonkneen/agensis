@@ -274,6 +274,9 @@ export interface FloatingWindow {
   /** A task to scroll to and expand once the tasks window renders (e.g. from
    *  search) — consumed and cleared by the window content, not persisted. */
   focusTaskId?: string;
+  /** Set when this window is tiled with another (drag-to-split) — windows
+   *  sharing a groupId are shown as one unit in the dock and move together. */
+  groupId?: string | null;
 }
 
 export type PresenceVisibilityMode = 'visible' | 'dimmed' | 'hidden';

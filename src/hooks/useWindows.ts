@@ -23,6 +23,24 @@ function generateId(): string {
   return `win_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function generateGroupId(): string {
+  return `wgrp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Drop groupId from any window whose group has been reduced to a single
+// member — a "group" of one is just a window, and the dock should stop
+// drawing a surrounding frame around it.
+function cleanupSoloGroups(windows: FloatingWindow[]): FloatingWindow[] {
+  const counts = new Map<string, number>();
+  windows.forEach(w => {
+    if (!w.groupId) return;
+    counts.set(w.groupId, (counts.get(w.groupId) || 0) + 1);
+  });
+  const lonelyGroups = new Set([...counts.entries()].filter(([, count]) => count < 2).map(([groupId]) => groupId));
+  if (lonelyGroups.size === 0) return windows;
+  return windows.map(w => (w.groupId && lonelyGroups.has(w.groupId) ? { ...w, groupId: null } : w));
+}
+
 function getWorkspaceViewportSize(): { width: number; height: number } {
   if (typeof window === 'undefined') {
     return { width: 1024, height: 720 };
@@ -268,16 +286,14 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
     const partner = visiblePartners[0];
     if (!partner) return windows;
     const partnerBounds = clampToViewport(getComplementaryTile(viewportBounds, workspaceEdge));
-    return windows.map(w => (
-      w.id === partner.id
-        ? {
-            ...w,
-            ...partnerBounds,
-            maximized: false,
-            restoreBounds: partnerBounds,
-          }
-        : w
-    ));
+    const groupId = partner.groupId || active.groupId || generateGroupId();
+    return cleanupSoloGroups(windows.map(w => {
+      if (w.id === partner.id) {
+        return { ...w, ...partnerBounds, maximized: false, restoreBounds: partnerBounds, groupId };
+      }
+      if (w.id === activeId) return { ...w, groupId };
+      return w;
+    }));
   }
 
   const splitTarget = visiblePartners
@@ -290,16 +306,14 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
   if (!splitTarget) return windows;
 
   const partnerBounds = clampToViewport(getComplementaryTile(splitTarget.container, splitTarget.edge));
-  return windows.map(w => (
-    w.id === splitTarget.partner.id
-      ? {
-          ...w,
-          ...partnerBounds,
-          maximized: false,
-          restoreBounds: partnerBounds,
-        }
-      : w
-  ));
+  const groupId = splitTarget.partner.groupId || active.groupId || generateGroupId();
+  return cleanupSoloGroups(windows.map(w => {
+    if (w.id === splitTarget.partner.id) {
+      return { ...w, ...partnerBounds, maximized: false, restoreBounds: partnerBounds, groupId };
+    }
+    if (w.id === activeId) return { ...w, groupId };
+    return w;
+  }));
 }
 
 function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
@@ -409,7 +423,7 @@ export function useWindows() {
     setWindows(prev => {
       const closing = prev.find(w => w.id === id);
       if (closing) rememberWindowBounds(closing);
-      return fillSoleVisibleWindow(prev.filter(w => w.id !== id));
+      return cleanupSoloGroups(fillSoleVisibleWindow(prev.filter(w => w.id !== id)));
     });
   }, [rememberWindowBounds]);
 
@@ -418,6 +432,31 @@ export function useWindows() {
     setWindows(prev =>
       prev.map(w => w.id === id ? { ...w, zIndex: nextZIndexRef.current } : w)
     );
+  }, []);
+
+  // Dock-driven group actions: a tiled pair/cluster is shown as one unit in
+  // the dock, so focusing or minimizing any member brings (or hides) the
+  // whole group together instead of just the clicked window.
+  const focusWindowGroup = useCallback((groupId: string, leadId: string) => {
+    setWindows(prev => {
+      const members = prev.filter(w => w.groupId === groupId);
+      if (members.length === 0) return prev;
+      const ordered = [...members.filter(w => w.id !== leadId), ...members.filter(w => w.id === leadId)];
+      const zById = new Map<string, number>();
+      ordered.forEach(w => {
+        nextZIndexRef.current++;
+        zById.set(w.id, nextZIndexRef.current);
+      });
+      return prev.map(w => (zById.has(w.id) ? { ...w, zIndex: zById.get(w.id)!, minimized: false } : w));
+    });
+  }, []);
+
+  const minimizeWindowGroup = useCallback((groupId: string) => {
+    setWindows(prev => prev.map(w => (w.groupId === groupId ? { ...w, minimized: true } : w)));
+  }, []);
+
+  const ungroupWindows = useCallback((groupId: string) => {
+    setWindows(prev => prev.map(w => (w.groupId === groupId ? { ...w, groupId: null } : w)));
   }, []);
 
   const updateWindow = useCallback((id: string, updates: Partial<FloatingWindow>, options?: WindowUpdateOptions) => {
@@ -441,5 +480,5 @@ export function useWindows() {
     );
   }, []);
 
-  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow };
+  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, focusWindowGroup, minimizeWindowGroup, ungroupWindows };
 }
