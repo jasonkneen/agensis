@@ -9,6 +9,8 @@ const express = require('express');
 const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
+const { createMcpHandler } = require('./mcp.cjs');
+const { renderSkillMd, skillManifest } = require('./skills.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -795,6 +797,8 @@ function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
 function rateLimitBlocked(res, limiter, key) {
@@ -3351,6 +3355,51 @@ function createApp() {
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
+  });
+
+  // Native MCP server endpoint. Any MCP-capable CLI (Qwen, Claude Code, Codex)
+  // points its config at this URL with `Authorization: Bearer <agent connect
+  // token>` and gets the full workspace toolset — no agensis-agent daemon needed.
+  // Mirrors the hilos /api/mcp model. See server/mcp.cjs.
+  const mcpHandler = createMcpHandler({
+    getDb,
+    verifyAgentConnectToken,
+    continueConversation,
+    notifyDbSubscribers,
+    slugHandle,
+    rateLimiter: mcpRateLimiter,
+    rateLimitBlocked,
+    runtimeSchemaReady,
+    serverVersion: '1.0.0',
+  });
+  app.post(['/backend/mcp', '/api/mcp', '/mcp'], mcpHandler);
+  app.get(['/backend/mcp', '/api/mcp', '/mcp'], (_req, res) => {
+    res.status(405).json({
+      error: { message: 'MCP endpoint: use HTTP POST with JSON-RPC 2.0 and an Authorization: Bearer <agent token> header.' },
+    });
+  });
+
+  // Skill / marketplace endpoints (agentskills.io format). Public + token-free:
+  // they serve generic instructions for joining a workspace over the MCP server
+  // above. The per-agent Bearer token is delivered separately via the Configure
+  // MCP dialog (connection-command). The MCP host is the WS-capable backend
+  // (AGENSIS_DAEMON_BASE_URL when set, e.g. Fly), mirroring connection-command.
+  function skillBaseUrl(req) {
+    return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || requestBaseUrl(req);
+  }
+  app.get(['/backend/skill', '/api/skill', '/skill', '/.well-known/agent-skill'], (req, res) => {
+    if (rateLimitBlocked(res, skillRateLimiter, `skill:${clientIpFromReq(req)}`)) return;
+    const manifest = skillManifest({
+      baseUrl: skillBaseUrl(req),
+      name: typeof req.query?.name === 'string' ? req.query.name : undefined,
+      handle: typeof req.query?.handle === 'string' ? req.query.handle : undefined,
+    });
+    res.json({ data: manifest, error: null });
+  });
+  app.get(['/backend/skill/SKILL.md', '/api/skill/SKILL.md', '/skill/SKILL.md'], (req, res) => {
+    if (rateLimitBlocked(res, skillRateLimiter, `skill:${clientIpFromReq(req)}`)) return;
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.send(renderSkillMd({ baseUrl: skillBaseUrl(req) }));
   });
 
   app.post('/backend/webhooks/:token', async (req, res) => {

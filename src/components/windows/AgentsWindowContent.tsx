@@ -8,17 +8,21 @@ import {
   Copy,
   Database,
   Globe,
+  KeyRound,
   Link2,
   Monitor,
   Pencil,
+  Plug,
   Plus,
   Power,
+  RefreshCw,
   Rocket,
   Save,
   ShieldCheck,
   Sparkles,
   Terminal,
   Trash2,
+  TriangleAlert,
   Upload,
   Wrench,
   X,
@@ -28,6 +32,13 @@ import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Empty,
   EmptyDescription,
@@ -1118,6 +1129,7 @@ function AgentDetailPane({
   const [connectionCommand, setConnectionCommand] = useState('');
   const [connectionError, setConnectionError] = useState('');
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!agent) return;
@@ -1321,6 +1333,16 @@ function AgentDetailPane({
             {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
             {copyState === 'copied' ? 'Copied' : 'Connect'}
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setMcpDialogOpen(true)}
+            disabled={!agentActive}
+          >
+            <Plug data-icon="inline-start" />
+            Configure MCP
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={handleCreateWebhook} disabled={creatingWebhook}>
             <Link2 data-icon="inline-start" />
             Webhook
@@ -1430,6 +1452,249 @@ function AgentDetailPane({
           )}
         </div>
       </div>
+      <ConfigureMcpDialog agent={agent} open={mcpDialogOpen} onOpenChange={setMcpDialogOpen} />
+    </div>
+  );
+}
+
+interface SkillManifest {
+  mcp: { endpoint: string; transport: string; tokenPlaceholder: string; configTemplate: unknown };
+  install: { skillUrl: string; curlSkill: string; claudeMcpAdd: string };
+  prompt: string;
+  tools: Array<{ name: string; description: string }>;
+}
+
+function ConfigureMcpDialog({
+  agent,
+  open,
+  onOpenChange,
+}: {
+  agent: WorkspaceAgent;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [manifest, setManifest] = useState<SkillManifest | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [token, setToken] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [tokenError, setTokenError] = useState('');
+
+  const handle = agent.handle || agentHandle(agent.name);
+
+  useEffect(() => {
+    if (!open) return;
+    // Reset per-open: never carry a token across opens, and re-fetch the manifest.
+    setToken('');
+    setTokenError('');
+    setLoadError('');
+    let cancelled = false;
+    const params = new URLSearchParams({ name: agent.name, handle });
+    fetch(apiUrl(`/backend/skill?${params.toString()}`), { headers: { ...apiAuthHeaders() } })
+      .then(async (res) => {
+        const payload = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (!res.ok || !payload?.data) {
+          setLoadError('Could not load the MCP skill manifest from the backend.');
+          return;
+        }
+        setManifest(payload.data as SkillManifest);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('Could not reach the backend to load MCP details.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, agent.id, agent.name, handle]);
+
+  const placeholder = manifest?.mcp.tokenPlaceholder || 'aga_YOUR_AGENT_TOKEN';
+
+  const withToken = (text: string) =>
+    token ? text.split(placeholder).join(token) : text;
+
+  const configJson = manifest
+    ? withToken(JSON.stringify(manifest.mcp.configTemplate, null, 2))
+    : '';
+  const claudeMcpAdd = manifest ? withToken(manifest.install.claudeMcpAdd) : '';
+
+  const handleGenerateToken = async () => {
+    setGenerating(true);
+    setTokenError('');
+    try {
+      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ handle, baseUrl: apiBaseUrl() }),
+      });
+      const payload = await response.json().catch(() => null);
+      const newToken = payload?.data?.token || '';
+      if (!response.ok || !newToken) {
+        setTokenError(payload?.error?.message || 'Could not mint an agent token.');
+        return;
+      }
+      setToken(newToken);
+    } catch {
+      setTokenError('Could not reach the backend to mint a token.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="border-b px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-sm">
+            <Plug className="size-4 text-primary" />
+            Configure MCP — {agent.name}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Connect any MCP-capable agent (Claude Code, Codex, Cursor, Qwen…) to this workspace
+            as @{handle}. No daemon required.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[calc(85vh-4rem)] space-y-4 overflow-y-auto p-4">
+          {loadError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {loadError}
+            </div>
+          )}
+
+          {/* Token */}
+          <McpDialogSection icon={KeyRound} title="1. API key (agent token)">
+            <p className="text-xs text-muted-foreground">
+              The token authenticates the agent as @{handle}. Tokens are stored hashed and shown
+              once — copy it now.
+            </p>
+            <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>Generating a token replaces the agent&apos;s previous one. If a daemon is
+                running for this agent, update it with the new token too.</span>
+            </div>
+            {token ? (
+              <CopyField value={token} label="Agent token" mono />
+            ) : (
+              <div className="mt-2 text-xs text-muted-foreground">
+                No token generated yet — the config below uses a <code>{placeholder}</code> placeholder.
+              </div>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant={token ? 'outline' : 'default'}
+              className="mt-2"
+              onClick={handleGenerateToken}
+              disabled={generating}
+            >
+              <RefreshCw data-icon="inline-start" className={generating ? 'animate-spin' : undefined} />
+              {token ? 'Regenerate token' : 'Generate token'}
+            </Button>
+            {tokenError && <div className="mt-2 text-xs text-destructive">{tokenError}</div>}
+          </McpDialogSection>
+
+          {/* Endpoint + config */}
+          <McpDialogSection icon={Globe} title="2. MCP endpoint & config">
+            {manifest && <CopyField value={manifest.mcp.endpoint} label="Endpoint" mono />}
+            <p className="mt-3 mb-1 text-xs text-muted-foreground">
+              Claude Code one-liner:
+            </p>
+            {manifest && <CopyBlock value={claudeMcpAdd} />}
+            <p className="mt-3 mb-1 text-xs text-muted-foreground">
+              Or paste into your MCP client config (Claude Code <code>.mcp.json</code>, Codex
+              <code> ~/.codex/config.toml</code>, etc.):
+            </p>
+            {manifest && <CopyBlock value={configJson} />}
+          </McpDialogSection>
+
+          {/* Prompt */}
+          <McpDialogSection icon={Sparkles} title="3. Agent prompt (optional)">
+            <p className="text-xs text-muted-foreground">
+              Paste this into the agent so it knows it&apos;s now an agensis teammate and how to behave.
+            </p>
+            {manifest && <CopyBlock value={manifest.prompt} className="mt-2 max-h-44" />}
+          </McpDialogSection>
+
+          {/* Skill / marketplace */}
+          <McpDialogSection icon={Wrench} title="4. Install as a skill (agentskills.io)">
+            <p className="text-xs text-muted-foreground">
+              Give the agent durable know-how via the open Agent Skills format. Drop the skill into
+              any compatible client:
+            </p>
+            {manifest && <CopyBlock value={manifest.install.curlSkill} className="mt-2" />}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Claude Code plugin marketplace (git-hosted): add this repo, then install the
+              <code> agensis</code> plugin:
+            </p>
+            <CopyBlock
+              value={'/plugin marketplace add <your-org>/agensis\n/plugin install agensis@agensis'}
+              className="mt-2"
+            />
+          </McpDialogSection>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function McpDialogSection({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border bg-muted/25 p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <Icon className="size-3.5" />
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function CopyField({ value, label, mono }: { value: string; label: string; mono?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(value);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  };
+  return (
+    <div className="mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <code className={cn('min-w-0 flex-1 truncate', mono && 'font-mono')} title={value}>{value}</code>
+      <Button type="button" variant="ghost" size="icon-xs" onClick={copy} aria-label={`Copy ${label}`}>
+        {copied ? <Check /> : <Copy />}
+      </Button>
+    </div>
+  );
+}
+
+function CopyBlock({ value, className }: { value: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(value);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  };
+  return (
+    <div className={cn('relative rounded-md border bg-background', className)}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="absolute right-1 top-1 z-10"
+        onClick={copy}
+        aria-label="Copy"
+      >
+        {copied ? <Check /> : <Copy />}
+      </Button>
+      <pre className="max-h-full overflow-auto whitespace-pre-wrap break-words p-2 pr-8 text-xs leading-relaxed">{value}</pre>
     </div>
   );
 }
