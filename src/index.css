@@ -3477,3 +3477,30 @@ select {
   box-shadow: var(--neo-shadow-sm);
   transform: rotate(-3deg);
 }
+
+/* ---- window title-bar chrome: the mac-dot strip from the mockups ----------
+   Restyles the floating-window header (a real element, [data-window-titlebar])
+   into a brutal window title bar: a raised cream strip, a mono title, and three
+   bordered traffic-light dots rendered as a single decorative ::before so no
+   markup or controls change. The existing window action buttons sit to the
+   right exactly as before. */
+:root[data-ui-theme="neo"] [data-window-titlebar] {
+  background: var(--canvas-raised) !important;
+  border-bottom: 2.5px solid var(--neo-ink) !important;
+  font-family: var(--neo-mono);
+}
+:root[data-ui-theme="neo"] [data-window-titlebar]::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 42px;
+  height: 12px;
+  margin-right: 2px;
+  background:
+    radial-gradient(circle at 6px 50%,  var(--error)   0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px),
+    radial-gradient(circle at 21px 50%, var(--warning) 0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px),
+    radial-gradient(circle at 36px 50%, var(--success) 0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px);
+}
+/* the window title reads as a mono room label */
+:root[data-ui-theme="neo"] [data-window-titlebar] .truncate {
+  letter-spacing: 0.02em;
+}

@@ -528,6 +528,7 @@ export function FloatingWindowShell({
           )}
         >
         <div
+          data-window-titlebar
           onPointerDown={handleDragStart}
           className={cn(
             'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
