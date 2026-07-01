@@ -129,7 +129,18 @@ function participantAvatarValue(participant: ChannelParticipant | null): string 
 // channels / non-agent chats, which keep the generic chat icon.
 function dockChatAvatar(session: ChatSession | undefined, agents: WorkspaceAgent[]): string | null {
   const participant = directAgentParticipantForSession(session);
-  if (!participant) return null;
+  if (!participant) {
+    // Old DM sessions (folder='Direct messages') may lack participants. Fall back
+    // to matching by session title so their dock buttons still show agent avatars.
+    if (session?.folder === 'Direct messages') {
+      const key = normalizeAgentLookupKey(session.title);
+      const agent = key
+        ? agents.find(item => [item.id, item.handle, item.name].some(v => normalizeAgentLookupKey(v) === key))
+        : undefined;
+      return (agent?.avatar && agent.avatar.trim()) || null;
+    }
+    return null;
+  }
   const key = normalizeAgentLookupKey(participant.agent_id || participant.handle || participant.name);
   const agent = key
     ? agents.find(item => [item.id, item.handle, item.name].some(v => normalizeAgentLookupKey(v) === key))
@@ -149,11 +160,12 @@ function DockChatAvatar({ avatar }: { avatar: string }) {
     );
   }
   const src = isImageAvatar(avatar) ? renderablePetAssetUrl(avatar) : undefined;
+  const text = avatar?.trim();
   return (
     <Avatar size="sm" className="size-6 rounded-md bg-muted">
       {src && <AvatarImage src={src} alt="" className="rounded-md" />}
-      <AvatarFallback className="rounded-md">
-        <MessageSquare className="size-3.5" />
+      <AvatarFallback className="rounded-md text-sm leading-none">
+        {src ? <MessageSquare className="size-3.5" /> : text ? text : <MessageSquare className="size-3.5" />}
       </AvatarFallback>
     </Avatar>
   );
