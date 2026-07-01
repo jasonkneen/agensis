@@ -67,6 +67,14 @@ function makeDb({ root, authSecret = 'test-secret' } = {}) {
         return params[0] === WORKSPACE_ID ? [{ id: WORKSPACE_ID, local_path: root, git_root: null }] : [];
       }
 
+      // Plan 005 — verifyToken now checks token_version on every authenticated
+      // request; this file only issues tokens for USER_ID at version '1' (see
+      // the __test.issueToken(USER_ID, '1') call sites below), so a fixed
+      // answer is enough — revocation itself isn't under test here.
+      if (normalized.startsWith('select token_version from app_users where id = $1')) {
+        return [{ token_version: '1' }];
+      }
+
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };
@@ -139,7 +147,7 @@ test('POST /backend/workspaces/:id/git/stage rejects a symlink that escapes the 
   const scratch = setupScratchRepo();
   try {
     installDb({ root: scratch.root });
-    const token = await __test.issueToken(USER_ID);
+    const token = await __test.issueToken(USER_ID, '1');
 
     await withServer(async (baseUrl) => {
       const response = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/stage`, {
@@ -164,7 +172,7 @@ test('POST /backend/workspaces/:id/git/stage still stages a normal (non-symlinke
   const scratch = setupScratchRepo();
   try {
     installDb({ root: scratch.root });
-    const token = await __test.issueToken(USER_ID);
+    const token = await __test.issueToken(USER_ID, '1');
 
     await withServer(async (baseUrl) => {
       const response = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/stage`, {
@@ -188,7 +196,7 @@ test('GET /backend/workspaces/:id/git/diff rejects a symlink that escapes the wo
   const scratch = setupScratchRepo();
   try {
     installDb({ root: scratch.root });
-    const token = await __test.issueToken(USER_ID);
+    const token = await __test.issueToken(USER_ID, '1');
 
     await withServer(async (baseUrl) => {
       const response = await authedFetch(
@@ -209,7 +217,7 @@ test('GET /backend/workspaces/:id/git/diff still reads a normal untracked file i
   const scratch = setupScratchRepo();
   try {
     installDb({ root: scratch.root });
-    const token = await __test.issueToken(USER_ID);
+    const token = await __test.issueToken(USER_ID, '1');
 
     await withServer(async (baseUrl) => {
       const response = await authedFetch(

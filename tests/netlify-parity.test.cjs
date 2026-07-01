@@ -18,6 +18,7 @@
 // ============================================================================
 
 const test = require('node:test');
+const { mock } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -25,7 +26,40 @@ const { pathToFileURL } = require('node:url');
 let handler;   // netlify default export
 let core;      // shared/backend-core.mjs
 
+// Plan 005 — token expiry and revocation — means requireUserId (-> verifyAuthToken
+// -> getTokenVersion) now needs a real `select token_version from app_users ...`
+// row for ANY successfully-authenticated request, including ones that only care
+// about post-auth route behavior. There is still no live Postgres in this test
+// file (by design, see the file header) and backend.mjs has no DB-injection test
+// hook, so `@netlify/database` itself is mocked at the module level, before
+// backend.mjs is imported (ESM mocks must be installed before the module under
+// test is first loaded). `dbQueryImpl` is a per-test override (see the
+// change-password test below); the default only ever needs to answer the
+// token_version lookup, since every other test in this file either never
+// authenticates successfully (401-before-DB) or calls the shared core functions
+// directly with their own mock `db`/`getTokenVersion`.
+let dbQueryImpl = null;
+
 test.before(async () => {
+  mock.module('@netlify/database', {
+    namedExports: {
+      getDatabase: () => ({
+        pool: {
+          async query(text, params) {
+            if (dbQueryImpl) return dbQueryImpl(text, params);
+            const normalized = String(text).replace(/\s+/g, ' ').trim().toLowerCase();
+            if (normalized.startsWith('alter table') || normalized.startsWith('create table') || normalized.startsWith('create index')) {
+              return { rows: [] }; // ensureAppUserProfileColumns() etc. — schema DDL, not under test here
+            }
+            if (/select token_version from app_users/i.test(text)) {
+              return { rows: [{ token_version: '1' }] };
+            }
+            throw new Error(`Unexpected DB query in netlify-parity test (no dbQueryImpl set): ${text}`);
+          },
+        },
+      }),
+    },
+  });
   const backend = await import(pathToFileURL(path.resolve(__dirname, '../netlify/functions/backend.mjs')).href);
   handler = backend.default;
   core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.mjs')).href);
@@ -200,8 +234,13 @@ test('POST /backend/users/me/change-password rejects a weak newPassword (validat
   const prevSecret = process.env.AUTH_SECRET;
   try {
     process.env.AUTH_SECRET = 'change-password-test-secret';
-    const sig = require('crypto').createHmac('sha256', 'change-password-test-secret').update('user-1').digest('base64url');
-    const token = `user-1.${sig}`;
+    // Plan 005 token format: `${userId}.${tokenVersion}.${sig}`, sig computed
+    // over the `${userId}.${tokenVersion}` payload. token_version '1' matches
+    // the default the module-level DB mock (see test.before above) answers for
+    // the auth step's token_version lookup.
+    const payload = 'user-1.1';
+    const sig = require('crypto').createHmac('sha256', 'change-password-test-secret').update(payload).digest('base64url');
+    const token = `${payload}.${sig}`;
 
     const req = new Request('http://localhost/backend/users/me/change-password', {
       method: 'POST',
