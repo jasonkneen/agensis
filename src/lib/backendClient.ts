@@ -20,8 +20,9 @@ type SessionLike = {
 
 type Filter = {
   column: string;
-  operator: 'eq';
+  operator: 'eq' | 'not';
   value: unknown;
+  subOperator?: string;
 };
 
 type LooseJson = ReturnType<typeof JSON.parse>;
@@ -278,6 +279,11 @@ class QueryBuilder<T = LooseJson> {
 
   eq(column: string, value: unknown) {
     this.filters.push({ column, operator: 'eq', value });
+    return this;
+  }
+
+  not(column: string, subOperator: string, value: unknown) {
+    this.filters.push({ column, operator: 'not', subOperator, value });
     return this;
   }
 

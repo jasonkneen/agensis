@@ -849,9 +849,19 @@ function buildWhereClause(filters = [], params = []) {
   for (const filter of filters) {
     if (!filter || typeof filter !== 'object') continue;
     const operator = filter.operator || 'eq';
-    if (operator !== 'eq') throw new Error(`Unsupported filter operator: ${operator}`);
-    params.push(filter.value ?? null);
-    clauses.push(`${quoteIdent(filter.column)} = $${params.length}`);
+    if (operator === 'eq') {
+      params.push(filter.value ?? null);
+      clauses.push(`${quoteIdent(filter.column)} = $${params.length}`);
+      continue;
+    }
+    if (operator === 'not') {
+      if (filter.subOperator !== 'is' || filter.value !== null) {
+        throw new Error(`Unsupported not filter: ${filter.subOperator} ${filter.value}`);
+      }
+      clauses.push(`${quoteIdent(filter.column)} IS NOT NULL`);
+      continue;
+    }
+    throw new Error(`Unsupported filter operator: ${operator}`);
   }
 
   return {
