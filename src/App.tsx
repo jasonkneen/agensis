@@ -1531,7 +1531,7 @@ function AppContent() {
                 subThreadStreaming={subThreadStreaming}
                 onOpenSubThread={openSubThread}
                 onCloseSubThread={closeSubThread}
-                onCreateSubThread={async (messageId, agent, messageContent) => {
+                onCreateSubThread={async (messageId, agent, messageContent?: string) => {
                   const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
                   const otherAgents = agents
                     .filter(a => a.enabled !== false && a.id !== agent.id)

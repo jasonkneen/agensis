@@ -188,7 +188,9 @@ function GeneralPanel({
       try {
         // Web mode: browser can't return the full system path, so we confirm the
         // folder name and ask the user to type the full path.
-        const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
+        const handle = await (window as unknown as {
+          showDirectoryPicker: (opts?: { mode?: 'read' | 'readwrite' }) => Promise<{ name: string }>;
+        }).showDirectoryPicker({ mode: 'read' });
         setPathStatus(`Selected "${handle.name}" — paste the full system path above, then click Link.`);
       } catch {
         // user cancelled

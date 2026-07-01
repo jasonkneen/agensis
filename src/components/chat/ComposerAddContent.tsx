@@ -229,7 +229,7 @@ export function ComposerAddContent({
         {toolOptions.length > 0 ? toolOptions.map(tool => (
           <ComposerAddRow
             key={tool.id}
-            icon={tool.detail.includes('command') ? <Command /> : <Wrench />}
+            icon={tool.detail.includes('command') ? <CommandIcon /> : <Wrench />}
             label={tool.label}
             detail={tool.detail}
             onClick={() => onAddTool(tool)}

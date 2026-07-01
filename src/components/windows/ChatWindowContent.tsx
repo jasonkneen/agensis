@@ -17,7 +17,6 @@ import {
   Columns2,
   Globe,
   Hash,
-  HardDrive,
   Layers,
   Link2,
   Loader2,
@@ -39,7 +38,6 @@ import {
   Sparkles,
   Terminal,
   Trash2,
-  Upload,
   UserPlus,
   Users,
   Wrench,
@@ -56,7 +54,6 @@ import {
   formatBytes,
   linkedProjectFile,
   linkedUploadedFile,
-  type ComposerContextOption,
   type LinkedFile,
   type ProjectFileEntry,
   type ProjectFileSource,
@@ -1605,7 +1602,7 @@ export function ChatWindowContent({
               skillOptions={skillOptions}
               toolOptions={toolOptions}
             />
-          ) : (
+          ) : sidePanel === 'files' || sidePanel === 'pins' || sidePanel === 'thread' ? (
             <ChannelSidePanel
               type={sidePanel}
               workspaceId={workspaceId}
@@ -1620,7 +1617,7 @@ export function ChatWindowContent({
               onUploadFiles={uploadAndLinkFiles}
               onClose={closeSidePanel}
             />
-          )}
+          ) : null}
         </aside>
       )}
 

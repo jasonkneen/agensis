@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Bot, MessageSquare, Mic, Paperclip, Plus, Send, User, X } from 'lucide-react';
+import { Bot, MessageSquare, Mic, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import {
