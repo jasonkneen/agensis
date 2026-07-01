@@ -1377,7 +1377,7 @@ function AppContent() {
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
 
-      <div data-workspace-frame className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl">
+      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
           online={online}
           syncing={syncing}

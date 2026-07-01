@@ -963,28 +963,6 @@
   overflow: visible !important;
 }
 
-/* The main workspace column is the sidebar's symmetric sibling in the padded
-   chrome row, but it sat flat with no elevation. Give it the SAME raised-surface
-   treatment as [data-sidebar-panel] so both chrome panels read as one family:
-   faint border + card fill + soft top-lighting gradient + glass blur, lifted by
-   the shared --shadow-md/--shadow-xl tokens (which each theme redefines — soft
-   for base/tinyworld, hard-offset for neo — so parity is automatic per theme).
-   Applied to the WRAPPER (not <main>) because it already clips overflow and its
-   shadow lives in the same 8px gap the sidebar's shadow does — no corner clip,
-   no straight-line cutoff. The fill uses a slightly lower default alpha than the
-   sidebar so the workspace backdrop still reads through the canvas. */
-[data-workspace-frame] {
-  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
-    color-mix(in srgb, var(--card) var(--agensis-canvas-frame-alpha, 55%), transparent);
-  box-shadow:
-    var(--shadow-md),
-    var(--shadow-xl);
-  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
-}
-
 
 .sidebar-workspace-pill {
   min-height: 34px;
@@ -3630,15 +3608,6 @@ select {
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
   border-top: 2.5px solid var(--neo-ink) !important;
   border-left: 2.5px solid var(--neo-ink) !important;
-}
-/* Main workspace column matches the sidebar's brutal frame: same thick top-left
-   ink border + hard radius + solid card (no glass) so it reads as a neo block. */
-:root[data-ui-theme="neo"] [data-workspace-frame] {
-  border-radius: 12px !important;
-  border: 2.5px solid var(--neo-ink) !important;
-  background: var(--card) !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] {
   background: var(--canvas-raised) !important;
