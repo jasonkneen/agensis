@@ -500,7 +500,7 @@ function AppearancePanel({
                       }}
                       aria-pressed={active}
                       title={t.label}
-                      className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-foreground ring-1 ring-foreground' : 'border-border hover:bg-accent'}`}
+                      className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
                     >
                       <span className="flex shrink-0 overflow-hidden border border-border" style={{ borderRadius: swatchRadius }}>
                         {t.swatch.map((c, i) => (
@@ -511,6 +511,11 @@ function AppearancePanel({
                         className="truncate font-medium"
                         style={{ fontFamily: profile.display, fontWeight: profile.weight, letterSpacing: profile.spacing, textTransform: profile.transform as 'uppercase' | 'none' | 'capitalize' | 'lowercase' }}
                       >{t.label}</span>
+                      {active && (
+                        <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                          <Check className="size-3" strokeWidth={3} />
+                        </span>
+                      )}
                     </button>
                   );
                 })}

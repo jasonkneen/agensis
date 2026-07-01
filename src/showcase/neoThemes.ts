@@ -245,6 +245,13 @@ export const STYLE_PROFILES: Record<string, NeoStyleProfile> = {
     shadow: { xs: sh(1.5), sm: sh(2), md: sh(3), lg: sh(4), x: '3px', y: '3px' },
     ...dots(20),
   },
+  // Manrope throughout, technical grid paper — drafting / blueprint
+  blueprint: {
+    label: 'Blueprint', font: F.manrope, display: F.manrope,
+    weight: '800', spacing: '-0.015em', transform: 'none', radius: 'default',
+    shadow: { xs: sh(1.5), sm: sh(2), md: sh(3), lg: sh(4), x: '3px', y: '3px' },
+    ...grid(24),
+  },
   // Big Shoulders Display — industrial transit
   transit: {
     label: 'Transit', font: F.manrope, display: F.bigShoulders,
@@ -356,6 +363,14 @@ const CREAM = '#fff6df';
 const PAPER2 = '#fff9ef';
 
 export const NEO_THEMES: NeoTheme[] = [
+  // ───────────────────────── BLUEPRINT — default, Manrope ──────────────────
+  {
+    id: 'blueprint', label: 'Blueprint', group: 'Blueprint', style: 'blueprint',
+    swatch: ['#ffffff', '#7de3ff', '#0d2440'],
+    light: { paper: '#eef4fb', ink: '#0d2440', primary: '#1f4f86', onPrimary: '#ffffff', dot: mix('#0d2440', 16, 'transparent') },
+    dark: { paper: '#0b1f38', ink: '#dfecfb', primary: '#8fd3ff', onPrimary: '#0b1f38', card: '#102744', raised: '#163251', shadow: '#3f5c80', dot: mix('#8fd3ff', 14, 'transparent') },
+  },
+
   // ───────────────────────── POP — bright & loud ──────────────────────────
   {
     id: 'classic', label: 'Classic', group: 'Pop', style: 'brutal',
@@ -482,12 +497,6 @@ export const NEO_THEMES: NeoTheme[] = [
     dark: { paper: '#15130f', ink: '#efe7d8', primary: '#efe7d8', onPrimary: '#15130f', card: '#1f1c16', raised: '#2a2620', shadow: '#615b4e' },
   },
   {
-    id: 'blueprint', label: 'Blueprint', group: 'Mono & Print', style: 'press',
-    swatch: ['#ffffff', '#7de3ff', '#0d2440'],
-    light: { paper: '#eef4fb', ink: '#0d2440', primary: '#1f4f86', onPrimary: '#ffffff', dot: mix('#0d2440', 16, 'transparent') },
-    dark: { paper: '#0b1f38', ink: '#dfecfb', primary: '#8fd3ff', onPrimary: '#0b1f38', card: '#102744', raised: '#163251', shadow: '#3f5c80', dot: mix('#8fd3ff', 14, 'transparent') },
-  },
-  {
     id: 'riso-red', label: 'Riso Red', group: 'Mono & Print', style: 'marquee',
     swatch: ['#ff4438', '#2a4bd7', '#f6efe2'],
     light: { paper: '#f7f0e3', ink: '#1c1208', primary: '#ff4438', onPrimary: '#fff', success: '#2a4bd7' },
@@ -591,7 +600,7 @@ export const NEO_GROUPS: string[] = NEO_THEMES.reduce<string[]>((groups, t) => {
 
 // ---- persistence ---------------------------------------------------------
 const STORAGE_KEY = 'agensis_neo_theme';
-export const DEFAULT_NEO_THEME = 'classic';
+export const DEFAULT_NEO_THEME = 'blueprint';
 
 export function getStoredNeoTheme(): string {
   try {

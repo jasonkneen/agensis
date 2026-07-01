@@ -36,7 +36,7 @@ const DEFAULTS: AppSettings = {
   ui_font_family: 'geist',
   ui_base_font_size: 15,
   ui_theme_preset: 'neutral',
-  ui_neo_theme: 'classic',
+  ui_neo_theme: 'blueprint',
   ui_panel_translucency: 76,
   ui_sidebar_translucency: 74,
   ui_glass_blur: 14,
