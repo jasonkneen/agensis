@@ -1736,27 +1736,32 @@ function ChatMessageBubble({
           </button>
         ) : null}
       </div>
-      <div className="absolute top-2 right-3 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
-        {onOpenThread && (
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
-            <CornerDownRight />
-          </Button>
-        )}
-        {onTogglePin && (
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onTogglePin} disabled={actionBusy} aria-label={msg.pinned ? 'Unpin post' : 'Pin post'} title={msg.pinned ? 'Unpin post' : 'Pin post'}>
-            <Pin fill={msg.pinned ? 'currentColor' : 'none'} />
-          </Button>
-        )}
-        {onStartEdit && (
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onStartEdit} disabled={actionBusy || isStreaming} aria-label="Edit post" title="Edit post">
-            <Pencil />
-          </Button>
-        )}
-        {onDelete && (
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} disabled={actionBusy} aria-label="Delete post" title="Delete post">
-            <Trash2 />
-          </Button>
-        )}
+      {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
+          rides into view as you scroll a tall message (top → mid-viewport → bottom-right)
+          instead of scrolling off the top with the message header. */}
+      <div className="pointer-events-none absolute inset-y-0 right-3 flex items-start">
+        <div className="pointer-events-auto sticky top-2 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
+          {onOpenThread && (
+            <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
+              <CornerDownRight />
+            </Button>
+          )}
+          {onTogglePin && (
+            <Button type="button" variant="ghost" size="icon-xs" onClick={onTogglePin} disabled={actionBusy} aria-label={msg.pinned ? 'Unpin post' : 'Pin post'} title={msg.pinned ? 'Unpin post' : 'Pin post'}>
+              <Pin fill={msg.pinned ? 'currentColor' : 'none'} />
+            </Button>
+          )}
+          {onStartEdit && (
+            <Button type="button" variant="ghost" size="icon-xs" onClick={onStartEdit} disabled={actionBusy || isStreaming} aria-label="Edit post" title="Edit post">
+              <Pencil />
+            </Button>
+          )}
+          {onDelete && (
+            <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} disabled={actionBusy} aria-label="Delete post" title="Delete post">
+              <Trash2 />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
