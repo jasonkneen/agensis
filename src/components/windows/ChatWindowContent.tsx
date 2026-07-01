@@ -673,6 +673,11 @@ export function ChatWindowContent({
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
 
+  // Open the sub-thread side panel whenever activeSubThread is set (e.g. after creation)
+  useEffect(() => {
+    if (activeSubThread) setSidePanel('sub-thread');
+  }, [activeSubThread]);
+
   useEffect(() => {
     if (!inferredSessionId && (!workspaceId || !channelTitle)) {
       setChannelMeta(null);
