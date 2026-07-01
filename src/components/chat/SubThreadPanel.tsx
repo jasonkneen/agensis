@@ -1,4 +1,4 @@
-import React, { useRef, useState, type CSSProperties } from 'react';
+import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Bot, MessageSquare, Mic, Paperclip, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
@@ -94,6 +94,16 @@ export function SubThreadPanel({
 
   const participants = Array.isArray(session.participants) ? session.participants : [];
   const agentParticipants = participants.filter(p => p.kind === 'agent');
+  const activityAgents = useMemo(() => {
+    const entries: { name: string; activity: string }[] = [];
+    for (const m of messages) {
+      if (!isActivityPlaceholderMsg(m)) continue;
+      const name = (m.sender_name || 'Agent').trim();
+      const activity = extractActivityVerbST(safeText(m.content));
+      if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
+    }
+    return entries;
+  }, [messages]);
 
   const addLinkedFile = (file: LinkedFile) => {
     setLinkedFiles(prev => prev.find(item => item.id === file.id) ? prev : [...prev, file]);
@@ -248,6 +258,26 @@ export function SubThreadPanel({
         </MessageScroller>
       </MessageScrollerProvider>
 
+      {activityAgents.length > 0 && (
+        <div className="composer-status flex items-center gap-2 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+          <span className="composer-status-dots" aria-hidden>
+            <span />
+            <span />
+            <span />
+          </span>
+          <span className="truncate">
+            {activityAgents.map(({ name, activity }, i) => (
+              <React.Fragment key={name}>
+                {i > 0 && (i === activityAgents.length - 1 ? ' and ' : ', ')}
+                <span className="font-medium text-foreground">{name}</span>
+                {' '}is {activity}
+              </React.Fragment>
+            ))}
+            {'…'}
+          </span>
+        </div>
+      )}
+
       <div className="channel-composer shrink-0 border-t border-border p-2">
         {hasAttachments && (
           <div className="mb-2 flex flex-wrap gap-1.5">
@@ -401,6 +431,9 @@ function SubThreadBubble({
   const content = safeText(msg.content);
   const artifact = content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
+  const isActivityPlaceholder = isActivityPlaceholderMsg(msg);
+  const placeholderActivity = isActivityPlaceholder ? extractActivityVerbST(content) : 'thinking';
+  const placeholderLabel = placeholderActivity.charAt(0).toUpperCase() + placeholderActivity.slice(1);
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const canOpenAgentProfile = msg.sender_kind === 'agent' && Boolean(msg.sender_id || msg.sender_name);
   const agentProfileKey = msg.sender_id || msg.sender_name || '';
@@ -444,7 +477,12 @@ function SubThreadBubble({
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
         <div className="mt-0.5 text-xs leading-relaxed text-foreground">
-          {displayContent ? (
+          {isActivityPlaceholder ? (
+            <span className="flex items-center gap-2 text-muted-foreground">
+              <Spinner className="size-3" />
+              {placeholderLabel}
+            </span>
+          ) : displayContent ? (
             <MarkdownContent content={displayContent} compact />
           ) : isStreaming ? (
             <span className="flex items-center gap-2 text-muted-foreground">
@@ -473,4 +511,26 @@ function safeText(value: unknown): string {
     }
   }
   return String(value);
+}
+
+const ACTIVITY_VERBS_ST = [
+  'looking up', 'summarizing', 'reviewing', 'reasoning', 'processing',
+  'generating', 'executing', 'analyzing', 'searching', 'fetching',
+  'planning', 'reading', 'editing', 'writing', 'checking', 'running',
+  'browsing', 'thinking',
+] as const;
+const ACTIVITY_STATUS_RE_ST = new RegExp(
+  `^(${ACTIVITY_VERBS_ST.join('|')})[\\s\\w.,…]*$`,
+  'i',
+);
+function extractActivityVerbST(content: string): string {
+  const lower = content.trim().toLowerCase();
+  for (const verb of ACTIVITY_VERBS_ST) {
+    if (lower.startsWith(verb)) return verb;
+  }
+  return 'thinking';
+}
+function isActivityPlaceholderMsg(msg: Pick<ChatMessage, 'sender_kind' | 'role' | 'content'>): boolean {
+  if (!(msg.sender_kind === 'agent' || msg.role === 'assistant')) return false;
+  return ACTIVITY_STATUS_RE_ST.test(safeText(msg.content).trim());
 }

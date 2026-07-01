@@ -19,6 +19,7 @@ import { AI_MODELS, type Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
+import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -366,21 +367,26 @@ function AppearancePanel({
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
   const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
+  const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
   const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
+  const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
+  // Derive which style tab is active from the current mode
+  const themeStyleTab: 'normal' | 'brutal' = isNeoFamily ? 'brutal' : 'normal';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
   const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
   const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const backgroundImage = workspace?.background_image || '';
-  const modes: Array<{ id: ThemeMode; label: string }> = [
+  // Scheme toggles per tab
+  const normalSchemeModes: Array<{ id: ThemeMode; label: string }> = [
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
     { id: 'system', label: 'System' },
-    { id: 'tinyworld-light', label: 'TinyWorld Light' },
-    { id: 'tinyworld-dark', label: 'TinyWorld Dark' },
-    { id: 'neo-light', label: 'Neo Light' },
-    { id: 'neo-dark', label: 'Neo Dark' },
+    { id: 'tinyworld-light', label: 'TW Light' },
+    { id: 'tinyworld-dark', label: 'TW Dark' },
   ];
+  // Active scheme value for normal tab: map normal-* back to plain light/dark
+  const normalSchemeValue: ThemeMode = themeMode === 'normal-light' ? 'light' : themeMode === 'normal-dark' ? 'dark' : themeMode;
   const fontOptions: Array<{ id: UiFontFamily; label: string }> = [
     { id: 'geist', label: 'Geist' },
     { id: 'inter', label: 'Inter' },
@@ -433,101 +439,220 @@ function AppearancePanel({
     <FieldGroup>
       <Field>
         <FieldLabel>Theme</FieldLabel>
-        <ToggleGroup
-          type="single"
-          value={themeMode}
-          onValueChange={value => {
-            if (value) onThemeChange(value as ThemeMode);
-          }}
-          variant="outline"
-          className="grid w-full grid-cols-2 sm:grid-cols-3"
-        >
-          {modes.map(mode => (
-            <ToggleGroupItem key={mode.id} value={mode.id}>
-              {mode.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <FieldDescription>System follows your OS setting. TinyWorld and Neo provide separate light and dark control palettes.</FieldDescription>
-      </Field>
 
-      <Field>
-        <FieldLabel>Accent color</FieldLabel>
-        <ToggleGroup
-          type="single"
-          value={themePreset}
-          onValueChange={value => {
-            if (!value) return;
-            setThemePreset(value);
-            setSetting('ui_theme_preset', value);
-            applyThemePreset(value);
-          }}
-          variant="outline"
-          className="grid w-full grid-cols-2 sm:grid-cols-3"
-        >
-          {THEME_PRESETS.map(preset => (
-            <ToggleGroupItem key={preset.id} value={preset.id} className="gap-2">
-              <span className="size-3 rounded-sm border border-border" style={{ background: preset.swatch }} />
-              {preset.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </Field>
-
-      <Field>
-        <FieldLabel>Neo theme</FieldLabel>
-        <div className="space-y-4">
-          {NEO_GROUPS.map(group => (
-            <div key={group} className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {NEO_THEMES.filter(t => t.group === group).map(t => {
-                  const active = neoTheme === t.id;
-                  const profile = resolveNeoStyle(t);
-                  const swatchRadius = profile.radius === 'sharp' ? '0px' : profile.radius === 'soft' ? '9999px' : '4px';
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        setNeoTheme(t.id);
-                        setSetting('ui_neo_theme', t.id);
-                        applyNeoTheme(t.id);
-                        if (!isNeoFamily) {
-                          const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                          onThemeChange(dark ? 'neo-dark' : 'neo-light');
-                        }
-                      }}
-                      aria-pressed={active}
-                      title={t.label}
-                      className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                    >
-                      <span className="flex shrink-0 overflow-hidden border border-border" style={{ borderRadius: swatchRadius }}>
-                        {t.swatch.map((c, i) => (
-                          <span key={i} className="size-3.5" style={{ background: c }} />
-                        ))}
-                      </span>
-                      <span
-                        className="truncate font-medium"
-                        style={{ fontFamily: profile.display, fontWeight: profile.weight, letterSpacing: profile.spacing, textTransform: profile.transform as 'uppercase' | 'none' | 'capitalize' | 'lowercase' }}
-                      >{t.label}</span>
-                      {active && (
-                        <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                          <Check className="size-3" strokeWidth={3} />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        {/* Normal | Brutal tab bar */}
+        <div className="flex gap-1 rounded-lg border border-border bg-muted p-1">
+          <button
+            type="button"
+            onClick={() => {
+              if (isNeoFamily) {
+                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                onThemeChange(isNormalFamily ? (dark ? 'normal-dark' : 'normal-light') : (dark ? 'dark' : 'light'));
+              }
+            }}
+            className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'normal' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Normal
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!isNeoFamily) {
+                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                onThemeChange(dark ? 'neo-dark' : 'neo-light');
+              }
+            }}
+            className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'brutal' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Brutal
+          </button>
         </div>
-        <FieldDescription>
-          {isNeoFamily
-            ? 'Repaints the whole app. Each theme has matching light and dark variants — toggle Neo Light / Neo Dark above to switch.'
-            : 'Picking a theme switches you into the Neo family. Each theme has matching light and dark variants.'}
-        </FieldDescription>
+
+        {/* Normal tab content */}
+        {themeStyleTab === 'normal' && (
+          <div className="space-y-4">
+            {/* Scheme sub-toggle */}
+            <ToggleGroup
+              type="single"
+              value={normalSchemeValue}
+              onValueChange={value => {
+                if (!value) return;
+                const next = value as ThemeMode;
+                // If a normal theme is active, keep it active while switching scheme
+                if (isNormalFamily && (next === 'light' || next === 'dark')) {
+                  onThemeChange(next === 'light' ? 'normal-light' : 'normal-dark');
+                } else {
+                  onThemeChange(next);
+                }
+              }}
+              variant="outline"
+              className="grid w-full grid-cols-3 sm:grid-cols-5"
+            >
+              {normalSchemeModes.map(mode => (
+                <ToggleGroupItem key={mode.id} value={mode.id}>
+                  {mode.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+
+            {/* Accent color (only when no custom normal theme) */}
+            {!isNormalFamily && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Accent color</div>
+                <ToggleGroup
+                  type="single"
+                  value={themePreset}
+                  onValueChange={value => {
+                    if (!value) return;
+                    setThemePreset(value);
+                    setSetting('ui_theme_preset', value);
+                    applyThemePreset(value);
+                  }}
+                  variant="outline"
+                  className="grid w-full grid-cols-2 sm:grid-cols-3"
+                >
+                  {THEME_PRESETS.map(preset => (
+                    <ToggleGroupItem key={preset.id} value={preset.id} className="gap-2">
+                      <span className="size-3 rounded-sm border border-border" style={{ background: preset.swatch }} />
+                      {preset.label}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+            )}
+
+            {/* Normal theme grid */}
+            <div className="space-y-3">
+              {NORMAL_GROUPS.map(group => (
+                <div key={group} className="space-y-1.5">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {NORMAL_THEMES.filter(t => t.group === group).map(t => {
+                      const active = normalTheme === t.id && isNormalFamily;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            if (active) {
+                              // Deselect: go back to plain scheme
+                              setNormalTheme('');
+                              setSetting('ui_normal_theme', '');
+                              clearNormalTheme();
+                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                              onThemeChange(dark ? 'dark' : 'light');
+                            } else {
+                              setNormalTheme(t.id);
+                              setSetting('ui_normal_theme', t.id);
+                              applyNormalTheme(t.id);
+                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                              onThemeChange(dark ? 'normal-dark' : 'normal-light');
+                            }
+                          }}
+                          aria-pressed={active}
+                          title={t.label}
+                          className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
+                        >
+                          <span className="flex shrink-0 overflow-hidden rounded-sm border border-border">
+                            {t.swatch.map((c, i) => (
+                              <span key={i} className="size-3.5" style={{ background: c }} />
+                            ))}
+                          </span>
+                          <span className="truncate font-medium">{t.label}</span>
+                          {active && (
+                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                              <Check className="size-3" strokeWidth={3} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <FieldDescription>
+              {isNormalFamily
+                ? 'Click the active theme to deselect and return to the default look.'
+                : 'Pick a theme to repaint the app. Toggle Light / Dark above to switch scheme.'}
+            </FieldDescription>
+          </div>
+        )}
+
+        {/* Brutal tab content */}
+        {themeStyleTab === 'brutal' && (
+          <div className="space-y-4">
+            {/* Neo scheme sub-toggle */}
+            <ToggleGroup
+              type="single"
+              value={themeMode}
+              onValueChange={value => {
+                if (value) onThemeChange(value as ThemeMode);
+              }}
+              variant="outline"
+              className="grid w-full grid-cols-2"
+            >
+              <ToggleGroupItem value="neo-light">Neo Light</ToggleGroupItem>
+              <ToggleGroupItem value="neo-dark">Neo Dark</ToggleGroupItem>
+            </ToggleGroup>
+
+            {/* Neo theme grid */}
+            <div className="space-y-3">
+              {NEO_GROUPS.map(group => (
+                <div key={group} className="space-y-1.5">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {NEO_THEMES.filter(t => t.group === group).map(t => {
+                      const active = neoTheme === t.id;
+                      const profile = resolveNeoStyle(t);
+                      const swatchRadius = profile.radius === 'sharp' ? '0px' : profile.radius === 'soft' ? '9999px' : '4px';
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            setNeoTheme(t.id);
+                            setSetting('ui_neo_theme', t.id);
+                            applyNeoTheme(t.id);
+                            if (!isNeoFamily) {
+                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                              onThemeChange(dark ? 'neo-dark' : 'neo-light');
+                            }
+                          }}
+                          aria-pressed={active}
+                          title={t.label}
+                          className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
+                        >
+                          <span className="flex shrink-0 overflow-hidden border border-border" style={{ borderRadius: swatchRadius }}>
+                            {t.swatch.map((c, i) => (
+                              <span key={i} className="size-3.5" style={{ background: c }} />
+                            ))}
+                          </span>
+                          <span
+                            className="truncate font-medium"
+                            style={{ fontFamily: profile.display, fontWeight: profile.weight, letterSpacing: profile.spacing, textTransform: profile.transform as 'uppercase' | 'none' | 'capitalize' | 'lowercase' }}
+                          >{t.label}</span>
+                          {active && (
+                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                              <Check className="size-3" strokeWidth={3} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <FieldDescription>
+              {isNeoFamily
+                ? 'Repaints the whole app with brutal chrome. Each theme has matching light and dark variants.'
+                : 'Picking a theme switches you into the Brutal family.'}
+            </FieldDescription>
+          </div>
+        )}
       </Field>
 
       <Field>

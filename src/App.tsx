@@ -580,7 +580,7 @@ function AppContent() {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession,
+    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, mergeSession,
   } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
 
   const {
@@ -1134,6 +1134,21 @@ function AppContent() {
     });
   }, [splitSession, setActiveSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
 
+  const handleMergeThread = useCallback(async (fork: ChatSession) => {
+    const pending = toast.loading(`Merging “${fork.title || 'split'}” into its parent…`);
+    const result = await mergeSession(fork);
+    if (result.status === 'error') {
+      toast.error('Merge failed — missing split lineage or parent thread', { id: pending });
+      return;
+    }
+    if (result.parent) handleSessionOpen(result.parent);
+    if (result.status === 'empty') {
+      toast.success('Nothing diverged in the split — fork removed, parent kept', { id: pending });
+      return;
+    }
+    toast.success('Merged — reconciling both branches into the parent', { id: pending });
+  }, [mergeSession, handleSessionOpen]);
+
   const handleAgentDirectMessage = useCallback(async (agent: { id: string; agentId?: string | null; name: string; handle: string | null }) => {
     const handle = agent.handle?.trim().replace(/^@+/, '') || '';
     const agentId = agent.agentId || agent.id || null;
@@ -1381,9 +1396,7 @@ function AppContent() {
         onSessionArchive={archiveSession}
         onSessionDelete={deleteSession}
         onSessionSplit={handleSplitThread}
-        onSessionMerge={(session) => toast('Merge needs a decision first', {
-          description: `Merge “${session.title}” into its parent, or into a new thread? And after merging, archive or delete the source? Answer in-channel and I'll wire it.`,
-        })}
+        onSessionMerge={handleMergeThread}
         onOpenMemory={handleOpenMemory}
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { syncNeoTheme, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
+import { syncNormalTheme } from '../showcase/normalThemes';
 
-export type ThemeMode = 'light' | 'dark' | 'system' | 'tinyworld-light' | 'tinyworld-dark' | 'neo-light' | 'neo-dark';
+export type ThemeMode = 'light' | 'dark' | 'system' | 'tinyworld-light' | 'tinyworld-dark' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
 
 const STORAGE_KEY = 'agensis_theme';
 
@@ -15,6 +16,8 @@ function resolveTheme(mode: ThemeMode): { scheme: 'light' | 'dark'; family: 'cla
   if (mode === 'tinyworld-dark') return { scheme: 'dark', family: 'tinyworld' };
   if (mode === 'neo-light') return { scheme: 'light', family: 'neo' };
   if (mode === 'neo-dark') return { scheme: 'dark', family: 'neo' };
+  if (mode === 'normal-light') return { scheme: 'light', family: 'classic' };
+  if (mode === 'normal-dark') return { scheme: 'dark', family: 'classic' };
   return { scheme: mode, family: 'classic' };
 }
 
@@ -41,6 +44,9 @@ function applyTheme(mode: ThemeMode) {
   // For the neo family this applies the stored neo theme's matching light/dark
   // seed; for other families it clears neo overrides and restores the accent.
   syncNeoTheme();
+  // Normal themes overwrite the accent preset vars applied by syncNeoTheme's
+  // non-neo branch so they win cleanly without any ordering dependency.
+  syncNormalTheme(mode);
 }
 
 export function useTheme() {
@@ -50,6 +56,7 @@ export function useTheme() {
       stored === 'light' || stored === 'dark' || stored === 'system'
       || stored === 'tinyworld-light' || stored === 'tinyworld-dark'
       || stored === 'neo-light' || stored === 'neo-dark'
+      || stored === 'normal-light' || stored === 'normal-dark'
     ) return stored;
     return 'dark';
   });

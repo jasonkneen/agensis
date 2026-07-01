@@ -213,17 +213,32 @@ type ParticipantCandidate = ChannelParticipant & {
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
 
-// A message is a live "thinking" placeholder while the daemon is still working:
-// an agent/assistant row whose body is the bare "Thinking …" marker (the daemon
-// updates this same row in place once real content streams in). This is the
-// session-scoped busy signal — unlike a global connection status, it can't leak
-// into other chat windows, and it clears itself the moment real content arrives.
-const THINKING_PLACEHOLDER_RE = /^thinking[\s\d.ms]*$/i;
+// Activity-status placeholder: an agent/assistant row whose content is a bare
+// activity verb emitted by the daemon while it works. The daemon updates this
+// same row in place once real content streams in. Ordered longest-first so
+// "looking up" matches before "looking".
+const ACTIVITY_VERBS = [
+  'looking up', 'summarizing', 'reviewing', 'reasoning', 'processing',
+  'generating', 'executing', 'analyzing', 'searching', 'fetching',
+  'planning', 'reading', 'editing', 'writing', 'checking', 'running',
+  'browsing', 'thinking',
+] as const;
+const ACTIVITY_STATUS_RE = new RegExp(
+  `^(${ACTIVITY_VERBS.join('|')})[\\s\\w.,…]*$`,
+  'i',
+);
+function extractActivityVerb(content: string): string {
+  const lower = content.trim().toLowerCase();
+  for (const verb of ACTIVITY_VERBS) {
+    if (lower.startsWith(verb)) return verb;
+  }
+  return 'thinking';
+}
 function isThinkingPlaceholderMessage(
   msg: Pick<ChatMessage, 'sender_kind' | 'role' | 'content'>,
 ): boolean {
   if (!(msg.sender_kind === 'agent' || msg.role === 'assistant')) return false;
-  return THINKING_PLACEHOLDER_RE.test(safeMessageText(msg.content).trim());
+  return ACTIVITY_STATUS_RE.test(safeMessageText(msg.content).trim());
 }
 
 export function ChatWindowContent({
@@ -727,13 +742,14 @@ export function ChatWindowContent({
   // derived only from this session's own messages, so it never leaks across
   // windows and auto-clears the instant real content replaces the placeholder.
   const thinkingAgents = useMemo(() => {
-    const names: string[] = [];
+    const entries: { name: string; activity: string }[] = [];
     for (const m of displayMessages) {
       if (!isThinkingPlaceholderMessage(m)) continue;
       const name = (m.sender_name || directAgent?.name || 'Agent').trim();
-      if (name && !names.includes(name)) names.push(name);
+      const activity = extractActivityVerb(safeMessageText(m.content));
+      if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
     }
-    return names;
+    return entries;
   }, [displayMessages, directAgent]);
   const isDirectMessage = isDirectMessageProp || Boolean(directAgent) || channelMeta?.folder === 'Direct messages';
   const directProfileKey = directAgent?.agent_id || directAgent?.handle || directAgent?.name || null;
@@ -1306,8 +1322,14 @@ export function ChatWindowContent({
               <span />
             </span>
             <span className="truncate">
-              <span className="font-medium text-foreground">{thinkingAgents.join(', ')}</span>{' '}
-              {thinkingAgents.length === 1 ? 'is thinking…' : 'are thinking…'}
+              {thinkingAgents.map(({ name, activity }, i) => (
+                <React.Fragment key={name}>
+                  {i > 0 && (i === thinkingAgents.length - 1 ? ' and ' : ', ')}
+                  <span className="font-medium text-foreground">{name}</span>
+                  {' '}is {activity}
+                </React.Fragment>
+              ))}
+              {'…'}
             </span>
           </div>
         )}
@@ -1764,7 +1786,7 @@ function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initial
 // Live "Thinking Ns" timer for agent placeholders — ticks locally from the
 // placeholder's created_at so it counts up even before any streamed content
 // (or realtime update) arrives.
-function ThinkingIndicator({ startedAt }: { startedAt?: string | null }) {
+function ThinkingIndicator({ startedAt, activity = 'thinking' }: { startedAt?: string | null; activity?: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const start = startedAt ? new Date(startedAt).getTime() : Date.now();
@@ -1773,10 +1795,11 @@ function ThinkingIndicator({ startedAt }: { startedAt?: string | null }) {
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [startedAt]);
+  const label = activity.charAt(0).toUpperCase() + activity.slice(1);
   return (
     <span className="flex items-center gap-2 text-muted-foreground">
       <Spinner className="size-3" />
-      Thinking {elapsed}s
+      {label} {elapsed}s
     </span>
   );
 }
@@ -1833,6 +1856,7 @@ function ChatMessageBubble({
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
   const isThinkingPlaceholder = isThinkingPlaceholderMessage(msg);
+  const placeholderActivity = isThinkingPlaceholder ? extractActivityVerb(rawContent) : 'thinking';
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const initials = senderName.slice(0, 2).toUpperCase() || (isUser ? 'ME' : 'AI');
@@ -1896,7 +1920,7 @@ function ChatMessageBubble({
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
             {isThinkingPlaceholder ? (
-              <ThinkingIndicator startedAt={msg.created_at} />
+              <ThinkingIndicator startedAt={msg.created_at} activity={placeholderActivity} />
             ) : displayContent ? (
               <MarkdownContent content={displayContent} streaming={isStreaming} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (

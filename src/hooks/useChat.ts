@@ -577,6 +577,66 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     );
   }, [activeSession, messages, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
+  // Merge a split fork back into its parent. "What changed" = the messages
+  // created after split_at on BOTH branches — the parent kept talking while the
+  // fork ran a competing line (split exists precisely to pit two answers against
+  // each other). We post those two divergences into the parent as one synthesis
+  // request and let the parent's agent reconcile them into a single solution via
+  // the normal async dispatch path — no new pipeline, no frozen UI. The request
+  // embeds the fork's divergent content verbatim, so nothing is lost even if the
+  // parent has no agent wired to respond. The fork is then soft-deleted (data
+  // retained), per the merge decision: result → parent, source → soft-delete.
+  const mergeSession = useCallback(async (
+    fork: ChatSession,
+  ): Promise<{ status: 'merged' | 'empty' | 'error'; parent?: ChatSession }> => {
+    if (!workspaceId || !navigator.onLine) return { status: 'error' };
+    const parentId = fork.split_parent_id;
+    const splitAt = fork.split_at;
+    if (!parentId || !splitAt) return { status: 'error' };
+
+    const parent = sessions.find(s => s.id === parentId);
+    if (!parent) return { status: 'error' };
+
+    // Pull both full transcripts; isolate each branch's post-split divergence.
+    const [parentRes, forkRes] = await Promise.all([
+      backendClient.from('messages').select('*').eq('session_id', parentId).order('created_at', { ascending: true }),
+      backendClient.from('messages').select('*').eq('session_id', fork.id).order('created_at', { ascending: true }),
+    ]);
+    const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id);
+    const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id);
+    const parentDiverged = parentTop.filter((m: Message) => String(m.created_at) > splitAt);
+    const forkDiverged = forkTop.filter((m: Message) => String(m.created_at) > splitAt);
+
+    // Nothing happened in the fork after the split → merge is pure cleanup.
+    if (forkDiverged.length === 0) {
+      await backendClient.from('chat_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', fork.id);
+      setSessions(prev => prev.filter(s => s.id !== fork.id));
+      setActiveSession(parent);
+      return { status: 'empty', parent };
+    }
+
+    const fmt = (msgs: Message[]) =>
+      msgs.map(m => `${m.sender_name || m.role}: ${messageText(m.content)}`).join('\n\n') || '(no further messages)';
+    const prompt =
+      `Merge two diverged branches of this thread into a single combined solution.\n\n` +
+      `Both branches share this thread's history up to the split. After the split they diverged:\n\n` +
+      `=== This thread continued ===\n${fmt(parentDiverged)}\n\n` +
+      `=== Split branch "${fork.title || 'Untitled'}" continued ===\n${fmt(forkDiverged)}\n\n` +
+      `Reconcile them: keep the best of each, resolve any conflicts, and produce one combined result. ` +
+      `If one branch is clearly better, use it and say why.`;
+
+    // Land on the parent so the synthesis renders in place, then dispatch.
+    setActiveSession(parent);
+    const userMsg = await insertUserMessage(parent, prompt);
+    await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null);
+
+    // Source split done — soft-delete (retain data for audit/history).
+    await backendClient.from('chat_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', fork.id);
+    setSessions(prev => prev.filter(s => s.id !== fork.id));
+
+    return { status: 'merged', parent };
+  }, [workspaceId, sessions, insertUserMessage, dispatchToAgent]);
+
   // Soft delete: never hard-delete a session — stamp deleted_at so the data
   // is retained (for audit/merge/history) and filtered out of every load path
   // (see fetchSessions). Row disappears from the UI immediately.
@@ -611,6 +671,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     archiveSession,
     sendMessage,
     deleteSession,
+    mergeSession,
   };
 }
 
