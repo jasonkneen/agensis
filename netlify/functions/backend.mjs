@@ -1212,27 +1212,37 @@ async function handleAiChat(req, userId) {
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
+      // Decode incrementally and carry a partial-line buffer across reads so an
+      // upstream SSE frame or multibyte char split across two chunks isn't
+      // dropped/corrupted (M12).
+      let buffer = '';
+      const handleLine = (raw) => {
+        const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+        if (!line.startsWith('data: ')) return;
+        const data = line.slice(6);
+        if (data === '[DONE]') {
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`));
+          }
+        } catch {
+          // Ignore malformed upstream chunks.
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value);
-        for (const line of text.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') {
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-            continue;
-          }
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`));
-            }
-          } catch {
-            // Ignore malformed upstream chunks.
-          }
-        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = buffer.endsWith('\n') ? '' : (lines.pop() ?? '');
+        for (const line of lines) handleLine(line);
       }
+      buffer += decoder.decode();
+      for (const line of buffer.split('\n')) handleLine(line);
       controller.close();
     },
   });

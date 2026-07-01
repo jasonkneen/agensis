@@ -6,6 +6,7 @@ import { DocumentCommentsPanel } from '../editor/DocumentCommentsPanel';
 import { DocumentVersionHistoryPanel } from '../editor/DocumentVersionHistoryPanel';
 import { useDocumentVersions } from '../../hooks/useDocumentVersions';
 import { apiAuthHeaders, apiUrl } from '../../lib/backendClient';
+import { extractSseDataLines, parseAiStreamPayload } from '../../lib/chatStream';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -175,22 +176,35 @@ async function runDocAI(prompt: string, title: string, docHtml: string, workspac
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let fullContent = '';
+  let streamError = '';
+  let buffer = '';
+
+  // Decode incrementally ({ stream: true }) and carry a partial-line buffer
+  // across reads, so a `data:` frame or multibyte char split across two network
+  // chunks isn't dropped/corrupted; also surface the server's mid-stream error
+  // frame instead of silently rendering "No response." (M12).
+  const consume = (data: string) => {
+    if (data === '[DONE]') return;
+    try {
+      const { text, error } = parseAiStreamPayload(JSON.parse(data));
+      if (error) { streamError = error; return; }
+      fullContent += text;
+    } catch {
+      // Ignore malformed stream chunks.
+    }
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    const lines = decoder.decode(value).split('\n');
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6);
-      if (data === '[DONE]') continue;
-      try {
-        const parsed = JSON.parse(data);
-        fullContent += parsed.delta?.text || parsed.choices?.[0]?.delta?.content || '';
-      } catch {
-        // Ignore malformed stream chunks.
-      }
-    }
+    buffer += decoder.decode(value, { stream: true });
+    const { data, remainder } = extractSseDataLines(buffer);
+    buffer = remainder;
+    for (const line of data) consume(line);
   }
+  for (const line of extractSseDataLines(buffer, true).data) consume(line);
+
+  if (streamError) throw new Error(streamError);
   return fullContent || 'No response.';
 }
 
