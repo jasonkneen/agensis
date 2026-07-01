@@ -576,7 +576,7 @@ function AgentForm({
   };
 
   return (
-    <FieldGroup className="gap-3">
+    <FieldGroup className="agent-form-fields gap-3">
       <div className="grid grid-cols-[4.5rem_1fr_10rem] gap-2">
         <Field>
           <FieldLabel>Preview</FieldLabel>

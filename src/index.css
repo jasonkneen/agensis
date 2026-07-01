@@ -1825,6 +1825,17 @@
   flex-shrink: 0;
 }
 
+/* Agent form fields read as lighter panels (white in light/neo), matching the
+   outline "selection" buttons which already use bg-background. The primitives
+   default to bg-transparent, so they blended into the bg-card/55 detail pane.
+   Light: --background surface. Dark: the primitive's own dark:bg-input/30 wins
+   (higher specificity), so inputs and buttons stay consistent there too. Neo's
+   own input styling (higher specificity) is untouched, preserving brutal edges. */
+.agent-form-fields
+  :where(input:not([type="color"]):not([type="file"]), textarea, select) {
+  background-color: var(--background);
+}
+
 .agents-list-card[data-agent-selected="true"] {
   background: color-mix(in srgb, var(--agent-accent, var(--primary)) 10%, var(--card)) !important;
 }

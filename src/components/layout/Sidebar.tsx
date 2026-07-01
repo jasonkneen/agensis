@@ -874,40 +874,33 @@ function copyAgentMention(agent: SidebarAgentTarget) {
 
 type DmFilter = 'active' | 'idle' | 'busy' | 'all';
 
-const DM_FILTER_OPTIONS: { label: string; value: DmFilter; dot?: string }[] = [
-  { label: 'Active', value: 'active', dot: 'bg-emerald-500' },
-  { label: 'Busy', value: 'busy', dot: 'bg-amber-500' },
-  { label: 'Idle', value: 'idle', dot: 'bg-muted-foreground/40' },
+const DM_FILTER_OPTIONS: { label: string; value: DmFilter }[] = [
+  { label: 'Active', value: 'active' },
+  { label: 'Busy', value: 'busy' },
+  { label: 'Idle', value: 'idle' },
   { label: 'All agents', value: 'all' },
 ];
 
 function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: DmFilter) => void }) {
-  const current = DM_FILTER_OPTIONS.find(f => f.value === filter) || DM_FILTER_OPTIONS[0];
+  const current = DM_FILTER_OPTIONS.find(f => f.value === filter) || DM_FILTER_OPTIONS[3];
+  const isFiltered = filter !== 'all';
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="sidebar-section-action"
+          className={`sidebar-section-action flex items-center gap-1 ${isFiltered ? 'text-primary' : ''}`}
           aria-label={`Filter: ${current.label}`}
           title={`Filter: ${current.label}`}
           onClick={e => e.stopPropagation()}
         >
-          {current.dot ? (
-            <span className={`size-2.5 rounded-full ${current.dot}`} />
-          ) : (
-            <Filter className="size-3.5" />
-          )}
+          <Filter className="size-3.5" />
+          {isFiltered && <span className="text-[10px] font-medium leading-none">{current.label}</span>}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-36">
         {DM_FILTER_OPTIONS.map(opt => (
           <DropdownMenuItem key={opt.value} onSelect={() => onChange(opt.value)}>
-            {opt.dot ? (
-              <span className={`size-2 rounded-full ${opt.dot}`} />
-            ) : (
-              <Filter className="size-3.5 opacity-50" />
-            )}
             {opt.label}
             {filter === opt.value && <span className="ml-auto text-xs text-primary">✓</span>}
           </DropdownMenuItem>
