@@ -26,7 +26,8 @@ import { NotificationsBell } from './components/notifications/NotificationsBell'
 import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { inviteUrl } from './hooks/useWorkspaceUsers';
-import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from './components/ui/avatar';
+import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage } from './components/ui/avatar';
+import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
   AlertDialog,
   AlertDialogAction,
