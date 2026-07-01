@@ -7,8 +7,7 @@ import {
   Maximize2,
   Minimize2,
   CornerDownRight,
-  PanelRightClose,
-  PanelRightOpen,
+  Plus,
   Check,
   Send,
 } from 'lucide-react';
@@ -76,7 +75,7 @@ interface ThreadWidgetRailProps {
   userId?: string;
   accent?: string;
   collapsed: boolean;
-  onToggleCollapsed: () => void;
+  onTooNarrowChange?: (tooNarrow: boolean) => void;
   onJumpToMessage?: (messageId: string) => void;
   onBlockerAnswered?: (item: ThreadItem, response: string) => void;
 }
@@ -87,7 +86,7 @@ export function ThreadWidgetRail({
   userId,
   accent,
   collapsed,
-  onToggleCollapsed,
+  onTooNarrowChange,
   onJumpToMessage,
   onBlockerAnswered,
 }: ThreadWidgetRailProps) {
@@ -117,11 +116,15 @@ export function ThreadWidgetRail({
     const host = rootRef.current?.parentElement;
     if (!host || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(entries => {
-      for (const e of entries) setTooNarrow(e.contentRect.width < 520);
+      for (const e of entries) {
+        const narrow = e.contentRect.width < 520;
+        setTooNarrow(narrow);
+        onTooNarrowChange?.(narrow);
+      }
     });
     ro.observe(host);
     return () => ro.disconnect();
-  }, [sessionId, collapsed]);
+  }, [sessionId, onTooNarrowChange]);
 
   // Load the saved arrangement whenever the thread changes.
   useEffect(() => {
@@ -160,83 +163,76 @@ export function ThreadWidgetRail({
     persist(next);
   }, [widgets, persist]);
 
-  const hasItems = useMemo(
-    () => ALL_KINDS.some(k => (byKind[k]?.length ?? 0) > 0),
-    [byKind],
+  // Kinds the user has closed — offered back via the "+ add" chips so a closed
+  // widget is never lost with no way to restore it.
+  const closedKinds = useMemo(
+    () => ALL_KINDS.filter(k => !widgets.some(w => w.kind === k)),
+    [widgets],
   );
+
+  const addWidget = useCallback((kind: ThreadItemKind) => {
+    if (widgets.some(w => w.kind === kind)) return;
+    persist([...widgets, { kind, w: 1, h: 2 }]);
+  }, [widgets, persist]);
 
   if (!sessionId || !workspaceId) return null;
 
-  // Collapsed (manually, or forced because the surface is too narrow) → a
-  // single floating reopen chip in the top-right corner.
-  if (collapsed || tooNarrow) {
-    return (
-      <div ref={rootRef} className="pointer-events-none absolute right-3 top-3 z-10">
-        <button
-          type="button"
-          className="thread-widget-card pointer-events-auto flex size-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-          title={tooNarrow ? 'Widen the window to show widgets' : 'Show widgets'}
-          aria-label="Show widgets"
-          disabled={tooNarrow}
-          onClick={onToggleCollapsed}
-        >
-          <PanelRightOpen className="size-4" />
-        </button>
-      </div>
-    );
-  }
+  const hidden = collapsed || tooNarrow;
 
   return (
     // Click-through overlay pinned to the right gutter of the message surface.
+    // The container stays mounted even when hidden so the ResizeObserver keeps
+    // reporting width; the toggle now lives in the chat header (not here), so
+    // it no longer clashes with the per-message action toolbar.
     <div ref={rootRef} className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-1 z-10 flex w-[272px] flex-col gap-2 px-3 py-3">
-      {/* one quiet collapse control, top-right — no panel chrome, no add UI */}
-      <div className="flex shrink-0 items-center justify-end">
-        <button
-          type="button"
-          className="pointer-events-auto flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
-          title="Hide widgets"
-          aria-label="Hide widgets"
-          onClick={onToggleCollapsed}
-        >
-          <PanelRightClose className="size-3.5" />
-        </button>
-      </div>
+      {!hidden && (
+        <>
+          {/* re-add chips for any widget the user has closed */}
+          {closedKinds.length > 0 && (
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+              {closedKinds.map(kind => (
+                <button
+                  key={kind}
+                  type="button"
+                  className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                  title={`Add ${KIND_META[kind].label} widget`}
+                  onClick={() => addWidget(kind)}
+                >
+                  <Plus className="size-2.5" />
+                  {KIND_META[kind].label}
+                </button>
+              ))}
+            </div>
+          )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
-        {widgets.map((w, index) => (
-          <WidgetCard
-            key={w.kind}
-            index={index}
-            layout={w}
-            items={byKind[w.kind]}
-            loading={loading}
-            accent={accent}
-            isDragTarget={dropIndex === index && dragIndex !== index}
-            onDragStart={() => setDragIndex(index)}
-            onDragOver={() => setDropIndex(index)}
-            onDragEnd={() => {
-              if (dragIndex !== null && dropIndex !== null) reorder(dragIndex, dropIndex);
-              setDragIndex(null);
-              setDropIndex(null);
-            }}
-            onResize={() => cycleSize(index)}
-            onClose={() => closeWidget(w.kind)}
-            onToggleDone={toggleDone}
-            onAnswer={handleAnswer}
-            onDelete={deleteItem}
-            onJumpToMessage={onJumpToMessage}
-          />
-        ))}
-        {widgets.length === 0 && hasItems && (
-          <button
-            type="button"
-            className="pointer-events-auto col-span-2 rounded-lg border border-dashed border-border/60 p-3 text-center text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-            onClick={() => persist(DEFAULT_WIDGETS)}
-          >
-            Show widgets
-          </button>
-        )}
-      </div>
+          <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
+            {widgets.map((w, index) => (
+              <WidgetCard
+                key={w.kind}
+                index={index}
+                layout={w}
+                items={byKind[w.kind]}
+                loading={loading}
+                accent={accent}
+                isDragTarget={dropIndex === index && dragIndex !== index}
+                onDragStart={() => setDragIndex(index)}
+                onDragOver={() => setDropIndex(index)}
+                onDragEnd={() => {
+                  if (dragIndex !== null && dropIndex !== null) reorder(dragIndex, dropIndex);
+                  setDragIndex(null);
+                  setDropIndex(null);
+                }}
+                onResize={() => cycleSize(index)}
+                onClose={() => closeWidget(w.kind)}
+                onToggleDone={toggleDone}
+                onAnswer={handleAnswer}
+                onDelete={deleteItem}
+                onJumpToMessage={onJumpToMessage}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
