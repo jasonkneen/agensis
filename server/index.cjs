@@ -2656,6 +2656,83 @@ function resolveStoragePath(storagePath) {
   return fullPath;
 }
 
+// ============================================================
+// File upload content-type hardening (plan 002).
+//
+// Server-side mirror of src/components/files/FileUpload.tsx's
+// ALLOWED_EXTENSIONS map — keep the two lists in sync. The client's `type`
+// (browser-reported MIME) is untrusted and easily spoofed, so the server
+// NEVER stores or serves it verbatim: the stored/served Content-Type is
+// always derived from this allowlist, keyed on the upload's file extension.
+//
+// `.html` and `.svg` can carry executable script when rendered inline by a
+// browser, so — per plan 002's "reject-and-neutralize" decision — uploads of
+// those two extensions are still accepted (matching the client's advertised
+// feature set) but their Content-Type is neutralized to `text/plain` here,
+// at storage time, rather than trusting anything downstream to catch it.
+const UPLOAD_EXTENSION_CONTENT_TYPES = {
+  // Images
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'text/plain', // neutralized — see FORCE_ATTACHMENT_EXTENSIONS below
+  bmp: 'image/bmp',
+  // Documents
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // Text / data
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  rtf: 'application/rtf',
+  // Code (browsers often report "" or text/plain for these)
+  json: 'application/json',
+  js: 'text/javascript',
+  mjs: 'text/javascript',
+  ts: 'text/plain',
+  tsx: 'text/plain',
+  jsx: 'text/plain',
+  html: 'text/plain', // neutralized — see FORCE_ATTACHMENT_EXTENSIONS below
+  css: 'text/css',
+  xml: 'application/xml',
+  yml: 'text/yaml',
+  yaml: 'text/yaml',
+};
+
+// Extensions whose native rendering can execute script inline — always
+// served as a download (Content-Disposition: attachment), independent of
+// whatever Content-Type ends up stored (belt-and-suspenders: this check runs
+// at serve time using the ORIGINAL FILENAME, since Step 1 above already
+// neutralizes the stored type for these two to `text/plain`, which would
+// otherwise make a stored-type-only check below a no-op for the normal
+// upload path).
+const FORCE_ATTACHMENT_EXTENSIONS = new Set(['html', 'svg']);
+
+// Defense-in-depth: `uploaded_files` is also reachable through the generic
+// `/backend/db/*` CRUD routes (it's in ALLOWED_TABLES), so a write-role user
+// could PATCH a row's `type` column directly to one of these dangerous MIME
+// strings without ever going through the upload handler above. Force
+// attachment for these regardless of the file's extension/name.
+const FORCE_ATTACHMENT_CONTENT_TYPES = new Set([
+  'text/html',
+  'image/svg+xml',
+  'application/xhtml+xml',
+  'text/xml',
+]);
+
+function getUploadExtension(name) {
+  const trimmed = String(name || '');
+  const dot = trimmed.lastIndexOf('.');
+  return dot >= 0 ? trimmed.slice(dot + 1).toLowerCase() : '';
+}
+
 const PROJECT_FILE_IGNORE_DIRS = new Set([
   '.git',
   '.hg',
@@ -3685,11 +3762,20 @@ function createApp() {
 
   app.post('/backend/files/upload', requireAuth, async (req, res) => {
     try {
-      const { workspace_id: workspaceId, name, type, contentBase64 } = req.body || {};
+      const { workspace_id: workspaceId, name, contentBase64 } = req.body || {};
       if (!workspaceId || !name || typeof contentBase64 !== 'string') {
         return jsonError(res, 400, new Error('workspace_id, name, and contentBase64 are required'));
       }
       await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+      // The client's `type` (req.body.type) is deliberately ignored — it is
+      // browser-reported and trivially spoofed. The stored Content-Type is
+      // always derived server-side from the file extension via the allowlist
+      // above (see plan 002 for the full rationale).
+      const extension = getUploadExtension(name);
+      const normalizedType = UPLOAD_EXTENSION_CONTENT_TYPES[extension];
+      if (!extension || normalizedType === undefined) {
+        return jsonError(res, 400, new Error(`Unsupported file type: .${extension || 'unknown'}`));
+      }
       const id = crypto.randomUUID();
       const buffer = Buffer.from(contentBase64, 'base64');
       const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB; matches the client FileUpload cap
@@ -3705,7 +3791,7 @@ function createApp() {
         `insert into uploaded_files (id, workspace_id, name, size, type, storage_path, content_sha256)
          values ($1, $2, $3, $4, $5, $6, $7)
          returning *`,
-        [id, workspaceId, String(name), buffer.length, String(type || ''), storagePath, sha],
+        [id, workspaceId, String(name), buffer.length, normalizedType, storagePath, sha],
       );
       notifyDbSubscribers('uploaded_files', 'INSERT', rows);
       res.json({ data: rows[0], error: null });
@@ -3722,8 +3808,25 @@ function createApp() {
       await enforceWorkspaceRole(req.userId, file.workspace_id, 'read');
       const fullPath = resolveStoragePath(file.storage_path);
       if (!fs.existsSync(fullPath)) return jsonError(res, 404, new Error('File content is missing on disk'));
+      // Never let the browser sniff/execute uploaded content as something
+      // other than the Content-Type we explicitly set below.
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // Force a download (never `inline`) for anything that can carry script
+      // when rendered by a browser. Checked two ways:
+      //  - by the ORIGINAL FILENAME's extension, because the upload handler
+      //    already neutralizes .html/.svg's stored type to `text/plain`,
+      //    which would make a stored-type-only check below a no-op for the
+      //    normal upload path;
+      //  - by the STORED type value, as a belt-and-suspenders guard against
+      //    any other write path (e.g. a generic `/backend/db/uploaded_files`
+      //    update — `uploaded_files` is in ALLOWED_TABLES) that could set
+      //    `type` to a dangerous value without going through the upload
+      //    handler above.
+      const mustForceAttachment = FORCE_ATTACHMENT_EXTENSIONS.has(getUploadExtension(file.name))
+        || FORCE_ATTACHMENT_CONTENT_TYPES.has(file.type);
+      const disposition = mustForceAttachment ? 'attachment' : 'inline';
       res.setHeader('Content-Type', file.type || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `inline; filename="${safeFileName(file.name)}"`);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${safeFileName(file.name)}"`);
       fs.createReadStream(fullPath).pipe(res);
     } catch (error) {
       jsonError(res, 500, error);
