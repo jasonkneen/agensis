@@ -18,7 +18,7 @@ import type { ThemeMode } from '../../hooks/useTheme';
 import { AI_MODELS, type Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
-import { NEO_THEMES, NEO_GROUPS, applyNeoTheme } from '../../showcase/neoThemes';
+import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -449,6 +449,8 @@ function AppearancePanel({
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {NEO_THEMES.filter(t => t.group === group).map(t => {
                   const active = neoTheme === t.id;
+                  const profile = resolveNeoStyle(t);
+                  const swatchRadius = profile.radius === 'sharp' ? '0px' : profile.radius === 'soft' ? '9999px' : '4px';
                   return (
                     <button
                       key={t.id}
@@ -466,12 +468,15 @@ function AppearancePanel({
                       title={t.label}
                       className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-foreground ring-1 ring-foreground' : 'border-border hover:bg-accent'}`}
                     >
-                      <span className="flex shrink-0 overflow-hidden rounded-[5px] border border-border">
+                      <span className="flex shrink-0 overflow-hidden border border-border" style={{ borderRadius: swatchRadius }}>
                         {t.swatch.map((c, i) => (
                           <span key={i} className="size-3.5" style={{ background: c }} />
                         ))}
                       </span>
-                      <span className="truncate font-medium">{t.label}</span>
+                      <span
+                        className="truncate font-medium"
+                        style={{ fontFamily: profile.display, fontWeight: profile.weight, letterSpacing: profile.spacing, textTransform: profile.transform as 'uppercase' | 'none' | 'capitalize' | 'lowercase' }}
+                      >{t.label}</span>
                     </button>
                   );
                 })}
