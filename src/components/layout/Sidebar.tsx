@@ -190,6 +190,30 @@ export function Sidebar({
       return new Set();
     }
   });
+  // Render a DM's split forks nested under it, recursively (split-of-a-split
+  // nests deeper). Each fork gets the SPLIT chip + a Merge-into-parent action,
+  // wired to the same handlers SessionTree uses for channels/threads.
+  const renderDmForks = (parentId: string, depth: number): React.ReactNode =>
+    (dmForksByParent.get(parentId) || []).map(fork => (
+      <React.Fragment key={fork.id}>
+        <SessionRow
+          session={fork}
+          archiveNoun="split"
+          depth={depth}
+          chip="SPLIT"
+          canMerge
+          onOpen={() => onSessionOpen(fork)}
+          onMoveFolder={folder => onSessionUpdate?.(fork.id, { folder })}
+          onArchive={() => onSessionArchive?.(fork.id, true)}
+          onDelete={onSessionDelete ? () => onSessionDelete(fork.id) : undefined}
+          onSplit={onSessionSplit ? () => onSessionSplit(fork) : undefined}
+          onMerge={onSessionMerge ? () => onSessionMerge(fork) : undefined}
+          presenceUsers={chatPresence[fork.id] || []}
+        />
+        {renderDmForks(fork.id, depth + 1)}
+      </React.Fragment>
+    ));
+
   const userInitial = (userEmail[0] || 'U').toUpperCase();
   const uniqueSessions = React.useMemo(() => uniqueById(sessions), [sessions]);
   const uniqueRecents = React.useMemo(() => uniqueById(recents), [recents]);
@@ -208,9 +232,30 @@ export function Sidebar({
     };
   }, [uniqueSessions]);
   const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
+  // A split of a DM is itself a DM session (same agent participant), so the
+  // per-agent dedup in buildDirectMessageTargets would otherwise swallow it and
+  // its Merge action would never render. Pull forks out of the target input and
+  // nest them under their parent's row instead (mirrors SessionTree for
+  // channels/threads). Fork = split_parent_id pointing at another DM in-view.
+  const { dmForksByParent, dmPrimarySessions } = React.useMemo(() => {
+    const ids = new Set(directSessions.map(session => session.id));
+    const forksByParent = new Map<string, ChatSession[]>();
+    const primary: ChatSession[] = [];
+    for (const session of directSessions) {
+      const parentId = session.split_parent_id;
+      if (parentId && ids.has(parentId)) {
+        const list = forksByParent.get(parentId) || [];
+        list.push(session);
+        forksByParent.set(parentId, list);
+      } else {
+        primary.push(session);
+      }
+    }
+    return { dmForksByParent: forksByParent, dmPrimarySessions: primary };
+  }, [directSessions]);
   const directMessageTargets = React.useMemo(
-    () => buildDirectMessageTargets(directSessions, directAgents, favoriteAgentKeys),
-    [directSessions, directAgents, favoriteAgentKeys],
+    () => buildDirectMessageTargets(dmPrimarySessions, directAgents, favoriteAgentKeys),
+    [dmPrimarySessions, directAgents, favoriteAgentKeys],
   );
   const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('all');
   const filteredDmTargets = React.useMemo(() => {
@@ -536,21 +581,23 @@ export function Sidebar({
               headerActions={<DmFilterButton filter={dmFilter} onChange={setDmFilter} />}
             >
               {filteredDmTargets.map(agent => (
-                <DirectAgentRow
-                  key={getAgentKey(agent)}
-                  agent={agent}
-                  favorite={favoriteAgentKeys.has(getAgentKey(agent))}
-                  onMessage={() => {
-                    if (agent.session) {
-                      onSessionOpen(agent.session);
-                      return;
-                    }
-                    onAgentMessage?.(agent);
-                  }}
-                  onProfile={() => onAgentProfile?.(agent)}
-                  onCopyMention={() => copyAgentMention(agent)}
-                  onToggleFavorite={() => toggleAgentFavorite(agent)}
-                />
+                <React.Fragment key={getAgentKey(agent)}>
+                  <DirectAgentRow
+                    agent={agent}
+                    favorite={favoriteAgentKeys.has(getAgentKey(agent))}
+                    onMessage={() => {
+                      if (agent.session) {
+                        onSessionOpen(agent.session);
+                        return;
+                      }
+                      onAgentMessage?.(agent);
+                    }}
+                    onProfile={() => onAgentProfile?.(agent)}
+                    onCopyMention={() => copyAgentMention(agent)}
+                    onToggleFavorite={() => toggleAgentFavorite(agent)}
+                  />
+                  {agent.session && renderDmForks(agent.session.id, 1)}
+                </React.Fragment>
               ))}
             </SidebarSection>
             <SidebarSection
