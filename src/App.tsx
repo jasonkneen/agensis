@@ -580,7 +580,7 @@ function AppContent() {
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
     createSession, updateSession, archiveSession, sendMessage,
-  } = useChat(activeWorkspaceId, user.email?.split('@')[0] || undefined);
+  } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
 
   const {
     subThreadsByMessage,
