@@ -1926,23 +1926,49 @@ function ChannelSidePanel({
                 ))}
               </FileTreeSection>
             )}
-            {projectGroups.map(group => (
-              <FileTreeSection
-                key={group.source.id}
-                title={group.source.label}
-                detail={group.source.root}
-                count={group.files.length}
-              >
-                {group.files.map(file => (
-                  <ProjectFileRow
-                    key={`${group.source.id}:${file.path}`}
-                    file={file}
-                    source={group.source}
-                    onOpen={() => setSelectedFile({ kind: 'project', file, source: group.source })}
-                  />
-                ))}
-              </FileTreeSection>
-            ))}
+            {projectGroups.map(group => {
+              const rootFiles: ProjectFileEntry[] = [];
+              const dirFiles = new Map<string, ProjectFileEntry[]>();
+              for (const file of group.files) {
+                const firstSlash = file.path.indexOf('/');
+                if (firstSlash === -1) {
+                  rootFiles.push(file);
+                } else {
+                  const dir = file.path.slice(0, firstSlash);
+                  if (!dirFiles.has(dir)) dirFiles.set(dir, []);
+                  dirFiles.get(dir)!.push(file);
+                }
+              }
+              return (
+                <FileTreeSection
+                  key={group.source.id}
+                  title={group.source.label}
+                  detail={group.source.root}
+                  count={group.files.length}
+                >
+                  {rootFiles.map(file => (
+                    <ProjectFileRow
+                      key={`${group.source.id}:${file.path}`}
+                      file={file}
+                      source={group.source}
+                      onOpen={() => setSelectedFile({ kind: 'project', file, source: group.source })}
+                    />
+                  ))}
+                  {Array.from(dirFiles.entries()).map(([dir, files]) => (
+                    <FileTreeDirSection key={dir} name={dir} count={files.length}>
+                      {files.map(file => (
+                        <ProjectFileRow
+                          key={`${group.source.id}:${file.path}`}
+                          file={file}
+                          source={group.source}
+                          onOpen={() => setSelectedFile({ kind: 'project', file, source: group.source })}
+                        />
+                      ))}
+                    </FileTreeDirSection>
+                  ))}
+                </FileTreeSection>
+              );
+            })}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">No uploaded, workspace, or agent files found.</p>
@@ -2525,23 +2551,58 @@ function FileTreeSection({
   detail,
   count,
   children,
+  defaultOpen = true,
 }: {
   title: string;
   detail?: string;
   count: number;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="file-tree-section">
-      <div className="file-tree-heading" title={detail || title}>
-        <ChevronDown className="size-3.5 shrink-0" />
+      <button
+        type="button"
+        className="file-tree-heading w-full cursor-pointer bg-transparent"
+        title={detail || title}
+        onClick={() => setOpen(v => !v)}
+      >
+        <ChevronDown className={cn('size-3.5 shrink-0 transition-transform duration-150', !open && '-rotate-90')} />
         <Folder className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="min-w-0 flex-1 truncate text-left">{title}</span>
         <span className="file-tree-count">{count}</span>
-      </div>
-      {detail && <div className="file-tree-root truncate">{detail}</div>}
-      <div className="file-tree-children">{children}</div>
+      </button>
+      {open && detail && <div className="file-tree-root truncate">{detail}</div>}
+      {open && <div className="file-tree-children">{children}</div>}
     </section>
+  );
+}
+
+function FileTreeDirSection({
+  name,
+  count,
+  children,
+}: {
+  name: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="file-tree-section">
+      <button
+        type="button"
+        className="file-tree-heading w-full cursor-pointer bg-transparent"
+        onClick={() => setOpen(v => !v)}
+      >
+        <ChevronDown className={cn('size-3.5 shrink-0 transition-transform duration-150', !open && '-rotate-90')} />
+        <FolderOpen className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">{name}</span>
+        <span className="file-tree-count">{count}</span>
+      </button>
+      {open && <div className="file-tree-children">{children}</div>}
+    </div>
   );
 }
 
