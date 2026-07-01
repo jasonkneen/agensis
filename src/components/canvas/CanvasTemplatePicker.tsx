@@ -1,6 +1,6 @@
 import { LayoutTemplate, Plus } from 'lucide-react';
 import type { CanvasAppDefinition } from '../../lib/canvasApps';
-import { CANVAS_APPS, APPLETS_FOLDER } from '../../lib/canvasApps';
+import { CANVAS_APPS, APPLETS_FOLDER, extractHtmlFromDocContent } from '../../lib/canvasApps';
 import type { Document } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,7 +17,7 @@ interface CanvasTemplatePickerProps {
 }
 
 const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateDocApp, onCreateCustomApp, documents = [] }: CanvasTemplatePickerProps) => {
-  const appletDocs = documents.filter(d => d.folder === APPLETS_FOLDER);
+  const appletDocs = documents.filter(d => d.folder === APPLETS_FOLDER && !!extractHtmlFromDocContent(d.content ?? ''));
 
   const handleCreateApp = (app: CanvasAppDefinition) => {
     onCreateApp(app);

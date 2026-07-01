@@ -28,6 +28,8 @@ interface DrawingLayerProps {
   canEditObject?: (obj: CanvasObject) => boolean;
   onCreateAppletTask?: (input: CreateTaskInput) => void;
   onUpdateAppletTask?: (id: string, updates: Partial<Task>) => void;
+  focusObjectId?: string | null;
+  onFocusObjectHandled?: () => void;
 }
 
 const STICKY_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff', '#fed7aa'];
@@ -76,6 +78,8 @@ export function DrawingLayer({
   canEditObject = () => true,
   onCreateAppletTask,
   onUpdateAppletTask,
+  focusObjectId,
+  onFocusObjectHandled,
 }: DrawingLayerProps) {
   const [tool, setTool] = useState<CanvasTool>('select');
   const [color, setColor] = useState('#3b82f6');
@@ -138,6 +142,35 @@ export function DrawingLayer({
   const clearCanvasItemTransforms = useCallback((ids: Iterable<string>) => {
     Array.from(ids).forEach(clearCanvasItemTransform);
   }, [clearCanvasItemTransform]);
+
+  // Resize handles are React-positioned siblings of the transformed item, so
+  // without this they stay pinned at the pre-resize corners and only "catch up"
+  // when the commit re-renders. During a live resize we reposition them directly
+  // to the previewed corners. Uses the same pixel space as the committed px/py
+  // (both derive from layerRef's bounding width), so there's no jump on commit.
+  const positionResizeHandles = useCallback((id: string, lpx: number, lpy: number, lpw: number, lph: number) => {
+    const root = layerRef.current?.parentElement;
+    if (!root) return;
+    root.querySelectorAll<HTMLElement>(`[data-resize-handle-for="${id}"]`).forEach(el => {
+      const key = el.dataset.resizeHandleKey;
+      let left = lpx - 5;
+      let top = lpy - 5;
+      if (key === 'ne') left = lpx + lpw - 5;
+      else if (key === 'sw') top = lpy + lph - 5;
+      else if (key === 'se') { left = lpx + lpw - 5; top = lpy + lph - 5; }
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+    });
+  }, []);
+
+  const clearResizeHandlePositions = useCallback((id: string) => {
+    const root = layerRef.current?.parentElement;
+    if (!root) return;
+    root.querySelectorAll<HTMLElement>(`[data-resize-handle-for="${id}"]`).forEach(el => {
+      el.style.left = '';
+      el.style.top = '';
+    });
+  }, []);
 
   const previewDragToPosition = useCallback((pos: { x: number; y: number }) => {
     const snapshot = dragSnapshotRef.current;
@@ -231,20 +264,32 @@ export function DrawingLayer({
       element.style.transformOrigin = 'top left';
       element.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scaleX}, ${scaleY}) ${baseTransform}`.trim();
     });
-  }, [computeResizeRect, getCanvasItemElements]);
+
+    // Keep the selection handles glued to the live corners as the box resizes.
+    const lpx = (next.x / 100) * snapshot.canvasRect.width;
+    const lpy = (next.y / 100) * snapshot.canvasRect.height;
+    const lpw = (next.width / 100) * snapshot.canvasRect.width;
+    const lph = (next.height / 100) * snapshot.canvasRect.height;
+    positionResizeHandles(snapshot.id, lpx, lpy, lpw, lph);
+  }, [computeResizeRect, getCanvasItemElements, positionResizeHandles]);
 
   const endResize = useCallback((commit = true) => {
     const snapshot = resizeSnapshotRef.current;
     if (snapshot) {
       if (commit) {
+        // Committed geometry re-renders the handles at the same corners the
+        // preview left them, so no cleanup needed. On cancel there's no
+        // re-render — clear the imperative positions so they don't strand.
         onUpdateObject(snapshot.id, snapshot.latestRect);
+      } else {
+        clearResizeHandlePositions(snapshot.id);
       }
       clearCanvasItemTransform(snapshot.id);
       resizeSnapshotRef.current = null;
     }
     setResizeState(null);
     setHostInteractionLocked(false);
-  }, [clearCanvasItemTransform, onUpdateObject, setHostInteractionLocked]);
+  }, [clearCanvasItemTransform, clearResizeHandlePositions, onUpdateObject, setHostInteractionLocked]);
 
   const toPercent = useCallback((clientX: number, clientY: number) => {
     if (!layerRef.current) return { x: 0, y: 0 };
@@ -1330,7 +1375,7 @@ function CanvasItemWrapper({
               />
             )}
             {showResizeHandles && obj.type !== 'pen' && !editing && (
-              <ResizeHandles px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />
+              <ResizeHandles itemId={obj.id} px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />
             )}
           </div>
         </div>
@@ -1402,7 +1447,7 @@ function CanvasItemWrapper({
               onDelete={onDelete}
             />
             {showResizeHandles && obj.type !== 'pen' && !editing && (
-              <ResizeHandles px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />
+              <ResizeHandles itemId={obj.id} px={px} py={py} pw={pw} ph={ph} onResizeStart={onResizeStart} />
             )}
           </>
         )}
@@ -1412,12 +1457,14 @@ function CanvasItemWrapper({
 }
 
 function ResizeHandles({
+  itemId,
   px,
   py,
   pw,
   ph,
   onResizeStart,
 }: {
+  itemId: string;
   px: number;
   py: number;
   pw: number;
@@ -1437,6 +1484,8 @@ function ResizeHandles({
         <div
           key={handle.key}
           data-resize-handle
+          data-resize-handle-for={itemId}
+          data-resize-handle-key={handle.key}
           onPointerDown={(e) => {
             e.preventDefault();
             onResizeStart(handle.key, e);
@@ -1603,7 +1652,7 @@ function SelectionActionBar({
       {canMutateSelection && (
         <ActionButton
           icon={<Trash2 data-icon="inline-start" className="size-3.5" />}
-          label="Delete"
+          label="Remove"
           danger
           onClick={onDelete}
         />

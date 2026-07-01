@@ -58,6 +58,18 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
     objectsRef.current = objects;
   }, [objects]);
 
+  // Allocate the next stacking index from the *live* object set, not just the
+  // local counter. In a multi-client workspace another participant's
+  // bringToFront bumps a z_index that syncs into objectsRef via realtime while
+  // our nextZRef stays stale-low — without this, a freshly created object could
+  // open *behind* a remotely-raised one. Math.max keeps the counter monotonic.
+  const nextZ = useCallback(() => {
+    const maxZ = objectsRef.current.reduce((m, o) => Math.max(m, o.z_index), 0);
+    const z = Math.max(nextZRef.current, maxZ + 1);
+    nextZRef.current = z + 1;
+    return z;
+  }, []);
+
   useEffect(() => {
     if (!workspaceId) return;
 
@@ -149,7 +161,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
     overrides: Partial<CanvasObject> = {}
   ): Promise<CanvasObject | null> => {
     if (!workspaceId) return null;
-    const z = nextZRef.current++;
+    const z = nextZ();
     let data: CanvasObject | null = null;
 
     const insertPayload = {
@@ -200,7 +212,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
       return obj;
     }
     return null;
-  }, [workspaceId, userId, activeLayerId]);
+  }, [workspaceId, userId, activeLayerId, nextZ]);
 
   const updateObject = useCallback(async (id: string, updates: Partial<CanvasObject>) => {
     const existing = objectsRef.current.find(o => o.id === id);
@@ -270,9 +282,9 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
   }, [workspaceId]);
 
   const bringToFront = useCallback(async (id: string) => {
-    const z = nextZRef.current++;
+    const z = nextZ();
     updateObject(id, { z_index: z });
-  }, [updateObject]);
+  }, [updateObject, nextZ]);
 
   const createGroup = useCallback(async (name: string, objectIds: string[], color?: string): Promise<CanvasGroup | null> => {
     if (!workspaceId) return null;
