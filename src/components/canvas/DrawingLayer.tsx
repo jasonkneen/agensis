@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
-import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode } from '../../types';
+import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,7 @@ interface DrawingLayerProps {
   onCreateTask?: (input: { title: string; sourceId: string }) => void;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
+  documents?: Document[];
   getPresenceMode?: (id?: string | null) => PresenceVisibilityMode;
   canEditObject?: (obj: CanvasObject) => boolean;
   onCreateAppletTask?: (input: CreateTaskInput) => void;
@@ -70,6 +71,7 @@ export function DrawingLayer({
   onCreateTask,
   tasks = [],
   agents = [],
+  documents = [],
   getPresenceMode = () => 'visible',
   canEditObject = () => true,
   onCreateAppletTask,
@@ -852,6 +854,7 @@ export function DrawingLayer({
             showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && tool === 'select'}
             tasks={tasks}
             agents={agents}
+            documents={documents}
             presenceMode={getPresenceMode(obj.user_id)}
             hostInteractionActive={anyInteraction}
             onAppletStateChange={canEditObject(obj) ? (stateText) => onUpdateObject(obj.id, { text_content: stateText }) : undefined}
@@ -941,6 +944,7 @@ export function DrawingLayer({
           showResizeHandles={canEditObject(obj) && selectedIds.size === 1 && selectedIds.has(obj.id) && activeTool === 'select'}
           tasks={tasks}
           agents={agents}
+          documents={documents}
           presenceMode={getPresenceMode(obj.user_id)}
           hostInteractionActive={anyInteraction}
           onAppletStateChange={canEditObject(obj) ? (stateText) => onUpdateObject(obj.id, { text_content: stateText }) : undefined}
@@ -1192,6 +1196,7 @@ function CanvasItemWrapper({
   showResizeHandles = false,
   tasks = [],
   agents = [],
+  documents = [] as Document[],
   presenceMode = 'visible',
   onAppletStateChange,
   onAppletCreateTask,
@@ -1216,6 +1221,7 @@ function CanvasItemWrapper({
   showResizeHandles?: boolean;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
+  documents?: Document[];
   presenceMode?: PresenceVisibilityMode;
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
@@ -1316,6 +1322,7 @@ function CanvasItemWrapper({
                 hostInteractionActive={hostInteractionActive}
                 tasks={tasks}
                 agents={agents}
+                documents={documents}
                 onAppletStateChange={onAppletStateChange}
                 onAppletCreateTask={onAppletCreateTask}
                 onAppletUpdateTask={onAppletUpdateTask}
@@ -1388,6 +1395,7 @@ function CanvasItemWrapper({
               hostInteractionActive={hostInteractionActive}
               tasks={tasks}
               agents={agents}
+              documents={documents}
               onAppletStateChange={onAppletStateChange}
               onAppletCreateTask={onAppletCreateTask}
               onAppletUpdateTask={onAppletUpdateTask}

@@ -1,6 +1,7 @@
 import { LayoutTemplate, Plus } from 'lucide-react';
 import type { CanvasAppDefinition } from '../../lib/canvasApps';
-import { CANVAS_APPS } from '../../lib/canvasApps';
+import { CANVAS_APPS, APPLETS_FOLDER } from '../../lib/canvasApps';
+import type { Document } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -10,12 +11,21 @@ interface CanvasTemplatePickerProps {
   open: boolean;
   onClose: () => void;
   onCreateApp: (app: CanvasAppDefinition) => void;
+  onCreateDocApp?: (doc: Document) => void;
   onCreateCustomApp: () => void;
+  documents?: Document[];
 }
 
-const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }: CanvasTemplatePickerProps) => {
+const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateDocApp, onCreateCustomApp, documents = [] }: CanvasTemplatePickerProps) => {
+  const appletDocs = documents.filter(d => d.folder === APPLETS_FOLDER);
+
   const handleCreateApp = (app: CanvasAppDefinition) => {
     onCreateApp(app);
+    onClose();
+  };
+
+  const handleCreateDocApp = (doc: Document) => {
+    onCreateDocApp?.(doc);
     onClose();
   };
 
@@ -95,6 +105,30 @@ const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateCustomApp }:
                     <span className="max-w-sm text-sm leading-relaxed text-muted-foreground">{app.description}</span>
                     <Badge variant="secondary" className="mt-auto w-fit text-xs">
                       HTML applet
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
+              {appletDocs.map(doc => (
+                <Card
+                  key={doc.id}
+                  role="button"
+                  tabIndex={0}
+                  size="sm"
+                  className="cursor-pointer rounded-lg transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  onClick={() => handleCreateDocApp(doc)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleCreateDocApp(doc);
+                    }
+                  }}
+                >
+                  <CardContent className="flex min-h-36 flex-col gap-3 p-4">
+                    <span className="text-base font-semibold leading-snug text-foreground">{doc.title}</span>
+                    <span className="max-w-sm text-sm leading-relaxed text-muted-foreground">Saved applet from the Applets folder</span>
+                    <Badge variant="outline" className="mt-auto w-fit text-xs">
+                      Saved applet
                     </Badge>
                   </CardContent>
                 </Card>

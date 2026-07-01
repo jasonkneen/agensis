@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, X } from 'lucide-react';
-import type { CanvasObject, Task, WorkspaceAgent } from '../../types';
+import type { CanvasObject, Task, WorkspaceAgent, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { CANVAS_APPS, parseAppletState } from '../../lib/canvasApps';
+import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent } from '../../lib/canvasApps';
 import { apiAuthHeaders } from '../../lib/backendClient';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ interface CanvasObjectRendererProps {
   hostInteractionActive?: boolean;
   tasks?: Task[];
   agents?: WorkspaceAgent[];
+  documents?: Document[];
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
   onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
@@ -33,6 +34,7 @@ export function CanvasObjectRenderer({
   hostInteractionActive = false,
   tasks = [],
   agents = [],
+  documents = [],
   onAppletStateChange,
   onAppletCreateTask,
   onAppletUpdateTask,
@@ -100,6 +102,7 @@ export function CanvasObjectRenderer({
         hostInteractionActive={hostInteractionActive}
         tasks={tasks}
         agents={agents}
+        documents={documents}
         onAppletStateChange={onAppletStateChange}
         onAppletCreateTask={onAppletCreateTask}
         onAppletUpdateTask={onAppletUpdateTask}
@@ -152,7 +155,7 @@ export function CanvasObjectRenderer({
 }
 
 function AppletObject({
-  obj, px, py, pw, ph, selected, attachHighlight, hostInteractionActive, tasks, agents, onAppletStateChange, onAppletCreateTask, onAppletUpdateTask, onDelete,
+  obj, px, py, pw, ph, selected, attachHighlight, hostInteractionActive, tasks, agents, documents, onAppletStateChange, onAppletCreateTask, onAppletUpdateTask, onDelete,
 }: {
   obj: CanvasObject;
   px: number; py: number; pw: number; ph: number;
@@ -161,6 +164,7 @@ function AppletObject({
   hostInteractionActive: boolean;
   tasks: Task[];
   agents: WorkspaceAgent[];
+  documents?: Document[];
   onAppletStateChange?: (stateText: string) => void;
   onAppletCreateTask?: (input: CreateTaskInput) => void;
   onAppletUpdateTask?: (id: string, updates: Partial<Task>) => void;
@@ -173,7 +177,10 @@ function AppletObject({
   const appId = parsed.appId || obj.file_name || 'applet';
   const appDefinition = CANVAS_APPS.find(app => app.id === appId);
   const appletTitle = obj.file_name || appDefinition?.name || 'Canvas applet';
-  const appletHtml = appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
+  const docBackedHtml = parsed.docId
+    ? (() => { const doc = documents?.find(d => d.id === parsed.docId); return doc ? extractHtmlFromDocContent(doc.content) : null; })()
+    : null;
+  const appletHtml = docBackedHtml || appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
   const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 
   const sendInit = () => {

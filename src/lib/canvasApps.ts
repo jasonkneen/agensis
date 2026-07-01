@@ -16,24 +16,43 @@ export const CANVAS_APPS: CanvasAppDefinition[] = [
     category: 'workspace',
     buildHtml: buildTaskKanbanAppHtml,
   },
+  {
+    id: 'calculator',
+    name: 'Calculator',
+    description: 'Standard calculator with keyboard support and persistent state',
+    category: 'generated',
+    buildHtml: buildCalculatorAppHtml,
+  },
 ];
 
 export function makeAppletState(appId: string, state: Record<string, unknown> = {}) {
   return JSON.stringify({ appId, state });
 }
 
+export function makeDocAppletState(docId: string, appName: string, state: Record<string, unknown> = {}) {
+  return JSON.stringify({ appId: appName, docId, state });
+}
+
 export function parseAppletState(value?: string | null) {
-  if (!value) return { appId: '', state: {} as Record<string, unknown> };
+  if (!value) return { appId: '', docId: null as string | null, state: {} as Record<string, unknown> };
   try {
     const parsed = JSON.parse(value);
     return {
       appId: typeof parsed.appId === 'string' ? parsed.appId : '',
+      docId: typeof parsed.docId === 'string' ? parsed.docId : null,
       state: parsed.state && typeof parsed.state === 'object' ? parsed.state as Record<string, unknown> : {},
     };
   } catch {
-    return { appId: '', state: {} as Record<string, unknown> };
+    return { appId: '', docId: null as string | null, state: {} as Record<string, unknown> };
   }
 }
+
+export function extractHtmlFromDocContent(content: string): string {
+  const match = content.match(/```html[\s\r\n]+([\s\S]+?)```/i);
+  return match ? match[1].trim() : '';
+}
+
+export const APPLETS_FOLDER = 'Applets';
 
 export interface AgensisAppletInit {
   state: Record<string, unknown>;
@@ -346,6 +365,400 @@ function buildTaskKanbanAppHtml() {
       post("agensis:ready");
     })();
   </script>
+</body>
+</html>`;
+}
+
+function buildCalculatorAppHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calculator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface2: #0f3460;
+    --accent: #e94560;
+    --text: #eaeaea;
+    --text-muted: #888;
+    --btn-num: #1e2a4a;
+    --btn-num-hover: #26366a;
+    --btn-op: #0f3460;
+    --btn-op-hover: #1a4a8a;
+    --btn-eq: #e94560;
+    --btn-eq-hover: #ff6b6b;
+    --btn-clear: #2d4a7a;
+    --btn-clear-hover: #3a6aaa;
+    --radius: 12px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.4);
+    --font: system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  .calc {
+    width: 100%;
+    max-width: 340px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .display {
+    background: var(--bg);
+    padding: 20px 24px 16px;
+    text-align: right;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .display-expr {
+    font-size: 14px;
+    color: var(--text-muted);
+    min-height: 20px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .display-main {
+    font-size: 42px;
+    font-weight: 300;
+    letter-spacing: -1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+  .display-main.small { font-size: 28px; }
+  .display-main.error { color: var(--accent); font-size: 18px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: rgba(0,0,0,0.3);
+    padding: 1px;
+  }
+
+  button {
+    font-family: var(--font);
+    font-size: 18px;
+    font-weight: 400;
+    padding: 20px 0;
+    border: none;
+    cursor: pointer;
+    transition: background 0.12s, transform 0.08s;
+    color: var(--text);
+    background: var(--btn-num);
+    outline: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:hover { background: var(--btn-num-hover); }
+  button:active { transform: scale(0.95); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  button.op { background: var(--btn-op); color: #7eb8f7; font-size: 22px; }
+  button.op:hover { background: var(--btn-op-hover); }
+
+  button.eq {
+    background: var(--btn-eq);
+    color: #fff;
+    font-size: 24px;
+    font-weight: 300;
+  }
+  button.eq:hover { background: var(--btn-eq-hover); }
+
+  button.clear { background: var(--btn-clear); color: #7eb8f7; }
+  button.clear:hover { background: var(--btn-clear-hover); }
+
+  button.zero { grid-column: span 2; }
+
+  .kbd-hint {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 8px;
+    background: var(--surface);
+  }
+</style>
+</head>
+<body>
+<div class="calc" role="application" aria-label="Calculator">
+  <div class="display" aria-live="polite" aria-atomic="true">
+    <div class="display-expr" id="expr"></div>
+    <div class="display-main" id="main">0</div>
+  </div>
+  <div class="grid">
+    <button class="clear" data-action="clear" aria-label="Clear all">AC</button>
+    <button class="clear" data-action="sign"  aria-label="Toggle sign">+/−</button>
+    <button class="clear" data-action="pct"   aria-label="Percent">%</button>
+    <button class="op"    data-action="op" data-op="÷" aria-label="Divide">÷</button>
+
+    <button data-action="digit" data-val="7">7</button>
+    <button data-action="digit" data-val="8">8</button>
+    <button data-action="digit" data-val="9">9</button>
+    <button class="op" data-action="op" data-op="×" aria-label="Multiply">×</button>
+
+    <button data-action="digit" data-val="4">4</button>
+    <button data-action="digit" data-val="5">5</button>
+    <button data-action="digit" data-val="6">6</button>
+    <button class="op" data-action="op" data-op="−" aria-label="Subtract">−</button>
+
+    <button data-action="digit" data-val="1">1</button>
+    <button data-action="digit" data-val="2">2</button>
+    <button data-action="digit" data-val="3">3</button>
+    <button class="op" data-action="op" data-op="+" aria-label="Add">+</button>
+
+    <button class="zero" data-action="digit" data-val="0" aria-label="Zero">0</button>
+    <button data-action="dot" aria-label="Decimal point">.</button>
+    <button class="eq" data-action="equals" aria-label="Equals">=</button>
+  </div>
+  <div class="kbd-hint">keyboard supported</div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const ST = {
+  current:   '0',
+  prev:      null,
+  op:        null,
+  justEvaled: false,
+  error:     false,
+};
+
+// ── Theme from agensis ─────────────────────────────────────────────────────
+function applyTheme(theme) {
+  if (!theme) return;
+  const root = document.documentElement;
+  const map = {
+    '--bg':       theme.background || theme.bg,
+    '--surface':  theme.surface,
+    '--surface2': theme.surface2 || theme.surfaceAlt,
+    '--accent':   theme.accent || theme.primary,
+    '--text':     theme.text || theme.foreground,
+    '--text-muted': theme.textMuted || theme.muted,
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (v) root.style.setProperty(k, v);
+  }
+}
+
+// ── Display ────────────────────────────────────────────────────────────────
+const mainEl = document.getElementById('main');
+const exprEl = document.getElementById('expr');
+
+function fmt(n) {
+  if (n === null || n === undefined) return '0';
+  const s = String(n);
+  if (s.length > 12) {
+    const num = parseFloat(n);
+    if (isNaN(num)) return 'Error';
+    const exp = num.toExponential(4);
+    return exp.length < 14 ? exp : 'Overflow';
+  }
+  return s;
+}
+
+function render() {
+  const text = ST.error ? 'Error' : fmt(ST.current);
+  mainEl.textContent = text;
+  mainEl.className = 'display-main' +
+    (ST.error ? ' error' : text.length > 9 ? ' small' : '');
+
+  if (ST.op && ST.prev !== null && !ST.justEvaled) {
+    exprEl.textContent = fmt(ST.prev) + ' ' + ST.op;
+  } else if (ST.justEvaled && ST.prev !== null) {
+    exprEl.textContent = fmt(ST.prev) + ' ' + ST.op + ' ' + fmt(ST._lastInput) + ' =';
+  } else {
+    exprEl.textContent = '';
+  }
+}
+
+// ── Logic ──────────────────────────────────────────────────────────────────
+function calc(a, b, op) {
+  const fa = parseFloat(a), fb = parseFloat(b);
+  switch (op) {
+    case '+': return fa + fb;
+    case '−': return fa - fb;
+    case '×': return fa * fb;
+    case '÷': return fb === 0 ? null : fa / fb;
+  }
+  return fb;
+}
+
+function cleanNum(n) {
+  if (typeof n === 'number') {
+    if (!isFinite(n)) return null;
+    // avoid floating-point display noise
+    const r = parseFloat(n.toPrecision(12));
+    return String(r);
+  }
+  return String(n);
+}
+
+function dispatch(action, payload) {
+  if (ST.error && action !== 'clear') return;
+
+  switch (action) {
+    case 'digit': {
+      const v = payload;
+      if (ST.justEvaled) {
+        ST.current = v === '0' ? '0' : v;
+        ST.prev = null; ST.op = null; ST.justEvaled = false;
+      } else if (ST.current === '0' && v !== '.') {
+        ST.current = v;
+      } else if (ST.current.length < 15) {
+        ST.current += v;
+      }
+      break;
+    }
+    case 'dot': {
+      if (ST.justEvaled) { ST.current = '0.'; ST.justEvaled = false; break; }
+      if (!ST.current.includes('.')) ST.current += '.';
+      break;
+    }
+    case 'op': {
+      const op = payload;
+      if (ST.op && !ST.justEvaled && ST.prev !== null) {
+        const r = calc(ST.prev, ST.current, ST.op);
+        if (r === null) { ST.error = true; break; }
+        ST.prev = cleanNum(r);
+        ST.current = ST.prev;
+      } else {
+        ST.prev = ST.current;
+      }
+      ST.op = op;
+      ST.justEvaled = false;
+      ST.current = '0';
+      break;
+    }
+    case 'equals': {
+      if (!ST.op || ST.prev === null) break;
+      const input = ST.justEvaled ? ST._lastInput : ST.current;
+      ST._lastInput = input;
+      const r = calc(ST.prev, input, ST.op);
+      if (r === null) { ST.error = true; break; }
+      ST.current = cleanNum(r);
+      ST.justEvaled = true;
+      break;
+    }
+    case 'sign': {
+      if (ST.current !== '0') {
+        ST.current = ST.current.startsWith('-')
+          ? ST.current.slice(1)
+          : '-' + ST.current;
+      }
+      break;
+    }
+    case 'pct': {
+      const v = parseFloat(ST.current);
+      ST.current = cleanNum(v / 100);
+      break;
+    }
+    case 'clear': {
+      Object.assign(ST, { current: '0', prev: null, op: null, justEvaled: false, error: false, _lastInput: undefined });
+      break;
+    }
+  }
+
+  render();
+  saveState();
+}
+
+// ── Persistence (agensis) ──────────────────────────────────────────────────
+function saveState() {
+  try {
+    window.parent.postMessage({
+      source: 'agensis-applet',
+      type:   'agensis:setState',
+      payload: { state: { current: ST.current, prev: ST.prev, op: ST.op } },
+    }, '*');
+  } catch (_) {}
+}
+
+// ── Event wiring ───────────────────────────────────────────────────────────
+document.querySelector('.grid').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const { action, op, val } = btn.dataset;
+  if (action === 'digit') dispatch('digit', val);
+  else if (action === 'op') dispatch('op', op);
+  else dispatch(action);
+});
+
+const KEY_MAP = {
+  '0':'digit:0','1':'digit:1','2':'digit:2','3':'digit:3','4':'digit:4',
+  '5':'digit:5','6':'digit:6','7':'digit:7','8':'digit:8','9':'digit:9',
+  '.':'dot',',':'dot',
+  '+':'op:+','-':'op:−','*':'op:×','/':'op:÷','x':'op:×',
+  'Enter':'equals','=':'equals',
+  'Escape':'clear','Backspace':'backspace','Delete':'clear',
+  '%':'pct',
+};
+
+document.addEventListener('keydown', e => {
+  const cmd = KEY_MAP[e.key];
+  if (!cmd) return;
+  e.preventDefault();
+  if (cmd === 'backspace') {
+    if (ST.error) { dispatch('clear'); return; }
+    ST.current = ST.current.length > 1 ? ST.current.slice(0, -1) : '0';
+    render(); saveState(); return;
+  }
+  const [action, payload] = cmd.split(':');
+  dispatch(action, payload);
+});
+
+// ── agensis SDK ────────────────────────────────────────────────────────────
+window.addEventListener('message', e => {
+  if (!e.data || e.data.type !== 'agensis:init') return;
+  const { state, theme } = e.data.payload || {};
+  if (theme) applyTheme(theme);
+  if (state) {
+    ST.current = state.current ?? '0';
+    ST.prev    = state.prev    ?? null;
+    ST.op      = state.op      ?? null;
+  }
+  render();
+});
+
+// Signal ready
+window.parent.postMessage({ source: 'agensis-applet', type: 'agensis:ready' }, '*');
+
+// Catch unhandled errors
+window.addEventListener('error', ev => {
+  window.parent.postMessage({
+    source: 'agensis-applet', type: 'agensis:crash',
+    payload: { message: ev.message || 'Unknown error' },
+  }, '*');
+});
+
+// Initial render
+render();
+</script>
 </body>
 </html>`;
 }

@@ -93,7 +93,7 @@ import { useDockAttention } from './hooks/useDockAttention';
 import { useWorkspacePresence, windowLabel, type WorkspacePresenceUser } from './hooks/useWorkspacePresence';
 import { useWorkspaceKnowledge, type WorkspaceContextCounts } from './hooks/useWorkspaceKnowledge';
 import type { CanvasAppDefinition } from './lib/canvasApps';
-import { makeAppletState } from './lib/canvasApps';
+import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
@@ -1014,6 +1014,22 @@ function AppContent() {
     });
   }, [addCanvasObject, activeLayerId]);
 
+  const handleCreateDocApp = useCallback(async (doc: Document) => {
+    await addCanvasObject('applet', {
+      x: 12,
+      y: 10,
+      width: 76,
+      height: 72,
+      fill: 'var(--canvas-raised)',
+      stroke: 'var(--border)',
+      stroke_width: 1,
+      file_name: doc.title,
+      text_content: makeDocAppletState(doc.id, doc.title),
+      src: '',
+      layer_id: activeLayerId,
+    });
+  }, [addCanvasObject, activeLayerId]);
+
   const handleCreateTask = useCallback(async (input: CreateTaskInput) => {
     const task = await createTask(input);
     if (task) {
@@ -1516,6 +1532,7 @@ function AppContent() {
               onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
               tasks={tasks}
               agents={agents}
+              documents={documents}
               getPresenceMode={getPresenceMode}
               canEditObject={canEditCanvasObject}
               onCreateAppletTask={handleCreateTask}
@@ -1542,7 +1559,9 @@ function AppContent() {
               open={templatePickerOpen}
               onClose={() => setTemplatePickerOpen(false)}
               onCreateApp={handleCreateCanvasApp}
+              onCreateDocApp={handleCreateDocApp}
               onCreateCustomApp={handleCreateCustomApplet}
+              documents={documents}
             />
 
             <div
