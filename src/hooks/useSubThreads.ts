@@ -120,17 +120,32 @@ export function useSubThreads(workspaceId: string | null) {
     agentHandle: string,
     agentId: string | null,
     agentName: string,
+    options?: {
+      contextMessage?: string;
+      additionalAgents?: Array<{ id: string | null; name: string; handle: string }>;
+    },
   ): Promise<ChatSession | null> => {
     if (!workspaceId) return null;
-    const participants = [{
+    const now = new Date().toISOString();
+    const primaryParticipant = {
       id: agentId || agentHandle,
       name: agentName,
       kind: 'agent',
       handle: agentHandle,
       agent_id: agentId,
       direct: true,
-      added_at: new Date().toISOString(),
-    }];
+      added_at: now,
+    };
+    const extraParticipants = (options?.additionalAgents || []).map(a => ({
+      id: a.id || a.handle,
+      name: a.name,
+      kind: 'agent',
+      handle: a.handle,
+      agent_id: a.id,
+      direct: false,
+      added_at: now,
+    }));
+    const participants = [primaryParticipant, ...extraParticipants];
     const { data } = await backendClient
       .from('chat_sessions')
       .insert({
@@ -149,6 +164,29 @@ export function useSubThreads(workspaceId: string | null) {
         ...prev,
         [messageId]: [...(prev[messageId] || []), data],
       }));
+      // Seed the thread with the parent message as context so the agent knows the task
+      if (options?.contextMessage) {
+        const contextMsgId = crypto.randomUUID();
+        await backendClient.from('messages').insert({
+          id: contextMsgId,
+          session_id: data.id,
+          role: 'user',
+          content: options.contextMessage,
+        });
+        // Dispatch to the target agent so it reads the context immediately
+        fetch(apiUrl('/backend/agents/dispatch'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({
+            workspaceId,
+            sessionId: data.id,
+            messageId: contextMsgId,
+            content: options.contextMessage,
+            threadParentId: null,
+            messages: [{ role: 'user', content: options.contextMessage }],
+          }),
+        }).catch(() => null);
+      }
     }
     return data;
   }, [workspaceId]);

@@ -1278,9 +1278,19 @@ function AppContent() {
                 subThreadStreaming={subThreadStreaming}
                 onOpenSubThread={openSubThread}
                 onCloseSubThread={closeSubThread}
-                onCreateSubThread={async (messageId, agent) => {
+                onCreateSubThread={async (messageId, agent, messageContent) => {
                   const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-                  const session = await createSubThread(messageId, slug, agent.id, agent.name);
+                  const otherAgents = agents
+                    .filter(a => a.enabled !== false && a.id !== agent.id)
+                    .map(a => ({
+                      id: a.id,
+                      name: a.name,
+                      handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
+                    }));
+                  const session = await createSubThread(messageId, slug, agent.id, agent.name, {
+                    contextMessage: messageContent,
+                    additionalAgents: otherAgents,
+                  });
                   if (session) openSubThread(session);
                 }}
                 onSendSubThreadMessage={sendSubThreadMessage}
