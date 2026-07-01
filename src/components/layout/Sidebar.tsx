@@ -237,22 +237,10 @@ export function Sidebar({
   // its Merge action would never render. Pull forks out of the target input and
   // nest them under their parent's row instead (mirrors SessionTree for
   // channels/threads). Fork = split_parent_id pointing at another DM in-view.
-  const { dmForksByParent, dmPrimarySessions } = React.useMemo(() => {
-    const ids = new Set(directSessions.map(session => session.id));
-    const forksByParent = new Map<string, ChatSession[]>();
-    const primary: ChatSession[] = [];
-    for (const session of directSessions) {
-      const parentId = session.split_parent_id;
-      if (parentId && ids.has(parentId)) {
-        const list = forksByParent.get(parentId) || [];
-        list.push(session);
-        forksByParent.set(parentId, list);
-      } else {
-        primary.push(session);
-      }
-    }
-    return { dmForksByParent: forksByParent, dmPrimarySessions: primary };
-  }, [directSessions]);
+  const { dmForksByParent, dmPrimarySessions } = React.useMemo(
+    () => buildDmForkGroups(directSessions),
+    [directSessions],
+  );
   const directMessageTargets = React.useMemo(
     () => buildDirectMessageTargets(dmPrimarySessions, directAgents, favoriteAgentKeys),
     [dmPrimarySessions, directAgents, favoriteAgentKeys],
@@ -1298,6 +1286,28 @@ function RowChip({ kind }: { kind: 'SPLIT' | 'SUB' }) {
       {kind}
     </span>
   );
+}
+
+// Separate DM split forks from their parents so the per-agent dedup in
+// buildDirectMessageTargets never swallows a fork (which would hide its Merge
+// action). A fork is a DM whose split_parent_id points at another DM in the
+// same list; it's mapped under that parent and rendered nested. Forks whose
+// parent isn't in view fall back to `primary` so they never vanish.
+export function buildDmForkGroups(directSessions: ChatSession[]) {
+  const ids = new Set(directSessions.map(session => session.id));
+  const dmForksByParent = new Map<string, ChatSession[]>();
+  const dmPrimarySessions: ChatSession[] = [];
+  for (const session of directSessions) {
+    const parentId = session.split_parent_id;
+    if (parentId && ids.has(parentId)) {
+      const list = dmForksByParent.get(parentId) || [];
+      list.push(session);
+      dmForksByParent.set(parentId, list);
+    } else {
+      dmPrimarySessions.push(session);
+    }
+  }
+  return { dmForksByParent, dmPrimarySessions };
 }
 
 // Group a flat session list into a split hierarchy: a fork (split_parent_id set)
