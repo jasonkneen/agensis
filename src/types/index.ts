@@ -40,6 +40,7 @@ export interface ChatSession {
   max_agent_turns?: number | null;
   auto_rounds?: number | null;
   archived_at?: string | null;
+  parent_message_id?: string | null;
   version?: number;
   created_at: string;
   updated_at: string;

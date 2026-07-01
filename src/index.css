@@ -1623,6 +1623,15 @@
 }
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
+/* Floating thread widgets — macOS-style: hairline edge + layered depth
+   (tight contact shadow + soft ambient) so cards lift off the chat canvas. */
+.thread-widget-card {
+  box-shadow: var(--shadow-md), var(--shadow-xl);
+}
+.thread-widget-card:hover {
+  box-shadow: var(--shadow-lg), var(--shadow-xl);
+}
+
 .chat-msg-jump-highlight {
   animation: chat-msg-jump 1.6s ease-out;
   border-radius: 0.5rem;

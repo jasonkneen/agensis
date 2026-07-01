@@ -62,6 +62,7 @@ import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
 import { useChat } from './hooks/useChat';
+import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
 import { useMemory } from './hooks/useMemory';
 import { useFiles } from './hooks/useFiles';
@@ -441,6 +442,17 @@ function AppContent() {
     openThread, closeThread,
     createSession, updateSession, archiveSession, sendMessage,
   } = useChat(activeWorkspaceId);
+
+  const {
+    subThreadsByMessage,
+    activeSubThread,
+    subThreadMessages,
+    subThreadStreaming,
+    createSubThread,
+    openSubThread,
+    closeSubThread,
+    sendSubThreadMessage,
+  } = useSubThreads(activeWorkspaceId);
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
   const { files: uploadedFiles, uploadFiles } = useFiles(activeWorkspaceId);
@@ -1260,6 +1272,18 @@ function AppContent() {
                 activeThreadId={activeThreadId}
                 onOpenThread={openThread}
                 onCloseThread={closeThread}
+                subThreadsByMessage={subThreadsByMessage}
+                activeSubThread={activeSubThread}
+                subThreadMessages={subThreadMessages}
+                subThreadStreaming={subThreadStreaming}
+                onOpenSubThread={openSubThread}
+                onCloseSubThread={closeSubThread}
+                onCreateSubThread={async (messageId, agent) => {
+                  const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
+                  const session = await createSubThread(messageId, slug, agent.id, agent.name);
+                  if (session) openSubThread(session);
+                }}
+                onSendSubThreadMessage={sendSubThreadMessage}
                 useWorkspaceCtx={useWorkspaceCtx}
                 onToggleWorkspaceCtx={() => setUseWorkspaceCtx(v => !v)}
                 onHomeSendMessage={handleHomeSendMessage}
@@ -1545,6 +1569,14 @@ function CanvasLayerScene({
   activeThreadId,
   onOpenThread,
   onCloseThread,
+  subThreadsByMessage,
+  activeSubThread,
+  subThreadMessages,
+  subThreadStreaming,
+  onOpenSubThread,
+  onCloseSubThread,
+  onCreateSubThread: onCreateSubThreadProp,
+  onSendSubThreadMessage,
   useWorkspaceCtx,
   onToggleWorkspaceCtx,
   onHomeSendMessage,
@@ -1614,6 +1646,14 @@ function CanvasLayerScene({
   activeThreadId: string | null;
   onOpenThread: (messageId: string) => void;
   onCloseThread: () => void;
+  subThreadsByMessage: Record<string, import('./types').ChatSession[]>;
+  activeSubThread: import('./types').ChatSession | null;
+  subThreadMessages: import('./types').Message[];
+  subThreadStreaming: boolean;
+  onOpenSubThread: (session: import('./types').ChatSession) => void;
+  onCloseSubThread: () => void;
+  onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
+  onSendSubThreadMessage: (content: string) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
   onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
@@ -1758,6 +1798,14 @@ function CanvasLayerScene({
                     if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
                     onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
                   }}
+                  subThreadsByMessage={subThreadsByMessage}
+                  activeSubThread={activeSubThread}
+                  subThreadMessages={subThreadMessages}
+                  subThreadStreaming={subThreadStreaming}
+                  onOpenSubThread={onOpenSubThread}
+                  onCloseSubThread={onCloseSubThread}
+                  onCreateSubThread={onCreateSubThreadProp}
+                  onSendSubThreadMessage={onSendSubThreadMessage}
                   channelTitle={winSession?.title || win.title}
                 />
                 )

@@ -43,6 +43,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
+import { SubThreadPanel } from '../chat/SubThreadPanel';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
@@ -168,6 +169,14 @@ interface ChatWindowContentProps {
   isDirectMessage?: boolean;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onUpdateAgent?: (id: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
+  subThreadsByMessage?: Record<string, ChatSession[]>;
+  activeSubThread?: ChatSession | null;
+  subThreadMessages?: ChatMessage[];
+  subThreadStreaming?: boolean;
+  onOpenSubThread?: (session: ChatSession) => void;
+  onCloseSubThread?: () => void;
+  onCreateSubThread?: (messageId: string, agent: WorkspaceAgent) => void;
+  onSendSubThreadMessage?: (content: string) => void;
 }
 
 type ChannelPresenceUser = {
@@ -230,7 +239,7 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile';
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread';
 
 // A message is a live "thinking" placeholder while the daemon is still working:
 // an agent/assistant row whose body is the bare "Thinking …" marker (the daemon
@@ -273,7 +282,16 @@ export function ChatWindowContent({
   contextControls,
   isDirectMessage: isDirectMessageProp = false,
   onUpdateAgent,
+  subThreadsByMessage = {},
+  activeSubThread,
+  subThreadMessages = [],
+  subThreadStreaming = false,
+  onOpenSubThread,
+  onCloseSubThread,
+  onCreateSubThread,
+  onSendSubThreadMessage,
 }: ChatWindowContentProps) {
+  const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
@@ -991,6 +1009,10 @@ export function ChatWindowContent({
   const openThread = () => {
     setSidePanel('thread');
   };
+  const openSubThreadPanel = (session: ChatSession) => {
+    onOpenSubThread?.(session);
+    setSidePanel('sub-thread');
+  };
   const openAgentProfilePanel = (agentIdOrHandle?: string | null) => {
     const key = agentIdOrHandle || directProfileKey || profileAgent?.id || '';
     if (!key) return;
@@ -999,6 +1021,7 @@ export function ChatWindowContent({
   };
   const closeSidePanel = () => {
     if (sidePanel === 'thread') onCloseThread?.();
+    if (sidePanel === 'sub-thread') onCloseSubThread?.();
     setSidePanel(null);
   };
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1186,6 +1209,9 @@ export function ChatWindowContent({
                             openThread();
                           } : undefined}
                           onAgentProfile={openAgentProfilePanel}
+                          subThreads={subThreadsByMessage[msg.id]}
+                          onOpenSubThread={openSubThreadPanel}
+                          onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
                         />
                       </MessageScrollerItem>
                     ))}
@@ -1499,6 +1525,17 @@ export function ChatWindowContent({
               onClose={closeSidePanel}
               embedded
             />
+          ) : sidePanel === 'sub-thread' && activeSubThread && onSendSubThreadMessage ? (
+            <SubThreadPanel
+              session={activeSubThread}
+              messages={subThreadMessages}
+              streaming={subThreadStreaming}
+              resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
+              onSendMessage={onSendSubThreadMessage}
+              onAgentProfile={openAgentProfilePanel}
+              onClose={closeSidePanel}
+              embedded
+            />
           ) : (
             <ChannelSidePanel
               type={sidePanel}
@@ -1628,6 +1665,40 @@ export function ChatWindowContent({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={Boolean(subThreadPickerMessageId)} onOpenChange={open => { if (!open) setSubThreadPickerMessageId(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Start a sub-thread with…</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-1 py-2">
+            {agents.filter(a => a.enabled !== false).map(agent => (
+              <button
+                key={agent.id}
+                type="button"
+                className="flex items-center gap-3 rounded-md px-3 py-2.5 text-left hover:bg-muted"
+                onClick={() => {
+                  if (subThreadPickerMessageId && onCreateSubThread) {
+                    onCreateSubThread(subThreadPickerMessageId, agent);
+                  }
+                  setSubThreadPickerMessageId(null);
+                }}
+              >
+                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Bot className="size-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{agent.name}</div>
+                  {agent.handle && <div className="truncate text-xs text-muted-foreground">@{agent.handle}</div>}
+                </div>
+              </button>
+            ))}
+            {agents.filter(a => a.enabled !== false).length === 0 && (
+              <p className="px-3 py-2 text-sm text-muted-foreground">No agents available in this workspace.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1683,6 +1754,9 @@ function ChatMessageBubble({
   onDelete,
   onOpenThread,
   onAgentProfile,
+  subThreads,
+  onOpenSubThread,
+  onCreateSubThread,
 }: {
   msg: ChatMessage;
   avatar?: string;
@@ -1700,6 +1774,9 @@ function ChatMessageBubble({
   onDelete?: () => void;
   onOpenThread?: () => void;
   onAgentProfile?: (agentIdOrHandle: string) => void;
+  subThreads?: ChatSession[];
+  onOpenSubThread?: (session: ChatSession) => void;
+  onCreateSubThread?: () => void;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -1791,6 +1868,38 @@ function ChatMessageBubble({
             <CornerDownRight className="size-3" />
             {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
           </button>
+        ) : null}
+        {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {(subThreads || []).map(session => {
+              const participants = Array.isArray(session.participants) ? session.participants : [];
+              const agentParticipants = participants.filter(p => p.kind === 'agent');
+              const label = agentParticipants.length > 0
+                ? agentParticipants.map(p => p.handle || p.name).join(', ')
+                : session.title;
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => onOpenSubThread?.(session)}
+                >
+                  <MessageSquare className="size-2.5" />
+                  {label}
+                </button>
+              );
+            })}
+            {onCreateSubThread && (
+              <button
+                type="button"
+                className="inline-flex h-5 items-center gap-1 rounded-full border border-dashed border-border px-2 text-[11px] text-muted-foreground hover:border-border hover:text-foreground"
+                onClick={onCreateSubThread}
+              >
+                <Plus className="size-2.5" />
+                Sub-thread
+              </button>
+            )}
+          </div>
         ) : null}
       </div>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it

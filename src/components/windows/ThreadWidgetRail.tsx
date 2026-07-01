@@ -7,7 +7,6 @@ import {
   Plus,
   Maximize2,
   Minimize2,
-  GripVertical,
   CornerDownRight,
   PanelRightClose,
   PanelRightOpen,
@@ -15,7 +14,6 @@ import {
   Send,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
 import { useThreadItems } from '@/hooks/useThreadItems';
 import type { ThreadItem, ThreadItemKind } from '@/types';
 
@@ -153,94 +151,88 @@ export function ThreadWidgetRail({
 
   if (!sessionId || !workspaceId) return null;
 
-  // Collapsed → thin reopen strip.
+  // Collapsed → floating reopen chip (no panel chrome).
   if (layout.collapsed) {
     return (
-      <div className="thread-widget-rail-collapsed flex h-full shrink-0 flex-col items-center border-l border-border bg-card/40 px-1 py-2">
-        <Button
-          size="icon"
-          variant="ghost"
-          className="size-7"
+      <div className="thread-widget-rail-collapsed flex h-full shrink-0 flex-col items-center px-1.5 py-3">
+        <button
+          type="button"
+          className="thread-widget-card flex size-8 items-center justify-center rounded-full border border-black/5 bg-card text-muted-foreground transition-colors hover:text-foreground dark:border-white/10"
           title="Show widgets"
           aria-label="Show widgets"
           onClick={() => setCollapsed(false)}
         >
           <PanelRightOpen className="size-4" />
-        </Button>
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="thread-widget-rail flex h-full w-[320px] shrink-0 flex-col overflow-hidden border-l border-border bg-card/30">
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-        <span className="text-xs font-medium text-muted-foreground">Widgets</span>
-        <div className="flex-1" />
-        {missingKinds.length > 0 && (
-          <div className="flex items-center gap-0.5">
-            {missingKinds.map(kind => {
-              const Icon = KIND_META[kind].icon;
-              return (
-                <Button
-                  key={kind}
-                  size="icon"
-                  variant="ghost"
-                  className="size-6"
-                  title={`Add ${KIND_META[kind].label} widget`}
-                  aria-label={`Add ${KIND_META[kind].label} widget`}
-                  onClick={() => addWidget(kind)}
-                >
-                  <Icon className="size-3.5" />
-                </Button>
-              );
-            })}
-          </div>
-        )}
-        <Button
-          size="icon"
-          variant="ghost"
-          className="size-6"
+    <div className="thread-widget-rail flex h-full w-[300px] shrink-0 flex-col overflow-y-auto px-3 py-3">
+      {/* floating controls — no panel header, just a subtle collapse chip */}
+      <div className="mb-2 flex shrink-0 items-center justify-end gap-1">
+        {missingKinds.map(kind => {
+          const Icon = KIND_META[kind].icon;
+          return (
+            <button
+              key={kind}
+              type="button"
+              className="flex size-6 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+              title={`Add ${KIND_META[kind].label} widget`}
+              aria-label={`Add ${KIND_META[kind].label} widget`}
+              onClick={() => addWidget(kind)}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className="flex size-6 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
           title="Hide widgets"
           aria-label="Hide widgets"
           onClick={() => setCollapsed(true)}
         >
           <PanelRightClose className="size-3.5" />
-        </Button>
+        </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <div className="grid grid-cols-2 gap-2 [grid-auto-flow:dense] [grid-auto-rows:150px]">
-          {layout.widgets.map((w, index) => (
-            <WidgetCard
-              key={w.kind}
-              index={index}
-              layout={w}
-              items={byKind[w.kind]}
-              loading={loading}
-              accent={accent}
-              isDragTarget={dropIndex === index && dragIndex !== index}
-              onDragStart={() => setDragIndex(index)}
-              onDragOver={() => setDropIndex(index)}
-              onDragEnd={() => {
-                if (dragIndex !== null && dropIndex !== null) reorder(dragIndex, dropIndex);
-                setDragIndex(null);
-                setDropIndex(null);
-              }}
-              onResize={() => cycleSize(index)}
-              onClose={() => closeWidget(w.kind)}
-              onAdd={content => createItem({ kind: w.kind, content })}
-              onToggleDone={toggleDone}
-              onAnswer={answerBlocker}
-              onDelete={deleteItem}
-              onJumpToMessage={onJumpToMessage}
-            />
-          ))}
-          {layout.widgets.length === 0 && (
-            <div className="col-span-2 rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-              No widgets. Add one from the header above.
-            </div>
-          )}
-        </div>
+      <div className="grid min-h-0 grid-cols-2 gap-3 [grid-auto-flow:dense] [grid-auto-rows:158px]">
+        {layout.widgets.map((w, index) => (
+          <WidgetCard
+            key={w.kind}
+            index={index}
+            layout={w}
+            items={byKind[w.kind]}
+            loading={loading}
+            accent={accent}
+            isDragTarget={dropIndex === index && dragIndex !== index}
+            onDragStart={() => setDragIndex(index)}
+            onDragOver={() => setDropIndex(index)}
+            onDragEnd={() => {
+              if (dragIndex !== null && dropIndex !== null) reorder(dragIndex, dropIndex);
+              setDragIndex(null);
+              setDropIndex(null);
+            }}
+            onResize={() => cycleSize(index)}
+            onClose={() => closeWidget(w.kind)}
+            onAdd={content => createItem({ kind: w.kind, content })}
+            onToggleDone={toggleDone}
+            onAnswer={answerBlocker}
+            onDelete={deleteItem}
+            onJumpToMessage={onJumpToMessage}
+          />
+        ))}
+        {layout.widgets.length === 0 && (
+          <button
+            type="button"
+            className="col-span-2 rounded-2xl border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            onClick={() => ALL_KINDS.forEach(addWidget)}
+          >
+            No widgets — click to restore
+          </button>
+        )}
       </div>
     </div>
   );
@@ -299,32 +291,31 @@ function WidgetCard({
   return (
     <div
       className={cn(
-        'thread-widget group/card relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-md transition-shadow hover:shadow-lg',
+        'thread-widget thread-widget-card group/card relative flex flex-col overflow-hidden rounded-2xl border border-black/5 bg-card transition-shadow dark:border-white/10',
         layout.w === 2 ? 'col-span-2' : 'col-span-1',
         layout.h === 2 ? 'row-span-2' : 'row-span-1',
         isDragTarget && 'ring-2 ring-primary/60',
       )}
       onDragOver={e => { e.preventDefault(); onDragOver(); }}
     >
-      {/* header / drag handle */}
+      {/* header — whole row is the drag handle, no divider, no grip clutter */}
       <div
-        className="flex h-7 shrink-0 cursor-grab items-center gap-1 border-b border-border/60 px-1.5 active:cursor-grabbing"
+        className="flex shrink-0 cursor-grab items-center gap-1.5 px-3 pt-2.5 pb-1 active:cursor-grabbing"
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
-        <GripVertical className="size-3 shrink-0 text-muted-foreground/50" />
         <Icon className="size-3.5 shrink-0" style={accent ? { color: accent } : undefined} />
-        <span className="truncate text-xs font-medium">{meta.label}</span>
+        <span className="truncate text-xs font-semibold tracking-tight">{meta.label}</span>
         {items.length > 0 && (
-          <span className="rounded-full bg-muted px-1.5 text-[10px] leading-4 text-muted-foreground">
+          <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium leading-4 text-muted-foreground">
             {openCount || items.length}
           </span>
         )}
         <div className="flex-1" />
         <button
           type="button"
-          className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover/card:opacity-100"
+          className="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover/card:opacity-100"
           title="Resize"
           aria-label="Resize widget"
           onClick={onResize}
@@ -333,7 +324,7 @@ function WidgetCard({
         </button>
         <button
           type="button"
-          className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover/card:opacity-100"
+          className="flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted group-hover/card:opacity-100"
           title="Close"
           aria-label="Close widget"
           onClick={onClose}
@@ -343,11 +334,11 @@ function WidgetCard({
       </div>
 
       {/* body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
         {loading && items.length === 0 ? (
           <p className="px-1 py-2 text-[11px] text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="px-1 py-2 text-[11px] text-muted-foreground">{meta.empty}</p>
+          <p className="px-1 py-2 text-[11px] text-muted-foreground/70">{meta.empty}</p>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {items.map(item => (
@@ -364,24 +355,16 @@ function WidgetCard({
         )}
       </div>
 
-      {/* add affordance */}
-      <div className="flex shrink-0 items-center gap-1 border-t border-border/60 px-1.5 py-1">
+      {/* add affordance — borderless, quiet until focused */}
+      <div className="flex shrink-0 items-center gap-1 px-3 pb-2.5 pt-1">
+        <Plus className="size-3 shrink-0 text-muted-foreground/50" />
         <input
           value={adding}
           onChange={e => setAdding(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitAdd(); } }}
           placeholder={meta.addPlaceholder}
-          className="min-w-0 flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/60"
+          className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] outline-none focus:ring-0 placeholder:text-muted-foreground/50"
         />
-        <button
-          type="button"
-          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-          title="Add"
-          aria-label="Add item"
-          onClick={submitAdd}
-        >
-          <Plus className="size-3" />
-        </button>
       </div>
     </div>
   );

@@ -30,9 +30,10 @@ export function useChat(workspaceId: string | null) {
       return data;
     });
     if (data) {
-      setSessions(data);
-      if (data.length > 0) {
-        setActiveSession(prev => prev ?? data[0]);
+      const mainSessions = data.filter(s => !s.parent_message_id);
+      setSessions(mainSessions);
+      if (mainSessions.length > 0) {
+        setActiveSession(prev => prev ?? mainSessions[0]);
       }
     }
   }, [workspaceId]);
