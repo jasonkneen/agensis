@@ -189,7 +189,7 @@ export function ThreadWidgetRail({
         <>
           {/* re-add chips for any widget the user has closed */}
           {closedKinds.length > 0 && (
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+            <div className="pointer-events-auto flex shrink-0 flex-wrap items-center justify-end gap-1">
               {closedKinds.map(kind => (
                 <button
                   key={kind}
@@ -205,7 +205,7 @@ export function ThreadWidgetRail({
             </div>
           )}
 
-          <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
+          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
             {widgets.map((w, index) => (
               <WidgetCard
                 key={w.kind}
