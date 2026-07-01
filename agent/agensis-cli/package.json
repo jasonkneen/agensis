@@ -19,7 +19,7 @@
     ".": "./src/agensis.mjs"
   },
   "scripts": {
-    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs",
+    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs && node --check src/memory.mjs",
     "link": "npm link && bun link",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm run check",
@@ -30,6 +30,7 @@
     "src/agensis.mjs",
     "src/cli.mjs",
     "src/queue.mjs",
+    "src/memory.mjs",
     "README.md",
     "LICENSE"
   ],

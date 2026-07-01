@@ -422,7 +422,11 @@ class RealtimeManager {
     });
 
     this.socket.addEventListener('error', () => {
-      this.enterPermanentUnavailable();
+      // A WS 'error' fires on transient failures (failed connect, 1006 abnormal
+      // close from a deploy or a mobile network drop) and is always followed by
+      // 'close'. Do NOT permanently disable realtime here — let the 'close'
+      // handler drive exponential backoff + resubscribe. Permanently disabling
+      // on the most common failure mode killed all realtime until a page reload.
     });
 
     this.socket.addEventListener('close', () => {
@@ -537,12 +541,6 @@ class RealtimeManager {
     this.reconnectAttempts = 0;
     this.unavailableUntil = Date.now() + RealtimeManager.UNAVAILABLE_RETRY_DELAY_MS;
     this.scheduleUnavailableRetry();
-  }
-
-  private enterPermanentUnavailable() {
-    this.permanentlyUnavailable = true;
-    this.unavailableUntil = Number.POSITIVE_INFINITY;
-    this.markUnavailable();
   }
 
   private isUnavailableCoolingDown() {
