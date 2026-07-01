@@ -27,7 +27,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon-192.svg', 'icon-512.svg'],
+      includeAssets: ['icon-192.svg', 'icon-512.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
       manifest: {
         name: 'agensis — AI Workspace',
         short_name: 'agensis',
@@ -39,6 +39,20 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         icons: [
+          // PNG icons first so platforms that don't rasterize SVG (notably iOS
+          // home-screen) get a real logo instead of a page screenshot (L12).
+          {
+            src: '/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any',
+          },
+          {
+            src: '/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable',
+          },
           {
             src: '/icon-192.svg',
             sizes: '192x192',
