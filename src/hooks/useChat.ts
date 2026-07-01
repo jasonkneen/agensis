@@ -163,11 +163,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       .from('messages')
       .select('*')
       .eq('session_id', source.id)
-      .is('thread_parent_id', null)
       .order('created_at', { ascending: true });
 
-    if (sourceMessages && sourceMessages.length > 0) {
-      const copies = sourceMessages.map(m => {
+    // Copy only top-level messages (not in-session sub-thread replies). The
+    // backendClient query builder has no `.is()`, so filter client-side exactly
+    // like the main view does (see topLevelMessages below).
+    const topLevel = (sourceMessages || []).filter(m => !m.thread_parent_id);
+    if (topLevel.length > 0) {
+      const copies = topLevel.map(m => {
         const row: Record<string, unknown> = {
           id: crypto.randomUUID(),
           session_id: forked.id,
