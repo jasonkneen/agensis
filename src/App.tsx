@@ -1377,7 +1377,7 @@ function AppContent() {
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
 
-      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
           online={online}
           syncing={syncing}
@@ -1387,7 +1387,7 @@ function AppContent() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} data-workspace-viewport className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-border shadow-xl">
+        <main ref={canvasRef} data-workspace-viewport className="relative min-h-0 flex-1 overflow-hidden rounded-none">
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}

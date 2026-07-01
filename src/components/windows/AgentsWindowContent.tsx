@@ -321,6 +321,27 @@ export function AgentsWindowContent({
                   All
                   <span className="tabular-nums opacity-70">{agents.length}</span>
                 </button>
+                {(() => {
+                  const activeCount = presenceCounts.busy + presenceCounts.idle;
+                  const isActiveFilter = statusFilter.size === 2 && statusFilter.has('busy') && statusFilter.has('idle');
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
+                      aria-pressed={isActiveFilter}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                        isActiveFilter
+                          ? 'border-primary/60 bg-primary/15 text-foreground'
+                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
+                      Active
+                      <span className="tabular-nums opacity-70">{activeCount}</span>
+                    </button>
+                  );
+                })()}
                 {AGENT_PRESENCE_FILTERS.map(filter => {
                   const active = statusFilter.has(filter.key);
                   return (
