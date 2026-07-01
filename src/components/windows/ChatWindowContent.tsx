@@ -1937,10 +1937,10 @@ function ChatMessageBubble({
             {onCreateSubThread && (
               <button
                 type="button"
-                className="inline-flex h-5 items-center gap-1 rounded-full border border-dashed border-border px-2 text-[11px] text-muted-foreground hover:border-border hover:text-foreground"
+                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                 onClick={onCreateSubThread}
               >
-                <Plus className="size-2.5" />
+                <Plus className="size-3" />
                 Sub-thread
               </button>
             )}
