@@ -911,6 +911,24 @@
   display: none;
 }
 
+/* macOS-style one-shot dock bounce — draws attention when a chat's agent
+   starts working. Plays once (the class is removed after ~1.3s). */
+@keyframes dock-bounce {
+  0%   { transform: translateY(0); }
+  14%  { transform: translateY(-9px); }
+  28%  { transform: translateY(0); }
+  42%  { transform: translateY(-5px); }
+  56%  { transform: translateY(0); }
+  70%  { transform: translateY(-2px); }
+  100% { transform: translateY(0); }
+}
+.dock-bounce {
+  animation: dock-bounce 1.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-bounce { animation: none; }
+}
+
 .context-count-chip svg {
   display: block;
   width: 0.8rem;

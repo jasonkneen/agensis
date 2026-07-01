@@ -80,21 +80,81 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
   }, [pending, events]);
 
   // The badge counts only things that need attention — pending approvals.
-  // Connection events are informational, so they never light the badge.
+  // Connection events are informational, so they never light the red badge;
+  // instead, activity you haven't opened the bell to see yet drives a soft
+  // pulse ring (visually distinct from the approvals badge).
   const badgeCount = pending.length;
 
+  // "Unseen" = the newest connect/disconnect event is newer than the last time
+  // this workspace's bell was opened. Keyed per workspace so it never bleeds
+  // across workspaces.
+  const lastSeenKey = workspaceId ? `notif:lastSeen:${workspaceId}` : null;
+  const newestActivityAt = useMemo(() => {
+    let newest = 0;
+    for (const e of events) {
+      if (e.event_type !== 'agent_connected' && e.event_type !== 'agent_disconnected') continue;
+      const t = new Date(e.created_at).getTime();
+      if (Number.isFinite(t) && t > newest) newest = t;
+    }
+    return newest;
+  }, [events]);
+
+  const [lastSeenAt, setLastSeenAt] = useState(0);
+  useEffect(() => {
+    if (!lastSeenKey) {
+      setLastSeenAt(0);
+      return;
+    }
+    const raw = Number(localStorage.getItem(lastSeenKey));
+    setLastSeenAt(Number.isFinite(raw) ? raw : 0);
+  }, [lastSeenKey]);
+
+  const hasUnseen = newestActivityAt > 0 && newestActivityAt > lastSeenAt;
+
+  const markSeen = () => {
+    const now = Math.max(newestActivityAt, Date.now());
+    setLastSeenAt(now);
+    if (lastSeenKey) {
+      try {
+        localStorage.setItem(lastSeenKey, String(now));
+      } catch {
+        /* localStorage unavailable — degrade to session-only */
+      }
+    }
+  };
+
   return (
-    <Popover>
+    <Popover onOpenChange={(open) => { if (open) markSeen(); }}>
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="default"
           size="icon-lg"
           className="relative size-9 rounded-full shadow-lg transition-transform hover:scale-105"
-          title="Notifications"
-          aria-label={badgeCount > 0 ? `Notifications, ${badgeCount} pending` : 'Notifications'}
+          title={hasUnseen ? 'Notifications — new activity' : 'Notifications'}
+          aria-label={
+            badgeCount > 0
+              ? `Notifications, ${badgeCount} pending`
+              : hasUnseen
+                ? 'Notifications, new activity'
+                : 'Notifications'
+          }
         >
           <Bell className="size-4" />
+          {hasUnseen && (
+            <>
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-emerald-400/60 animate-ping"
+              />
+              {badgeCount === 0 && (
+                <span
+                  aria-hidden
+                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background bg-emerald-500"
+                />
+              )}
+            </>
+          )}
           {badgeCount > 0 && (
             <span
               aria-hidden

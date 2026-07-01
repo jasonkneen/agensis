@@ -78,6 +78,7 @@ import { useActivity } from './hooks/useActivity';
 import { useAgents } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
+import { useDockAttention } from './hooks/useDockAttention';
 import { useWorkspacePresence, windowLabel, type WorkspacePresenceUser } from './hooks/useWorkspacePresence';
 import { useWorkspaceKnowledge, type WorkspaceContextCounts } from './hooks/useWorkspaceKnowledge';
 import type { CanvasAppDefinition } from './lib/canvasApps';
@@ -112,6 +113,7 @@ function renderDockButton(
   win: FloatingWindow,
   focusedDockWindow: FloatingWindow | null,
   handlers: { onOpen: () => void; onHide: () => void; onFocus: () => void },
+  bounce = false,
 ) {
   const active = focusedDockWindow?.id === win.id;
   const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
@@ -136,6 +138,7 @@ function renderDockButton(
         'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
         active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
         win.minimized && 'text-muted-foreground',
+        bounce && 'dock-bounce',
       )}
       title={`${dockActionLabel} ${windowLabel(win)}`}
       aria-label={`${dockActionLabel} ${windowLabel(win)}`}
@@ -222,6 +225,29 @@ function isDirectSessionForAgent(session: ChatSession, agentId?: string | null, 
     (targetAgentId && participantAgentId === targetAgentId)
     || (targetHandle && (participantHandle === targetHandle || participantName === targetHandle || title === targetHandle))
   );
+}
+
+// True when a session's direct agent has a live daemon connection reporting
+// 'busy'. Matches the connection by agent_id first, then by normalized
+// handle/name/title — the same resolution the chat participant status uses.
+function isDirectAgentBusy(session: ChatSession, agentConnections: AgentConnection[]): boolean {
+  const participant = directAgentParticipantForSession(session);
+  if (!participant) return false;
+  const agentId = normalizeAgentLookupKey(participant.agent_id);
+  const handle = normalizeAgentLookupKey(participant.handle);
+  const name = normalizeAgentLookupKey(participant.name);
+  const title = normalizeAgentLookupKey(session.title);
+  return agentConnections.some(conn => {
+    if (conn.status !== 'busy') return false;
+    if (agentId && normalizeAgentLookupKey(conn.agent_id) === agentId) return true;
+    const connHandle = normalizeAgentLookupKey(conn.handle);
+    const connName = normalizeAgentLookupKey(conn.name);
+    return Boolean(
+      (handle && (connHandle === handle || connName === handle))
+      || (name && (connHandle === name || connName === name))
+      || (title && (connHandle === title || connName === title)),
+    );
+  });
 }
 
 function loadPresenceVisibility(): PresenceVisibilityMap {
@@ -601,6 +627,20 @@ function AppContent() {
       !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
     ), null);
   const dockEntries = groupDockWindows(dockWindows);
+  // macOS-style dock bounce: a chat window's icon bounces once when its agent
+  // starts working (idle → busy). Derived purely from the realtime connection
+  // status already in scope — no extra subscriptions.
+  const dockBusyById = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const win of dockWindows) {
+      if (win.type !== 'chat' || !win.sessionId) continue;
+      const session = sessions.find(item => item.id === win.sessionId);
+      if (!session) continue;
+      map.set(win.id, isDirectAgentBusy(session, agentConnections));
+    }
+    return map;
+  }, [dockWindows, sessions, agentConnections]);
+  const bouncingDockIds = useDockAttention(dockBusyById);
   const canEditCanvasObject = useCallback((obj: CanvasObject) => !obj.user_id || obj.user_id === user?.id, [user?.id]);
   const settingsLayer = layers.find(layer => layer.id === (settingsLayerId || activeLayerId)) || activeLayer;
   const settingsWorkspace = useMemo<Workspace | null>(() => {
@@ -1323,7 +1363,7 @@ function AppContent() {
                       onOpen: () => { focusWindow(win.id); minimizeWindow(win.id); },
                       onHide: () => minimizeWindow(win.id),
                       onFocus: () => focusWindow(win.id),
-                    });
+                    }, bouncingDockIds.has(win.id));
                   }
                   const { groupId, members } = entry;
                   return (
@@ -1336,7 +1376,7 @@ function AppContent() {
                         onOpen: () => focusWindowGroup(groupId, member.id),
                         onHide: () => minimizeWindowGroup(groupId),
                         onFocus: () => focusWindowGroup(groupId, member.id),
-                      }))}
+                      }, bouncingDockIds.has(member.id)))}
                       <Button
                         type="button"
                         variant="ghost"
