@@ -160,10 +160,13 @@ export function useSubThreads(workspaceId: string | null) {
       .select()
       .single();
     if (data) {
-      setSubThreadsByMessage(prev => ({
-        ...prev,
-        [messageId]: [...(prev[messageId] || []), data],
-      }));
+      setSubThreadsByMessage(prev => {
+        const existing = prev[messageId] || [];
+        // The realtime chat_sessions INSERT can land during the await above and
+        // add this session first; guard by id so we don't render a duplicate chip.
+        if (existing.some(s => s.id === data.id)) return prev;
+        return { ...prev, [messageId]: [...existing, data] };
+      });
       // Seed the thread with the parent message as context so the agent knows the task
       if (options?.contextMessage) {
         const contextMsgId = crypto.randomUUID();
