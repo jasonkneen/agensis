@@ -29,7 +29,6 @@
     "@fontsource-variable/geist": "^5.2.9",
     "@netlify/database": "^1.1.0",
     "@netlify/identity": "^1.2.0",
-    "@open-pets/client": "^3.0.0",
     "@shadcn/react": "^0.1.0",
     "@tailwindcss/vite": "^4.3.1",
     "class-variance-authority": "^0.7.1",
