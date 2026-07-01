@@ -998,8 +998,12 @@ function AppContent() {
     handleOpenAgents();
   }, [handleOpenAgents]);
 
+  // Newly dropped applet to focus (select + raise) once it lands in the canvas
+  // object list; cleared by DrawingLayer via onFocusObjectHandled.
+  const [focusCanvasObjectId, setFocusCanvasObjectId] = useState<string | null>(null);
+
   const handleCreateCanvasApp = useCallback(async (app: CanvasAppDefinition) => {
-    await addCanvasObject('applet', {
+    const created = await addCanvasObject('applet', {
       x: 12,
       y: 10,
       width: 76,
@@ -1012,10 +1016,11 @@ function AppContent() {
       src: app.buildHtml(),
       layer_id: activeLayerId,
     });
+    if (created) setFocusCanvasObjectId(created.id);
   }, [addCanvasObject, activeLayerId]);
 
   const handleCreateDocApp = useCallback(async (doc: Document) => {
-    await addCanvasObject('applet', {
+    const created = await addCanvasObject('applet', {
       x: 12,
       y: 10,
       width: 76,
@@ -1028,6 +1033,7 @@ function AppContent() {
       src: '',
       layer_id: activeLayerId,
     });
+    if (created) setFocusCanvasObjectId(created.id);
   }, [addCanvasObject, activeLayerId]);
 
   const handleCreateTask = useCallback(async (input: CreateTaskInput) => {
@@ -1537,6 +1543,8 @@ function AppContent() {
               canEditObject={canEditCanvasObject}
               onCreateAppletTask={handleCreateTask}
               onUpdateAppletTask={handleUpdateTask}
+              focusObjectId={focusCanvasObjectId}
+              onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
             />
 
             {showCanvasGrid && (

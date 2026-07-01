@@ -782,6 +782,17 @@ export function DrawingLayer({
     return () => setHostInteractionLocked(false);
   }, [setHostInteractionLocked]);
 
+  // When a new object is dropped from the picker, focus it: select it (applets
+  // get the +9000 display-z boost while selected) and raise its stacking index,
+  // so it opens on top instead of behind whatever was previously selected.
+  useEffect(() => {
+    if (!focusObjectId) return;
+    if (!objects.some(o => o.id === focusObjectId)) return;
+    setSelectedIds(new Set([focusObjectId]));
+    onBringToFront(focusObjectId);
+    onFocusObjectHandled?.();
+  }, [focusObjectId, objects, onBringToFront, onFocusObjectHandled]);
+
   const { w: canvasW, h: canvasH } = getSize();
   const objectById = new Map(objects.map(obj => [obj.id, obj]));
   const displayZIndexOf = (obj: CanvasObject) => {
