@@ -10,12 +10,15 @@ import {
   FileText,
   Filter,
   Folder,
+  GitMerge,
   Hash,
   Layers3,
   LayoutTemplate,
   LogOut,
   MessageSquare,
   MoreHorizontal,
+  Split,
+  Trash2,
   PanelLeft,
   PanelLeftClose,
   Plus,
@@ -95,6 +98,9 @@ interface SidebarProps {
   onSessionOpen: (session: ChatSession) => void;
   onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
   onSessionArchive?: (id: string, archived?: boolean) => void;
+  onSessionDelete?: (id: string) => void;
+  onSessionSplit?: (session: ChatSession) => void;
+  onSessionMerge?: (session: ChatSession) => void;
   onOpenMemory: () => void;
   onOpenTasks?: () => void;
   onOpenActivity?: () => void;
@@ -134,6 +140,9 @@ export function Sidebar({
   onSessionOpen,
   onSessionUpdate,
   onSessionArchive,
+  onSessionDelete,
+  onSessionSplit,
+  onSessionMerge,
   onOpenMemory,
   onOpenTasks,
   onOpenActivity,
@@ -384,18 +393,20 @@ export function Sidebar({
             >
               {groupedThreadSessions.map(group => (
                 group.folder === 'General' ? (
-                  group.sessions.slice(0, 8).map(session => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      icon={<MessageSquare />}
-                      archiveNoun="thread"
-                      onOpen={() => onSessionOpen(session)}
-                      onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
-                      onArchive={() => onSessionArchive?.(session.id, true)}
-                      presenceUsers={chatPresence[session.id] || []}
-                    />
-                  ))
+                  <SessionTree
+                    key={group.folder}
+                    sessions={group.sessions}
+                    icon={<MessageSquare />}
+                    archiveNoun="thread"
+                    limit={8}
+                    chatPresence={chatPresence}
+                    onSessionOpen={onSessionOpen}
+                    onSessionUpdate={onSessionUpdate}
+                    onSessionArchive={onSessionArchive}
+                    onSessionDelete={onSessionDelete}
+                    onSessionSplit={onSessionSplit}
+                    onSessionMerge={onSessionMerge}
+                  />
                 ) : (
                   <SidebarFolderGroup
                     key={group.folder}
@@ -405,18 +416,19 @@ export function Sidebar({
                     open={openSections.has(`threads-folder:${group.folder}`)}
                     onOpenChange={open => toggleSection(`threads-folder:${group.folder}`, open)}
                   >
-                    {group.sessions.slice(0, 8).map(session => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        icon={<MessageSquare />}
-                        archiveNoun="thread"
-                        onOpen={() => onSessionOpen(session)}
-                        onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
-                        onArchive={() => onSessionArchive?.(session.id, true)}
-                        presenceUsers={chatPresence[session.id] || []}
-                      />
-                    ))}
+                    <SessionTree
+                      sessions={group.sessions}
+                      icon={<MessageSquare />}
+                      archiveNoun="thread"
+                      limit={8}
+                      chatPresence={chatPresence}
+                      onSessionOpen={onSessionOpen}
+                      onSessionUpdate={onSessionUpdate}
+                      onSessionArchive={onSessionArchive}
+                      onSessionDelete={onSessionDelete}
+                      onSessionSplit={onSessionSplit}
+                      onSessionMerge={onSessionMerge}
+                    />
                   </SidebarFolderGroup>
                 )
               ))}
@@ -433,17 +445,19 @@ export function Sidebar({
             >
               {groupedSessions.map(group => (
                 group.folder === 'General' ? (
-                  group.sessions.slice(0, 8).map(session => (
-                    <SessionRow
-                      key={session.id}
-                      session={session}
-                      icon={<Hash />}
-                      onOpen={() => onSessionOpen(session)}
-                      onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
-                      onArchive={() => onSessionArchive?.(session.id, true)}
-                      presenceUsers={chatPresence[session.id] || []}
-                    />
-                  ))
+                  <SessionTree
+                    key={group.folder}
+                    sessions={group.sessions}
+                    icon={<Hash />}
+                    limit={8}
+                    chatPresence={chatPresence}
+                    onSessionOpen={onSessionOpen}
+                    onSessionUpdate={onSessionUpdate}
+                    onSessionArchive={onSessionArchive}
+                    onSessionDelete={onSessionDelete}
+                    onSessionSplit={onSessionSplit}
+                    onSessionMerge={onSessionMerge}
+                  />
                 ) : (
                   <SidebarFolderGroup
                     key={group.folder}
@@ -453,17 +467,18 @@ export function Sidebar({
                     open={openSections.has(`channels-folder:${group.folder}`)}
                     onOpenChange={open => toggleSection(`channels-folder:${group.folder}`, open)}
                   >
-                    {group.sessions.slice(0, 8).map(session => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        icon={<Hash />}
-                        onOpen={() => onSessionOpen(session)}
-                        onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
-                        onArchive={() => onSessionArchive?.(session.id, true)}
-                        presenceUsers={chatPresence[session.id] || []}
-                      />
-                    ))}
+                    <SessionTree
+                      sessions={group.sessions}
+                      icon={<Hash />}
+                      limit={8}
+                      chatPresence={chatPresence}
+                      onSessionOpen={onSessionOpen}
+                      onSessionUpdate={onSessionUpdate}
+                      onSessionArchive={onSessionArchive}
+                      onSessionDelete={onSessionDelete}
+                      onSessionSplit={onSessionSplit}
+                      onSessionMerge={onSessionMerge}
+                    />
                   </SidebarFolderGroup>
                 )
               ))}
@@ -554,6 +569,7 @@ export function Sidebar({
                   onOpen={() => onSessionOpen(session)}
                   onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
                   onArchive={() => onSessionArchive?.(session.id, false)}
+                  onDelete={onSessionDelete ? () => onSessionDelete(session.id) : undefined}
                   presenceUsers={chatPresence[session.id] || []}
                 />
               ))}
@@ -1224,41 +1240,230 @@ function ItemRow({
 
 const ITEM_FOLDERS = ['General', 'Work', 'Research', 'Drafts', 'Ideas', 'Webhooks'];
 
+// Lineage chip shown in front of a nested row. Fixed width so SPLIT and SUB
+// align to the same column regardless of label.
+function RowChip({ kind }: { kind: 'SPLIT' | 'SUB' }) {
+  return (
+    <span
+      className="inline-flex w-9 shrink-0 items-center justify-center rounded-sm bg-primary/15 px-1 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wide text-primary"
+      title={kind === 'SPLIT' ? 'Split of the thread above' : 'Sub-thread of the thread above'}
+    >
+      {kind}
+    </span>
+  );
+}
+
+// Group a flat session list into a split hierarchy: a fork (split_parent_id set)
+// nests under its source when the source is present in the same list; otherwise
+// it falls back to a root so it never disappears. Order is preserved.
+function buildSessionTree(sessions: ChatSession[]) {
+  const ids = new Set(sessions.map(s => s.id));
+  const childrenByParent = new Map<string, ChatSession[]>();
+  const roots: ChatSession[] = [];
+  for (const session of sessions) {
+    const parentId = session.split_parent_id;
+    if (parentId && ids.has(parentId)) {
+      const list = childrenByParent.get(parentId) || [];
+      list.push(session);
+      childrenByParent.set(parentId, list);
+    } else {
+      roots.push(session);
+    }
+  }
+  return { roots, childrenByParent };
+}
+
+function SessionTree({
+  sessions,
+  icon,
+  archiveNoun,
+  limit,
+  chatPresence,
+  onSessionOpen,
+  onSessionUpdate,
+  onSessionArchive,
+  onSessionDelete,
+  onSessionSplit,
+  onSessionMerge,
+}: {
+  sessions: ChatSession[];
+  icon?: React.ReactNode;
+  archiveNoun?: string;
+  limit?: number;
+  chatPresence: Record<string, ItemPresenceUser[]>;
+  onSessionOpen: (session: ChatSession) => void;
+  onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
+  onSessionArchive?: (id: string, archived?: boolean) => void;
+  onSessionDelete?: (id: string) => void;
+  onSessionSplit?: (session: ChatSession) => void;
+  onSessionMerge?: (session: ChatSession) => void;
+}) {
+  const { roots, childrenByParent } = React.useMemo(() => buildSessionTree(sessions), [sessions]);
+  const shownRoots = typeof limit === 'number' ? roots.slice(0, limit) : roots;
+
+  const renderNode = (session: ChatSession, depth: number, chip: 'SPLIT' | 'SUB' | null): React.ReactNode => {
+    const kids = childrenByParent.get(session.id) || [];
+    return (
+      <React.Fragment key={session.id}>
+        <SessionRow
+          session={session}
+          icon={icon}
+          archiveNoun={archiveNoun}
+          depth={depth}
+          chip={chip}
+          canMerge={chip === 'SPLIT'}
+          onOpen={() => onSessionOpen(session)}
+          onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
+          onArchive={() => onSessionArchive?.(session.id, true)}
+          onDelete={onSessionDelete ? () => onSessionDelete(session.id) : undefined}
+          onSplit={onSessionSplit ? () => onSessionSplit(session) : undefined}
+          onMerge={onSessionMerge ? () => onSessionMerge(session) : undefined}
+          presenceUsers={chatPresence[session.id] || []}
+        />
+        {kids.map(kid => renderNode(kid, depth + 1, 'SPLIT'))}
+      </React.Fragment>
+    );
+  };
+
+  return <>{shownRoots.map(session => renderNode(session, 0, null))}</>;
+}
+
 function SessionRow({
   session,
   archived = false,
   icon,
   archiveNoun = 'channel',
+  depth = 0,
+  chip = null,
+  canMerge = false,
   onOpen,
   onMoveFolder,
   onArchive,
+  onDelete,
+  onSplit,
+  onMerge,
   presenceUsers = [],
 }: {
   session: ChatSession;
   archived?: boolean;
   icon?: React.ReactNode;
   archiveNoun?: string;
+  depth?: number;
+  chip?: 'SPLIT' | 'SUB' | null;
+  canMerge?: boolean;
   onOpen: () => void;
   onMoveFolder: (folder: string) => void;
   onArchive: () => void;
+  onDelete?: () => void;
+  onSplit?: () => void;
+  onMerge?: () => void;
   presenceUsers?: ItemPresenceUser[];
 }) {
+  const actions = (
+    <>
+      {onSplit && !archived && (
+        <DropdownMenuItem onSelect={() => onSplit()}>
+          <Split data-icon="inline-start" />
+          Split
+        </DropdownMenuItem>
+      )}
+      {canMerge && onMerge && (
+        <DropdownMenuItem onSelect={() => onMerge()}>
+          <GitMerge data-icon="inline-start" />
+          Merge into parent
+        </DropdownMenuItem>
+      )}
+      <DropdownMenuItem onSelect={onArchive}>
+        {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
+        {archived ? `Unarchive ${archiveNoun}` : `Archive ${archiveNoun}`}
+      </DropdownMenuItem>
+      {onDelete && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={() => onDelete()}
+          >
+            <Trash2 data-icon="inline-start" />
+            Delete
+          </DropdownMenuItem>
+        </>
+      )}
+    </>
+  );
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="min-w-0 w-full">
-          <ItemRow
-            icon={archived ? <Archive /> : icon || <MessageSquare />}
-            label={session.title}
+        <div
+          className="sidebar-session-row group flex min-w-0 w-full items-center gap-1 rounded-md pr-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          style={depth ? { paddingLeft: depth * 12 } : undefined}
+        >
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-1 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={onOpen}
-            kind="session"
-            presenceUsers={presenceUsers}
-          />
+          >
+            {chip ? (
+              <RowChip kind={chip} />
+            ) : (
+              <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
+                {archived ? <Archive /> : icon || <MessageSquare />}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate text-left">{session.title}</span>
+            {presenceUsers.length > 0 && (
+              <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                {presenceUsers.slice(0, 3).map(person => (
+                  <span
+                    key={person.userId}
+                    className="flex size-2 items-center justify-center overflow-hidden rounded-full text-[0px] font-semibold leading-none text-white ring-1 ring-background"
+                    style={{ backgroundColor: person.color }}
+                    title={`${person.name}${person.typing ? ' is typing' : ' is active'}`}
+                  >
+                    {person.name.trim().charAt(0).toUpperCase()}
+                  </span>
+                ))}
+                {presenceUsers.length > 3 && (
+                  <span className="text-[10px] leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
+                )}
+              </span>
+            )}
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-6 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                aria-label={`More actions for ${session.title}`}
+                onClick={event => event.stopPropagation()}
+              >
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              {actions}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuLabel>{session.title}</ContextMenuLabel>
         <ContextMenuSeparator />
+        {onSplit && !archived && (
+          <ContextMenuItem onSelect={() => onSplit()}>
+            <Split data-icon="inline-start" />
+            Split
+          </ContextMenuItem>
+        )}
+        {canMerge && onMerge && (
+          <ContextMenuItem onSelect={() => onMerge()}>
+            <GitMerge data-icon="inline-start" />
+            Merge into parent
+          </ContextMenuItem>
+        )}
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <Folder data-icon="inline-start" />
@@ -1276,6 +1481,18 @@ function SessionRow({
           {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
           {archived ? `Unarchive ${archiveNoun}` : `Archive ${archiveNoun}`}
         </ContextMenuItem>
+        {onDelete && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => onDelete()}
+            >
+              <Trash2 data-icon="inline-start" />
+              Delete
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

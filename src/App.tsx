@@ -63,6 +63,7 @@ import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
+import { toast } from 'sonner';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
@@ -579,7 +580,7 @@ function AppContent() {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, archiveSession, sendMessage,
+    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession,
   } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
 
   const {
@@ -1110,8 +1111,13 @@ function AppContent() {
   }, [setActiveSession, openWindow, activeLayerId, user?.id]);
 
   const handleSplitThread = useCallback(async (source: ChatSession) => {
+    const pending = toast.loading(`Splitting “${source.title || 'thread'}”…`);
     const forked = await splitSession(source);
-    if (!forked) return;
+    if (!forked) {
+      toast.error('Split failed — try again', { id: pending });
+      return;
+    }
+    toast.success(`Split created — “${forked.title}” added under its parent`, { id: pending });
     // Make the fork the live thread and open it tiled beside the source.
     setActiveSession(forked);
     openSplitWindow(source.id, {
@@ -1373,6 +1379,11 @@ function AppContent() {
         onSessionOpen={handleSessionOpen}
         onSessionUpdate={updateSession}
         onSessionArchive={archiveSession}
+        onSessionDelete={deleteSession}
+        onSessionSplit={handleSplitThread}
+        onSessionMerge={(session) => toast('Merge needs a decision first', {
+          description: `Merge “${session.title}” into its parent, or into a new thread? And after merging, archive or delete the source? Answer in-channel and I'll wire it.`,
+        })}
         onOpenMemory={handleOpenMemory}
         onOpenTasks={handleOpenTasks}
         onOpenActivity={handleOpenActivity}

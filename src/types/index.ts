@@ -41,6 +41,12 @@ export interface ChatSession {
   auto_rounds?: number | null;
   archived_at?: string | null;
   parent_message_id?: string | null;
+  /** Set on a fork created via "split" — points at the source session it was cloned from. */
+  split_parent_id?: string | null;
+  /** When the split happened; the divergence baseline for merging the two branches. */
+  split_at?: string | null;
+  /** Soft-delete marker. Sessions are never hard-deleted so the data stays usable. */
+  deleted_at?: string | null;
   version?: number;
   created_at: string;
   updated_at: string;

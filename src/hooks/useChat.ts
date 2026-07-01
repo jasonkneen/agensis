@@ -30,7 +30,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       return data;
     });
     if (data) {
-      const mainSessions = data.filter(s => !s.parent_message_id);
+      const mainSessions = data.filter(s => !s.parent_message_id && !s.deleted_at);
       setSessions(mainSessions);
       if (mainSessions.length > 0) {
         setActiveSession(prev => prev ?? mainSessions[0]);
@@ -151,6 +151,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
         conversation_mode: source.conversation_mode ?? 'auto',
         folder: source.folder ?? null,
         participants: source.participants ?? null,
+        // Lineage: link the fork to its source so the sidebar can render it
+        // indented under the parent, and merge can diff messages after the
+        // divergence point (split_at).
+        split_parent_id: source.id,
+        split_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -572,8 +577,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     );
   }, [activeSession, messages, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
+  // Soft delete: never hard-delete a session — stamp deleted_at so the data
+  // is retained (for audit/merge/history) and filtered out of every load path
+  // (see fetchSessions). Row disappears from the UI immediately.
   const deleteSession = useCallback(async (id: string) => {
-    await backendClient.from('chat_sessions').delete().eq('id', id);
+    await backendClient
+      .from('chat_sessions')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
     setSessions(prev => prev.filter(s => s.id !== id));
     if (activeSession?.id === id) {
       setActiveSession(null);
