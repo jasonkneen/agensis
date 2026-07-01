@@ -3792,6 +3792,21 @@ function createApp() {
     const resolved = path.resolve(root, String(relativePath || ''));
     const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
     if (resolved !== root && !resolved.startsWith(rootWithSep)) return null;
+    // Lexical containment isn't enough — a symlink inside root can point outside it.
+    // Only realpath-check if the target exists; callers that need "path must exist"
+    // semantics (e.g. resolveStagePaths, which stages an existing file) already get
+    // that for free, and callers reading a possibly-new path should catch the ENOENT
+    // case themselves the way the diff route's untracked-file branch already does.
+    let realTarget;
+    try {
+      realTarget = fs.realpathSync(resolved);
+    } catch {
+      return resolved; // Path doesn't exist yet — lexical check already passed; let the
+                        // caller's own existence check (if any) handle the not-found case.
+    }
+    const realRoot = fs.realpathSync(root);
+    const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+    if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) return null;
     return resolved;
   }
 
@@ -3886,23 +3901,13 @@ function createApp() {
         if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
           return jsonError(res, 404, new Error('File not found'));
         }
-        // resolveWithinRoot only checks the lexical path — a symlink inside the
-        // workspace root could still point outside it. This branch reads raw
-        // file content (unlike the git-diff branch below, which stays inside
-        // git's own repository boundary), so re-validate against the real path
-        // right before reading.
-        let realTarget;
-        try {
-          realTarget = fs.realpathSync(target);
-        } catch {
-          return jsonError(res, 404, new Error('File not found'));
-        }
-        const realRoot = fs.realpathSync(root);
-        const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
-        if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) {
-          return jsonError(res, 400, new Error('path must stay within the workspace project root'));
-        }
-        const content = fs.readFileSync(realTarget, 'utf8').slice(0, 200_000);
+        // This branch reads raw file content (unlike the git-diff branch below,
+        // which stays inside git's own repository boundary via `git diff`), so a
+        // symlink inside the workspace root pointing outside it would otherwise
+        // let an attacker read arbitrary files on the host. `resolveWithinRoot`
+        // above already realpath-validates `target` against `root`, so it's safe
+        // to read directly here.
+        const content = fs.readFileSync(target, 'utf8').slice(0, 200_000);
         return res.json({ data: { path: relativePath, untracked: true, diff: '', content }, error: null });
       }
 
