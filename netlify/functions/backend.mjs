@@ -1129,7 +1129,7 @@ async function handleDb(pathname, req, userId) {
     const { table, values, filters = [], returning = '*', single = false } = body || {};
     const tableSql = ensureTable(table);
     if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
-    await enforceDbOperationAccess({ userId, table, op: 'update', filters, db: query });
+    await enforceDbOperationAccess({ userId, table, op: 'update', filters, payload: { values }, db: query });
 
     const params = [];
     const setParts = Object.keys(values).map((column) => {

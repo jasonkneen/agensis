@@ -299,6 +299,38 @@ async function resolveWorkspaceRowById(id, db) {
   return rows[0]?.id || null;
 }
 
+// Parent-reference columns that define a child row's tenancy. An UPDATE may set
+// these (e.g. moving a canvas object between groups) but only to a parent that
+// lives in the SAME workspace as the source row.
+const UPDATE_PARENT_REF_LOOKUPS = {
+  session_id: 'select workspace_id from chat_sessions where id = $1 limit 1',
+  document_id: 'select workspace_id from documents where id = $1 limit 1',
+  task_id: 'select workspace_id from tasks where id = $1 limit 1',
+  group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
+};
+
+// H1 (2026-07 review): reject an UPDATE whose `values` would move/inject the row
+// into a workspace other than the one it currently belongs to. Authorizing the
+// source workspace alone is not enough — the SET clause could carry
+// workspace_id or a cross-tenant parent reference. `sourceWorkspaceId` is the
+// row's current workspace (already resolved + authorized by the caller).
+export async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return;
+  const src = String(sourceWorkspaceId);
+  if (values.workspace_id != null && String(values.workspace_id) !== src) {
+    throw forbidden('Cannot move a row to another workspace');
+  }
+  for (const [col, sql] of Object.entries(UPDATE_PARENT_REF_LOOKUPS)) {
+    const v = values[col];
+    if (v == null) continue; // absent, or explicitly cleared to null, is fine
+    const rows = await db(sql, [v]);
+    const targetWs = rows[0]?.workspace_id;
+    if (!targetWs || String(targetWs) !== src) {
+      throw forbidden('Cannot reassign a row to another workspace');
+    }
+  }
+}
+
 // ----------------------------------------------------------------------------
 // THE central gate: authorize a generic /backend/db/* operation.
 //
@@ -354,6 +386,16 @@ export async function enforceDbOperationAccess({ userId, table, op, filters, pay
   if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
   const mode = capabilityForDbOperation(table, op);
+
+  // UPDATE: authorize the SOURCE row's workspace (resolved from filters), then
+  // verify `values` can't move the row into a different workspace (H1).
+  if (op === 'update') {
+    const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
+    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
+    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+    await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
+    return;
+  }
 
   for (const row of operationRows(values)) {
     if (!row || typeof row !== 'object') continue;

@@ -490,6 +490,35 @@ async function resolveWorkspaceRowById(id) {
   return rows[0]?.id || null;
 }
 
+// Parent-reference columns that define a child row's tenancy. An UPDATE may set
+// these (e.g. moving a canvas object between groups) but only to a parent in the
+// SAME workspace as the source row. Mirror of shared/backend-core.mjs.
+const UPDATE_PARENT_REF_LOOKUPS = {
+  session_id: 'select workspace_id from chat_sessions where id = $1 limit 1',
+  document_id: 'select workspace_id from documents where id = $1 limit 1',
+  task_id: 'select workspace_id from tasks where id = $1 limit 1',
+  group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
+};
+
+// H1 (2026-07 review): reject an UPDATE whose `values` would move/inject the row
+// into a workspace other than the one it currently belongs to.
+async function assertUpdateKeepsTenancy(sourceWorkspaceId, values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return;
+  const src = String(sourceWorkspaceId);
+  if (values.workspace_id != null && String(values.workspace_id) !== src) {
+    throw forbidden('Cannot move a row to another workspace');
+  }
+  for (const [col, sql] of Object.entries(UPDATE_PARENT_REF_LOOKUPS)) {
+    const v = values[col];
+    if (v == null) continue; // absent, or explicitly cleared to null, is fine
+    const rows = await getDb().unsafe(sql, [v]);
+    const targetWs = rows[0]?.workspace_id;
+    if (!targetWs || String(targetWs) !== src) {
+      throw forbidden('Cannot reassign a row to another workspace');
+    }
+  }
+}
+
 function operationRows(values) {
   if (!values) return [];
   return Array.isArray(values) ? values : [values];
@@ -521,6 +550,16 @@ async function enforceDbOperationAccess(userId, table, action, payload) {
   if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
   const mode = capabilityForDbOperation(table, action);
+
+  // UPDATE: authorize the SOURCE row's workspace (resolved from filters), then
+  // verify `values` can't move the row into a different workspace (H1).
+  if (action === 'update') {
+    const resolved = await resolveOperationWorkspace(table, { filters: payload.filters });
+    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
+    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
+    await assertUpdateKeepsTenancy(resolved.workspaceId, payload.values);
+    return;
+  }
 
   for (const row of operationRows(payload.values)) {
     if (!row || typeof row !== 'object') continue;
@@ -5111,7 +5150,7 @@ function createApp() {
       const { table, values, filters = [], returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
-      await enforceDbOperationAccess(req.userId, table, 'update', { filters });
+      await enforceDbOperationAccess(req.userId, table, 'update', { filters, values });
 
       const params = [];
       const setParts = Object.keys(values).map((column) => {

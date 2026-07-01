@@ -182,3 +182,86 @@ test('a valid editor write is allowed (no throw)', async () => {
     }),
   );
 });
+
+// ---------------------------------------------------------------------------
+// H1 (2026-07 review): cross-tenant row reassignment via UPDATE values.
+// An editor of workspace A must not be able to move/inject a row into a
+// workspace they have no role in by setting workspace_id (or a parent-ref
+// column) in the update's `values`. The gate must authorize the SOURCE row's
+// workspace AND reject any values that change tenancy across workspaces, while
+// still allowing an in-workspace parent move (e.g. canvas object → another
+// group in the same workspace).
+// ---------------------------------------------------------------------------
+
+test('H1: editor cannot move a row to another workspace via values.workspace_id', async () => {
+  const db = makeDb({
+    roles: { 'ws-1:user-editor': 'editor' },
+    rowWorkspaces: { tasks: { 'task-1': 'ws-1' } },
+  });
+  await assert.rejects(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'tasks', op: 'update',
+      filters: [eq('id', 'task-1')],
+      payload: { values: { workspace_id: 'ws-2', title: 'stolen' } }, db,
+    }),
+    { status: 403 },
+  );
+});
+
+test('H1: editor cannot reassign a child row under another workspace parent (group_id)', async () => {
+  const db = makeDb({
+    roles: { 'ws-1:user-editor': 'editor' },
+    rowWorkspaces: { canvas_objects: { 'obj-1': 'ws-1' }, canvas_groups: { 'grp-2': 'ws-2' } },
+  });
+  await assert.rejects(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'canvas_objects', op: 'update',
+      filters: [eq('id', 'obj-1')],
+      payload: { values: { group_id: 'grp-2' } }, db,
+    }),
+    { status: 403 },
+  );
+});
+
+test('H1: editor cannot move a message under another workspace session (session_id)', async () => {
+  const db = makeDb({
+    roles: { 'ws-1:user-editor': 'editor' },
+    rowWorkspaces: { chat_sessions: { 'sess-1': 'ws-1', 'sess-2': 'ws-2' } },
+  });
+  await assert.rejects(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'messages', op: 'update',
+      filters: [eq('session_id', 'sess-1')],
+      payload: { values: { session_id: 'sess-2' } }, db,
+    }),
+    { status: 403 },
+  );
+});
+
+test('H1: editor CAN move a canvas object to another group in the SAME workspace', async () => {
+  const db = makeDb({
+    roles: { 'ws-1:user-editor': 'editor' },
+    rowWorkspaces: { canvas_objects: { 'obj-1': 'ws-1' }, canvas_groups: { 'grp-1': 'ws-1' } },
+  });
+  await assert.doesNotReject(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'canvas_objects', op: 'update',
+      filters: [eq('id', 'obj-1')],
+      payload: { values: { group_id: 'grp-1' } }, db,
+    }),
+  );
+});
+
+test('H1: clearing group_id (null) on an in-workspace row is allowed', async () => {
+  const db = makeDb({
+    roles: { 'ws-1:user-editor': 'editor' },
+    rowWorkspaces: { canvas_objects: { 'obj-1': 'ws-1' } },
+  });
+  await assert.doesNotReject(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'canvas_objects', op: 'update',
+      filters: [eq('id', 'obj-1')],
+      payload: { values: { group_id: null } }, db,
+    }),
+  );
+});
