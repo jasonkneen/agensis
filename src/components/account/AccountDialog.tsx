@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { useUserProfile } from '../../hooks/useUserProfile';
+import { evaluatePassword, PASSWORD_MIN_CLASSES, PASSWORD_MIN_LENGTH } from '../../lib/passwordPolicy';
 
 const ACCOUNT_ACCENT_CHOICES = ['#00a95c', '#38bdf8', '#a78bfa', '#f59e0b', '#f472b6', '#ef4444', '#64748b'];
 
@@ -49,6 +50,7 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
   }, [profile]);
 
   const initial = (displayName || userEmail || 'U').trim().charAt(0).toUpperCase();
+  const newPasswordPolicy = evaluatePassword(newPassword);
 
   const saveProfile = async () => {
     setSavingProfile(true);
@@ -59,8 +61,14 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
   };
 
   const submitPasswordChange = async () => {
-    if (newPassword.length < 6) {
-      setPasswordMessage({ type: 'error', text: 'New password must be at least 6 characters.' });
+    const policy = evaluatePassword(newPassword);
+    if (!policy.valid) {
+      setPasswordMessage({
+        type: 'error',
+        text:
+          policy.message ||
+          `Password must be at least ${PASSWORD_MIN_LENGTH} characters and include ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`,
+      });
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -162,6 +170,27 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
                 placeholder="New password"
                 autoComplete="new-password"
               />
+              {newPassword.length > 0 && (
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  Password strength:{' '}
+                  <span
+                    className={
+                      newPasswordPolicy.valid
+                        ? 'font-medium text-green-600 dark:text-green-500'
+                        : 'font-medium text-amber-600 dark:text-amber-500'
+                    }
+                  >
+                    {newPasswordPolicy.label}
+                  </span>
+                  {!newPasswordPolicy.valid && (
+                    <>
+                      {' '}
+                      — need {PASSWORD_MIN_LENGTH}+ chars and {PASSWORD_MIN_CLASSES} of:
+                      lowercase, uppercase, number, symbol.
+                    </>
+                  )}
+                </p>
+              )}
               <Input
                 type="password"
                 value={confirmPassword}
