@@ -485,6 +485,63 @@ export function useWindows() {
     });
   }, []);
 
+  // Open a chat window as a side-by-side split of an existing thread's window:
+  // the source is tiled to the left half, the fork to the right half, and both
+  // share a groupId so the existing tiled-pair move/resize logic treats them as
+  // one unit. Falls back to a full-viewport window if the source isn't open.
+  const openSplitWindow = useCallback((
+    sourceSessionId: string,
+    opts: { title?: string; sessionId: string; canvasId?: string; ownerUserId?: string | null },
+  ) => {
+    setWindows(prev => {
+      // Fork already open on this canvas — just surface it.
+      const existingFork = prev.find(w => w.sessionId === opts.sessionId && w.canvasId === opts.canvasId);
+      if (existingFork) {
+        nextZIndexRef.current++;
+        return prev.map(w =>
+          w.id === existingFork.id ? { ...w, minimized: false, zIndex: nextZIndexRef.current } : w);
+      }
+
+      const canvasKey = opts.canvasId || 'base';
+      const source = prev.find(w => w.sessionId === sourceSessionId && (w.canvasId || 'base') === canvasKey);
+      const viewport = getFullViewportBounds();
+      const leftBounds = clampToViewport(getSplitTile(viewport, 'left'));
+      const rightBounds = clampToViewport(getComplementaryTile(viewport, 'left'));
+      const groupId = source?.groupId || generateGroupId();
+
+      nextZIndexRef.current++;
+      const forkBounds = source ? rightBounds : getFullViewportBounds();
+      const fork: FloatingWindow = {
+        id: generateId(),
+        type: 'chat',
+        title: opts.title || 'Untitled',
+        x: forkBounds.x,
+        y: forkBounds.y,
+        width: forkBounds.width,
+        height: forkBounds.height,
+        zIndex: nextZIndexRef.current,
+        minimized: false,
+        maximized: false,
+        restoreBounds: forkBounds,
+        canvasId: opts.canvasId,
+        sessionId: opts.sessionId,
+        ownerUserId: opts.ownerUserId ?? null,
+        isPrivate: false,
+        locked: false,
+        shared: false,
+        groupId: source ? groupId : null,
+      };
+
+      const withSource = source
+        ? prev.map(w => w.id === source.id
+            ? { ...w, ...leftBounds, minimized: false, maximized: false, restoreBounds: leftBounds, groupId }
+            : w)
+        : prev;
+
+      return [...withSource, fork];
+    });
+  }, []);
+
   const closeWindow = useCallback((id: string) => {
     setWindows(prev => {
       const closing = prev.find(w => w.id === id);
@@ -563,5 +620,5 @@ export function useWindows() {
     );
   }, []);
 
-  return { windows, openWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
+  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
 }

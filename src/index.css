@@ -1698,6 +1698,20 @@
   -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
 
+/* Window corner radius is theme-aware: 20px base, 12px neo/tinyworld (so windows
+   match the sidebar's brutal frame instead of being softer). The Tailwind
+   rounded-*-xl utilities bake a literal 20px at build time, so these higher-
+   specificity rules re-point them at --radius-xl. Because --radius-xl is now
+   referenced in the CSS itself, it can never be purged; and if it ever failed
+   to resolve, the property is dropped and the browser falls back to Tailwind's
+   literal 20px — rounded, never square. Per-corner selectors are preserved so
+   tiled windows still square only their shared (adjacent) edges. */
+[data-window-surface].rounded-xl { border-radius: var(--radius-xl); }
+[data-window-surface].rounded-tl-xl { border-top-left-radius: var(--radius-xl); }
+[data-window-surface].rounded-tr-xl { border-top-right-radius: var(--radius-xl); }
+[data-window-surface].rounded-bl-xl { border-bottom-left-radius: var(--radius-xl); }
+[data-window-surface].rounded-br-xl { border-bottom-right-radius: var(--radius-xl); }
+
 /* Single shared glass surface — same frosting for every floating panel:
    search/command dialog, presence popover, mention pickers, composer. */
 .agensis-glass-panel {

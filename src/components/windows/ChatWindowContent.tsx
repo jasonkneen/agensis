@@ -14,6 +14,7 @@ import {
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
+  Columns2,
   Globe,
   Hash,
   HardDrive,
@@ -183,6 +184,7 @@ interface ChatWindowContentProps {
   onCloseSubThread?: () => void;
   onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
   onSendSubThreadMessage?: (content: string) => void;
+  onSplitThread?: () => void;
   currentUserId?: string;
 }
 
@@ -260,6 +262,7 @@ export function ChatWindowContent({
   onCloseSubThread,
   onCreateSubThread,
   onSendSubThreadMessage,
+  onSplitThread,
   currentUserId = '',
 }: ChatWindowContentProps) {
   const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
@@ -1114,6 +1117,19 @@ export function ChatWindowContent({
                 </span>
               )}
             </Button>
+            {onSplitThread && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2"
+                onClick={onSplitThread}
+                title="Split this thread — copies the transcript into a new thread beside this one; send a message to start it"
+              >
+                <Columns2 data-icon="inline-start" />
+                Split
+              </Button>
+            )}
             <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={clearView} title="Clear this view — messages stay; scroll up to restore">
               <Eraser data-icon="inline-start" />
               Clear

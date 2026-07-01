@@ -518,29 +518,33 @@ export function FloatingWindowShell({
         transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
       };
 
-  const R = 'var(--radius-xl)';
-  const cornerStyle: React.CSSProperties = (() => {
-    if (!adjacentEdges || adjacentEdges.size === 0) return { borderRadius: R };
-    return {
-      borderTopLeftRadius: (!adjacentEdges.has('left') && !adjacentEdges.has('top')) ? R : '0px',
-      borderTopRightRadius: (!adjacentEdges.has('right') && !adjacentEdges.has('top')) ? R : '0px',
-      borderBottomLeftRadius: (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) ? R : '0px',
-      borderBottomRightRadius: (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) ? R : '0px',
-    };
+  // Corner rounding via Tailwind CLASSES, not an inline `var(--radius-xl)`.
+  // The inline-var approach (commit 061650c) put the ONLY reference to
+  // --radius-xl in JS, so the radius silently depended on that custom property
+  // surviving the CSS pipeline and resolving at runtime — the recurring
+  // "corners are square again" bug. Classes emit the radius into the CSS layer
+  // where it's cascade-normal and purge-proof. Unlisted corners stay square.
+  const cornerClass = (() => {
+    if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-xl';
+    const corners: string[] = [];
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-xl');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('top')) corners.push('rounded-tr-xl');
+    if (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) corners.push('rounded-bl-xl');
+    if (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) corners.push('rounded-br-xl');
+    return corners.join(' ');
   })();
 
   return (
     <>
       {isDragging && snapPreview && (
         <div
-          className="pointer-events-none absolute border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
+          className="pointer-events-none absolute rounded-xl border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
           style={{
             left: snapPreview.x,
             top: snapPreview.y,
             width: snapPreview.width,
             height: snapPreview.height,
             zIndex: win.zIndex + 1,
-            borderRadius: R,
           }}
         />
       )}
@@ -555,13 +559,14 @@ export function FloatingWindowShell({
         onDragEnter={e => e.stopPropagation()}
         onDragLeave={e => e.stopPropagation()}
         onDrop={e => e.stopPropagation()}
-        className="flex flex-col overflow-visible text-card-foreground"
-        style={{ ...shellStyle, ...cornerStyle }}
+        className={cn('flex flex-col overflow-visible text-card-foreground', cornerClass)}
+        style={shellStyle}
         >
         <div
           data-window-surface
           className={cn(
             'flex h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl',
+            cornerClass,
             // Full-view windows sit edge-to-edge (inset 0) inside <main>'s
             // overflow-hidden, so a drop shadow gets clipped into a hard
             // straight line. A full-bleed panel shouldn't float — drop the
@@ -570,7 +575,6 @@ export function FloatingWindowShell({
             isFullView ? 'bg-card' : 'bg-card/45',
             isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}
-          style={cornerStyle}
         >
         <div
           data-window-titlebar

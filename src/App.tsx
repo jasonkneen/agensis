@@ -579,7 +579,7 @@ function AppContent() {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, updateSession, archiveSession, sendMessage,
+    createSession, splitSession, updateSession, archiveSession, sendMessage,
   } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
 
   const {
@@ -609,6 +609,7 @@ function AppContent() {
   const {
     windows,
     openWindow,
+    openSplitWindow,
     closeWindow,
     closeAllWindows,
     focusWindow,
@@ -1108,6 +1109,25 @@ function AppContent() {
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
   }, [setActiveSession, openWindow, activeLayerId, user?.id]);
 
+  const handleSplitThread = useCallback(async (source: ChatSession) => {
+    const forked = await splitSession(source);
+    if (!forked) return;
+    // Make the fork the live thread and open it tiled beside the source.
+    setActiveSession(forked);
+    openSplitWindow(source.id, {
+      title: forked.title || 'Split',
+      sessionId: forked.id,
+      canvasId: activeLayerId,
+      ownerUserId: user?.id,
+    });
+    logEvent({
+      event_type: 'chat_created',
+      entity_type: 'chat',
+      entity_id: forked.id,
+      title: `Split thread: ${forked.title}`,
+    });
+  }, [splitSession, setActiveSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
+
   const handleAgentDirectMessage = useCallback(async (agent: { id: string; agentId?: string | null; name: string; handle: string | null }) => {
     const handle = agent.handle?.trim().replace(/^@+/, '') || '';
     const agentId = agent.agentId || agent.id || null;
@@ -1491,6 +1511,7 @@ function AppContent() {
                   // The user can view it from the Threads panel.
                 }}
                 onSendSubThreadMessage={sendSubThreadMessage}
+                onSplitThread={handleSplitThread}
                 useWorkspaceCtx={useWorkspaceCtx}
                 onToggleWorkspaceCtx={() => setUseWorkspaceCtx(v => !v)}
                 onHomeSendMessage={handleHomeSendMessage}
@@ -1791,6 +1812,7 @@ function CanvasLayerScene({
   onCloseSubThread,
   onCreateSubThread: onCreateSubThreadProp,
   onSendSubThreadMessage,
+  onSplitThread,
   useWorkspaceCtx,
   onToggleWorkspaceCtx,
   onHomeSendMessage,
@@ -1868,6 +1890,7 @@ function CanvasLayerScene({
   onCloseSubThread: () => void;
   onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
+  onSplitThread: (source: import('./types').ChatSession) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
   onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
@@ -2020,6 +2043,7 @@ function CanvasLayerScene({
                   onCloseSubThread={onCloseSubThread}
                   onCreateSubThread={onCreateSubThreadProp}
                   onSendSubThreadMessage={onSendSubThreadMessage}
+                  onSplitThread={winSession ? () => onSplitThread(winSession) : undefined}
                   channelTitle={winSession?.title || win.title}
                   currentUserId={userId}
                 />

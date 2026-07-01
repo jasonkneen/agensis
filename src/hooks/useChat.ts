@@ -131,6 +131,65 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     return data;
   }, [workspaceId]);
 
+  // Split a thread: clone the session as a new top-level thread and copy its
+  // full top-level transcript into the fork so it mirrors the original. No
+  // agent is dispatched — the human "starts it" by sending the first message
+  // (and can @mention a different agent to pit a competitor against the fork).
+  const splitSession = useCallback(async (source: ChatSession): Promise<ChatSession | null> => {
+    if (!workspaceId) return null;
+    if (!navigator.onLine) return null;
+
+    // 1. Clone the session row. Mirror the fields that drive routing/rendering
+    //    (folder, participants, conversation_mode, model); the fork stays
+    //    top-level (parent_message_id null) so it can spawn its own sub-threads.
+    const { data: forked } = await backendClient
+      .from('chat_sessions')
+      .insert({
+        workspace_id: workspaceId,
+        title: `${source.title || 'Untitled'} (split)`,
+        model: source.model || 'auto',
+        conversation_mode: source.conversation_mode ?? 'auto',
+        folder: source.folder ?? null,
+        participants: source.participants ?? null,
+      })
+      .select()
+      .single();
+    if (!forked) return null;
+
+    // 2. Copy every top-level message into the fork, preserving authorship and
+    //    order. created_at is carried over so a single bulk insert (which would
+    //    otherwise stamp identical now() values) keeps the original ordering.
+    const { data: sourceMessages } = await backendClient
+      .from('messages')
+      .select('*')
+      .eq('session_id', source.id)
+      .is('thread_parent_id', null)
+      .order('created_at', { ascending: true });
+
+    if (sourceMessages && sourceMessages.length > 0) {
+      const copies = sourceMessages.map(m => {
+        const row: Record<string, unknown> = {
+          id: crypto.randomUUID(),
+          session_id: forked.id,
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at,
+        };
+        if (m.sender_kind) row.sender_kind = m.sender_kind;
+        if (m.sender_id) row.sender_id = m.sender_id;
+        if (m.sender_name) row.sender_name = m.sender_name;
+        return row;
+      });
+      await backendClient.from('messages').insert(copies);
+    }
+
+    // 3. Register the fork. The caller sets it active + opens the split window;
+    //    the active-session effect then fetches the copied rows from the DB (a
+    //    brand-new session has no message cache, so nothing renders stale).
+    setSessions(prev => [forked, ...prev]);
+    return forked;
+  }, [workspaceId]);
+
   const updateSession = useCallback(async (id: string, updates: Partial<ChatSession>) => {
     const { data } = await backendClient
       .from('chat_sessions')
@@ -533,6 +592,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     loading,
     streaming,
     createSession,
+    splitSession,
     updateSession,
     archiveSession,
     sendMessage,
