@@ -231,6 +231,19 @@ type ParticipantCandidate = ChannelParticipant & {
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile';
 
+// A message is a live "thinking" placeholder while the daemon is still working:
+// an agent/assistant row whose body is the bare "Thinking …" marker (the daemon
+// updates this same row in place once real content streams in). This is the
+// session-scoped busy signal — unlike a global connection status, it can't leak
+// into other chat windows, and it clears itself the moment real content arrives.
+const THINKING_PLACEHOLDER_RE = /^thinking[\s\d.ms]*$/i;
+function isThinkingPlaceholderMessage(
+  msg: Pick<ChatMessage, 'sender_kind' | 'role' | 'content'>,
+): boolean {
+  if (!(msg.sender_kind === 'agent' || msg.role === 'assistant')) return false;
+  return THINKING_PLACEHOLDER_RE.test(safeMessageText(msg.content).trim());
+}
+
 export function ChatWindowContent({
   messages,
   topLevelMessages,
@@ -705,6 +718,18 @@ export function ChatWindowContent({
     () => directAgentFromParticipants(persistedParticipants),
     [persistedParticipants],
   );
+  // Live "who's working right now" for the status line above the composer —
+  // derived only from this session's own messages, so it never leaks across
+  // windows and auto-clears the instant real content replaces the placeholder.
+  const thinkingAgents = useMemo(() => {
+    const names: string[] = [];
+    for (const m of displayMessages) {
+      if (!isThinkingPlaceholderMessage(m)) continue;
+      const name = (m.sender_name || directAgent?.name || 'Agent').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+    return names;
+  }, [displayMessages, directAgent]);
   const isDirectMessage = isDirectMessageProp || Boolean(directAgent) || channelMeta?.folder === 'Direct messages';
   const directProfileKey = directAgent?.agent_id || directAgent?.handle || directAgent?.name || null;
   const profileAgent = useMemo(() => {
@@ -1168,6 +1193,20 @@ export function ChatWindowContent({
             Read-only workspace instance
           </div>
         ) : (
+        <>
+        {thinkingAgents.length > 0 && (
+          <div className="composer-status flex items-center gap-2 border-t border-border bg-card/60 px-3 py-1.5 text-xs text-muted-foreground">
+            <span className="composer-status-dots" aria-hidden>
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="truncate">
+              <span className="font-medium text-foreground">{thinkingAgents.join(', ')}</span>{' '}
+              {thinkingAgents.length === 1 ? 'is thinking…' : 'are thinking…'}
+            </span>
+          </div>
+        )}
         <div className="channel-composer border-t border-border p-2">
           {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
             <AttachmentGroup className="mb-2">
@@ -1417,6 +1456,7 @@ export function ChatWindowContent({
             />
           </div>
         </div>
+        </>
         )}
       </div>
 
@@ -1648,7 +1688,7 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
-  const isThinkingPlaceholder = (msg.sender_kind === 'agent' || msg.role === 'assistant') && /^thinking[\s\d.ms]*$/i.test(rawContent.trim());
+  const isThinkingPlaceholder = isThinkingPlaceholderMessage(msg);
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const initials = isUser ? 'You'.slice(0, 2).toUpperCase() : (senderName.slice(0, 2).toUpperCase() || 'AI');
