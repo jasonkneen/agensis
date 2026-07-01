@@ -116,6 +116,49 @@ function windowDockIcon(type: FloatingWindow['type']) {
   return <FileText className="size-4" />;
 }
 
+function participantAvatarValue(participant: ChannelParticipant | null): string | null {
+  if (!participant) return null;
+  const record = participant as unknown as Record<string, unknown>;
+  const value = record.avatar ?? record.avatar_url ?? record.image ?? record.icon;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+// Avatar to show on a chat window's dock button: the direct agent's avatar from
+// the workspace roster (the same source the chat window renders), falling back
+// to any avatar carried on the participant. Returns null for multi-agent
+// channels / non-agent chats, which keep the generic chat icon.
+function dockChatAvatar(session: ChatSession | undefined, agents: WorkspaceAgent[]): string | null {
+  const participant = directAgentParticipantForSession(session);
+  if (!participant) return null;
+  const key = normalizeAgentLookupKey(participant.agent_id || participant.handle || participant.name);
+  const agent = key
+    ? agents.find(item => [item.id, item.handle, item.name].some(v => normalizeAgentLookupKey(v) === key))
+    : undefined;
+  return (agent?.avatar && agent.avatar.trim()) || participantAvatarValue(participant);
+}
+
+// Renders a chat window's agent avatar inside its size-8 dock button, mirroring
+// the sidebar's spritesheet/image/fallback branches so animated pets animate and
+// missing images fall back to the chat glyph.
+function DockChatAvatar({ avatar }: { avatar: string }) {
+  if (isPetSpritesheetAvatar(avatar)) {
+    return (
+      <span className="animated-pet-avatar-shell size-6 rounded-md">
+        <span className="animated-pet-avatar" style={{ backgroundImage: `url(${renderablePetAssetUrl(avatar)})` }} />
+      </span>
+    );
+  }
+  const src = isImageAvatar(avatar) ? renderablePetAssetUrl(avatar) : undefined;
+  return (
+    <Avatar size="sm" className="size-6 rounded-md bg-muted">
+      {src && <AvatarImage src={src} alt="" className="rounded-md" />}
+      <AvatarFallback className="rounded-md">
+        <MessageSquare className="size-3.5" />
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
 type DockEntry =
   | { kind: 'window'; win: FloatingWindow }
   | { kind: 'group'; groupId: string; members: FloatingWindow[] };
