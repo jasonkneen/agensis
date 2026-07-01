@@ -781,6 +781,12 @@ export const backendClient: BackendClient = {
       }
     },
     async signOut() {
+      // Best-effort server-side revocation (bumps token_version so the current
+      // token is rejected on its next use, e.g. if it was ever leaked) BEFORE
+      // clearing local state. postJson swallows network errors into its own
+      // { error } shape rather than throwing, so a flaky connection never blocks
+      // the local sign-out from completing.
+      await postJson('/backend/auth/signout', {});
       setStoredSession(null, 'SIGNED_OUT');
       return { error: null };
     },
