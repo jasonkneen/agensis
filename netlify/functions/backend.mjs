@@ -1168,12 +1168,13 @@ async function handleDb(pathname, req, userId) {
 
 async function handleAiChat(req, userId) {
   const { messages, model, memory, documents, workspaceContext, workspaceId } = await readBody(req);
-  // A valid token is required (enforced by the router). When the request targets
-  // a workspace, the user must additionally be allowed to run agents there.
-  if (workspaceId) {
-    await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
-  }
-  const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId || null);
+  // A valid token is required (enforced by the router). workspaceId is mandatory
+  // and the user must be allowed to run agents there — otherwise any signed-up
+  // user could omit workspaceId to skip authorization and stream completions on
+  // the app-level ANTHROPIC_API_KEY (M4, 2026-07 review). Mirrors the daemon.
+  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
+  const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId);
   if (!apiKey) return jsonError(503, new Error('ANTHROPIC_API_KEY is not configured'));
   const resolvedModel = !model || model === 'auto'
     ? 'claude-opus-4-5'
