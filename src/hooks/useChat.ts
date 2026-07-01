@@ -562,7 +562,20 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
         threadParentId,
       );
       if (dispatched) return;
-      if (!agent && !directParticipant) return;
+      // Dispatch failed. If there's a direct-AI fallback (agent/direct
+      // participant) fall through to it; otherwise surface the failure instead
+      // of returning silently and leaving the user's message looking sent (M6).
+      if (!agent && !directParticipant) {
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          session_id: session.id,
+          role: 'assistant',
+          content: "Couldn't reach the agent — your message was posted but no reply was generated. Please try sending it again.",
+          thread_parent_id: threadParentId ?? null,
+          created_at: new Date().toISOString(),
+        }]);
+        return;
+      }
     } else if (!agent) {
       return;
     }
@@ -633,7 +646,21 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     // Land on the parent so the synthesis renders in place, then dispatch.
     setActiveSession(parent);
     const userMsg = await insertUserMessage(parent, prompt);
-    await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null);
+    const dispatched = await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null);
+
+    // If the synthesis dispatch failed, keep the fork (do NOT soft-delete) so
+    // the merge can be retried, and surface the failure instead of silently
+    // destroying the branch with no synthesis (M6).
+    if (!dispatched) {
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        session_id: parent.id,
+        role: 'assistant',
+        content: "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
+        created_at: new Date().toISOString(),
+      }]);
+      return { status: 'error', parent };
+    }
 
     // Source split done — soft-delete (retain data for audit/history).
     await backendClient.from('chat_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', fork.id);
