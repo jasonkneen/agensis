@@ -168,6 +168,7 @@ function renderDockButton(
   focusedDockWindow: FloatingWindow | null,
   handlers: { onOpen: () => void; onHide: () => void; onFocus: () => void; onClose?: () => void },
   bounce = false,
+  avatar: string | null = null,
 ) {
   const active = focusedDockWindow?.id === win.id;
   const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
@@ -198,7 +199,7 @@ function renderDockButton(
           title={`${dockActionLabel} ${windowLabel(win)}`}
           aria-label={`${dockActionLabel} ${windowLabel(win)}`}
         >
-          {windowDockIcon(win.type)}
+          {win.type === 'chat' && avatar ? <DockChatAvatar avatar={avatar} /> : windowDockIcon(win.type)}
           <span
             aria-hidden
             className={cn(
@@ -567,7 +568,7 @@ function AppContent() {
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
     createSession, updateSession, archiveSession, sendMessage,
-  } = useChat(activeWorkspaceId);
+  } = useChat(activeWorkspaceId, user.email?.split('@')[0] || undefined);
 
   const {
     subThreadsByMessage,
@@ -779,6 +780,19 @@ function AppContent() {
     return map;
   }, [dockWindows, sessions, agentConnections]);
   const bouncingDockIds = useDockAttention(dockBusyById);
+  // Chat dock buttons show their direct agent's avatar in place of the generic
+  // chat glyph. Resolved from the same session→participant→agent path as the
+  // bounce map, so avatar-bearing buttons are exactly the direct-chat set.
+  const dockAvatarById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const win of dockWindows) {
+      if (win.type !== 'chat' || !win.sessionId) continue;
+      const session = sessions.find(item => item.id === win.sessionId);
+      const avatar = dockChatAvatar(session, agents);
+      if (avatar) map.set(win.id, avatar);
+    }
+    return map;
+  }, [dockWindows, sessions, agents]);
   const canEditCanvasObject = useCallback((obj: CanvasObject) => !obj.user_id || obj.user_id === user?.id, [user?.id]);
   const settingsLayer = layers.find(layer => layer.id === (settingsLayerId || activeLayerId)) || activeLayer;
   const settingsWorkspace = useMemo<Workspace | null>(() => {
@@ -1531,7 +1545,7 @@ function AppContent() {
                       onHide: () => minimizeWindow(win.id),
                       onFocus: () => focusWindow(win.id),
                       onClose: () => handleCloseWindow(win.id),
-                    }, bouncingDockIds.has(win.id));
+                    }, bouncingDockIds.has(win.id), dockAvatarById.get(win.id) ?? null);
                   }
                   const { groupId, members } = entry;
                   return (
@@ -1545,7 +1559,7 @@ function AppContent() {
                         onHide: () => minimizeWindowGroup(groupId),
                         onFocus: () => focusWindowGroup(groupId, member.id),
                         onClose: () => handleCloseWindow(member.id),
-                      }, bouncingDockIds.has(member.id)))}
+                      }, bouncingDockIds.has(member.id), dockAvatarById.get(member.id) ?? null))}
                       <Button
                         type="button"
                         variant="ghost"

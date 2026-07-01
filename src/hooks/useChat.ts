@@ -6,7 +6,7 @@ import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
-export function useChat(workspaceId: string | null) {
+export function useChat(workspaceId: string | null, currentUserName?: string) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -177,6 +177,7 @@ export function useChat(workspaceId: string | null) {
       session_id: session.id,
       role: 'user',
       content,
+      sender_name: currentUserName || null,
       thread_parent_id: threadParentId ?? null,
       created_at: new Date().toISOString(),
     };
@@ -189,11 +190,12 @@ export function useChat(workspaceId: string | null) {
       role: 'user',
       content,
     };
+    if (currentUserName) insertPayload.sender_name = currentUserName;
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
     await backendClient.from('messages').insert(insertPayload);
 
     return userMsg;
-  }, []);
+  }, [currentUserName]);
 
   const autoTitleSession = useCallback(async (
     session: ChatSession,
