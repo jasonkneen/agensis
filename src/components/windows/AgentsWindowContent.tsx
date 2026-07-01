@@ -966,7 +966,7 @@ function AgentRow({
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
           </Badge>
           <Badge variant="outline">{displayModel(agent.model)}</Badge>
-          <ConnectionDot count={activeConnections.length} />
+          <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
           {!agentActive && <Badge variant="secondary">deactivated</Badge>}
           {toolBadges.length > 0
             ? toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)
@@ -1317,7 +1317,7 @@ function AgentDetailPane({
                 {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
               </Badge>
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
-              <ConnectionDot count={activeConnections.length} />
+              <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
               {!agentActive && <Badge variant="secondary">deactivated</Badge>}
             </div>
           </div>
@@ -1709,19 +1709,19 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
   );
 }
 
-function ConnectionDot({ count }: { count: number }) {
+function ConnectionDot({ count, busy = false }: { count: number; busy?: boolean }) {
   const connected = count > 0;
+  // Match the three-tier presence palette used by the sidebar dots and the
+  // notifications bell: online = emerald, busy = amber (pulsing), offline = grey.
+  const tone = !connected ? 'bg-muted-foreground/40' : busy ? 'bg-amber-500' : 'bg-emerald-500';
+  const label = !connected
+    ? 'Not connected'
+    : busy
+      ? `${count} daemon ${count === 1 ? 'connection' : 'connections'} · working`
+      : `${count} daemon ${count === 1 ? 'connection' : 'connections'}`;
   return (
-    <Badge
-      variant="outline"
-      className="gap-1 px-1.5"
-      title={connected ? `${count} daemon ${count === 1 ? 'connection' : 'connections'}` : 'Not connected'}
-      aria-label={connected ? `${count} connected` : 'Not connected'}
-    >
-      <span
-        className={cn('size-1.5 rounded-full', connected ? 'bg-emerald-500' : 'bg-muted-foreground/40')}
-        aria-hidden
-      />
+    <Badge variant="outline" className="gap-1 px-1.5" title={label} aria-label={label}>
+      <span className={cn('size-1.5 rounded-full', tone, busy && 'animate-pulse')} aria-hidden />
       {connected && count > 1 ? count : null}
     </Badge>
   );

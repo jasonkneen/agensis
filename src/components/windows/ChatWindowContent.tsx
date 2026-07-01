@@ -1178,7 +1178,9 @@ export function ChatWindowContent({
                   </AttachmentMedia>
                   <AttachmentContent>
                     <AttachmentTitle>{file.name}</AttachmentTitle>
-                    <AttachmentDescription>{file.sourceLabel}</AttachmentDescription>
+                    {file.kind !== 'uploaded' && file.sourceLabel && (
+                      <AttachmentDescription>{file.sourceLabel}</AttachmentDescription>
+                    )}
                   </AttachmentContent>
                   <AttachmentActions>
                     <AttachmentAction

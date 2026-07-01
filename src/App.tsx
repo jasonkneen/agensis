@@ -2218,7 +2218,7 @@ function WorkspacePresenceAvatars({
                       {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                     {(person.isCurrentUser || person.kind === 'agent') && (
-                      <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
+                      <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'} />
                     )}
                   </Avatar>
                   <div className="min-w-0 flex-1">
@@ -2329,7 +2329,7 @@ function WorkspacePresenceAvatars({
                     {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                   {(person.isCurrentUser || person.kind === 'agent') && (
-                    <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500' : 'bg-green-500'} />
+                    <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'} />
                   )}
                 </Avatar>
               );
