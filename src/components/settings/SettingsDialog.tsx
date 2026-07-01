@@ -170,11 +170,28 @@ function GeneralPanel({
     setPathStatus(null);
   }, [workspace?.id, workspace?.local_path]);
 
+  const isElectron = Boolean(window.electronAPI);
+  const hasDirectoryPicker = !isElectron && 'showDirectoryPicker' in window;
+  const canBrowse = isElectron || hasDirectoryPicker;
+
   const browsePath = async () => {
-    const picked = await window.electronAPI?.pickFolder();
-    if (picked) {
-      setPathDraft(picked);
-      setPathStatus(null);
+    if (isElectron) {
+      const picked = await window.electronAPI!.pickFolder();
+      if (picked) {
+        setPathDraft(picked);
+        setPathStatus(null);
+      }
+      return;
+    }
+    if (hasDirectoryPicker) {
+      try {
+        // Web mode: browser can't return the full system path, so we confirm the
+        // folder name and ask the user to type the full path.
+        const handle = await (window as any).showDirectoryPicker({ mode: 'read' });
+        setPathStatus(`Selected "${handle.name}" — paste the full system path above, then click Link.`);
+      } catch {
+        // user cancelled
+      }
     }
   };
 
@@ -222,7 +239,7 @@ function GeneralPanel({
             placeholder="/Users/name/Documents/GitHub/project"
           />
           <InputGroupAddon align="inline-end">
-            {window.electronAPI && (
+            {canBrowse && (
               <InputGroupButton size="xs" variant="ghost" onClick={browsePath} disabled={!workspace}>
                 Browse
               </InputGroupButton>
@@ -234,7 +251,11 @@ function GeneralPanel({
           </InputGroupAddon>
         </InputGroup>
         <FieldDescription>
-          {pathStatus || workspace?.git_root || workspace?.local_path || 'Associate this workspace with a local folder or Git repository.'}
+          {pathStatus || workspace?.git_root || workspace?.local_path || (
+            isElectron
+              ? 'Click Browse or type the path, then Link.'
+              : 'Web mode — type the full system path (e.g. /Users/name/projects/repo), then click Link.'
+          )}
         </FieldDescription>
       </Field>
     </FieldGroup>
