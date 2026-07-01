@@ -99,6 +99,9 @@
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.7);
   --home-bg-image-opacity: 0.42;
   --home-bg-overlay: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.04) 72%, var(--canvas-base) 100%);
+  /* Always-on radial vignette that darkens the edges and lifts the focal
+     area near the composer, giving the flat backdrop perceptible depth. */
+  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,0.42) 100%);
 
   color-scheme: dark;
 }
@@ -135,6 +138,7 @@
   --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.15);
   --home-bg-image-opacity: 0.34;
   --home-bg-overlay: linear-gradient(to bottom, rgba(255,255,255,0.02) 0%, rgba(0,0,0,0.08) 72%, var(--canvas-base) 100%);
+  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30,24,12,0.10) 76%, rgba(20,16,8,0.20) 100%);
 
   color-scheme: light;
 }
@@ -1696,6 +1700,15 @@
   background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
   backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
   -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
+}
+
+/* Depth: floating windows are lifted off the canvas with a layered ambient +
+   contact shadow (theme-aware via --shadow-*) rather than a single flat drop.
+   Applied to the outer wrapper — not the surface — so it never clobbers the
+   selection ring's box-shadow, and animates via the shell's box-shadow
+   transition. Full-view windows are edge-to-edge and stay unshadowed. */
+[data-window-view-mode="floating"] {
+  box-shadow: var(--shadow-lg), var(--shadow-xl);
 }
 
 /* Window corner radius is theme-aware: 20px base, 12px neo/tinyworld (so windows
