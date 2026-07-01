@@ -52,6 +52,7 @@ interface UsersWindowContentProps {
 export function UsersWindowContent({
   workspaceName,
   currentUserId,
+  currentUserEmail,
   inviteOrigin,
   members,
   invites,
@@ -143,15 +144,18 @@ export function UsersWindowContent({
               {members.map((member) => {
                 const memberId = member.id;
                 const isYou = member.user_id === currentUserId;
+                // The backend leaves email blank when a participant has no
+                // app_users row; for the current user we know it from the session.
+                const displayEmail = member.email || (isYou ? currentUserEmail ?? '' : '');
                 const canManage = memberId !== null && member.role !== 'owner' && !isYou;
                 return (
                   <Item key={memberId ?? member.user_id} variant="outline">
                     <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-sm font-semibold uppercase text-muted-foreground">
-                      {member.email ? member.email.charAt(0).toUpperCase() : <UserRound className="size-4" />}
+                      {displayEmail ? displayEmail.charAt(0).toUpperCase() : <UserRound className="size-4" />}
                     </ItemMedia>
                     <ItemContent className="min-w-0">
                       <ItemTitle className="truncate font-semibold">
-                        {member.email}
+                        {displayEmail || (member.role === 'owner' ? 'Workspace owner' : 'Unknown user')}
                         {isYou ? ' (you)' : ''}
                       </ItemTitle>
                       <div className="flex flex-wrap items-center gap-1">

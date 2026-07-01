@@ -4395,15 +4395,19 @@ function createApp() {
       const workspaceId = String(req.params.id || '').trim();
       if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
       await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      // LEFT JOIN app_users so a participant is never dropped just because their
+      // app_users row is missing (e.g. identity seeded by an auth path that did
+      // not write app_users). The owner must ALWAYS appear; email falls back to
+      // '' and the client fills the current user's own email from its session.
       const rows = await getDb().unsafe(
         `select * from (
-           select w.user_id as user_id, u.email as email, 'owner' as role,
+           select w.user_id as user_id, coalesce(u.email, '') as email, 'owner' as role,
                   null::uuid as id, null::uuid as invited_by, w.created_at as created_at
-             from workspaces w join app_users u on u.id = w.user_id
+             from workspaces w left join app_users u on u.id = w.user_id
             where w.id = $1
            union all
-           select m.user_id, u.email, m.role, m.id, m.invited_by, m.created_at
-             from workspace_members m join app_users u on u.id = m.user_id
+           select m.user_id, coalesce(u.email, '') as email, m.role, m.id, m.invited_by, m.created_at
+             from workspace_members m left join app_users u on u.id = m.user_id
             where m.workspace_id = $1
          ) t order by (role = 'owner') desc, created_at asc`,
         [workspaceId],
