@@ -500,6 +500,15 @@ export function useWindows() {
     );
   }, []);
 
+  // Drop every open window at once. Windows are in-memory only and their
+  // canvasId ('base' for a workspace's default layer) is not unique across
+  // workspaces, so switching workspaces must clear them or the previous
+  // workspace's windows leak into the new one's canvas.
+  const closeAllWindows = useCallback(() => {
+    setWindows([]);
+    setSelectedWindowIds([]);
+  }, []);
+
   // Dock-driven group actions: a tiled pair/cluster is shown as one unit in
   // the dock, so focusing or minimizing any member brings (or hides) the
   // whole group together instead of just the clicked window.
@@ -554,5 +563,5 @@ export function useWindows() {
     );
   }, []);
 
-  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
+  return { windows, openWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
 }

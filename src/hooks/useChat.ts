@@ -52,6 +52,15 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     setLoading(false);
   }, []);
 
+  // Drop the previous workspace's active session when the workspace changes.
+  // fetchSessions preserves `prev ?? first`, so without this the old
+  // workspace's session (and its messages) would stay selected after a
+  // switch. Clearing here lets fetchSessions pick the new workspace's first
+  // session instead.
+  useEffect(() => {
+    setActiveSession(null);
+  }, [workspaceId]);
+
   useEffect(() => {
     fetchSessions();
   }, [fetchSessions]);

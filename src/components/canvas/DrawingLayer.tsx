@@ -52,6 +52,7 @@ type DragSnapshot = {
 
 type ResizeSnapshot = {
   id: string;
+  objectType: string;
   handle: 'nw' | 'ne' | 'sw' | 'se';
   startMouse: { x: number; y: number };
   startRect: { x: number; y: number; width: number; height: number };
@@ -136,6 +137,8 @@ export function DrawingLayer({
       delete element.dataset.baseTransform;
       element.style.transform = baseTransform && baseTransform !== 'none' ? baseTransform : '';
       element.style.transformOrigin = '';
+      element.style.width = '';
+      element.style.height = '';
     });
   }, [getCanvasItemElements]);
 
@@ -253,8 +256,6 @@ export function DrawingLayer({
 
     const tx = ((next.x - snapshot.startRect.x) / 100) * snapshot.canvasRect.width;
     const ty = ((next.y - snapshot.startRect.y) / 100) * snapshot.canvasRect.height;
-    const scaleX = next.width / snapshot.startRect.width;
-    const scaleY = next.height / snapshot.startRect.height;
     getCanvasItemElements(snapshot.id).forEach(element => {
       if (element.dataset.baseTransform === undefined) {
         element.dataset.baseTransform = element.style.transform || 'none';
@@ -262,7 +263,18 @@ export function DrawingLayer({
       const baseTransform = element.dataset.baseTransform === 'none' ? '' : element.dataset.baseTransform;
       element.dataset.transforming = 'true';
       element.style.transformOrigin = 'top left';
-      element.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scaleX}, ${scaleY}) ${baseTransform}`.trim();
+      if (snapshot.objectType === 'applet') {
+        // Iframes reflow when width/height change directly; CSS scale squishes them.
+        const newW = (next.width / 100) * snapshot.canvasRect.width;
+        const newH = (next.height / 100) * snapshot.canvasRect.height;
+        element.style.transform = `translate3d(${tx}px, ${ty}px, 0) ${baseTransform}`.trim();
+        element.style.width = `${newW}px`;
+        element.style.height = `${newH}px`;
+      } else {
+        const scaleX = next.width / snapshot.startRect.width;
+        const scaleY = next.height / snapshot.startRect.height;
+        element.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${scaleX}, ${scaleY}) ${baseTransform}`.trim();
+      }
     });
 
     // Keep the selection handles glued to the live corners as the box resizes.
@@ -692,6 +704,7 @@ export function DrawingLayer({
     const pos = toPercent(e.clientX, e.clientY);
     const snapshot: ResizeSnapshot = {
       id,
+      objectType: obj.type,
       handle,
       startMouse: pos,
       startRect: { x: obj.x, y: obj.y, width: obj.width, height: obj.height },

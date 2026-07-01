@@ -150,10 +150,10 @@
   --text-primary: #2a2722;
   --text-secondary: #6f695f;
   --text-muted: #918979;
-  --accent: #3a72c8;
-  --accent-hover: #2f63b3;
-  --accent-subtle: rgba(58, 114, 200, 0.12);
-  --accent-border: rgba(58, 114, 200, 0.32);
+  --accent: #d98a24;
+  --accent-hover: #c2761a;
+  --accent-subtle: rgba(217, 138, 36, 0.12);
+  --accent-border: rgba(217, 138, 36, 0.32);
   --success: #2db37c;
   --warning: #e8a330;
   --error: #e8532a;
@@ -166,8 +166,8 @@
   --card-foreground: #2a2722;
   --popover: #fffaf0;
   --popover-foreground: #2a2722;
-  --primary: #3a72c8;
-  --primary-foreground: #ffffff;
+  --primary: #d98a24;
+  --primary-foreground: #3a2408;
   --secondary: #f3ecdc;
   --secondary-foreground: #2a2722;
   --muted: #f3ecdc;
@@ -176,7 +176,7 @@
   --sh-accent-foreground: #2a2722;
   --sh-border: #e4d8c2;
   --input: #e4d8c2;
-  --ring: #3a72c8;
+  --ring: #d98a24;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] {
@@ -190,10 +190,10 @@
   --text-primary: #f5ecdc;
   --text-secondary: #c8bba7;
   --text-muted: #8d806e;
-  --accent: #6fa4ed;
-  --accent-hover: #8bb7f3;
-  --accent-subtle: rgba(111, 164, 237, 0.14);
-  --accent-border: rgba(111, 164, 237, 0.34);
+  --accent: #f0b85d;
+  --accent-hover: #f5c877;
+  --accent-subtle: rgba(240, 184, 93, 0.14);
+  --accent-border: rgba(240, 184, 93, 0.34);
   --success: #65d7a0;
   --warning: #f0b85d;
   --error: #f27d5f;
@@ -206,7 +206,7 @@
   --card-foreground: #f5ecdc;
   --popover: #211f1b;
   --popover-foreground: #f5ecdc;
-  --primary: #6fa4ed;
+  --primary: #f0b85d;
   --primary-foreground: #101010;
   --secondary: #2a261f;
   --secondary-foreground: #f5ecdc;
@@ -216,7 +216,7 @@
   --sh-accent-foreground: #f5ecdc;
   --sh-border: #4a4031;
   --input: #4a4031;
-  --ring: #6fa4ed;
+  --ring: #f0b85d;
 }
 
 /* ============================================================
@@ -956,7 +956,6 @@
   backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
   -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
   contain: layout paint;
-  will-change: width;
 }
 
 [data-sidebar-panel].sidebar-collapsed-panel {

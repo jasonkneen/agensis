@@ -610,6 +610,7 @@ function AppContent() {
     windows,
     openWindow,
     closeWindow,
+    closeAllWindows,
     focusWindow,
     updateWindow,
     minimizeWindow,
@@ -618,6 +619,21 @@ function AppContent() {
     ungroupTiledWindows,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
+
+  // Windows are in-memory and keyed by canvas layer id, which is 'base' for
+  // every workspace's default layer — so without this, the previous
+  // workspace's open windows leak onto a newly created/selected workspace's
+  // canvas, making it look identical. Clear them only on a genuine switch
+  // (skip the initial ''→firstId hydration, which has no windows to clear).
+  const prevWorkspaceIdRef = useRef<string>('');
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    const prev = prevWorkspaceIdRef.current;
+    prevWorkspaceIdRef.current = activeWorkspaceId;
+    if (prev && prev !== activeWorkspaceId) {
+      closeAllWindows();
+    }
+  }, [activeWorkspaceId, closeAllWindows]);
   const { cursors } = useMultiplayerCursors(
     activeWorkspaceId,
     canvasRef,
@@ -1006,8 +1022,8 @@ function AppContent() {
     const created = await addCanvasObject('applet', {
       x: 12,
       y: 10,
-      width: 76,
-      height: 72,
+      width: app.defaultWidth ?? 40,
+      height: app.defaultHeight ?? 55,
       fill: 'var(--canvas-raised)',
       stroke: 'var(--border)',
       stroke_width: 1,
@@ -1023,8 +1039,8 @@ function AppContent() {
     const created = await addCanvasObject('applet', {
       x: 12,
       y: 10,
-      width: 76,
-      height: 72,
+      width: 28,
+      height: 48,
       fill: 'var(--canvas-raised)',
       stroke: 'var(--border)',
       stroke_width: 1,

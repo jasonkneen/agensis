@@ -6,6 +6,8 @@ export interface CanvasAppDefinition {
   description: string;
   category: 'workspace' | 'generated';
   buildHtml: () => string;
+  defaultWidth?: number;   // % of canvas width
+  defaultHeight?: number;  // % of canvas height
 }
 
 export const CANVAS_APPS: CanvasAppDefinition[] = [
@@ -22,6 +24,8 @@ export const CANVAS_APPS: CanvasAppDefinition[] = [
     description: 'Standard calculator with keyboard support and persistent state',
     category: 'generated',
     buildHtml: buildCalculatorAppHtml,
+    defaultWidth: 22,
+    defaultHeight: 52,
   },
 ];
 
