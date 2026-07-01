@@ -106,23 +106,77 @@ export function badRequest(message) { return httpError(400, message); }
 // AUTH: verify a signed session token. Mirrors server/index.cjs verifyToken /
 // requireAuth, but the signing secret is passed in (no DB/env coupling here).
 //
-//   token format: `${userId}.${base64url(HMAC_SHA256(secret, userId))}`
+//   token format: `${userId}.${tokenVersion}.${base64url(HMAC_SHA256(secret, `${userId}.${tokenVersion}`))}`
+//
+// `token_version` (plan 005) is a per-user counter on app_users: a token embeds
+// the version that was current when it was issued, and is rejected once that
+// no longer matches the user's CURRENT version (bumped on sign-out / password
+// change) — this is what makes revocation possible at all; previously a token
+// was a pure function of userId + the (un-rotatable-per-user) global secret.
+//
+// `getTokenVersion(userId) => Promise<string|null>` is REQUIRED once the token
+// signature checks out — verifyAuthToken deliberately does not fall back to
+// "skip the check" if it's missing, since a caller forgetting to wire it would
+// silently defeat revocation. See createTokenVersionCache below for the
+// short-TTL cache every real caller should wrap `db` in (this runs on every
+// authenticated request — an uncached per-request DB read is not acceptable).
 // ----------------------------------------------------------------------------
 
-export function verifyAuthToken(authHeader, secret) {
+export async function verifyAuthToken(authHeader, secret, getTokenVersion) {
   const header = String(authHeader || '');
   const token = header.startsWith('Bearer ') ? header.slice(7) : header;
   if (!token || typeof token !== 'string') return null;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return null;
-  const userId = token.slice(0, dot);
+  const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
+  const [userId, tokenVersionStr] = payload.split('.');
+  if (!userId || !tokenVersionStr) return null;
   if (!secret) return null;
-  const expected = crypto.createHmac('sha256', String(secret)).update(userId).digest('base64url');
+  const expected = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  if (typeof getTokenVersion !== 'function') {
+    throw new Error('verifyAuthToken requires a getTokenVersion(userId) function to check revocation');
+  }
+  const currentVersion = await getTokenVersion(userId);
+  if (currentVersion === null || currentVersion === undefined || String(currentVersion) !== tokenVersionStr) return null;
   return userId;
+}
+
+// Short-TTL in-process cache for token_version lookups, so verifyAuthToken's
+// revocation check doesn't turn every authenticated request into a DB round
+// trip. Mirrors server/index.cjs's tokenVersionCache/getCachedTokenVersion —
+// kept as a separate implementation (this file is ESM, that one CJS; see the
+// H4 rate-limiter comment elsewhere in this file for why they aren't shared
+// directly) but the two must stay in sync.
+//
+// State is per-instance/per-warm-container (same caveat as createRateLimiter
+// below): a multi-instance deploy only bounds staleness to `ttlMs` on OTHER
+// instances; the instance that performs a sign-out/password-change bump should
+// update its own cache entry immediately (see netlify/functions/backend.mjs).
+export function createTokenVersionCache({ ttlMs = 10_000 } = {}) {
+  const cache = new Map(); // userId -> { version, expiresAt }
+  return {
+    async get(userId, db) {
+      const now = Date.now();
+      const cached = cache.get(userId);
+      if (cached && cached.expiresAt > now) return cached.version;
+      const rows = await db('select token_version from app_users where id = $1 limit 1', [userId]);
+      const version = rows[0] ? String(rows[0].token_version) : null;
+      cache.set(userId, { version, expiresAt: now + ttlMs });
+      return version;
+    },
+    // Called right after THIS instance bumps a user's token_version, so
+    // revocation is instant here instead of waiting out the stale entry's TTL.
+    set(userId, version) {
+      cache.set(userId, { version: String(version), expiresAt: Date.now() + ttlMs });
+    },
+    clear() {
+      cache.clear();
+    },
+  };
 }
 
 // ----------------------------------------------------------------------------

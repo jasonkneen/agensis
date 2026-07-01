@@ -11,7 +11,23 @@ import {
   appendWorkspaceAccessClause,
   logMessageActivityIdempotent,
   createRateLimiter,
+  createTokenVersionCache,
 } from '../../shared/backend-core.mjs';
+
+// Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
+// createTokenVersionCache doc comments for the full rationale.
+//
+// requireUserId (-> verifyAuthToken -> getTokenVersion) runs BEFORE any
+// route-specific handler, on every protected route — including ones that never
+// call ensureAppUserProfileColumns() themselves (db/*, settings/secrets,
+// ai-chat, ...). So this is the one place that must ensure token_version
+// exists itself, or a cold container's very first authenticated request on a
+// DB that hasn't run migrations yet would 500 on a missing column.
+const tokenVersionCache = createTokenVersionCache();
+async function getTokenVersion(userId) {
+  await ensureAppUserProfileColumns();
+  return tokenVersionCache.get(userId, query);
+}
 
 // H4 — Rate limiting. Module-scoped, in-memory fixed-window limiters.
 // NOTE: in-memory state lives in a single warm serverless instance; a
@@ -300,16 +316,17 @@ function getAuthSecret() {
   return process.env.AUTH_SECRET || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL || 'netlify-preview-auth-secret';
 }
 
-function issueToken(userId) {
-  const sig = crypto.createHmac('sha256', getAuthSecret()).update(String(userId)).digest('base64url');
-  return `${userId}.${sig}`;
+function issueToken(userId, tokenVersion) {
+  const payload = `${userId}.${tokenVersion}`;
+  const sig = crypto.createHmac('sha256', getAuthSecret()).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
 }
 
 // Resolve the authed user id from a request's Authorization header. Throws 401
 // when no valid Bearer token is present. The thrown error's `.status` is mapped
 // to the existing `{ data: null, error }` JSON shape by the top-level handler.
-function requireUserId(req) {
-  const userId = verifyAuthToken(req.headers.get('authorization'), getAuthSecret());
+async function requireUserId(req) {
+  const userId = await verifyAuthToken(req.headers.get('authorization'), getAuthSecret(), getTokenVersion);
   if (!userId) {
     const err = new Error('Authentication required');
     err.status = 401;
@@ -616,6 +633,7 @@ async function ensureAppUserProfileColumns() {
   await query(`
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
   `);
   appUserProfileColumnsEnsured = true;
 }
@@ -806,20 +824,21 @@ async function handleAuth(pathname, req) {
     if (existing.length > 0) return jsonError(409, new Error('An account with that email already exists'));
 
     const rows = await query(
-      'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
+      'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at, token_version',
       [email, createPasswordHash(password)],
     );
-    const user = rows[0];
-    return json({ data: { user, token: issueToken(user.id) }, error: null });
+    const row = rows[0];
+    const user = { id: row.id, email: row.email, display_name: row.display_name, accent_color: row.accent_color, created_at: row.created_at };
+    return json({ data: { user, token: issueToken(user.id, row.token_version) }, error: null });
   }
 
-  const rows = await query('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
+  const rows = await query('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
   const user = rows[0];
   if (!user || !verifyPassword(password, user.password_hash)) {
     return jsonError(401, new Error('Invalid email or password'));
   }
   const sessionUser = { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at };
-  return json({ data: { user: sessionUser, token: issueToken(sessionUser.id) }, error: null });
+  return json({ data: { user: sessionUser, token: issueToken(sessionUser.id, user.token_version) }, error: null });
 }
 
 async function handleOAuthAuth() {
@@ -828,13 +847,14 @@ async function handleOAuthAuth() {
   const email = String(identityUser?.email || '').trim().toLowerCase();
   if (!email) return jsonError(401, new Error('Social login was not completed'));
 
-  const existing = await query('select id, email, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
-  const user = existing[0] || (await query(
-    'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
+  const existing = await query('select id, email, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
+  const row = existing[0] || (await query(
+    'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at, token_version',
     [email, `oauth:netlify:${identityUser.id}`],
   ))[0];
+  const user = { id: row.id, email: row.email, display_name: row.display_name, accent_color: row.accent_color, created_at: row.created_at };
 
-  return json({ data: { user, token: issueToken(user.id) }, error: null });
+  return json({ data: { user, token: issueToken(user.id, row.token_version) }, error: null });
 }
 
 async function handleGetMyProfile(userId) {
@@ -883,7 +903,26 @@ async function handleChangeMyPassword(req, userId) {
     return jsonError(401, new Error('Current password is incorrect'));
   }
 
-  await query('update app_users set password_hash = $2 where id = $1', [userId, createPasswordHash(newPassword)]);
+  // Bumping token_version invalidates EVERY outstanding token for this user,
+  // including the one used to make this very request — issue a fresh one below
+  // so the caller's own session survives without a forced re-login.
+  const updated = await query(
+    'update app_users set password_hash = $2, token_version = token_version + 1 where id = $1 returning token_version',
+    [userId, createPasswordHash(newPassword)],
+  );
+  const newVersion = updated[0]?.token_version;
+  tokenVersionCache.set(userId, newVersion);
+  return json({ data: { ok: true, token: issueToken(userId, newVersion) }, error: null });
+}
+
+// Real server-side sign-out: bumps token_version so the calling token (and
+// every other outstanding token for this user) is rejected on its next use.
+async function handleSignOut(userId) {
+  const updated = await query(
+    'update app_users set token_version = token_version + 1 where id = $1 returning token_version',
+    [userId],
+  );
+  if (updated[0]) tokenVersionCache.set(userId, updated[0].token_version);
   return json({ data: { ok: true }, error: null });
 }
 
@@ -1244,20 +1283,20 @@ async function route(req) {
     return handleSystemCapabilities(req);
   }
   if (req.method === 'GET' && pathname === '/backend/agents/connections') {
-    return handleAgentConnections(req, requireUserId(req));
+    return handleAgentConnections(req, await requireUserId(req));
   }
   if (req.method === 'POST' && pathname === '/backend/agents/dispatch') {
-    const userId = requireUserId(req);
+    const userId = await requireUserId(req);
     const blocked = rateLimitBlock(dispatchRateLimiter, userId || clientIpFromRequest(req));
     if (blocked) return blocked;
     return handleAgentDispatch(req, userId);
   }
   if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
-    return handleCreateAgentWebhook(req, requireUserId(req));
+    return handleCreateAgentWebhook(req, await requireUserId(req));
   }
   const connectionCommandMatch = pathname.match(/^\/backend\/agents\/([^/]+)\/connection-command$/);
   if (req.method === 'POST' && connectionCommandMatch) {
-    return handleAgentConnectionCommand(req, decodeURIComponent(connectionCommandMatch[1]), requireUserId(req));
+    return handleAgentConnectionCommand(req, decodeURIComponent(connectionCommandMatch[1]), await requireUserId(req));
   }
   if (req.method === 'POST' && (pathname === '/backend/auth/signup' || pathname === '/backend/auth/signin')) {
     return handleAuth(pathname, req);
@@ -1265,27 +1304,30 @@ async function route(req) {
   if (req.method === 'POST' && pathname === '/backend/auth/oauth') {
     return handleOAuthAuth();
   }
+  if (req.method === 'POST' && pathname === '/backend/auth/signout') {
+    return handleSignOut(await requireUserId(req));
+  }
   if (req.method === 'POST' && pathname === '/backend/rpc/lookup_user_by_email') {
-    requireUserId(req);
+    await requireUserId(req);
     const body = await readBody(req);
     const lookupEmail = String(body?.lookup_email || '').trim().toLowerCase();
     const rows = await query('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
     return json({ data: rows, error: null });
   }
   if (req.method === 'GET' && pathname === '/backend/users/me') {
-    return handleGetMyProfile(requireUserId(req));
+    return handleGetMyProfile(await requireUserId(req));
   }
   if (req.method === 'PATCH' && pathname === '/backend/users/me') {
-    return handleUpdateMyProfile(req, requireUserId(req));
+    return handleUpdateMyProfile(req, await requireUserId(req));
   }
   if (req.method === 'POST' && pathname === '/backend/users/me/change-password') {
-    return handleChangeMyPassword(req, requireUserId(req));
+    return handleChangeMyPassword(req, await requireUserId(req));
   }
   if (req.method === 'POST' && pathname.startsWith('/backend/db/')) {
-    return handleDb(pathname, req, requireUserId(req));
+    return handleDb(pathname, req, await requireUserId(req));
   }
   if (req.method === 'GET' && pathname === '/backend/settings/secrets') {
-    const userId = requireUserId(req);
+    const userId = await requireUserId(req);
     const url = new URL(req.url);
     const workspaceId = String(url.searchParams.get('workspaceId') || '').trim() || null;
     // Managed secrets (ANTHROPIC_API_KEY etc.) require workspace manage rights.
@@ -1294,7 +1336,7 @@ async function route(req) {
     return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/settings/secrets') {
-    const userId = requireUserId(req);
+    const userId = await requireUserId(req);
     const body = await readBody(req);
     const workspaceId = String(body?.workspaceId || '').trim() || null;
     if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
@@ -1313,7 +1355,7 @@ async function route(req) {
     return json({ data: { keys }, error: null });
   }
   if (req.method === 'POST' && pathname === '/backend/ai-chat') {
-    const userId = requireUserId(req);
+    const userId = await requireUserId(req);
     const blocked = rateLimitBlock(aiChatRateLimiter, userId || clientIpFromRequest(req));
     if (blocked) return blocked;
     return handleAiChat(req, userId);
