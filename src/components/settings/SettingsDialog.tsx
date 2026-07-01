@@ -170,6 +170,14 @@ function GeneralPanel({
     setPathStatus(null);
   }, [workspace?.id, workspace?.local_path]);
 
+  const browsePath = async () => {
+    const picked = await window.electronAPI?.pickFolder();
+    if (picked) {
+      setPathDraft(picked);
+      setPathStatus(null);
+    }
+  };
+
   const inspectAndSave = async () => {
     if (!workspace || !pathDraft.trim()) return;
     setInspecting(true);
@@ -214,6 +222,11 @@ function GeneralPanel({
             placeholder="/Users/name/Documents/GitHub/project"
           />
           <InputGroupAddon align="inline-end">
+            {window.electronAPI && (
+              <InputGroupButton size="xs" variant="ghost" onClick={browsePath} disabled={!workspace}>
+                Browse
+              </InputGroupButton>
+            )}
             <InputGroupButton size="xs" onClick={inspectAndSave} disabled={!workspace || !pathDraft.trim() || inspecting}>
               {inspecting ? <Spinner data-icon="inline-start" /> : <Check data-icon="inline-start" />}
               Link

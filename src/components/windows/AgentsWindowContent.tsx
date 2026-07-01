@@ -144,10 +144,35 @@ export function AgentsWindowContent({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
+  const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || focusedAgent || agents[0] || null;
+
+  const presenceByAgent = new Map<string, AgentPresence>(
+    agents.map(agent => [
+      agent.id,
+      agentPresenceStatus(agent, connections.filter(connection => connection.agent_id === agent.id)),
+    ]),
+  );
+  const presenceCounts = AGENT_PRESENCE_FILTERS.reduce<Record<AgentPresence, number>>((acc, filter) => {
+    acc[filter.key] = 0;
+    return acc;
+  }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
+  presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
+  const visibleAgents = statusFilter.size === 0
+    ? agents
+    : agents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
+
+  const toggleStatusFilter = (key: AgentPresence) => {
+    setStatusFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   useEffect(() => {
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
@@ -280,6 +305,46 @@ export function AgentsWindowContent({
               </div>
             )}
 
+            {agents.length > 0 && (
+              <div className="agents-status-filter mb-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter(new Set())}
+                  aria-pressed={statusFilter.size === 0}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                    statusFilter.size === 0
+                      ? 'border-primary/60 bg-primary/15 text-foreground'
+                      : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                  )}
+                >
+                  All
+                  <span className="tabular-nums opacity-70">{agents.length}</span>
+                </button>
+                {AGENT_PRESENCE_FILTERS.map(filter => {
+                  const active = statusFilter.has(filter.key);
+                  return (
+                    <button
+                      key={filter.key}
+                      type="button"
+                      onClick={() => toggleStatusFilter(filter.key)}
+                      aria-pressed={active}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                        active
+                          ? 'border-primary/60 bg-primary/15 text-foreground'
+                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      )}
+                    >
+                      <span className={cn('size-1.5 rounded-full', filter.tone)} aria-hidden />
+                      {filter.label}
+                      <span className="tabular-nums opacity-70">{presenceCounts[filter.key]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {agents.length === 0 ? (
               <Empty className="h-full border-0">
                 <EmptyHeader>
@@ -290,9 +355,19 @@ export function AgentsWindowContent({
                   <EmptyDescription>Create an agent, copy its connection command, and run it where the daemon should execute.</EmptyDescription>
                 </EmptyHeader>
               </Empty>
+            ) : visibleAgents.length === 0 ? (
+              <Empty className="border-0 py-8">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Bot />
+                  </EmptyMedia>
+                  <EmptyTitle>No agents match</EmptyTitle>
+                  <EmptyDescription>No agents are {AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
             ) : (
               <ItemGroup className="gap-1">
-                {agents.map(agent => (
+                {visibleAgents.map(agent => (
                   <AgentRow
                     key={agent.id}
                     agent={agent}
@@ -1887,6 +1962,24 @@ function agentMatchesKey(agent: WorkspaceAgent, key: string) {
 function isAgentActive(agent: Pick<WorkspaceAgent, 'enabled'>) {
   return agent.enabled !== false;
 }
+
+type AgentPresence = 'busy' | 'idle' | 'disconnected' | 'inactive';
+
+// One mutually-exclusive presence per agent, derived from the enabled flag and
+// live daemon connections. Every agent lands in exactly one bucket.
+function agentPresenceStatus(agent: WorkspaceAgent, connections: AgentConnection[]): AgentPresence {
+  if (!isAgentActive(agent)) return 'inactive';
+  const live = connections.filter(connection => connection.status !== 'offline');
+  if (live.length === 0) return 'disconnected';
+  return live.some(connection => connection.status === 'busy') ? 'busy' : 'idle';
+}
+
+const AGENT_PRESENCE_FILTERS: Array<{ key: AgentPresence; label: string; tone: string }> = [
+  { key: 'busy', label: 'Busy', tone: 'bg-amber-500' },
+  { key: 'idle', label: 'Idle', tone: 'bg-emerald-500' },
+  { key: 'disconnected', label: 'Disconnected', tone: 'bg-muted-foreground/40' },
+  { key: 'inactive', label: 'Inactive', tone: 'bg-rose-500' },
+];
 
 function agentHandle(value: string) {
   return String(value || 'agent')
