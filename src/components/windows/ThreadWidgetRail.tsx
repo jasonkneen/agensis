@@ -99,6 +99,20 @@ export function ThreadWidgetRail({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
+  // Responsive: when the chat surface is too narrow for the cards to float
+  // without covering messages, hide the whole rail behind the reopen button.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [tooNarrow, setTooNarrow] = useState(false);
+  useEffect(() => {
+    const host = rootRef.current?.parentElement;
+    if (!host || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setTooNarrow(e.contentRect.width < 520);
+    });
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [sessionId, collapsed]);
+
   // Load the saved arrangement whenever the thread changes.
   useEffect(() => {
     if (!sessionId) return;
@@ -143,15 +157,17 @@ export function ThreadWidgetRail({
 
   if (!sessionId || !workspaceId) return null;
 
-  // Collapsed → a single floating reopen chip in the top-right corner.
-  if (collapsed) {
+  // Collapsed (manually, or forced because the surface is too narrow) → a
+  // single floating reopen chip in the top-right corner.
+  if (collapsed || tooNarrow) {
     return (
-      <div className="pointer-events-none absolute right-3 top-3 z-10">
+      <div ref={rootRef} className="pointer-events-none absolute right-3 top-3 z-10">
         <button
           type="button"
-          className="thread-widget-card pointer-events-auto flex size-8 items-center justify-center rounded-xl border border-black/5 bg-card text-muted-foreground transition-colors hover:text-foreground dark:border-white/10"
-          title="Show widgets"
+          className="thread-widget-card pointer-events-auto flex size-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          title={tooNarrow ? 'Widen the window to show widgets' : 'Show widgets'}
           aria-label="Show widgets"
+          disabled={tooNarrow}
           onClick={onToggleCollapsed}
         >
           <PanelRightOpen className="size-4" />
@@ -162,7 +178,7 @@ export function ThreadWidgetRail({
 
   return (
     // Click-through overlay pinned to the right gutter of the message surface.
-    <div className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-0 z-10 flex w-[300px] flex-col gap-2 overflow-hidden px-3 py-3">
+    <div ref={rootRef} className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-0 z-10 flex w-[272px] flex-col gap-2 overflow-hidden px-3 py-3">
       {/* one quiet collapse control, top-right — no panel chrome, no add UI */}
       <div className="flex shrink-0 items-center justify-end">
         <button
@@ -176,7 +192,7 @@ export function ThreadWidgetRail({
         </button>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto [grid-auto-flow:dense] [grid-auto-rows:150px]">
+      <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto [grid-auto-flow:dense] [grid-auto-rows:116px]">
         {widgets.map((w, index) => (
           <WidgetCard
             key={w.kind}
@@ -204,7 +220,7 @@ export function ThreadWidgetRail({
         {widgets.length === 0 && hasItems && (
           <button
             type="button"
-            className="pointer-events-auto col-span-2 rounded-xl border border-dashed border-border/60 p-3 text-center text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            className="pointer-events-auto col-span-2 rounded-lg border border-dashed border-border/60 p-3 text-center text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
             onClick={() => persist(DEFAULT_WIDGETS)}
           >
             Show widgets
@@ -258,7 +274,7 @@ function WidgetCard({
   return (
     <div
       className={cn(
-        'thread-widget thread-widget-card group/card pointer-events-auto relative flex flex-col overflow-hidden rounded-xl border border-black/5 bg-card transition-shadow dark:border-white/10',
+        'thread-widget thread-widget-card group/card pointer-events-auto relative flex flex-col overflow-hidden rounded-lg border border-border bg-card transition-shadow',
         layout.w === 2 ? 'col-span-2' : 'col-span-1',
         layout.h === 2 ? 'row-span-2' : 'row-span-1',
         isDragTarget && 'ring-2 ring-primary/60',

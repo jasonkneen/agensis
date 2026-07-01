@@ -1528,6 +1528,14 @@ export function ChatWindowContent({
               onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded
+              documents={documents}
+              agents={agents}
+              uploadedFiles={uploadedFiles ?? []}
+              canvasGroups={canvasGroups}
+              onUploadFiles={onUploadFiles}
+              composerProjectFiles={composerProjectFiles}
+              skillOptions={skillOptions}
+              toolOptions={toolOptions}
             />
           ) : (
             <ChannelSidePanel
@@ -3402,17 +3410,4 @@ function safeMessageText(value: unknown): string {
     }
   }
   return String(value);
-}
-
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
-  let idx = 0;
-  while (value >= 1024 && idx < units.length - 1) {
-    value /= 1024;
-    idx += 1;
-  }
-  return `${value >= 10 || idx === 0 ? Math.round(value) : value.toFixed(1)} ${units[idx]}`;
 }
