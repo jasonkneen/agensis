@@ -877,6 +877,29 @@ async function ensureRuntimeSchema() {
   } catch (error) {
     console.warn('[backend] activity_events idempotency index migration failed:', error.message || error);
   }
+
+  // M15 — enforce at most one ACTIVE (queued/running) job per (session, agent)
+  // so two concurrent triggers can't produce duplicate agent turns even across
+  // Fly instances (the in-process guard hasActiveBurstJob is per-process only).
+  // Dedupe any pre-existing duplicates first (keep the newest) so the unique
+  // index can be created; wrapped on its own so a failure never blocks boot,
+  // and the app stays correct via hasActiveBurstJob if the index isn't present.
+  try {
+    await db.unsafe(`
+      DELETE FROM agent_jobs a
+      USING agent_jobs b
+      WHERE a.status IN ('queued','running')
+        AND b.status IN ('queued','running')
+        AND a.session_id = b.session_id
+        AND a.agent_id = b.agent_id
+        AND (a.created_at < b.created_at OR (a.created_at = b.created_at AND a.ctid > b.ctid));
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_active_per_session_agent
+        ON agent_jobs (session_id, agent_id)
+        WHERE status IN ('queued','running');
+    `);
+  } catch (error) {
+    console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
+  }
 }
 
 function getDb() {
@@ -2115,6 +2138,28 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
   }
 }
 
+// Insert an agent_job, tolerating the partial unique index that enforces one
+// active job per (session, agent) (M15). A unique violation means a concurrent
+// trigger already created the turn's job (won the race), so we clean up the
+// just-created "Thinking" placeholder message (if any) and return null; callers
+// treat null like the pending path and stop the drain loop.
+async function insertActiveAgentJob(sql, params, placeholderMessageId = null) {
+  try {
+    return await getDb().unsafe(sql, params);
+  } catch (error) {
+    if (error && error.code === '23505') {
+      if (placeholderMessageId) {
+        try {
+          const del = await getDb().unsafe('delete from messages where id = $1 returning *', [placeholderMessageId]);
+          if (del.length > 0) notifyDbSubscribers('messages', 'DELETE', del);
+        } catch { /* best effort placeholder cleanup */ }
+      }
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function hasActiveBurstJob(sessionId, agentId) {
   // Include 'queued', not just 'running': an MCP-backed agent's job sits in
   // 'queued' until its client polls and claims it, so two rapid triggers for the
@@ -2155,7 +2200,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     );
     notifyDbSubscribers('messages', 'INSERT', pendingRows);
     const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
-    const jobRows = await getDb().unsafe(
+    const jobRows = await insertActiveAgentJob(
       `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
        values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
        returning *`,
@@ -2166,18 +2211,21 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
         // would double-encode into a jsonb STRING scalar and the SQL key lookup returns null.
         { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' },
       ],
+      responseMessageId,
     );
+    if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
     notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
     return { ok: true, pending: true }; // a polling client will claim it; conversation resumes on submit
   }
 
   if (runMode === 'builtin') {
-    const jobRows = await getDb().unsafe(
+    const jobRows = await insertActiveAgentJob(
       `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, started_at, metadata)
        values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
        returning *`,
       [workspaceId, agent.id, sessionId, createdBy, '', JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin' })],
     );
+    if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
     notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
     try {
       const responseText = await runAnthropicCompletion({
@@ -2248,7 +2296,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
   const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
-  const jobRows = await getDb().unsafe(
+  const jobRows = await insertActiveAgentJob(
     `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
      returning *`,
@@ -2261,7 +2309,9 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
       daemonPrompt,
       JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' }),
     ],
+    responseMessageId,
   );
+  if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => {});
   const agentPayload = agentRuntimePayload(agent);
@@ -5474,6 +5524,7 @@ module.exports = {
     authorizeRealtimeBroadcast,
     revokeRealtimeAccessForMember,
     registerTestWebsocketClient,
+    insertActiveAgentJob,
     buildWhereClause,
     capabilityForDbOperation,
     canManageWorkspace,
