@@ -992,10 +992,16 @@ function buildOrderClause(orderBy) {
 }
 
 function mapDbError(error) {
+  // Never return Postgres `detail` to clients — it can contain stored column
+  // values and schema internals (e.g. the row that violated a unique/foreign-key
+  // constraint). Log it server-side and expose only the message + SQLSTATE code.
+  // (L2, 2026-07 review.)
+  if (error?.detail) {
+    console.error('[db-error]', { code: error.code, detail: error.detail, message: error.message });
+  }
   return {
     message: error?.message || 'Database error',
     code: error?.code || null,
-    detail: error?.detail || null,
   };
 }
 

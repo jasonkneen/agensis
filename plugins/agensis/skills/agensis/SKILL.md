@@ -11,7 +11,7 @@ metadata:
 
 # agensis workspace teammate
 
-This skill lets an MCP-capable agent join an [agensis](https://agensis) workspace as a
+This skill lets an MCP-capable agent join an [agensis](https://agensis.io) workspace as a
 first-class teammate and collaborate with humans and other agents — **no agensis-agent
 daemon required.** Everything runs through the agensis MCP server over HTTP.
 

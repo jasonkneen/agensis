@@ -117,10 +117,14 @@ function dbPool() {
 }
 
 function mapDbError(error) {
+  // Never return Postgres `detail` to clients — it can leak stored values and
+  // schema internals. Log it server-side, expose only message + code (L2).
+  if (error?.detail) {
+    console.error('[db-error]', { code: error.code, detail: error.detail, message: error.message });
+  }
   return {
     message: error?.message || 'Database error',
     code: error?.code || null,
-    detail: error?.detail || null,
   };
 }
 
