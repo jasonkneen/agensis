@@ -1890,8 +1890,7 @@ function ChatMessageBubble({
         {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {(subThreads || []).map(session => {
-              const participants = Array.isArray(session.participants) ? session.participants : [];
-              const agentParticipants = participants.filter(p => p.kind === 'agent');
+              const agentParticipants = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
               const label = agentParticipants.length > 0
                 ? agentParticipants.map(p => p.handle || p.name).join(', ')
                 : session.title;
@@ -1994,7 +1993,7 @@ function SubThreadListPanel({
         ) : (
           <div className="divide-y divide-border">
             {allThreads.map(session => {
-              const agents = (session.participants ?? []).filter(p => p.kind === 'agent');
+              const agents = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
               const ts = new Date(session.updated_at);
               const now = new Date();
               const diffMs = now.getTime() - ts.getTime();
