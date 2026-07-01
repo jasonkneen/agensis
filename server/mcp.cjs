@@ -326,6 +326,9 @@ function buildTools() {
       additionalProperties: false,
     },
     async run(args, { db, identity, deps }) {
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot create channels');
+      }
       const title = requireString(args, 'title');
       const folder = typeof args?.folder === 'string' && args.folder.trim() ? args.folder.trim() : 'General';
       const mode = args?.conversation_mode === 'auto' ? 'auto' : 'mention';
@@ -402,6 +405,9 @@ function buildTools() {
       additionalProperties: false,
     },
     async run(args, { db, identity, deps }) {
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot create or modify documents');
+      }
       const docId = typeof args?.doc_id === 'string' && args.doc_id.trim() ? args.doc_id.trim() : null;
       const content = typeof args?.content === 'string' ? args.content : null;
       if (docId) {
@@ -503,6 +509,9 @@ function buildTools() {
       additionalProperties: false,
     },
     async run(args, { db, identity, deps }) {
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot create tasks');
+      }
       const title = requireString(args, 'title');
       const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : 'todo';
       const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : 'normal';
@@ -539,6 +548,9 @@ function buildTools() {
       additionalProperties: false,
     },
     async run(args, { db, identity, deps }) {
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot modify tasks');
+      }
       const taskId = requireString(args, 'task_id');
       const existing = await db.unsafe(
         'select id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
@@ -707,6 +719,9 @@ function buildTools() {
       additionalProperties: false,
     },
     async run(args, { db, identity, deps }) {
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot add memory');
+      }
       const fact = requireString(args, 'fact');
       const category = typeof args?.category === 'string' && args.category.trim() ? args.category.trim() : 'general';
       const rows = await db.unsafe(

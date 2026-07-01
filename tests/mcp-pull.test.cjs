@@ -40,8 +40,8 @@ test.afterEach(() => resetTestState());
 // --- invite-token auth (the ONE link) --------------------------------------
 
 test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
-  use([{ match: /from workspace_invites where token = \$1 and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com' }] }]);
-  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true });
+  use([{ match: /from workspace_invites where token = \$1 and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
+  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
 });
 
 test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {
