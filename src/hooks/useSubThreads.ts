@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { backendClient, apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { messageText } from '../lib/chatStream';
+import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
 import type { ChatSession, Message } from '../types';
 
 export function useSubThreads(workspaceId: string | null) {
@@ -296,37 +296,44 @@ export function useSubThreads(workspaceId: string | null) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullContent = '';
+        let streamError = '';
         let buffer = '';
 
+        // Use the shared parser: the /backend/ai-chat stream frames are
+        // { delta: { text } } (not choices[].delta.content), so the old shape
+        // yielded blank replies and persisted an empty message (M13).
         const consume = (data: string) => {
           if (data === '[DONE]') return;
           try {
-            const parsed = JSON.parse(data);
-            const text = parsed?.choices?.[0]?.delta?.content || parsed?.text || '';
+            const { text, error } = parseAiStreamPayload(JSON.parse(data));
+            if (error) { streamError = error; return; }
             if (text) {
               fullContent += text;
               setSubThreadMessages(prev => prev.map(m =>
                 m.id === assistantMsgId ? { ...m, content: fullContent } : m));
             }
-          } catch { /* ignore */ }
+          } catch { /* ignore malformed frame */ }
         };
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (line.startsWith('data: ')) consume(line.slice(6).trim());
-          }
+          const { data, remainder } = extractSseDataLines(buffer);
+          buffer = remainder;
+          for (const line of data) consume(line);
         }
+        // Flush any trailing partial line left in the buffer.
+        for (const line of extractSseDataLines(buffer, true).data) consume(line);
 
+        const finalContent = finalAssistantStreamContent(fullContent, streamError);
+        setSubThreadMessages(prev => prev.map(m =>
+          m.id === assistantMsgId ? { ...m, content: finalContent } : m));
         await backendClient.from('messages').insert({
           id: assistantMsgId,
           session_id: activeSubThread.id,
           role: 'assistant',
-          content: fullContent,
+          content: finalContent,
         });
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
