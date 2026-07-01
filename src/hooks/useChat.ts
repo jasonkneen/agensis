@@ -48,7 +48,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
         .order('created_at', { ascending: true });
       return data;
     });
-    if (data) setMessages(data.map(normalizeMessage));
+    // Drop soft-deleted messages (a cleared/closed DM retains its rows in the DB
+    // but they must never re-surface). Server read paths filter too; this covers
+    // the generic table-select the client uses.
+    if (data) setMessages(data.filter(m => !m.deleted_at).map(normalizeMessage));
     setLoading(false);
   }, []);
 
@@ -173,7 +176,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     // Copy only top-level messages (not in-session sub-thread replies). The
     // backendClient query builder has no `.is()`, so filter client-side exactly
     // like the main view does (see topLevelMessages below).
-    const topLevel = (sourceMessages || []).filter(m => !m.thread_parent_id);
+    const topLevel = ((sourceMessages || []) as Message[]).filter(m => !m.thread_parent_id);
     if (topLevel.length > 0) {
       const copies = topLevel.map(m => {
         const row: Record<string, unknown> = {
@@ -652,6 +655,23 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     }
   }, [activeSession]);
 
+  // Clear + close a conversation: soft-delete every message in the thread AND
+  // soft-delete (close) the session, in one action. Nothing is hard-deleted —
+  // both the messages and the session keep their rows (stamped deleted_at) so the
+  // data is retained, but they're filtered out of every read path (sidebar, DM
+  // resolution, message fetch, agent search/digest/context). Used by the DM row's
+  // "Delete conversation" action.
+  const closeAndClearSession = useCallback(async (id: string) => {
+    const stamp = new Date().toISOString();
+    await backendClient.from('messages').update({ deleted_at: stamp }).eq('session_id', id);
+    await backendClient.from('chat_sessions').update({ deleted_at: stamp }).eq('id', id);
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSession?.id === id) {
+      setActiveSession(null);
+      setMessages([]);
+    }
+  }, [activeSession]);
+
   return {
     sessions,
     activeSession,
@@ -671,6 +691,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     archiveSession,
     sendMessage,
     deleteSession,
+    closeAndClearSession,
     mergeSession,
   };
 }

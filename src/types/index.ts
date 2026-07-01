@@ -75,6 +75,7 @@ export interface Message {
   sender_name?: string | null;
   pinned?: boolean;
   reactions?: Record<string, string[]>;
+  deleted_at?: string | null;
   created_at: string;
 }
 

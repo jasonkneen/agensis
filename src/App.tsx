@@ -580,7 +580,7 @@ function AppContent() {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, mergeSession,
+    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
   } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
 
   const {
@@ -1149,6 +1149,18 @@ function AppContent() {
     toast.success('Merged — reconciling both branches into the parent', { id: pending });
   }, [mergeSession, handleSessionOpen]);
 
+  // Delete a DM conversation: soft-delete all its messages, close (soft-delete)
+  // the session, and close any open chat window pointing at it — "close the
+  // thread" has to shut the actual window, not just drop the sidebar row, or the
+  // user is left staring at a dead/empty chat pane. Everything is soft-deleted;
+  // the data is retained for later use.
+  const handleDeleteDm = useCallback(async (session: ChatSession) => {
+    const pending = toast.loading(`Deleting “${session.title || 'conversation'}”…`);
+    await closeAndClearSession(session.id);
+    windows.filter(w => w.sessionId === session.id).forEach(w => closeWindow(w.id));
+    toast.success('Conversation deleted and closed', { id: pending });
+  }, [closeAndClearSession, windows, closeWindow]);
+
   const handleAgentDirectMessage = useCallback(async (agent: { id: string; agentId?: string | null; name: string; handle: string | null }) => {
     const handle = agent.handle?.trim().replace(/^@+/, '') || '';
     const agentId = agent.agentId || agent.id || null;
@@ -1395,6 +1407,7 @@ function AppContent() {
         onSessionUpdate={updateSession}
         onSessionArchive={archiveSession}
         onSessionDelete={deleteSession}
+        onDirectMessageDelete={handleDeleteDm}
         onSessionSplit={handleSplitThread}
         onSessionMerge={handleMergeThread}
         onOpenMemory={handleOpenMemory}
@@ -2339,7 +2352,11 @@ function ReadOnlyChatWindowContent({
       .order('created_at', { ascending: true })
       .then((result: { data: ChatMessage[] | null }) => {
         const { data } = result;
-        if (!cancelled && data) setRemoteMessages(data as ChatMessage[]);
+        // Drop soft-deleted rows so a cleared conversation can't linger in a
+        // second open tab that hasn't yet closed the window.
+        if (!cancelled && data) {
+          setRemoteMessages(data.filter(m => !(m as { deleted_at?: string | null }).deleted_at) as ChatMessage[]);
+        }
       });
 
     return () => {

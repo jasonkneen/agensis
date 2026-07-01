@@ -681,7 +681,9 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
+    CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
 
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -1833,7 +1835,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
     ? await getDb().unsafe(
         `select id, role, content, sender_kind, sender_id, sender_name, created_at
          from messages
-         where session_id = $1 and (id = $2 or thread_parent_id = $2)
+         where session_id = $1 and (id = $2 or thread_parent_id = $2) and deleted_at is null
          order by created_at desc
          limit $3`,
         [sessionId, threadParentId, limit],
@@ -1841,7 +1843,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
     : await getDb().unsafe(
         `select id, role, content, sender_kind, sender_id, sender_name, created_at
          from messages
-         where session_id = $1 and thread_parent_id is null
+         where session_id = $1 and thread_parent_id is null and deleted_at is null
          order by created_at desc
          limit $2`,
         [sessionId, limit],
@@ -1893,6 +1895,7 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
          and m.sender_kind = 'agent' and m.sender_id = $2
          and m.session_id <> $3
          and m.content !~ '^Thinking '
+         and m.deleted_at is null and s.deleted_at is null
        order by m.session_id, m.created_at desc`,
       [workspaceId, String(agentId), currentSessionId || ''],
     );

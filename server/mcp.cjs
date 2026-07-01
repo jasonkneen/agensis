@@ -205,6 +205,7 @@ function buildTools() {
            from messages m
            join chat_sessions s on s.id = m.session_id
           where s.workspace_id = $1 and m.content ilike $2
+            and m.deleted_at is null and s.deleted_at is null
           order by m.created_at desc limit $3`,
         [identity.workspaceId, `%${query}%`, limit],
       );

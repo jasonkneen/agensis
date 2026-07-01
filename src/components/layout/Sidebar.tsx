@@ -99,6 +99,7 @@ interface SidebarProps {
   onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
   onSessionArchive?: (id: string, archived?: boolean) => void;
   onSessionDelete?: (id: string) => void;
+  onDirectMessageDelete?: (session: ChatSession) => void;
   onSessionSplit?: (session: ChatSession) => void;
   onSessionMerge?: (session: ChatSession) => void;
   onOpenMemory: () => void;
@@ -141,6 +142,7 @@ export function Sidebar({
   onSessionUpdate,
   onSessionArchive,
   onSessionDelete,
+  onDirectMessageDelete,
   onSessionSplit,
   onSessionMerge,
   onOpenMemory,
@@ -583,6 +585,7 @@ export function Sidebar({
                     onProfile={() => onAgentProfile?.(agent)}
                     onCopyMention={() => copyAgentMention(agent)}
                     onToggleFavorite={() => toggleAgentFavorite(agent)}
+                    onDelete={agent.session && onDirectMessageDelete ? () => onDirectMessageDelete(agent.session!) : undefined}
                   />
                   {agent.session && renderDmForks(agent.session.id, 1)}
                 </React.Fragment>
@@ -968,6 +971,7 @@ function DirectAgentRow({
   onProfile,
   onCopyMention,
   onToggleFavorite,
+  onDelete,
 }: {
   agent: SidebarMessageTarget;
   favorite: boolean;
@@ -975,6 +979,7 @@ function DirectAgentRow({
   onProfile: () => void;
   onCopyMention: () => void;
   onToggleFavorite: () => void;
+  onDelete?: () => void;
 }) {
   const handle = normalizeHandle(agent.handle);
   const status = agent.status || 'offline';
@@ -1046,6 +1051,18 @@ function DirectAgentRow({
             <Star data-icon="inline-start" />
             {favorite ? 'Remove favorite' : 'Add to favorites'}
           </DropdownMenuItem>
+          {onDelete && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => onDelete()}
+              >
+                <Trash2 data-icon="inline-start" />
+                Delete conversation
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
