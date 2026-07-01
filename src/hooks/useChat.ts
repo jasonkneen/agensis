@@ -537,9 +537,26 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     const userMsg = await insertUserMessage(session, content, threadParentId);
     await autoTitleSession(session, content, threadParentId);
 
-    const contextMessages = threadParentId
-      ? messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId)
-      : activeSession?.id === session.id ? messages : [];
+    let contextMessages: Message[];
+    if (threadParentId) {
+      contextMessages = messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId);
+    } else if (activeSession?.id === session.id) {
+      contextMessages = messages;
+    } else {
+      // Sending to a session other than the one on screen (e.g. a split window):
+      // the `messages` state only holds the active session, so load the target's
+      // own top-level history rather than sending the agent empty context (L5,
+      // 2026-07 review). Don't touch `messages` state (it belongs to the active
+      // session); exclude the just-inserted message since dispatch appends it.
+      const { data } = await backendClient
+        .from('messages')
+        .select('*')
+        .eq('session_id', session.id)
+        .order('created_at', { ascending: true });
+      contextMessages = (data || [])
+        .filter((m: Message) => !m.deleted_at && !m.thread_parent_id && m.id !== userMsg.id)
+        .map(normalizeMessage);
+    }
 
     const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
 
