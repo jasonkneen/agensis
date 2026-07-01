@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS app_users (
   password_hash text NOT NULL,
   display_name text DEFAULT '',
   accent_color text DEFAULT '',
+  -- Plan 005: bumped on sign-out / password change to invalidate every
+  -- outstanding session token for this user (embedded in the token; verifyToken
+  -- rejects a token whose embedded version no longer matches this column).
+  token_version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now()
 );
 

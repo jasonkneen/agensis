@@ -215,23 +215,67 @@ async function getAuthSecret() {
   return cachedAuthSecret;
 }
 
-async function issueToken(userId) {
+// Token revocation: `token_version` is a per-user counter stored on app_users.
+// A token embeds the version that was current when it was issued; verifyToken
+// rejects any token whose embedded version no longer matches the user's CURRENT
+// version. Bumping the version (on sign-out or password change) invalidates
+// every outstanding token for that user in one shot.
+//
+// verifyToken is a hot path (called on every authenticated HTTP request and
+// every WebSocket auth frame) and used to be pure in-process HMAC verification
+// with zero I/O. A per-request DB lookup for token_version would turn every
+// authenticated request into a DB round trip, so lookups are served from a
+// short-TTL in-process cache instead — this bounds revocation to "takes effect
+// within TOKEN_VERSION_CACHE_TTL_MS", not instant, in exchange for bounded DB
+// load. No eviction beyond TTL expiry (an unbounded Map at very large scale);
+// fine for this app's expected size, revisit if that ever changes.
+const tokenVersionCache = new Map(); // userId -> { version, expiresAt }
+const TOKEN_VERSION_CACHE_TTL_MS = 10_000; // 10s: bounds staleness of revocation, bounds DB load
+
+async function getCachedTokenVersion(userId) {
+  const now = Date.now();
+  const cached = tokenVersionCache.get(userId);
+  if (cached && cached.expiresAt > now) return cached.version;
+  const rows = await getDb().unsafe('select token_version from app_users where id = $1 limit 1', [userId]);
+  const version = rows[0] ? String(rows[0].token_version) : null;
+  tokenVersionCache.set(userId, { version, expiresAt: now + TOKEN_VERSION_CACHE_TTL_MS });
+  return version;
+}
+
+// Called immediately after THIS process bumps a user's token_version (sign-out,
+// password change) so revocation is instant on the instance that just did the
+// write, instead of waiting out the stale cache entry's remaining TTL. Other
+// instances in a multi-instance deploy still only pick up the change within
+// TOKEN_VERSION_CACHE_TTL_MS — see the maintenance notes on the plan for that
+// accepted trade-off.
+function setCachedTokenVersion(userId, version) {
+  tokenVersionCache.set(userId, { version: String(version), expiresAt: Date.now() + TOKEN_VERSION_CACHE_TTL_MS });
+}
+
+async function issueToken(userId, tokenVersion) {
   const secret = await getAuthSecret();
-  const sig = crypto.createHmac('sha256', secret).update(String(userId)).digest('base64url');
-  return `${userId}.${sig}`;
+  const payload = `${userId}.${tokenVersion}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
 }
 
 async function verifyToken(token) {
   if (!token || typeof token !== 'string') return null;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return null;
-  const userId = token.slice(0, dot);
+  const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
+  const [userId, tokenVersionStr] = payload.split('.');
+  if (!userId || !tokenVersionStr) return null;
   const secret = await getAuthSecret();
-  const expected = crypto.createHmac('sha256', secret).update(userId).digest('base64url');
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  // Check the signed version still matches the user's CURRENT version in the DB
+  // (via the short-TTL cache above) — a stale/rolled-back/revoked token fails here.
+  const currentVersion = await getCachedTokenVersion(userId);
+  if (currentVersion === null || currentVersion !== tokenVersionStr) return null;
   return userId;
 }
 
@@ -503,6 +547,7 @@ async function ensureRuntimeSchema() {
   await db.unsafe(`
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
 
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS local_path text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
@@ -4481,12 +4526,13 @@ function createApp() {
       if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));
 
       const rows = await getDb().unsafe(
-        'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at',
+        'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at, token_version',
         [email, await createPasswordHash(password)],
       );
 
-      const user = rows[0];
-      res.json({ data: { user, token: await issueToken(user.id) }, error: null });
+      const row = rows[0];
+      const user = { id: row.id, email: row.email, display_name: row.display_name, accent_color: row.accent_color, created_at: row.created_at };
+      res.json({ data: { user, token: await issueToken(user.id, row.token_version) }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
     }
@@ -4503,14 +4549,14 @@ function createApp() {
       // whatever password they already have.
       if (rateLimitBlocked(res, signinRateLimiter, `signin:${email}`)) return;
 
-      const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
+      const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
       if (!user || !(await verifyPassword(password, user.password_hash))) return jsonError(res, 401, new Error('Invalid email or password'));
 
       res.json({
         data: {
           user: { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at },
-          token: await issueToken(user.id),
+          token: await issueToken(user.id, user.token_version),
         },
         error: null,
       });
@@ -4586,7 +4632,35 @@ function createApp() {
         return jsonError(res, 401, new Error('Current password is incorrect'));
       }
 
-      await getDb().unsafe('update app_users set password_hash = $2 where id = $1', [req.userId, await createPasswordHash(newPassword)]);
+      // Bumping token_version invalidates EVERY outstanding token for this user,
+      // including the one used to make this very request — a leaked/stolen token
+      // is dead the moment the real owner changes their password. Issue a fresh
+      // token below so the caller's own session survives without a forced
+      // re-login; a stolen token has no way to learn the new version.
+      const updated = await getDb().unsafe(
+        'update app_users set password_hash = $2, token_version = token_version + 1 where id = $1 returning token_version',
+        [req.userId, await createPasswordHash(newPassword)],
+      );
+      const newVersion = updated[0]?.token_version;
+      setCachedTokenVersion(req.userId, newVersion);
+      const token = await issueToken(req.userId, newVersion);
+      res.json({ data: { ok: true, token }, error: null });
+    } catch (error) {
+      jsonError(res, 500, error);
+    }
+  });
+
+  // Real server-side sign-out: bumps token_version so the calling token (and
+  // every other outstanding token for this user) is rejected by verifyToken on
+  // its next use. Previously "sign out" was purely client-side (localStorage
+  // clear), which never revoked anything — a captured token stayed valid forever.
+  app.post('/backend/auth/signout', requireAuth, async (req, res) => {
+    try {
+      const updated = await getDb().unsafe(
+        'update app_users set token_version = token_version + 1 where id = $1 returning token_version',
+        [req.userId],
+      );
+      if (updated[0]) setCachedTokenVersion(req.userId, updated[0].token_version);
       res.json({ data: { ok: true }, error: null });
     } catch (error) {
       jsonError(res, 500, error);
@@ -5076,6 +5150,7 @@ function setTestDb(nextDb) {
   db = nextDb;
   cachedAuthSecret = null;
   cachedAuthSecretSource = '';
+  tokenVersionCache.clear();
 }
 
 function resetTestState() {
@@ -5084,6 +5159,7 @@ function resetTestState() {
   cachedAuthSecretSource = '';
   websocketClients = new Set();
   envLoaded = false;
+  tokenVersionCache.clear();
 }
 
 module.exports = {
@@ -5107,6 +5183,10 @@ module.exports = {
     roleHasWorkspaceCapability,
     setTestDb,
     verifyToken,
+    // Token revocation cache — exposed so tests can assert the cache is real
+    // (not a no-op) without hardcoding its TTL.
+    TOKEN_VERSION_CACHE_TTL_MS,
+    getCachedTokenVersion,
     workspaceIdFromRealtimeChannel,
     // MCP connect-a-client model — exercised against a fake DB.
     verifyInviteToken,

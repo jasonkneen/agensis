@@ -1,38 +1,66 @@
 const test = require('node:test');
+const { mock } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const crypto = require('node:crypto');
 const { createApp, __test } = require('../server/index.cjs');
 
 function eq(column, value) {
   return { column, operator: 'eq', value };
 }
 
-function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, appSettings = {}, authSecret = 'test-secret', appUsers = {} } = {}) {
+// In-memory app_users table — supports both the signup/signin/change-password
+// routes (plan 004, keyed by email) and token_version-revocation tests (plan
+// 005, keyed by userId with a lazy '1' default so every pre-existing
+// `__test.issueToken(id, '1')` call in the RBAC/settings tests above keeps
+// working without seeding a row). Both `appUsers` (email -> partial record)
+// and `users` (id -> partial record) seed the SAME underlying store, since
+// every authenticated request now round-trips through token_version
+// (verifyToken), not just the auth-specific routes.
+function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, appSettings = {}, authSecret = 'test-secret', appUsers = {}, users = {} } = {}) {
   const secretRows = { ...workspaceSecrets };
   const settingRows = { ...appSettings };
   if (authSecret) settingRows.AUTH_SECRET = authSecret;
 
-  // In-memory app_users table — supports the auth routes (signup/signin/
-  // change-password) exercised by the plan-004 auth-hardening tests below.
-  const usersById = new Map();
+  const userRows = {}; // id -> { id, email, password_hash, display_name, accent_color, created_at, token_version }
   const userIdByEmail = new Map();
   let nextUserId = 1;
   for (const [email, record] of Object.entries(appUsers)) {
     const id = record.id || `user-${nextUserId++}`;
-    usersById.set(id, {
+    userRows[id] = {
       id,
       email,
       password_hash: record.password_hash || '',
       display_name: record.display_name || '',
       accent_color: record.accent_color || '',
       created_at: record.created_at || new Date().toISOString(),
-    });
+      token_version: String(record.token_version ?? 1),
+    };
     userIdByEmail.set(email, id);
+  }
+  for (const [id, config] of Object.entries(users)) {
+    const existing = userRows[id];
+    userRows[id] = {
+      id,
+      email: existing?.email || config.email || '',
+      password_hash: config.password_hash ?? existing?.password_hash ?? null,
+      display_name: existing?.display_name || '',
+      accent_color: existing?.accent_color || '',
+      created_at: existing?.created_at || new Date().toISOString(),
+      token_version: String(config.token_version ?? existing?.token_version ?? 1),
+    };
+    if (userRows[id].email) userIdByEmail.set(userRows[id].email, id);
+  }
+  function getUserRow(id) {
+    if (!userRows[id]) {
+      userRows[id] = { id, email: '', password_hash: null, display_name: '', accent_color: '', created_at: new Date().toISOString(), token_version: '1' };
+    }
+    return userRows[id];
   }
 
   return {
     calls: [],
-    users: usersById,
+    userRows, // exposed so a test can bump/mutate token_version "out of band" (bypassing the app) to test cache staleness
     async unsafe(sql, params = []) {
       const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       this.calls.push({ sql, params });
@@ -93,27 +121,39 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
           display_name: '',
           accent_color: '',
           created_at: new Date().toISOString(),
+          token_version: '1',
         };
-        usersById.set(id, user);
+        userRows[id] = user;
         userIdByEmail.set(params[0], id);
-        return [{ id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at }];
+        return [{ id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at, token_version: user.token_version }];
       }
 
-      if (normalized.startsWith('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1')) {
+      if (normalized.startsWith('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1')) {
         const id = userIdByEmail.get(params[0]);
-        const user = id ? usersById.get(id) : null;
+        const user = id ? userRows[id] : null;
         return user ? [user] : [];
       }
 
-      if (normalized.startsWith('select id, password_hash from app_users where id = $1 limit 1')) {
-        const user = usersById.get(params[0]);
-        return user ? [{ id: user.id, password_hash: user.password_hash }] : [];
+      if (normalized.startsWith('select token_version from app_users where id = $1')) {
+        return [{ token_version: getUserRow(params[0]).token_version }];
       }
 
-      if (normalized.startsWith('update app_users set password_hash = $2 where id = $1')) {
-        const user = usersById.get(params[0]);
-        if (user) user.password_hash = params[1];
-        return [];
+      if (normalized.startsWith('select id, password_hash from app_users where id = $1')) {
+        const row = getUserRow(params[0]);
+        return row.password_hash ? [{ id: params[0], password_hash: row.password_hash }] : [];
+      }
+
+      if (normalized.startsWith('update app_users set password_hash = $2, token_version = token_version + 1 where id = $1')) {
+        const row = getUserRow(params[0]);
+        row.password_hash = params[1];
+        row.token_version = String(Number(row.token_version) + 1);
+        return [{ token_version: row.token_version }];
+      }
+
+      if (normalized.startsWith('update app_users set token_version = token_version + 1 where id = $1')) {
+        const row = getUserRow(params[0]);
+        row.token_version = String(Number(row.token_version) + 1);
+        return [{ token_version: row.token_version }];
       }
 
       const workspaceLookup = normalized.match(/^select workspace_id from "?([a-z_]+)"? where id = \$1 limit 1/);
@@ -338,7 +378,7 @@ test('realtime workspace table subscriptions require own user or readable worksp
 test('issued auth tokens verify against the persisted auth secret', async () => {
   installDb({ authSecret: 'fixed-test-secret' });
 
-  const token = await __test.issueToken('user-1');
+  const token = await __test.issueToken('user-1', '1');
   assert.equal(await __test.verifyToken(token), 'user-1');
   assert.equal(await __test.verifyToken(`${token}tampered`), null);
 });
@@ -354,11 +394,12 @@ test('AUTH_SECRET env var takes precedence over the DB-persisted secret', async 
     __test.resetTestState();
     installDb({ authSecret: 'db-fallback-secret' });
 
-    const token = await __test.issueToken('user-1');
+    const token = await __test.issueToken('user-1', '1');
     assert.equal(await __test.verifyToken(token), 'user-1');
     // A token signed with the DB secret must NOT verify once env is authoritative.
-    const dbSig = require('crypto').createHmac('sha256', 'db-fallback-secret').update('user-1').digest('base64url');
-    assert.equal(await __test.verifyToken(`user-1.${dbSig}`), null);
+    const dbPayload = 'user-1.1';
+    const dbSig = require('crypto').createHmac('sha256', 'db-fallback-secret').update(dbPayload).digest('base64url');
+    assert.equal(await __test.verifyToken(`${dbPayload}.${dbSig}`), null);
   } finally {
     if (prev === undefined) delete process.env.AUTH_SECRET;
     else process.env.AUTH_SECRET = prev;
@@ -376,9 +417,9 @@ test('AGENSIS_AUTH_SECRET env var is preferred over AUTH_SECRET', async () => {
     __test.resetTestState();
     installDb({ authSecret: 'db-fallback-secret' });
 
-    const token = await __test.issueToken('user-1');
-    const expectedSig = require('crypto').createHmac('sha256', 'agensis-pref').update('user-1').digest('base64url');
-    assert.equal(token, `user-1.${expectedSig}`);
+    const token = await __test.issueToken('user-1', '1');
+    const expectedSig = require('crypto').createHmac('sha256', 'agensis-pref').update('user-1.1').digest('base64url');
+    assert.equal(token, `user-1.1.${expectedSig}`);
     assert.equal(await __test.verifyToken(token), 'user-1');
   } finally {
     if (prevA === undefined) delete process.env.AGENSIS_AUTH_SECRET;
@@ -399,7 +440,7 @@ test('falls back to DB-persisted secret when no env secret is configured', async
     __test.resetTestState();
     installDb({ authSecret: 'db-only-secret' });
 
-    const token = await __test.issueToken('user-1');
+    const token = await __test.issueToken('user-1', '1');
     assert.equal(await __test.verifyToken(token), 'user-1');
   } finally {
     if (prevA !== undefined) process.env.AGENSIS_AUTH_SECRET = prevA;
@@ -415,7 +456,7 @@ test('settings secrets route requires authentication and supports app-level secr
     const unauthenticated = await fetch(`${baseUrl}/backend/settings/secrets?workspaceId=ws-1`);
     assert.equal(unauthenticated.status, 401);
 
-    const token = await __test.issueToken('user-1');
+    const token = await __test.issueToken('user-1', '1');
     const appLevel = await authedFetch(baseUrl, token, '/backend/settings/secrets');
     const body = await appLevel.json();
     assert.equal(appLevel.status, 200);
@@ -437,11 +478,11 @@ test('settings secrets route is owner/admin only', async () => {
   });
 
   await withServer(async (baseUrl) => {
-    const editorToken = await __test.issueToken('user-editor');
+    const editorToken = await __test.issueToken('user-editor', '1');
     const editorResponse = await authedFetch(baseUrl, editorToken, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(editorResponse.status, 403);
 
-    const adminToken = await __test.issueToken('user-admin');
+    const adminToken = await __test.issueToken('user-admin', '1');
     const adminResponse = await authedFetch(baseUrl, adminToken, '/backend/settings/secrets?workspaceId=ws-1');
     const adminBody = await adminResponse.json();
     assert.equal(adminResponse.status, 200);
@@ -458,7 +499,7 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-admin');
+    const token = await __test.issueToken('user-admin', '1');
     const response = await authedFetch(baseUrl, token, '/backend/settings/secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -486,7 +527,7 @@ test('ai-chat requires workspace id and run_agents capability before using AI ke
   });
 
   await withServer(async (baseUrl) => {
-    const editorToken = await __test.issueToken('user-editor');
+    const editorToken = await __test.issueToken('user-editor', '1');
     const missingWorkspace = await authedFetch(baseUrl, editorToken, '/backend/ai-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -494,7 +535,7 @@ test('ai-chat requires workspace id and run_agents capability before using AI ke
     });
     assert.equal(missingWorkspace.status, 400);
 
-    const commenterToken = await __test.issueToken('user-commenter');
+    const commenterToken = await __test.issueToken('user-commenter', '1');
     const denied = await authedFetch(baseUrl, commenterToken, '/backend/ai-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -598,4 +639,131 @@ test('POST /backend/auth/signin rate-limits repeated failed attempts for the sam
     assert.equal(sixth.status, 429);
     assert.ok(sixth.headers.get('retry-after'));
   });
+});
+
+// ============================================================================
+// Plan 005 — token expiry and revocation.
+//
+// The token now embeds a `token_version` that must match the user's current
+// app_users.token_version. Bumping that counter (sign-out, password change)
+// invalidates every outstanding token for that user in one shot.
+// ============================================================================
+
+// Mirrors server/index.cjs's createPasswordHash format (`${salt}:${hash}`,
+// scrypt keylen 64) without needing to export it — lets a test seed a row with
+// a password that /backend/users/me/change-password can actually verify.
+function testPasswordHash(password) {
+  const salt = 'test-salt';
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+test('a token issued before a password change is rejected after the change; the returned fresh token keeps working', async () => {
+  const fakeDb = installDb({
+    authSecret: 'fixed-test-secret',
+    users: { 'user-1': { password_hash: testPasswordHash('correct horse battery staple'), token_version: 1 } },
+  });
+
+  await withServer(async (baseUrl) => {
+    const oldToken = await __test.issueToken('user-1', '1');
+
+    const before = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets');
+    assert.equal(before.status, 200);
+
+    const changeResponse = await authedFetch(baseUrl, oldToken, '/backend/users/me/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: 'correct horse battery staple', newPassword: 'new-password-123' }),
+    });
+    assert.equal(changeResponse.status, 200);
+    const changeBody = await changeResponse.json();
+    assert.equal(changeBody.data.ok, true);
+    const freshToken = changeBody.data.token;
+    assert.ok(freshToken, 'expected change-password to return a fresh token');
+
+    // The token used BEFORE the change (still the same physical string used to
+    // make the change-password call itself) must now be rejected.
+    const afterOldToken = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets');
+    assert.equal(afterOldToken.status, 401);
+
+    // The fresh token returned in the response keeps the session alive (no
+    // forced re-login) even though it embeds the bumped version.
+    const afterFreshToken = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets');
+    assert.equal(afterFreshToken.status, 200);
+
+    assert.equal(fakeDb.userRows['user-1'].token_version, '2');
+  });
+});
+
+test('POST /backend/auth/signout requires auth and invalidates the calling token immediately', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const unauthenticated = await fetch(`${baseUrl}/backend/auth/signout`, { method: 'POST' });
+    assert.equal(unauthenticated.status, 401);
+
+    const token = await __test.issueToken('user-1', '1');
+    const before = await authedFetch(baseUrl, token, '/backend/settings/secrets');
+    assert.equal(before.status, 200);
+
+    const signOutResponse = await authedFetch(baseUrl, token, '/backend/auth/signout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(signOutResponse.status, 200);
+    const signOutBody = await signOutResponse.json();
+    assert.equal(signOutBody.data.ok, true);
+
+    // Reusing the same token right after sign-out must fail immediately — this
+    // instance just wrote the bump itself, so there is no 10s cache window here
+    // (that window only applies to OTHER instances in a multi-instance deploy).
+    const afterSignOut = await authedFetch(baseUrl, token, '/backend/settings/secrets');
+    assert.equal(afterSignOut.status, 401);
+
+    // A fresh sign-in (a newly issued token for the bumped version) works again.
+    const freshToken = await __test.issueToken('user-1', '2');
+    const afterFresh = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets');
+    assert.equal(afterFresh.status, 200);
+  });
+});
+
+test('a token with a tampered tokenVersion segment (validly re-signed for that tampered payload) is rejected', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  // Simulates an attacker who holds a captured token and tries to forge a
+  // different version, correctly re-signing the (now different) payload with
+  // the same secret. Signature verification alone can't catch this — only the
+  // DB's actual CURRENT token_version can, which is what this asserts.
+  const forgedPayload = 'user-1.999';
+  const forgedSig = crypto.createHmac('sha256', 'fixed-test-secret').update(forgedPayload).digest('base64url');
+  const forgedToken = `${forgedPayload}.${forgedSig}`;
+
+  assert.equal(await __test.verifyToken(forgedToken), null);
+});
+
+test('tokenVersionCache actually caches: serves a stale version within its TTL, then refreshes after it expires', async () => {
+  const fakeDb = installDb({ authSecret: 'fixed-test-secret', users: { 'user-1': { token_version: 1 } } });
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    const token = await __test.issueToken('user-1', '1');
+    // Populates the cache with version '1'.
+    assert.equal(await __test.verifyToken(token), 'user-1');
+
+    // Bump token_version directly in the fake DB's storage, bypassing the app —
+    // simulates an out-of-band change (e.g. another process revoking the user).
+    fakeDb.userRows['user-1'].token_version = '2';
+
+    // Still within the TTL: the cache serves the OLD, now-stale version, so the
+    // OLD token still authenticates — proves the cache is real, not a no-op.
+    mock.timers.tick(__test.TOKEN_VERSION_CACHE_TTL_MS - 1000);
+    assert.equal(await __test.verifyToken(token), 'user-1');
+
+    // Past the TTL: the cache entry has expired, verifyToken re-reads the DB and
+    // picks up the bumped version — the old token is now rejected.
+    mock.timers.tick(2000);
+    assert.equal(await __test.verifyToken(token), null);
+  } finally {
+    mock.timers.reset();
+  }
 });

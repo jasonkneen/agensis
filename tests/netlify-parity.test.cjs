@@ -77,16 +77,62 @@ for (const [method, pathname] of PROTECTED_ROUTES) {
 // depend on it, so the parity contract is pinned even if handler wiring changes.
 // ----------------------------------------------------------------------------
 
-test('verifyAuthToken returns null for missing/garbage tokens (gates every requireUserId route)', () => {
+test('verifyAuthToken returns null for missing/garbage tokens (gates every requireUserId route)', async () => {
   const secret = 'parity-secret';
-  assert.equal(core.verifyAuthToken(undefined, secret), null);     // no header
-  assert.equal(core.verifyAuthToken('', secret), null);            // empty header
-  assert.equal(core.verifyAuthToken('Bearer garbage', secret), null); // no dot -> not a token
-  assert.equal(core.verifyAuthToken('Bearer user-1.deadbeef', secret), null); // bad signature
-  // A correctly signed token round-trips (sanity that null isn't unconditional).
+  // Never reached for any of the malformed cases below (all rejected on format
+  // or signature before the revocation check runs), so a function that would
+  // throw if called is a stronger assertion than a stub that always succeeds.
+  const unreachableGetTokenVersion = async () => { throw new Error('should not be called'); };
+  assert.equal(await core.verifyAuthToken(undefined, secret, unreachableGetTokenVersion), null);     // no header
+  assert.equal(await core.verifyAuthToken('', secret, unreachableGetTokenVersion), null);            // empty header
+  assert.equal(await core.verifyAuthToken('Bearer garbage', secret, unreachableGetTokenVersion), null); // no dot -> not a token
+  assert.equal(await core.verifyAuthToken('Bearer user-1.deadbeef', secret, unreachableGetTokenVersion), null); // 1 dot -> no version segment
   const crypto = require('node:crypto');
-  const sig = crypto.createHmac('sha256', secret).update('user-1').digest('base64url');
-  assert.equal(core.verifyAuthToken(`Bearer user-1.${sig}`, secret), 'user-1');
+  const payload = 'user-1.1'; // `${userId}.${tokenVersion}`
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  // Well-formed (userId + version) payload, but the signature doesn't match.
+  assert.equal(await core.verifyAuthToken(`Bearer ${payload}.deadbeef`, secret, unreachableGetTokenVersion), null); // bad signature
+  // A correctly signed token whose embedded version matches the current
+  // (looked-up) version round-trips (sanity that null isn't unconditional).
+  assert.equal(await core.verifyAuthToken(`Bearer ${payload}.${sig}`, secret, async () => '1'), 'user-1');
+  // Plan 005 — revocation: a correctly signed token whose embedded version no
+  // longer matches the CURRENT looked-up version (e.g. after sign-out/password
+  // change bumped it) is rejected, even though the signature is perfectly valid.
+  assert.equal(await core.verifyAuthToken(`Bearer ${payload}.${sig}`, secret, async () => '2'), null);
+});
+
+test('createTokenVersionCache actually caches: serves a stale version within its TTL, then refreshes', async () => {
+  const { mock } = require('node:test');
+  const cache = core.createTokenVersionCache({ ttlMs: 10_000 });
+  let version = '1';
+  const calls = [];
+  const db = async (sql, params) => {
+    calls.push({ sql, params });
+    return [{ token_version: version }];
+  };
+
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    assert.equal(await cache.get('user-1', db), '1');
+    assert.equal(calls.length, 1); // first call is a real DB read
+
+    version = '2'; // bump out-of-band, bypassing the cache
+    assert.equal(await cache.get('user-1', db), '1'); // still within TTL: stale cached value served
+    assert.equal(calls.length, 1); // no new DB read yet — proves the cache is real, not a no-op
+
+    mock.timers.tick(10_001);
+    assert.equal(await cache.get('user-1', db), '2'); // TTL expired: re-reads and picks up the bump
+    assert.equal(calls.length, 2);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('createTokenVersionCache.set() lets a caller immediately reflect a version it just wrote itself', async () => {
+  const cache = core.createTokenVersionCache({ ttlMs: 10_000 });
+  const db = async () => { throw new Error('should not be called: set() must satisfy the read from cache'); };
+  cache.set('user-1', 3);
+  assert.equal(await cache.get('user-1', db), '3');
 });
 
 test('enforceDbOperationAccess throws 401 when userId is absent (gates POST /backend/db/*)', async () => {
