@@ -356,6 +356,12 @@ const DB_TABLE_ACCESS = {
   memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+  // External-agent registration approvals: reads are fine for any member, but
+  // approving/creating/removing a registration is a manage-only action (the
+  // dedicated routes enforce this) — without an explicit entry the generic CRUD
+  // path would default insert/update/delete to 'write' and let editors approve
+  // agents (M1, 2026-07 review).
+  agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   // Per-thread widget items (todo / plan / blocker). Any member with write can
   // add/toggle; agents write via the same REST path with their run_agents cap.
   thread_items: DEFAULT_TABLE_ACCESS,
@@ -1008,8 +1014,20 @@ function jsonError(res, status, error) {
 // ============================================================
 function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
   const hits = new Map(); // key -> { count, resetAt }
+  let lastSweep = 0;
+  // H2 (2026-07 review): evict expired entries so a flood of distinct keys
+  // (e.g. spoofed IPs before the keying fix, or simply many users over time)
+  // can't grow the Map without bound. Amortized: sweep at most once per window.
+  function sweep(now) {
+    if (now - lastSweep < windowMs) return;
+    lastSweep = now;
+    for (const [key, entry] of hits) {
+      if (now >= entry.resetAt) hits.delete(key);
+    }
+  }
   function check(key) {
     const now = Date.now();
+    sweep(now);
     let entry = hits.get(key);
     if (!entry || now >= entry.resetAt) {
       entry = { count: 0, resetAt: now + windowMs };
@@ -1044,8 +1062,14 @@ function rateLimitBlocked(res, limiter, key) {
 }
 
 function clientIpFromReq(req) {
-  const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+  // H2 (2026-07 review): the leftmost X-Forwarded-For segment is supplied by the
+  // client and trivially spoofable, so it must never key a rate limiter. Fly
+  // sets Fly-Client-IP to the real client address at its edge and overwrites any
+  // incoming value, so prefer it; fall back to the socket peer for local/non-Fly
+  // runs (where there is no untrusted proxy in front).
+  const flyClientIp = String(req.headers?.['fly-client-ip'] || '').trim();
+  if (flyClientIp) return flyClientIp;
+  return req.socket?.remoteAddress || req.ip || 'unknown';
 }
 
 // ============================================================
@@ -1822,6 +1846,16 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
   if (!workspaceId) return;
   const handles = parseAgentMentions(row.content);
   if (handles.length === 0) return;
+
+  // H3 (2026-07 review): running an agent from an @mention is an agent-dispatch
+  // action, so it must require the run_agents capability — a commenter/viewer
+  // (who can leave comments but not run agents) tagging an agent is a no-op,
+  // and the dispatch is throttled per author on the same budget as the
+  // dedicated /backend/agents/dispatch route. Both are enforced here because
+  // the comment insert route only checks the 'comment' capability.
+  const authorRole = authorUserId ? await getWorkspaceRole(authorUserId, workspaceId) : null;
+  if (!roleHasWorkspaceCapability(authorRole, 'run_agents')) return;
+  if (!dispatchRateLimiter.check(String(authorUserId)).allowed) return;
 
   let authorName = 'A teammate';
   if (authorUserId) {

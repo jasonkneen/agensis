@@ -86,6 +86,14 @@ export const DB_TABLE_ACCESS = {
   task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+  // Kept in sync with server/index.cjs DB_TABLE_ACCESS so a table added to this
+  // runtime's ALLOWED_TABLES can't silently fall through to the default
+  // read/write mapping (L1, 2026-07 review). Harmless while these tables aren't
+  // in ALLOWED_TABLES here — consulted only once a table is actually exposed.
+  agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+  thread_items: DEFAULT_TABLE_ACCESS,
 };
 
 // ----------------------------------------------------------------------------
