@@ -22,7 +22,7 @@ correctness items plus two cheap, independent DX/tech-debt wins.
 | 005  | Token expiry and revocation | P1 | M | — | TODO |
 | 006  | Fix canonical migration drift (`app_users` profile columns) | P1 | S | — | TODO |
 | 007  | Shared symlink-safe path guard (fix git-stage route) | P1 | S | — | TODO |
-| 008  | Fix loopback dev-fallback Host-header bypass | P2 | S | — | TODO |
+| 008  | Fix loopback dev-fallback Host-header bypass | P2 | S | — | DONE |
 | 009  | Remove dead canvas multi-window "Group" button | P2 | S | — | TODO |
 | 010  | ESLint coverage for the backend | P2 | M | — | TODO |
 
