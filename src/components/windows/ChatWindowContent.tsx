@@ -12,6 +12,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  GitBranch,
   GitCommitHorizontal,
   Globe,
   Hash,
@@ -213,7 +214,7 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread';
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
 
 // A message is a live "thinking" placeholder while the daemon is still working:
 // an agent/assistant row whose body is the bare "Thinking …" marker (the daemon
@@ -1082,6 +1083,21 @@ export function ChatWindowContent({
               <Pin data-icon="inline-start" />
               Pins
             </Button>
+            <Button
+              type="button"
+              variant={sidePanel === 'sub-threads' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-8 px-2"
+              onClick={() => setSidePanel(sidePanel === 'sub-threads' ? null : 'sub-threads')}
+            >
+              <GitBranch data-icon="inline-start" />
+              Threads
+              {Object.values(subThreadsByMessage).flat().length > 0 && (
+                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+                  {Object.values(subThreadsByMessage).flat().length}
+                </span>
+              )}
+            </Button>
             <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={clearView} title="Clear this view — messages stay; scroll up to restore">
               <Eraser data-icon="inline-start" />
               Clear
@@ -1518,6 +1534,12 @@ export function ChatWindowContent({
               onClose={closeSidePanel}
               embedded
             />
+          ) : sidePanel === 'sub-threads' ? (
+            <SubThreadListPanel
+              subThreadsByMessage={subThreadsByMessage}
+              onOpenSubThread={openSubThreadPanel}
+              onClose={closeSidePanel}
+            />
           ) : sidePanel === 'sub-thread' && activeSubThread && onSendSubThreadMessage ? (
             <SubThreadPanel
               session={activeSubThread}
@@ -1924,6 +1946,95 @@ function ChatMessageBubble({
             </Button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function SubThreadListPanel({
+  subThreadsByMessage,
+  onOpenSubThread,
+  onClose,
+}: {
+  subThreadsByMessage: Record<string, ChatSession[]>;
+  onOpenSubThread: (session: ChatSession) => void;
+  onClose: () => void;
+}) {
+  const allThreads = useMemo(
+    () =>
+      Object.values(subThreadsByMessage)
+        .flat()
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
+    [subThreadsByMessage],
+  );
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
+          Sub-threads
+          {allThreads.length > 0 && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+              {allThreads.length}
+            </span>
+          )}
+        </span>
+        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onClose}>
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {allThreads.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+            <GitBranch className="h-8 w-8 opacity-30" />
+            <p className="text-sm">No sub-threads yet</p>
+            <p className="text-center text-xs opacity-70">Start one from any message using the + Sub-thread button</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {allThreads.map(session => {
+              const agents = (session.participants ?? []).filter(p => p.kind === 'agent');
+              const ts = new Date(session.updated_at);
+              const now = new Date();
+              const diffMs = now.getTime() - ts.getTime();
+              const diffMins = Math.floor(diffMs / 60000);
+              const timeLabel =
+                diffMins < 1
+                  ? 'just now'
+                  : diffMins < 60
+                    ? `${diffMins}m ago`
+                    : diffMins < 1440
+                      ? `${Math.floor(diffMins / 60)}h ago`
+                      : ts.toLocaleDateString();
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  className="w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                  onClick={() => onOpenSubThread(session)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 truncate text-sm font-medium">{session.title || 'Sub-thread'}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">{timeLabel}</span>
+                  </div>
+                  {agents.length > 0 && (
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {agents.map(a => (
+                        <span
+                          key={a.id}
+                          className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground"
+                        >
+                          @{a.handle ?? a.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
