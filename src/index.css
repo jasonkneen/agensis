@@ -3579,6 +3579,10 @@ select {
   letter-spacing: 0.02em;
 }
 /* sidebar header matches window titlebar treatment */
+:root[data-ui-theme="neo"] [data-sidebar-panel] {
+  border-top: 2.5px solid var(--neo-ink) !important;
+  border-left: 2.5px solid var(--neo-ink) !important;
+}
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] {
   background: var(--canvas-raised) !important;
   border-bottom: 2.5px solid var(--neo-ink) !important;

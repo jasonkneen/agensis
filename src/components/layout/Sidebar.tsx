@@ -361,7 +361,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <div className="px-2 pb-2">
+      <div className="px-2 pt-2 pb-2">
         <button
           type="button"
           className="sidebar-search flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2.5 text-left text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
