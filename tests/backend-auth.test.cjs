@@ -7,12 +7,32 @@ function eq(column, value) {
   return { column, operator: 'eq', value };
 }
 
-function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, appSettings = {}, authSecret = 'test-secret' } = {}) {
+function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets = {}, appSettings = {}, authSecret = 'test-secret', appUsers = {} } = {}) {
   const secretRows = { ...workspaceSecrets };
   const settingRows = { ...appSettings };
   if (authSecret) settingRows.AUTH_SECRET = authSecret;
+
+  // In-memory app_users table — supports the auth routes (signup/signin/
+  // change-password) exercised by the plan-004 auth-hardening tests below.
+  const usersById = new Map();
+  const userIdByEmail = new Map();
+  let nextUserId = 1;
+  for (const [email, record] of Object.entries(appUsers)) {
+    const id = record.id || `user-${nextUserId++}`;
+    usersById.set(id, {
+      id,
+      email,
+      password_hash: record.password_hash || '',
+      display_name: record.display_name || '',
+      accent_color: record.accent_color || '',
+      created_at: record.created_at || new Date().toISOString(),
+    });
+    userIdByEmail.set(email, id);
+  }
+
   return {
     calls: [],
+    users: usersById,
     async unsafe(sql, params = []) {
       const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       this.calls.push({ sql, params });
@@ -57,6 +77,43 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
 
       if (normalized.startsWith('select id from workspaces where id = $1')) {
         return params[0] ? [{ id: params[0] }] : [];
+      }
+
+      if (normalized.startsWith('select id from app_users where email = $1 limit 1')) {
+        const id = userIdByEmail.get(params[0]);
+        return id ? [{ id }] : [];
+      }
+
+      if (normalized.startsWith('insert into app_users (email, password_hash) values')) {
+        const id = `user-${nextUserId++}`;
+        const user = {
+          id,
+          email: params[0],
+          password_hash: params[1],
+          display_name: '',
+          accent_color: '',
+          created_at: new Date().toISOString(),
+        };
+        usersById.set(id, user);
+        userIdByEmail.set(params[0], id);
+        return [{ id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at }];
+      }
+
+      if (normalized.startsWith('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1')) {
+        const id = userIdByEmail.get(params[0]);
+        const user = id ? usersById.get(id) : null;
+        return user ? [user] : [];
+      }
+
+      if (normalized.startsWith('select id, password_hash from app_users where id = $1 limit 1')) {
+        const user = usersById.get(params[0]);
+        return user ? [{ id: user.id, password_hash: user.password_hash }] : [];
+      }
+
+      if (normalized.startsWith('update app_users set password_hash = $2 where id = $1')) {
+        const user = usersById.get(params[0]);
+        if (user) user.password_hash = params[1];
+        return [];
       }
 
       const workspaceLookup = normalized.match(/^select workspace_id from "?([a-z_]+)"? where id = \$1 limit 1/);
@@ -446,5 +503,99 @@ test('ai-chat requires workspace id and run_agents capability before using AI ke
     const deniedBody = await denied.json();
     assert.equal(denied.status, 403);
     assert.equal(deniedBody.error.message, 'You do not have permission to run agents in this workspace');
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Plan 004 — server-side auth hardening (password policy + rate limiting).
+// ----------------------------------------------------------------------------
+
+test('evaluatePasswordServerSide enforces length + character-class-count policy', () => {
+  const weakShort = __test.evaluatePasswordServerSide('abc123');
+  assert.equal(weakShort.valid, false);
+
+  const weakSingleClass = __test.evaluatePasswordServerSide('abcdefgh');
+  assert.equal(weakSingleClass.valid, false);
+  assert.equal(weakSingleClass.classesMet, 1);
+
+  const compliant = __test.evaluatePasswordServerSide('Tr0ub4dor&3xyz');
+  assert.equal(compliant.valid, true);
+});
+
+test('POST /backend/auth/signup rejects a weak, single-character-class password', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/backend/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'weak-signup@example.com', password: 'abcdefgh' }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.match(body.error.message, /character|characters/i);
+  });
+});
+
+test('POST /backend/auth/signup still succeeds for a policy-compliant password (no regression)', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/backend/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'compliant-signup@example.com', password: 'Tr0ub4dor&3xyz' }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.data.user.email, 'compliant-signup@example.com');
+    assert.ok(body.data.token);
+  });
+});
+
+test('POST /backend/users/me/change-password rejects a weak newPassword', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    // Create a real account first so currentPassword actually matches — the
+    // weak-newPassword rejection must fire on its own merit, not because the
+    // current-password check happened to fail first.
+    const signup = await fetch(`${baseUrl}/backend/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'change-pw@example.com', password: 'Tr0ub4dor&3xyz' }),
+    });
+    const { data } = await signup.json();
+
+    const response = await authedFetch(baseUrl, data.token, '/backend/users/me/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: 'Tr0ub4dor&3xyz', newPassword: 'abc123' }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.match(body.error.message, /character|characters/i);
+  });
+});
+
+test('POST /backend/auth/signin rate-limits repeated failed attempts for the same email (429 on the 6th)', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const email = 'rate-limited-signin@example.com'; // unique to this test — limiter state is module-scoped
+    const attempt = () => fetch(`${baseUrl}/backend/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'whatever-wrong' }),
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      const response = await attempt();
+      assert.equal(response.status, 401, `attempt ${i + 1} should be a normal auth failure, not rate-limited`);
+    }
+
+    const sixth = await attempt();
+    assert.equal(sixth.status, 429);
+    assert.ok(sixth.headers.get('retry-after'));
   });
 });

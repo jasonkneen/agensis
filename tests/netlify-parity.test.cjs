@@ -111,3 +111,63 @@ test('assertWorkspaceRole throws 403 without a role (gates settings/secrets, ai-
     { status: 403 },
   );
 });
+
+// ----------------------------------------------------------------------------
+// Plan 004 — server-side auth hardening (password policy + rate limiting).
+//
+// handleAuth's very first line calls `ensureAppUserProfileColumns()`, which
+// hits a real DB connection before any of our new checks run, and this test
+// file (unlike backend-auth.test.cjs) has no `setTestDb`-style seam for the
+// Netlify path. So — following the same pattern already used above for
+// verifyAuthToken/enforceDbOperationAccess/assertWorkspaceRole — these test
+// the shared-core building blocks directly rather than a full handler
+// round-trip. `handleChangeMyPassword` is the one exception: it validates the
+// new password BEFORE touching the DB, so it's reachable end-to-end here.
+// ----------------------------------------------------------------------------
+
+test('evaluatePasswordServerSide enforces length + character-class-count policy (Netlify copy)', () => {
+  const weakShort = core.evaluatePasswordServerSide('abc123');
+  assert.equal(weakShort.valid, false);
+
+  const weakSingleClass = core.evaluatePasswordServerSide('abcdefgh');
+  assert.equal(weakSingleClass.valid, false);
+  assert.equal(weakSingleClass.classesMet, 1);
+
+  const compliant = core.evaluatePasswordServerSide('Tr0ub4dor&3xyz');
+  assert.equal(compliant.valid, true);
+});
+
+test('createRateLimiter (the factory backing the signin/signup limiters) blocks past its max', () => {
+  const limiter = core.createRateLimiter({ windowMs: 60_000, max: 5 });
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(limiter.check('same-key').allowed, true, `attempt ${i + 1} should be allowed`);
+  }
+  const sixth = limiter.check('same-key');
+  assert.equal(sixth.allowed, false);
+  assert.ok(sixth.retryAfterMs > 0);
+
+  // A different key has its own independent budget (per-email/per-IP isolation).
+  assert.equal(limiter.check('other-key').allowed, true);
+});
+
+test('POST /backend/users/me/change-password rejects a weak newPassword (validated before any DB call)', async () => {
+  const prevSecret = process.env.AUTH_SECRET;
+  try {
+    process.env.AUTH_SECRET = 'change-password-test-secret';
+    const sig = require('crypto').createHmac('sha256', 'change-password-test-secret').update('user-1').digest('base64url');
+    const token = `user-1.${sig}`;
+
+    const req = new Request('http://localhost/backend/users/me/change-password', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: 'whatever-current', newPassword: 'abc123' }),
+    });
+    const res = await handler(req);
+    const body = await res.json();
+    assert.equal(res.status, 400);
+    assert.match(body.error.message, /character|characters/i);
+  } finally {
+    if (prevSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = prevSecret;
+  }
+});
