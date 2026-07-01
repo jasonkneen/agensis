@@ -284,6 +284,7 @@ export function ChatWindowContent({
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
   const [widgetsCollapsed, setWidgetsCollapsed] = useState(false);
+  const [widgetsTooNarrow, setWidgetsTooNarrow] = useState(false);
   const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
@@ -1160,6 +1161,26 @@ export function ChatWindowContent({
                 </DropdownMenu>
               </>
             )}
+            {showWidgetRail && (
+              <Button
+                type="button"
+                variant={widgetsCollapsed ? 'ghost' : 'secondary'}
+                size="sm"
+                className="h-8 px-2"
+                aria-pressed={!widgetsCollapsed}
+                disabled={widgetsTooNarrow}
+                title={
+                  widgetsTooNarrow
+                    ? 'Widen the window to show widgets'
+                    : widgetsCollapsed
+                      ? 'Show thread widgets'
+                      : 'Hide thread widgets'
+                }
+                onClick={() => setWidgetsCollapsed(v => !v)}
+              >
+                {widgetsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
+              </Button>
+            )}
           </div>
         </div>
         <MessageScrollerProvider autoScroll={autoScroll}>
@@ -1226,7 +1247,7 @@ export function ChatWindowContent({
                 workspaceId={workspaceId}
                 sessionId={inferredSessionId}
                 collapsed={widgetsCollapsed}
-                onToggleCollapsed={() => setWidgetsCollapsed(v => !v)}
+                onTooNarrowChange={setWidgetsTooNarrow}
                 onJumpToMessage={handleJumpToMessage}
                 onBlockerAnswered={(item, response) => {
                   // Post the answered blocker back into the chat so it's tracked
