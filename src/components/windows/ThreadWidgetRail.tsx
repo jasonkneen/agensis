@@ -35,8 +35,8 @@ interface WidgetLayout {
 }
 
 const DEFAULT_WIDGETS: WidgetLayout[] = [
-  { kind: 'todo', w: 1, h: 2 },
-  { kind: 'plan', w: 1, h: 2 },
+  { kind: 'todo', w: 2, h: 1 },
+  { kind: 'plan', w: 2, h: 1 },
   { kind: 'blocker', w: 2, h: 1 },
 ];
 
@@ -172,7 +172,7 @@ export function ThreadWidgetRail({
 
   const addWidget = useCallback((kind: ThreadItemKind) => {
     if (widgets.some(w => w.kind === kind)) return;
-    persist([...widgets, { kind, w: 1, h: 2 }]);
+    persist([...widgets, { kind, w: 2, h: 1 }]);
   }, [widgets, persist]);
 
   if (!sessionId || !workspaceId) return null;

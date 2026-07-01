@@ -34,6 +34,7 @@ import {
   Rocket,
   Send,
   ShieldCheck,
+  Smile,
   Sparkles,
   Terminal,
   Trash2,
@@ -182,6 +183,7 @@ interface ChatWindowContentProps {
   onCloseSubThread?: () => void;
   onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
   onSendSubThreadMessage?: (content: string) => void;
+  currentUserId?: string;
 }
 
 type ChannelPresenceUser = {
@@ -258,6 +260,7 @@ export function ChatWindowContent({
   onCloseSubThread,
   onCreateSubThread,
   onSendSubThreadMessage,
+  currentUserId = '',
 }: ChatWindowContentProps) {
   const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
@@ -274,7 +277,7 @@ export function ChatWindowContent({
   const [hashStartPos, setHashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
-  const [widgetsCollapsed, setWidgetsCollapsed] = useState(false);
+  const [widgetsCollapsed, setWidgetsCollapsed] = useState(true);
   const [widgetsTooNarrow, setWidgetsTooNarrow] = useState(false);
   const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
@@ -622,6 +625,7 @@ export function ChatWindowContent({
   // width, the cards just float over the empty right-hand space (they don't
   // reserve a column). The overlay is click-through except for the cards.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
+  const widgetsActive = showWidgetRail && !widgetsCollapsed && !widgetsTooNarrow;
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
   const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
@@ -887,6 +891,24 @@ export function ChatWindowContent({
       .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { pinned: message.pinned });
     setMessageActionBusy(null);
+  };
+
+  const handleToggleReaction = async (message: ChatMessage, emoji: string) => {
+    const uid = currentUserId || 'me';
+    const prev: Record<string, string[]> = message.reactions ?? {};
+    const users = prev[emoji] ?? [];
+    const next: Record<string, string[]> = {
+      ...prev,
+      [emoji]: users.includes(uid) ? users.filter(u => u !== uid) : [...users, uid],
+    };
+    if (next[emoji].length === 0) delete next[emoji];
+    setMessageOverride(message.id, { reactions: next });
+    const { error } = await backendClient
+      .from('messages')
+      .update({ reactions: next })
+      .eq('id', message.id)
+      .eq('session_id', message.session_id);
+    if (error) setMessageOverride(message.id, { reactions: message.reactions });
   };
 
   const handleStartEdit = (message: ChatMessage) => {
@@ -1226,6 +1248,9 @@ export function ChatWindowContent({
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
                           onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
+                          widgetsActive={widgetsActive}
+                          currentUserId={currentUserId}
+                          onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
                         />
                       </MessageScrollerItem>
                     ))}
@@ -1760,6 +1785,9 @@ function ChatMessageBubble({
   subThreads,
   onOpenSubThread,
   onCreateSubThread,
+  widgetsActive,
+  currentUserId,
+  onToggleReaction,
 }: {
   msg: ChatMessage;
   avatar?: string;
@@ -1780,6 +1808,9 @@ function ChatMessageBubble({
   subThreads?: ChatSession[];
   onOpenSubThread?: (session: ChatSession) => void;
   onCreateSubThread?: () => void;
+  widgetsActive?: boolean;
+  currentUserId?: string;
+  onToggleReaction?: (emoji: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -1800,9 +1831,13 @@ function ChatMessageBubble({
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as React.CSSProperties & { '--agent-accent': string })
     : undefined;
 
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const reactions = msg.reactions ?? {};
+  const uid = currentUserId || 'me';
+
   return (
     <div
-      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40"
+      className={cn('chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 hover:bg-muted/40', widgetsActive ? 'pr-[300px]' : 'pr-20')}
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >
@@ -1903,12 +1938,56 @@ function ChatMessageBubble({
             )}
           </div>
         ) : null}
+        {/* Reaction pills — always visible when reactions exist */}
+        {Object.keys(reactions).length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {Object.entries(reactions).map(([emoji, users]) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => onToggleReaction?.(emoji)}
+                className={cn(
+                  'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-sm transition-colors',
+                  users.includes(uid)
+                    ? 'border-primary/40 bg-primary/10 text-foreground'
+                    : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                {emoji}
+                <span className="text-[11px] font-medium">{users.length}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)
           instead of scrolling off the top with the message header. */}
-      <div className="pointer-events-none absolute inset-y-0 right-3 flex items-start">
+      <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsActive ? 'right-[288px]' : 'right-3')}>
         <div className="pointer-events-auto sticky top-2 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
+          {onToggleReaction && (
+            <Popover open={reactionPickerOpen} onOpenChange={setReactionPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button type="button" variant="ghost" size="icon-xs" aria-label="Add reaction" title="Add reaction">
+                  <Smile />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent side="top" align="end" className="w-auto p-1.5">
+                <div className="grid grid-cols-8 gap-0.5">
+                  {['👍','👎','❤️','😂','🎉','🔥','👀','✅','🙏','💯','😮','😢','🤔','🚀','⭐','🐛'].map(e => (
+                    <button
+                      key={e}
+                      type="button"
+                      className="flex h-7 w-7 items-center justify-center rounded text-base hover:bg-muted"
+                      onClick={() => { onToggleReaction(e); setReactionPickerOpen(false); }}
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
+          )}
           {onOpenThread && (
             <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
               <CornerDownRight />

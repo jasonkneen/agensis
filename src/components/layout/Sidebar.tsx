@@ -203,7 +203,7 @@ export function Sidebar({
     () => buildDirectMessageTargets(directSessions, directAgents, favoriteAgentKeys),
     [directSessions, directAgents, favoriteAgentKeys],
   );
-  const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('active');
+  const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('all');
   const filteredDmTargets = React.useMemo(() => {
     if (dmFilter === 'all') return directMessageTargets;
     if (dmFilter === 'active') return directMessageTargets.filter(a => a.status === 'online');
@@ -339,7 +339,7 @@ export function Sidebar({
       className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card/45 text-card-foreground shadow-xl"
       style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
     >
-      <div className="px-2 pt-2 pb-3">
+      <div data-sidebar-titlebar className="px-2 pt-2 pb-3">
         <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
             <PanelLeftClose />

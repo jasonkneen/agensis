@@ -68,6 +68,7 @@ export interface Message {
   sender_id?: string | null;
   sender_name?: string | null;
   pinned?: boolean;
+  reactions?: Record<string, string[]>;
   created_at: string;
 }
 

@@ -3562,6 +3562,7 @@ select {
   border-bottom: 2.5px solid var(--neo-ink) !important;
   font-family: var(--neo-mono);
 }
+/* traffic-light dots disabled
 :root[data-ui-theme="neo"] [data-window-titlebar]::before {
   content: "";
   flex: 0 0 auto;
@@ -3572,10 +3573,31 @@ select {
     radial-gradient(circle at 6px 50%,  var(--error)   0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px),
     radial-gradient(circle at 21px 50%, var(--warning) 0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px),
     radial-gradient(circle at 36px 50%, var(--success) 0 4px, var(--neo-ink) 4px 5.4px, transparent 5.6px);
-}
+} */
 /* the window title reads as a mono room label */
 :root[data-ui-theme="neo"] [data-window-titlebar] .truncate {
   letter-spacing: 0.02em;
+}
+/* sidebar header matches window titlebar treatment */
+:root[data-ui-theme="neo"] [data-sidebar-titlebar] {
+  background: var(--canvas-raised) !important;
+  border-bottom: 2.5px solid var(--neo-ink) !important;
+  font-family: var(--neo-mono);
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+:root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0.25rem 0.5rem !important;
+}
+:root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-switch {
+  font-family: var(--neo-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
 }
 
 /* ============================================================================

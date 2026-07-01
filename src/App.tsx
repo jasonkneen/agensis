@@ -51,12 +51,13 @@ import {
 } from './components/ui/context-menu';
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu';
+import { Switch } from './components/ui/switch';
 import { ScrollArea } from './components/ui/scroll-area';
 import { Spinner } from './components/ui/spinner';
 import { TooltipProvider } from './components/ui/tooltip';
@@ -337,11 +338,16 @@ function KnowledgeContextControl({
   const [enabledKeys, setEnabledKeys] = useState<Set<keyof WorkspaceContextCounts>>(
     () => new Set(CONTEXT_COUNT_ITEMS.map(item => item.key)),
   );
+  const includedItems = CONTEXT_COUNT_ITEMS.filter(item => enabledKeys.has(item.key));
   const activeTotal = enabled
-    ? CONTEXT_COUNT_ITEMS
-        .filter(item => enabledKeys.has(item.key))
-        .reduce((total, item) => total + counts[item.key], 0)
+    ? includedItems.reduce((total, item) => total + counts[item.key], 0)
     : 0;
+  const activeSources = enabled
+    ? includedItems.filter(item => counts[item.key] > 0).length
+    : 0;
+  const summary = enabled
+    ? `${activeTotal} item${activeTotal === 1 ? '' : 's'} · ${activeSources} source${activeSources === 1 ? '' : 's'}`
+    : 'Context disabled';
 
   const setItemEnabled = (key: keyof WorkspaceContextCounts, checked: boolean) => {
     setEnabledKeys(prev => {
@@ -370,29 +376,66 @@ function KnowledgeContextControl({
           <ChevronDown className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>Knowledge</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={enabled}
-          onCheckedChange={checked => {
-            if (Boolean(checked) !== enabled) onToggle();
-          }}
-        >
-          Use workspace knowledge
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        {CONTEXT_COUNT_ITEMS.map(item => (
-          <DropdownMenuCheckboxItem
-            key={item.key}
-            checked={enabledKeys.has(item.key)}
-            disabled={!enabled}
-            onCheckedChange={checked => setItemEnabled(item.key, Boolean(checked))}
-          >
-            {item.icon}
-            <span className="min-w-0 flex-1 truncate">{item.label}</span>
-            <span className="ml-auto text-xs text-muted-foreground">{counts[item.key]}</span>
-          </DropdownMenuCheckboxItem>
-        ))}
+      <DropdownMenuContent align="end" className="w-72 p-0">
+        <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm font-semibold leading-none">Knowledge</span>
+            <span className="text-[11px] leading-none text-muted-foreground">{summary}</span>
+          </div>
+          <Switch
+            checked={enabled}
+            onCheckedChange={checked => {
+              if (Boolean(checked) !== enabled) onToggle();
+            }}
+            aria-label="Use workspace knowledge"
+          />
+        </div>
+        <DropdownMenuSeparator className="my-0" />
+        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Sources
+        </DropdownMenuLabel>
+        <div className="px-1 pb-1">
+          {CONTEXT_COUNT_ITEMS.map(item => {
+            const on = enabledKeys.has(item.key);
+            const count = counts[item.key];
+            const contributing = enabled && on && count > 0;
+            return (
+              <DropdownMenuItem
+                key={item.key}
+                disabled={!enabled}
+                aria-pressed={on}
+                onSelect={event => {
+                  event.preventDefault();
+                  setItemEnabled(item.key, !on);
+                }}
+                className={cn(
+                  'gap-2.5 rounded-md px-2 py-1.5 transition-opacity',
+                  enabled && !on && 'opacity-45',
+                )}
+              >
+                <span
+                  className={cn(
+                    'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
+                    contributing ? 'bg-pink-500/10 text-pink-500' : 'bg-muted text-muted-foreground',
+                  )}
+                >
+                  {item.icon}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                <span
+                  className={cn(
+                    'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition-colors',
+                    contributing
+                      ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400'
+                      : 'text-muted-foreground/60',
+                  )}
+                >
+                  {count}
+                </span>
+              </DropdownMenuItem>
+            );
+          })}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1256,6 +1299,12 @@ function AppContent() {
                 onFocusUser={setFocusedPresenceUserId}
                 onOpenRemoteWindow={handleOpenPresenceWindow}
                 onCopyInviteLink={handleCopyInviteLink}
+                onMessageAgent={person => handleAgentDirectMessage({
+                  id: person.agentId || person.id,
+                  agentId: person.agentId,
+                  name: person.name,
+                  handle: person.handle ?? null,
+                })}
               />
             </div>
 
@@ -1859,6 +1908,7 @@ function CanvasLayerScene({
                   onCreateSubThread={onCreateSubThreadProp}
                   onSendSubThreadMessage={onSendSubThreadMessage}
                   channelTitle={winSession?.title || win.title}
+                  currentUserId={userId}
                 />
                 )
               ) : (
@@ -2262,6 +2312,7 @@ function WorkspacePresenceAvatars({
   onFocusUser,
   onOpenRemoteWindow,
   onCopyInviteLink,
+  onMessageAgent,
 }: {
   users: WorkspacePresenceUser[];
   getMode: (id?: string | null) => PresenceVisibilityMode;
@@ -2272,6 +2323,7 @@ function WorkspacePresenceAvatars({
   onFocusUser: (id: string | null) => void;
   onOpenRemoteWindow: (win: FloatingWindow) => void;
   onCopyInviteLink?: () => Promise<string | null>;
+  onMessageAgent?: (person: WorkspacePresenceUser) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -2394,10 +2446,15 @@ function WorkspacePresenceAvatars({
                         : person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
                     </div>
                     {person.activityItems && person.activityItems.length > 0 && (
-                      <div className="presence-activity-chips mt-2 flex flex-wrap gap-x-1.5 gap-y-2">
+                      <div className="presence-activity-chips mt-2 flex min-w-0 flex-wrap gap-x-1.5 gap-y-2">
                         {person.activityItems.map(item => (
-                          <Badge key={item} variant="secondary" className="presence-activity-chip max-w-[12rem] truncate text-[10px]">
-                            {item}
+                          <Badge
+                            key={item}
+                            variant="secondary"
+                            title={item}
+                            className="presence-activity-chip min-w-0 max-w-full shrink justify-start text-[10px]"
+                          >
+                            <span className="min-w-0 truncate">{item}</span>
                           </Badge>
                         ))}
                       </div>
@@ -2422,6 +2479,17 @@ function WorkspacePresenceAvatars({
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     <div className="flex items-center gap-1">
+                      {person.kind === 'agent' && onMessageAgent && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon-xs"
+                          title={`Message ${person.name}`}
+                          onClick={() => onMessageAgent(person)}
+                        >
+                          <MessageSquare />
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant={isFavorite ? 'secondary' : 'outline'}

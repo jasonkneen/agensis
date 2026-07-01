@@ -12,6 +12,10 @@ export type WorkspacePresenceUser = {
   isCurrentUser?: boolean;
   activityItems?: string[];
   windows?: FloatingWindow[];
+  /** Raw agent id (unprefixed) — used to open/find the direct-message thread. */
+  agentId?: string | null;
+  /** Agent handle (without @) — fallback key for the direct-message thread. */
+  handle?: string | null;
 };
 
 type RemotePresenceUsers = ReturnType<typeof useItemPresence>['remotePresenceUsers'];
@@ -107,6 +111,8 @@ export function useWorkspacePresence({
           color: colorFromSeed(id),
           kind: 'agent',
           status: connection.status,
+          agentId: connection.agent_id || null,
+          handle: connection.handle || null,
           activityItems: [
             connection.status === 'busy' ? 'Running a job' : 'Connected daemon',
             connection.host ? `Host: ${connection.host}` : '',

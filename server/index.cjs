@@ -68,6 +68,7 @@ const JSON_COLUMNS_BY_TABLE = {
   agent_connections: new Set(['metadata']),
   agent_jobs: new Set(['metadata']),
   activity_events: new Set(['metadata']),
+  messages: new Set(['reactions']),
 };
 
 let envLoaded = false;
@@ -674,6 +675,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
