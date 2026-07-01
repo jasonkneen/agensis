@@ -649,11 +649,10 @@ export function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
-  // Floating thread widgets overlay the message list's right gutter. Reserve
-  // matching right padding on the message column (only while expanded) so a
-  // card never sits on top of message text.
+  // Floating thread widgets overlay the message list — messages stay full
+  // width, the cards just float over the empty right-hand space (they don't
+  // reserve a column). The overlay is click-through except for the cards.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
-  const reserveWidgetGutter = showWidgetRail && !widgetsCollapsed;
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
   const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
@@ -1174,7 +1173,7 @@ export function ChatWindowContent({
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
-              <MessageScrollerContent className={cn('min-h-full gap-0 py-2 transition-[padding]', reserveWidgetGutter && 'pr-[312px]')}>
+              <MessageScrollerContent className="min-h-full gap-0 py-2">
                 {clearedAt && hiddenCount > 0 && (
                   <button
                     type="button"
