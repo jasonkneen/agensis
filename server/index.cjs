@@ -1055,6 +1055,9 @@ const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
 const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Per-IP FAILED-attempt limiter (L2 review): bounds credential-stuffing across
+// many different emails from one host, which the per-email limiter can't catch.
+const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
@@ -4815,15 +4818,25 @@ function createApp() {
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
-      // Rate-limit failed AND successful attempts alike, keyed per-email, so a
-      // guessing script can't dodge the limit by varying its own IP. No
-      // complexity check here — existing users must be able to log in with
-      // whatever password they already have.
-      if (rateLimitBlocked(res, signinRateLimiter, `signin:${email}`)) return;
 
       const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
-      if (!user || !(await verifyPassword(password, user.password_hash))) return jsonError(res, 401, new Error('Invalid email or password'));
+      const passwordOk = user && (await verifyPassword(password, user.password_hash));
+
+      // L3 (2026-07 review): only FAILED attempts count toward the limiters, and
+      // a correct password is never blocked — so a guessing script can't lock a
+      // victim out by exhausting their email's budget with wrong passwords. The
+      // per-email limiter still slows targeted brute force (5/min), and a
+      // per-IP failure limiter bounds credential stuffing across many emails.
+      if (!passwordOk) {
+        const emailAllowed = signinRateLimiter.check(`signin:${email}`).allowed;
+        const ipAllowed = signinIpFailureLimiter.check(`signin-ip:${clientIpFromReq(req)}`).allowed;
+        if (!emailAllowed || !ipAllowed) {
+          res.setHeader('Retry-After', '60');
+          return jsonError(res, 429, new Error('Too many failed sign-in attempts. Please wait a minute and try again.'));
+        }
+        return jsonError(res, 401, new Error('Invalid email or password'));
+      }
 
       res.json({
         data: {

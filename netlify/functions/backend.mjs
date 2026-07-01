@@ -40,11 +40,16 @@ const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
 const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Per-IP FAILED-attempt limiter (L3): bounds credential-stuffing across emails.
+const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 function clientIpFromRequest(req) {
-  const forwarded = String(req.headers.get('x-forwarded-for') || '').split(',')[0].trim();
-  return forwarded || req.headers.get('x-nf-client-connection-ip') || 'unknown';
+  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
+  // trust the client-supplied leftmost x-forwarded-for for rate-limit keys (H2).
+  const trusted = String(req.headers.get('x-nf-client-connection-ip') || '').trim();
+  if (trusted) return trusted;
+  return String(req.headers.get('x-forwarded-for') || '').split(',').pop().trim() || 'unknown';
 }
 
 // Returns a 429 Response (with Retry-After) when the key is over budget, else null.
@@ -848,13 +853,22 @@ async function handleAuth(pathname, req) {
   }
 
   // signin — no complexity check (existing users must be able to log in with
-  // whatever password they already have); only rate-limit, keyed per-email.
-  const signinBlocked = rateLimitBlock(signinRateLimiter, `signin:${email}`);
-  if (signinBlocked) return signinBlocked;
-
+  // whatever password they already have).
   const rows = await query('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
   const user = rows[0];
-  if (!user || !verifyPassword(password, user.password_hash)) {
+  const passwordOk = user && verifyPassword(password, user.password_hash);
+
+  // L3 (2026-07 review): only FAILED attempts count, and a correct password is
+  // never blocked, so a guesser can't lock a victim out. Mirrors the daemon.
+  if (!passwordOk) {
+    const emailAllowed = signinRateLimiter.check(`signin:${email}`).allowed;
+    const ipAllowed = signinIpFailureLimiter.check(`signin-ip:${clientIpFromRequest(req)}`).allowed;
+    if (!emailAllowed || !ipAllowed) {
+      return new Response(JSON.stringify({ data: null, error: { message: 'Too many failed sign-in attempts. Please wait a minute and try again.', code: 'rate_limited' } }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+      });
+    }
     return jsonError(401, new Error('Invalid email or password'));
   }
   const sessionUser = { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at };

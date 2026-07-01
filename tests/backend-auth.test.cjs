@@ -641,6 +641,40 @@ test('POST /backend/auth/signin rate-limits repeated failed attempts for the sam
   });
 });
 
+test('POST /backend/auth/signin: a correct password is never locked out by prior failed attempts (L3)', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const email = 'lockout-victim@example.com'; // unique so its per-email budget starts fresh
+    const password = 'Tr0ub4dor&3xyz';
+    const signup = await fetch(`${baseUrl}/backend/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    assert.equal(signup.status, 200);
+
+    // An attacker exhausts the email's failed-attempt budget with wrong passwords.
+    for (let i = 0; i < 6; i += 1) {
+      await fetch(`${baseUrl}/backend/auth/signin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: 'definitely-wrong' }),
+      });
+    }
+
+    // The real user must still sign in with the correct password — no lockout.
+    const ok = await fetch(`${baseUrl}/backend/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    assert.equal(ok.status, 200, 'correct password must succeed despite prior failed attempts');
+    const body = await ok.json();
+    assert.ok(body.data?.token, 'issues a token');
+  });
+});
+
 // ============================================================================
 // Plan 005 — token expiry and revocation.
 //
