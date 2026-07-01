@@ -423,3 +423,32 @@ export function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
   }
   return { check, reset };
 }
+
+// ----------------------------------------------------------------------------
+// Server-side password policy (plan 004 — auth hardening).
+// Mirrors src/lib/passwordPolicy.ts's `evaluatePassword` rule (min length +
+// character-class count) as a plain-JS, framework-free re-implementation so it
+// can run here (ESM, Netlify) and be ported inline into server/index.cjs's CJS
+// style (that file keeps its own copies of shared helpers on purpose — see the
+// comment above `createRateLimiter` there). Keep both in sync if this changes.
+// ----------------------------------------------------------------------------
+
+export const PASSWORD_MIN_LENGTH = 10;
+export const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
+
+export function evaluatePasswordServerSide(password) {
+  const value = String(password || '');
+  const classesMet =
+    (/[a-z]/.test(value) ? 1 : 0) +
+    (/[A-Z]/.test(value) ? 1 : 0) +
+    (/[0-9]/.test(value) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
+  const longEnough = value.length >= PASSWORD_MIN_LENGTH;
+  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
+  const message = valid
+    ? ''
+    : !longEnough
+      ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+      : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
+  return { valid, classesMet, longEnough, message };
+}

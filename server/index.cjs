@@ -931,6 +931,11 @@ const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Plan 004 — auth hardening: signin is keyed per-email (matches the client's
+// documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
+// to slow down bulk account creation without punishing normal signup retries.
+const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
 function rateLimitBlocked(res, limiter, key) {
@@ -945,6 +950,35 @@ function rateLimitBlocked(res, limiter, key) {
 function clientIpFromReq(req) {
   const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
   return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+// ============================================================
+// Plan 004 — auth hardening: server-side password policy.
+// Mirrors src/lib/passwordPolicy.ts's `evaluatePassword` rule (min length +
+// character-class count) and shared/backend-core.mjs's
+// `evaluatePasswordServerSide` (the Netlify path's copy). Kept as an inline
+// CJS copy here for the same reason this file duplicates its rate limiter
+// and enforceDbOperationAccess rather than importing the ESM core — keep all
+// three in sync if this policy changes.
+// ============================================================
+const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
+
+function evaluatePasswordServerSide(password) {
+  const value = String(password || '');
+  const classesMet =
+    (/[a-z]/.test(value) ? 1 : 0) +
+    (/[A-Z]/.test(value) ? 1 : 0) +
+    (/[0-9]/.test(value) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
+  const longEnough = value.length >= PASSWORD_MIN_LENGTH;
+  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
+  const message = valid
+    ? ''
+    : !longEnough
+      ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+      : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
+  return { valid, classesMet, longEnough, message };
 }
 
 function workspaceIdFromSettingsRequest(req) {
@@ -4311,10 +4345,12 @@ function createApp() {
 
   app.post('/backend/auth/signup', async (req, res) => {
     try {
+      if (rateLimitBlocked(res, signupRateLimiter, clientIpFromReq(req))) return;
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
-      if (password.length < 6) return jsonError(res, 400, new Error('Password must be at least 6 characters'));
+      const passwordPolicy = evaluatePasswordServerSide(password);
+      if (!passwordPolicy.valid) return jsonError(res, 400, new Error(passwordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
 
       const existing = await getDb().unsafe('select id from app_users where email = $1 limit 1', [email]);
       if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));
@@ -4336,6 +4372,11 @@ function createApp() {
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
+      // Rate-limit failed AND successful attempts alike, keyed per-email, so a
+      // guessing script can't dodge the limit by varying its own IP. No
+      // complexity check here — existing users must be able to log in with
+      // whatever password they already have.
+      if (rateLimitBlocked(res, signinRateLimiter, `signin:${email}`)) return;
 
       const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
@@ -4411,7 +4452,8 @@ function createApp() {
       const currentPassword = String(req.body?.currentPassword || '');
       const newPassword = String(req.body?.newPassword || '');
       if (!currentPassword || !newPassword) return jsonError(res, 400, new Error('Current and new password are required'));
-      if (newPassword.length < 6) return jsonError(res, 400, new Error('New password must be at least 6 characters'));
+      const newPasswordPolicy = evaluatePasswordServerSide(newPassword);
+      if (!newPasswordPolicy.valid) return jsonError(res, 400, new Error(newPasswordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
 
       const rows = await getDb().unsafe('select id, password_hash from app_users where id = $1 limit 1', [req.userId]);
       const user = rows[0];
@@ -4932,6 +4974,7 @@ module.exports = {
     canMutateWorkspace,
     enforceDbOperationAccess,
     enforceWorkspaceRole,
+    evaluatePasswordServerSide,
     getWorkspaceRole,
     issueToken,
     resetTestState,
