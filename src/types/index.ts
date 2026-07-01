@@ -192,6 +192,25 @@ export interface Task {
   updated_at: string;
 }
 
+export type ThreadItemKind = 'todo' | 'plan' | 'blocker';
+export type ThreadItemStatus = 'open' | 'done' | 'answered' | 'dismissed';
+
+export interface ThreadItem {
+  id: string;
+  workspace_id: string;
+  session_id: string;
+  kind: ThreadItemKind;
+  content: string;
+  status: ThreadItemStatus;
+  order_index: number;
+  message_id: string | null;
+  response: string | null;
+  created_by: string | null;
+  created_by_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskComment {
   id: string;
   task_id: string;

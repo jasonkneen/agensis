@@ -41,6 +41,7 @@ const ALLOWED_TABLES = new Set([
   'activity_events',
   'agent_memory_files',
   'memory_file_comments',
+  'thread_items',
 ]);
 
 const VERSIONED_TABLES = new Set([
@@ -268,7 +269,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
   'agent_connections', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
-  'agent_memory_files', 'memory_file_comments',
+  'agent_memory_files', 'memory_file_comments', 'thread_items',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -308,6 +309,9 @@ const DB_TABLE_ACCESS = {
   memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+  // Per-thread widget items (todo / plan / blocker). Any member with write can
+  // add/toggle; agents write via the same REST path with their run_agents cap.
+  thread_items: DEFAULT_TABLE_ACCESS,
 };
 
 function findFilterValue(filters, column) {
@@ -593,6 +597,28 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_workspace_id ON agent_jobs(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_agent_id ON agent_jobs(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_session_id ON agent_jobs(session_id);
+
+    -- Per-thread widget items surfaced in the chat's right-hand widget rail.
+    -- kind: 'todo' | 'plan' | 'blocker'. Todos/plan use status open|done;
+    -- blockers use open|answered|dismissed and can carry a human response.
+    -- message_id optionally anchors an item to a message for jump-to-scroll.
+    CREATE TABLE IF NOT EXISTS thread_items (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      kind text NOT NULL DEFAULT 'todo' CHECK (kind IN ('todo', 'plan', 'blocker')),
+      content text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'open',
+      order_index double precision NOT NULL DEFAULT 0,
+      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+      response text DEFAULT '',
+      created_by uuid,
+      created_by_agent text DEFAULT '',
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_items_session ON thread_items(session_id, kind, order_index);
+    CREATE INDEX IF NOT EXISTS idx_thread_items_workspace ON thread_items(workspace_id);
 
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';

@@ -43,6 +43,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
+import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { apiAuthHeaders, apiUrl, backendClient, type SystemCapabilities } from '../../lib/backendClient';
@@ -979,6 +980,14 @@ export function ChatWindowContent({
     const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
     setAutoScroll(distanceFromEnd < 32);
   };
+  const handleJumpToMessage = useCallback((messageId: string) => {
+    const el = document.getElementById(`chat-msg-${messageId}`);
+    if (!el) return;
+    setAutoScroll(false);
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('chat-msg-jump-highlight');
+    window.setTimeout(() => el.classList.remove('chat-msg-jump-highlight'), 1600);
+  }, []);
   const openThread = () => {
     setSidePanel('thread');
   };
@@ -1156,7 +1165,7 @@ export function ChatWindowContent({
                 ) : (
                   <div className="flex min-w-0 flex-col">
                     {shownMessages.map((msg, idx) => (
-                      <MessageScrollerItem key={msg.id} scrollAnchor={idx === shownMessages.length - 1}>
+                      <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={idx === shownMessages.length - 1}>
                         <ChatMessageBubble
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
@@ -1507,6 +1516,14 @@ export function ChatWindowContent({
             />
           )}
         </aside>
+      )}
+
+      {!readOnly && (
+        <ThreadWidgetRail
+          workspaceId={workspaceId}
+          sessionId={inferredSessionId}
+          onJumpToMessage={handleJumpToMessage}
+        />
       )}
 
       <Dialog open={catchUpOpen} onOpenChange={setCatchUpOpen}>

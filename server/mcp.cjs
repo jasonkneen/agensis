@@ -568,6 +568,103 @@ function buildTools() {
     },
   });
 
+  // -- Thread widget items ---------------------------------------------------
+  // Per-thread todo / plan / blocker items shown in the chat's widget rail.
+  // Scoped to a specific channel session so they appear alongside that chat.
+  add({
+    name: 'create_thread_item',
+    description: 'Add an item to a chat thread\'s widget rail: kind "todo" (a task for this thread), "plan" (a plan step), or "blocker" (a question the human must answer). Scoped to a channel session_id. Attributed to this agent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'The channel/thread session id these items belong to.' },
+        kind: { type: 'string', enum: ['todo', 'plan', 'blocker'], description: 'Widget the item appears in.' },
+        content: { type: 'string', description: 'The item text (e.g. the to-do, plan step, or the question to ask the human).' },
+        message_id: { type: 'string', description: 'Optional message id to anchor this item to (clicking jumps there).' },
+      },
+      required: ['session_id', 'kind', 'content'],
+      additionalProperties: false,
+    },
+    async run(args, { db, identity, deps }) {
+      const sessionId = requireString(args, 'session_id');
+      const content = requireString(args, 'content');
+      const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : 'todo';
+      await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+      const ordRows = await db.unsafe(
+        'select coalesce(max(order_index), 0) as m from thread_items where session_id = $1 and kind = $2',
+        [sessionId, kind]);
+      const nextOrder = Number(ordRows[0]?.m || 0) + 1;
+      const rows = await db.unsafe(
+        `insert into thread_items (workspace_id, session_id, kind, content, status, order_index, message_id, created_by_agent)
+         values ($1, $2, $3, $4, 'open', $5, $6, $7) returning *`,
+        [identity.workspaceId, sessionId, kind, content, nextOrder,
+         typeof args?.message_id === 'string' && args.message_id.trim() ? args.message_id.trim() : null,
+         String(identity.agentId)]);
+      deps.notifyDbSubscribers('thread_items', 'INSERT', rows);
+      return { item: rows[0] };
+    },
+  });
+
+  add({
+    name: 'update_thread_item',
+    description: 'Update a thread widget item: change its content, mark it done (todo/plan), or dismiss a blocker. To read a human\'s answer to a blocker, fetch the item\'s response field.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        item_id: { type: 'string', description: 'The thread item id.' },
+        content: { type: 'string' },
+        status: { type: 'string', enum: ['open', 'done', 'answered', 'dismissed'] },
+      },
+      required: ['item_id'],
+      additionalProperties: false,
+    },
+    async run(args, { db, identity, deps }) {
+      const itemId = requireString(args, 'item_id');
+      const existing = await db.unsafe(
+        'select id from thread_items where id = $1 and workspace_id = $2 limit 1', [itemId, identity.workspaceId]);
+      if (!existing[0]) throw new ToolError('Thread item not found in this workspace');
+      const status = ['open', 'done', 'answered', 'dismissed'].includes(args?.status) ? args.status : null;
+      const rows = await db.unsafe(
+        `update thread_items set
+           content = coalesce($3, content),
+           status = coalesce($4, status),
+           updated_at = now()
+         where id = $1 and workspace_id = $2 returning *`,
+        [itemId, identity.workspaceId,
+         typeof args?.content === 'string' ? args.content : null,
+         status]);
+      deps.notifyDbSubscribers('thread_items', 'UPDATE', rows);
+      return { item: rows[0] };
+    },
+  });
+
+  add({
+    name: 'list_thread_items',
+    description: 'List the widget-rail items for a chat thread (todo / plan / blocker). Use to check whether the human has answered a blocker (see each item\'s status and response).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'The channel/thread session id.' },
+        kind: { type: 'string', enum: ['todo', 'plan', 'blocker'], description: 'Optional filter by widget.' },
+      },
+      required: ['session_id'],
+      additionalProperties: false,
+    },
+    async run(args, { db, identity }) {
+      const sessionId = requireString(args, 'session_id');
+      await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+      const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : null;
+      const rows = kind
+        ? await db.unsafe(
+            'select * from thread_items where session_id = $1 and kind = $2 order by order_index asc',
+            [sessionId, kind])
+        : await db.unsafe(
+            'select * from thread_items where session_id = $1 order by kind, order_index asc',
+            [sessionId]);
+      return { items: rows };
+    },
+  });
+
   // -- Workspace memory ------------------------------------------------------
 
   add({
