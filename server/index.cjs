@@ -2736,7 +2736,14 @@ async function submitMcpJobResult({ workspaceId, agentId, jobId, responseText = 
   const job = rows[0];
   if (!job) throw badRequest('Agent job not found');
   if (parseJsonObject(job.metadata).mode !== 'mcp') throw badRequest('Job is not an MCP job');
-  if (job.status !== 'running') throw badRequest(`Job is ${job.status}, not awaiting a result`);
+  // Accept a late result even after the reaper force-failed the job to 'error'
+  // (the client wasn't actually dead, just slow) — recovering the real response
+  // is better than discarding it. Only a job that already completed successfully
+  // ('done') or was never claimed ('queued') is genuinely not awaiting a result.
+  // (M3, 2026-07 review.)
+  if (job.status !== 'running' && job.status !== 'error') {
+    throw badRequest(`Job is ${job.status}, not awaiting a result`);
+  }
   touchMcpPresence(agentId); // a submitting client is alive
   await finalizeAgentJobResult(job, { responseText, errorText });
   return { jobId: job.id, status: errorText ? 'error' : 'done' };
@@ -2747,10 +2754,14 @@ async function submitMcpJobResult({ workspaceId, agentId, jobId, responseText = 
 async function reapStuckMcpJobs() {
   try {
     const rows = await getDb().unsafe(
+      // Time out on run duration (started_at), not creation, so a legitimately
+      // long coding/research turn isn't force-failed just because it queued for
+      // a while first; queued-but-never-claimed jobs fall back to created_at.
+      // (M3, 2026-07 review — mirrors the daemon's started_at-based reaper.)
       `select j.*, a.name as agent_name, a.handle as agent_handle
        from agent_jobs j left join workspace_agents a on a.id = j.agent_id
        where (j.metadata->>'mode') = 'mcp' and j.status in ('queued', 'running')
-         and j.created_at < now() - interval '180 seconds'`,
+         and coalesce(j.started_at, j.created_at) < now() - interval '240 seconds'`,
     );
     for (const job of rows) {
       await finalizeAgentJobResult(job, { errorText: 'the MCP client stopped responding' }).catch(() => {});
