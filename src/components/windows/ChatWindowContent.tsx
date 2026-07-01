@@ -1819,7 +1819,7 @@ function ChatMessageBubble({
   const isThinkingPlaceholder = isThinkingPlaceholderMessage(msg);
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
-  const initials = isUser ? 'You'.slice(0, 2).toUpperCase() : (senderName.slice(0, 2).toUpperCase() || 'AI');
+  const initials = senderName.slice(0, 2).toUpperCase() || (isUser ? 'ME' : 'AI');
   const createdAt = msg.created_at ? new Date(msg.created_at) : null;
   const timeLabel = createdAt && Number.isFinite(createdAt.getTime())
     ? createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

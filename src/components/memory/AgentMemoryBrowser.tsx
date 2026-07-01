@@ -50,6 +50,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
+  const [showComments, setShowComments] = useState(false);
 
   // Master-detail is responsive: above SPLIT_WIDTH the selected file opens as a
   // right-hand panel with the list still visible; below it, the detail takes over
@@ -157,6 +158,15 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
             ) : (
               <Badge variant="outline" className="gap-1"><Lock className="size-3" />Read-only</Badge>
             )}
+            <Button
+              type="button"
+              variant={showComments ? 'default' : 'ghost'}
+              size="icon-sm"
+              onClick={() => setShowComments(v => !v)}
+              title={showComments ? 'Hide comments' : 'Show comments'}
+            >
+              <MessageCircle className="size-4" />
+            </Button>
           </div>
           <ScrollArea className="min-h-0 flex-1">
             {viewMode === 'preview' ? (
@@ -174,16 +184,19 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
             )}
           </ScrollArea>
         </div>
-        <DocumentComments
-          comments={comments.comments}
-          topLevel={comments.topLevel}
-          replyMap={comments.replyMap}
-          currentUserId={userId}
-          currentUserEmail={userEmail}
-          onCreate={comments.createComment}
-          onResolve={comments.resolveComment}
-          onDelete={comments.deleteComment}
-        />
+        {showComments && (
+          <DocumentComments
+            comments={comments.comments}
+            topLevel={comments.topLevel}
+            replyMap={comments.replyMap}
+            currentUserId={userId}
+            currentUserEmail={userEmail}
+            onCreate={comments.createComment}
+            onResolve={comments.resolveComment}
+            onDelete={comments.deleteComment}
+            onClose={() => setShowComments(false)}
+          />
+        )}
       </div>
     );
   };
