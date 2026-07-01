@@ -18,6 +18,7 @@
 // ============================================================================
 
 const test = require('node:test');
+const { mock } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -25,7 +26,40 @@ const { pathToFileURL } = require('node:url');
 let handler;   // netlify default export
 let core;      // shared/backend-core.mjs
 
+// Plan 005 — token expiry and revocation — means requireUserId (-> verifyAuthToken
+// -> getTokenVersion) now needs a real `select token_version from app_users ...`
+// row for ANY successfully-authenticated request, including ones that only care
+// about post-auth route behavior. There is still no live Postgres in this test
+// file (by design, see the file header) and backend.mjs has no DB-injection test
+// hook, so `@netlify/database` itself is mocked at the module level, before
+// backend.mjs is imported (ESM mocks must be installed before the module under
+// test is first loaded). `dbQueryImpl` is a per-test override (see the
+// change-password test below); the default only ever needs to answer the
+// token_version lookup, since every other test in this file either never
+// authenticates successfully (401-before-DB) or calls the shared core functions
+// directly with their own mock `db`/`getTokenVersion`.
+let dbQueryImpl = null;
+
 test.before(async () => {
+  mock.module('@netlify/database', {
+    namedExports: {
+      getDatabase: () => ({
+        pool: {
+          async query(text, params) {
+            if (dbQueryImpl) return dbQueryImpl(text, params);
+            const normalized = String(text).replace(/\s+/g, ' ').trim().toLowerCase();
+            if (normalized.startsWith('alter table') || normalized.startsWith('create table') || normalized.startsWith('create index')) {
+              return { rows: [] }; // ensureAppUserProfileColumns() etc. — schema DDL, not under test here
+            }
+            if (/select token_version from app_users/i.test(text)) {
+              return { rows: [{ token_version: '1' }] };
+            }
+            throw new Error(`Unexpected DB query in netlify-parity test (no dbQueryImpl set): ${text}`);
+          },
+        },
+      }),
+    },
+  });
   const backend = await import(pathToFileURL(path.resolve(__dirname, '../netlify/functions/backend.mjs')).href);
   handler = backend.default;
   core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.mjs')).href);
@@ -156,4 +190,69 @@ test('assertWorkspaceRole throws 403 without a role (gates settings/secrets, ai-
     () => core.assertWorkspaceRole({ userId: 'u', workspaceId: 'ws-1', capability: 'run_agents', db }),
     { status: 403 },
   );
+});
+
+// ----------------------------------------------------------------------------
+// Plan 004 — server-side auth hardening (password policy + rate limiting).
+//
+// handleAuth's very first line calls `ensureAppUserProfileColumns()`, which
+// hits a real DB connection before any of our new checks run, and this test
+// file (unlike backend-auth.test.cjs) has no `setTestDb`-style seam for the
+// Netlify path. So — following the same pattern already used above for
+// verifyAuthToken/enforceDbOperationAccess/assertWorkspaceRole — these test
+// the shared-core building blocks directly rather than a full handler
+// round-trip. `handleChangeMyPassword` is the one exception: it validates the
+// new password BEFORE touching the DB, so it's reachable end-to-end here.
+// ----------------------------------------------------------------------------
+
+test('evaluatePasswordServerSide enforces length + character-class-count policy (Netlify copy)', () => {
+  const weakShort = core.evaluatePasswordServerSide('abc123');
+  assert.equal(weakShort.valid, false);
+
+  const weakSingleClass = core.evaluatePasswordServerSide('abcdefgh');
+  assert.equal(weakSingleClass.valid, false);
+  assert.equal(weakSingleClass.classesMet, 1);
+
+  const compliant = core.evaluatePasswordServerSide('Tr0ub4dor&3xyz');
+  assert.equal(compliant.valid, true);
+});
+
+test('createRateLimiter (the factory backing the signin/signup limiters) blocks past its max', () => {
+  const limiter = core.createRateLimiter({ windowMs: 60_000, max: 5 });
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(limiter.check('same-key').allowed, true, `attempt ${i + 1} should be allowed`);
+  }
+  const sixth = limiter.check('same-key');
+  assert.equal(sixth.allowed, false);
+  assert.ok(sixth.retryAfterMs > 0);
+
+  // A different key has its own independent budget (per-email/per-IP isolation).
+  assert.equal(limiter.check('other-key').allowed, true);
+});
+
+test('POST /backend/users/me/change-password rejects a weak newPassword (validated before any DB call)', async () => {
+  const prevSecret = process.env.AUTH_SECRET;
+  try {
+    process.env.AUTH_SECRET = 'change-password-test-secret';
+    // Plan 005 token format: `${userId}.${tokenVersion}.${sig}`, sig computed
+    // over the `${userId}.${tokenVersion}` payload. token_version '1' matches
+    // the default the module-level DB mock (see test.before above) answers for
+    // the auth step's token_version lookup.
+    const payload = 'user-1.1';
+    const sig = require('crypto').createHmac('sha256', 'change-password-test-secret').update(payload).digest('base64url');
+    const token = `${payload}.${sig}`;
+
+    const req = new Request('http://localhost/backend/users/me/change-password', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: 'whatever-current', newPassword: 'abc123' }),
+    });
+    const res = await handler(req);
+    const body = await res.json();
+    assert.equal(res.status, 400);
+    assert.match(body.error.message, /character|characters/i);
+  } finally {
+    if (prevSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = prevSecret;
+  }
 });

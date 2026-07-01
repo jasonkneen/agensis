@@ -1,11 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createMcpHandler } = require('../server/mcp.cjs');
+const { __test } = require('../server/index.cjs');
+const { roleHasWorkspaceCapability } = __test;
 
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
 const AGENT = { kind: 'agent', agentId: 'agent-1', workspaceId: WS, name: 'Coder', handle: 'coder', agent: { model: 'claude-opus-4-8', description: 'coding agent' } };
 const INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true };
+const VIEWER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-viewer', name: 'viewer@x.com', autoApprove: true, role: 'viewer' };
+const COMMENTER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-commenter', name: 'commenter@x.com', autoApprove: true, role: 'commenter' };
+const EDITOR_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-editor', name: 'editor@x.com', autoApprove: true, role: 'editor' };
+const ADMIN_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-admin', name: 'admin@x.com', autoApprove: true, role: 'admin' };
 const WORKSPACE = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
 
 // Minimal fake postgres client. Recognizes only the statements the MCP tools
@@ -38,7 +44,15 @@ function makeDb() {
 function makeDeps(overrides = {}) {
   const continueCalls = [];
   const notifyCalls = [];
-  const tokenMap = overrides.tokenMap || { 'good-token': AGENT, 'invite-token': INVITE, 'ws-token': WORKSPACE };
+  const tokenMap = overrides.tokenMap || {
+    'good-token': AGENT,
+    'invite-token': INVITE,
+    'ws-token': WORKSPACE,
+    'viewer-invite-token': VIEWER_INVITE,
+    'commenter-invite-token': COMMENTER_INVITE,
+    'editor-invite-token': EDITOR_INVITE,
+    'admin-invite-token': ADMIN_INVITE,
+  };
   const deps = {
     getDb: () => overrides.db,
     verifyMcpToken: async (token) => tokenMap[token] || null,
@@ -50,6 +64,7 @@ function makeDeps(overrides = {}) {
     resolveWorkspaceAgentByHandle: async (_ws, handle) => (handle === 'coder' ? { id: 'agent-1', handle: 'coder', name: 'Coder', mcp_approved: true } : null),
     registerAgentRequest: async (arg) => ({ registrationId: 'reg-1', status: arg.autoApprove ? 'approved' : 'pending', handle: arg.asHandle || arg.handle || arg.name || 'agent' }),
     getRegistrationStatus: async () => ({ registrationId: 'reg-1', status: 'approved', agentId: 'agent-1', handle: 'coder' }),
+    roleHasWorkspaceCapability,
     rateLimiter: null,
     rateLimitBlocked: null,
     runtimeSchemaReady: Promise.resolve(),
@@ -362,4 +377,66 @@ test('a workspace client CAN claim as an approved agent', async () => {
   const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'claim_job', arguments: { as: 'coder' } }) });
   assert.ok(!res.body.result.isError);
   assert.equal(claims[0].agentId, 'agent-1');
+});
+
+// --- invite role capability gating on write tools ---------------------------
+// A viewer/commenter invite grants read-only/comment-only access over HTTP
+// (enforceDbOperationAccess); these tools must enforce the same `write`
+// capability for invite-kind identities so an invite link never silently
+// grants full write access over MCP.
+
+test('a viewer invite cannot write_doc (create path) — rejected before any DB write', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', {
+    name: 'write_doc', arguments: { title: 'Sneaky doc', content: 'hi' },
+  }) });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /read-only/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('insert into documents')), 'must not reach the insert');
+});
+
+test('a commenter invite cannot create_task — rejected before any DB write', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'commenter-invite-token', body: rpc('tools/call', {
+    name: 'create_task', arguments: { title: 'Sneaky task' },
+  }) });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /read-only/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('insert into tasks')), 'must not reach the insert');
+});
+
+test('an editor invite CAN write_doc — no regression for the intended-write case', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'editor-invite-token', body: rpc('tools/call', {
+    name: 'write_doc', arguments: { title: 'Real doc', content: 'hi' },
+  }) });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  assert.ok(db.calls.some((c) => c.n.startsWith('insert into documents')), 'must reach the insert');
+});
+
+test('an admin invite CAN add_memory — no regression for the intended-write case', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'admin-invite-token', body: rpc('tools/call', {
+    name: 'add_memory', arguments: { fact: 'the sky is blue' },
+  }) });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  assert.ok(db.calls.some((c) => c.n.startsWith('insert into memory_facts')), 'must reach the insert');
+});
+
+test('a viewer invite CAN still read via a read-only tool (fix did not over-broadly block reads)', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', {
+    name: 'list_docs', arguments: {},
+  }) });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
 });

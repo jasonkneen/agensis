@@ -976,6 +976,11 @@ const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Plan 004 — auth hardening: signin is keyed per-email (matches the client's
+// documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
+// to slow down bulk account creation without punishing normal signup retries.
+const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
 function rateLimitBlocked(res, limiter, key) {
@@ -990,6 +995,35 @@ function rateLimitBlocked(res, limiter, key) {
 function clientIpFromReq(req) {
   const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
   return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+// ============================================================
+// Plan 004 — auth hardening: server-side password policy.
+// Mirrors src/lib/passwordPolicy.ts's `evaluatePassword` rule (min length +
+// character-class count) and shared/backend-core.mjs's
+// `evaluatePasswordServerSide` (the Netlify path's copy). Kept as an inline
+// CJS copy here for the same reason this file duplicates its rate limiter
+// and enforceDbOperationAccess rather than importing the ESM core — keep all
+// three in sync if this policy changes.
+// ============================================================
+const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
+
+function evaluatePasswordServerSide(password) {
+  const value = String(password || '');
+  const classesMet =
+    (/[a-z]/.test(value) ? 1 : 0) +
+    (/[A-Z]/.test(value) ? 1 : 0) +
+    (/[0-9]/.test(value) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
+  const longEnough = value.length >= PASSWORD_MIN_LENGTH;
+  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
+  const message = valid
+    ? ''
+    : !longEnough
+      ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+      : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
+  return { valid, classesMet, longEnough, message };
 }
 
 function workspaceIdFromSettingsRequest(req) {
@@ -1308,7 +1342,7 @@ async function verifyAgentConnectToken(token, req = null) {
 async function verifyInviteToken(token) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, email from workspace_invites
+    `select id, workspace_id, email, role from workspace_invites
       where token = $1 and status in ('pending', 'accepted')
         and (expires_at is null or expires_at > now())
       limit 1`,
@@ -1317,7 +1351,7 @@ async function verifyInviteToken(token) {
   const invite = rows[0];
   if (!invite) return null;
   // An invite link is pre-authorization → a client joining through it is auto-approved.
-  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true };
+  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true, role: invite.role };
 }
 
 // The one workspace MCP token (issued in settings). Authenticates any client into the
@@ -3961,6 +3995,21 @@ function createApp() {
     const resolved = path.resolve(root, String(relativePath || ''));
     const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
     if (resolved !== root && !resolved.startsWith(rootWithSep)) return null;
+    // Lexical containment isn't enough — a symlink inside root can point outside it.
+    // Only realpath-check if the target exists; callers that need "path must exist"
+    // semantics (e.g. resolveStagePaths, which stages an existing file) already get
+    // that for free, and callers reading a possibly-new path should catch the ENOENT
+    // case themselves the way the diff route's untracked-file branch already does.
+    let realTarget;
+    try {
+      realTarget = fs.realpathSync(resolved);
+    } catch {
+      return resolved; // Path doesn't exist yet — lexical check already passed; let the
+                        // caller's own existence check (if any) handle the not-found case.
+    }
+    const realRoot = fs.realpathSync(root);
+    const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+    if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) return null;
     return resolved;
   }
 
@@ -4055,23 +4104,13 @@ function createApp() {
         if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
           return jsonError(res, 404, new Error('File not found'));
         }
-        // resolveWithinRoot only checks the lexical path — a symlink inside the
-        // workspace root could still point outside it. This branch reads raw
-        // file content (unlike the git-diff branch below, which stays inside
-        // git's own repository boundary), so re-validate against the real path
-        // right before reading.
-        let realTarget;
-        try {
-          realTarget = fs.realpathSync(target);
-        } catch {
-          return jsonError(res, 404, new Error('File not found'));
-        }
-        const realRoot = fs.realpathSync(root);
-        const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
-        if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep)) {
-          return jsonError(res, 400, new Error('path must stay within the workspace project root'));
-        }
-        const content = fs.readFileSync(realTarget, 'utf8').slice(0, 200_000);
+        // This branch reads raw file content (unlike the git-diff branch below,
+        // which stays inside git's own repository boundary via `git diff`), so a
+        // symlink inside the workspace root pointing outside it would otherwise
+        // let an attacker read arbitrary files on the host. `resolveWithinRoot`
+        // above already realpath-validates `target` against `root`, so it's safe
+        // to read directly here.
+        const content = fs.readFileSync(target, 'utf8').slice(0, 200_000);
         return res.json({ data: { path: relativePath, untracked: true, diff: '', content }, error: null });
       }
 
@@ -4346,6 +4385,7 @@ function createApp() {
     getRegistrationStatus,
     getAgentConnectionCommand: buildAgentConnectionCommand,
     enforceWorkspaceRole,
+    roleHasWorkspaceCapability,
     rateLimiter: mcpRateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,
@@ -4475,10 +4515,12 @@ function createApp() {
 
   app.post('/backend/auth/signup', async (req, res) => {
     try {
+      if (rateLimitBlocked(res, signupRateLimiter, clientIpFromReq(req))) return;
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
-      if (password.length < 6) return jsonError(res, 400, new Error('Password must be at least 6 characters'));
+      const passwordPolicy = evaluatePasswordServerSide(password);
+      if (!passwordPolicy.valid) return jsonError(res, 400, new Error(passwordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
 
       const existing = await getDb().unsafe('select id from app_users where email = $1 limit 1', [email]);
       if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));
@@ -4501,6 +4543,11 @@ function createApp() {
       const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
       if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
+      // Rate-limit failed AND successful attempts alike, keyed per-email, so a
+      // guessing script can't dodge the limit by varying its own IP. No
+      // complexity check here — existing users must be able to log in with
+      // whatever password they already have.
+      if (rateLimitBlocked(res, signinRateLimiter, `signin:${email}`)) return;
 
       const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
       const user = rows[0];
@@ -4576,7 +4623,8 @@ function createApp() {
       const currentPassword = String(req.body?.currentPassword || '');
       const newPassword = String(req.body?.newPassword || '');
       if (!currentPassword || !newPassword) return jsonError(res, 400, new Error('Current and new password are required'));
-      if (newPassword.length < 6) return jsonError(res, 400, new Error('New password must be at least 6 characters'));
+      const newPasswordPolicy = evaluatePasswordServerSide(newPassword);
+      if (!newPasswordPolicy.valid) return jsonError(res, 400, new Error(newPasswordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
 
       const rows = await getDb().unsafe('select id, password_hash from app_users where id = $1 limit 1', [req.userId]);
       const user = rows[0];
@@ -5128,6 +5176,7 @@ module.exports = {
     canMutateWorkspace,
     enforceDbOperationAccess,
     enforceWorkspaceRole,
+    evaluatePasswordServerSide,
     getWorkspaceRole,
     issueToken,
     resetTestState,

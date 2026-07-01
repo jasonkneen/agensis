@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldGroup } from '@/components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Spinner } from '@/components/ui/spinner';
+import { evaluatePassword, PASSWORD_MIN_CLASSES, PASSWORD_MIN_LENGTH } from '../../lib/passwordPolicy';
 
 interface AuthPageProps {
   onSignIn: (email: string, password: string) => Promise<{ error: string | null }>;
@@ -24,47 +25,6 @@ interface AuthPageProps {
  *   - Password reset and email verification are NOT implemented server-side,
  *     so they are intentionally absent here (we do not fake a reset flow).
  */
-
-// --- Signup password policy -------------------------------------------------
-const PASSWORD_MIN_LENGTH = 10;
-const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
-
-interface PasswordPolicyResult {
-  valid: boolean;
-  classesMet: number;
-  longEnough: boolean;
-  /** Human-readable label for the strength hint. */
-  label: 'Too short' | 'Weak' | 'Fair' | 'Strong';
-  /** Inline error to show when invalid (empty when valid or password blank). */
-  message: string;
-}
-
-function evaluatePassword(password: string): PasswordPolicyResult {
-  const classesMet =
-    (/[a-z]/.test(password) ? 1 : 0) +
-    (/[A-Z]/.test(password) ? 1 : 0) +
-    (/[0-9]/.test(password) ? 1 : 0) +
-    (/[^A-Za-z0-9]/.test(password) ? 1 : 0);
-  const longEnough = password.length >= PASSWORD_MIN_LENGTH;
-  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
-
-  let label: PasswordPolicyResult['label'];
-  if (!longEnough) label = 'Too short';
-  else if (classesMet >= 4) label = 'Strong';
-  else if (classesMet >= PASSWORD_MIN_CLASSES) label = 'Fair';
-  else label = 'Weak';
-
-  let message = '';
-  if (password.length > 0 && !valid) {
-    if (!longEnough) {
-      message = `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
-    } else {
-      message = `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
-    }
-  }
-
-  return { valid, classesMet, longEnough, label, message };
-}
 
 // --- Sign-in lockout (client-side exponential back-off) ---------------------
 const LOCKOUT_THRESHOLD = 5; // back-off kicks in after this many failures

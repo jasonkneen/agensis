@@ -74,6 +74,14 @@ function makeDb({ owners = {}, roles = {}, authSecret = 'test-secret' } = {}) {
         return row ? [row] : [];
       }
 
+      // Plan 005 — verifyToken now checks token_version on every authenticated
+      // request; every __test.issueToken(...) call in this file uses version
+      // '1' (see below), so a fixed answer is enough — revocation isn't under
+      // test here.
+      if (normalized.startsWith('select token_version from app_users where id = $1')) {
+        return [{ token_version: '1' }];
+      }
+
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };
@@ -137,7 +145,7 @@ test('a spoofed .html upload (claimed type image/png) is stored with the server 
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -163,7 +171,7 @@ test('fetching an .html-named upload returns Content-Disposition: attachment and
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const uploadResponse = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -191,7 +199,7 @@ test('fetching an .svg-named upload also returns Content-Disposition: attachment
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const uploadResponse = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -220,7 +228,7 @@ test('a legitimate .png upload is unaffected — stays inline with Content-Type:
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const uploadResponse = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -259,7 +267,7 @@ test('a CRUD-bypass that sets a stored type to text/html directly is still serve
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const uploadResponse = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -296,7 +304,7 @@ test('an extension that only "matches" the allowlist via prototype inheritance (
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -319,7 +327,7 @@ test('an upload with an extension outside the server-side allowlist (.exe) is re
   });
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-editor');
+    const token = await __test.issueToken('user-editor', '1');
     const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -339,7 +347,7 @@ test('a non-owner/editor (no workspace access) cannot upload', async () => {
   installDb({ authSecret: 'fixed-test-secret' }); // no roles at all
 
   await withServer(async (baseUrl) => {
-    const token = await __test.issueToken('user-stranger');
+    const token = await __test.issueToken('user-stranger', '1');
     const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

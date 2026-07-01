@@ -12,7 +12,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.cjs",
+    "test": "node --experimental-test-module-mocks --test tests/*.test.cjs",
     "test:unit": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "icon": "node scripts/generate-icon.cjs",

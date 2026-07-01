@@ -15,15 +15,15 @@ correctness items plus two cheap, independent DX/tech-debt wins.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001  | Bump `ws` past its pre-auth-reachable DoS advisory | P1 | S | — | TODO |
+| 001  | Bump `ws` past its pre-auth-reachable DoS advisory | P1 | S | — | DONE |
 | 002  | Harden file upload/serving against stored XSS | P1 | M | — | DONE |
-| 003  | Enforce invite role on MCP write tools | P1 | S | — | TODO |
-| 004  | Server-side password policy + rate limiting (both backends) | P1 | M | — | TODO |
+| 003  | Enforce invite role on MCP write tools | P1 | S | — | DONE |
+| 004  | Server-side password policy + rate limiting (both backends) | P1 | M | — | DONE |
 | 005  | Token expiry and revocation | P1 | M | — | DONE |
-| 006  | Fix canonical migration drift (`app_users` profile columns) | P1 | S | — | TODO |
-| 007  | Shared symlink-safe path guard (fix git-stage route) | P1 | S | — | TODO |
+| 006  | Fix canonical migration drift (`app_users` profile columns) | P1 | S | — | DONE |
+| 007  | Shared symlink-safe path guard (fix git-stage route) | P1 | S | — | DONE |
 | 008  | Fix loopback dev-fallback Host-header bypass | P2 | S | — | DONE |
-| 009  | Remove dead canvas multi-window "Group" button | P2 | S | — | TODO |
+| 009  | Remove dead canvas multi-window "Group" button | P2 | S | — | DONE |
 | 010  | ESLint coverage for the backend | P2 | M | — | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line
