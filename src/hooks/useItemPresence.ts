@@ -63,7 +63,6 @@ function publicWindowSnapshot(win: FloatingWindow, ownerUserId?: string): Floati
     isPrivate: !!win.isPrivate,
     locked: !!win.locked,
     shared: !!win.shared,
-    layoutGroupId: win.layoutGroupId,
   };
 }
 

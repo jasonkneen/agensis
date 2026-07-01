@@ -24,16 +24,14 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
     minimizeWindow,
     selectedWindowIds,
     setSelectedWindowIds,
-    groupWindows,
     focusWindowGroup,
     minimizeWindowGroup,
     ungroupTiledWindows,
-    ungroupWindows,
   } = windowManager;
 
   const value = useMemo<WindowManagerValue>(
-    () => ({ windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows }),
-    [windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows],
+    () => ({ windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows }),
+    [windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows],
   );
 
   return <WindowManagerContext.Provider value={value}>{children}</WindowManagerContext.Provider>;

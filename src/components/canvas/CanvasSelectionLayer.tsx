@@ -25,7 +25,7 @@ function rectsIntersect(a: SelectionRect, b: SelectionRect): boolean {
 }
 
 export function CanvasSelectionLayer() {
-  const { windows, selectedWindowIds, setSelectedWindowIds, groupWindows } = useWindowManager();
+  const { windows, selectedWindowIds, setSelectedWindowIds } = useWindowManager();
   const layerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ start: Point; pointerId: number } | null>(null);
   const [currentRect, setCurrentRect] = useState<SelectionRect | null>(null);
@@ -143,12 +143,6 @@ export function CanvasSelectionLayer() {
           onPointerDown={e => e.stopPropagation()}
         >
           <span className="text-xs text-muted-foreground">{selectedWindowIds.length} windows selected</span>
-          <button
-            className="text-xs font-medium text-primary hover:underline"
-            onClick={() => groupWindows(selectedWindowIds)}
-          >
-            Group
-          </button>
           <button
             className="ml-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={clearSelection}
