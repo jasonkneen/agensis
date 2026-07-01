@@ -88,7 +88,7 @@ export function useThreadItems(
       status: input.status ?? 'open',
       order_index: nextOrder,
       message_id: input.message_id ?? null,
-    });
+    }, `thread_items_${sessionId}`);
     if (data) {
       const item = data as unknown as ThreadItem;
       setItems(prev => prev.some(i => i.id === item.id) ? prev : [...prev, item]);
@@ -98,12 +98,12 @@ export function useThreadItems(
   }, [workspaceId, sessionId, userId, items]);
 
   const updateItem = useCallback(async (id: string, updates: Partial<ThreadItem>) => {
-    const result = await offlineUpdate('thread_items', id, updates as Record<string, unknown>);
+    const result = await offlineUpdate('thread_items', id, updates as Record<string, unknown>, `thread_items_${sessionId}`);
     if (result) {
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...result } as ThreadItem : i));
     }
     return result;
-  }, []);
+    }, [sessionId]);
 
   const toggleDone = useCallback(async (item: ThreadItem) => {
     const next: ThreadItemStatus = item.status === 'done' ? 'open' : 'done';
@@ -115,10 +115,10 @@ export function useThreadItems(
   }, [updateItem]);
 
   const deleteItem = useCallback(async (id: string) => {
-    await offlineDelete('thread_items', id);
+    await offlineDelete('thread_items', id, `thread_items_${sessionId}`);
     setItems(prev => prev.filter(i => i.id !== id));
     return true;
-  }, []);
+    }, [sessionId]);
 
   const byKind = useMemo(() => {
     const groups: Record<ThreadItemKind, ThreadItem[]> = { todo: [], plan: [], blocker: [] };

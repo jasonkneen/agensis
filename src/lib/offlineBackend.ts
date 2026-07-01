@@ -1,9 +1,14 @@
 import { backendClient } from './backendClient';
-import { enqueue, cacheSet, cacheGet } from './offlineDb';
+import { enqueue, cacheSet, cacheGet, cacheApplyInsert, cacheApplyUpdate, cacheApplyDelete } from './offlineDb';
 
+// The three mutation helpers accept an optional `cacheKey` (the same key the
+// hook passes to cachedFetch). When a mutation is queued offline, the cached
+// collection under that key is updated too, so a reload while still offline
+// reflects the change instead of the stale snapshot (M8).
 export async function offlineInsert(
   table: string,
   payload: Record<string, unknown>,
+  cacheKey?: string,
 ): Promise<Record<string, unknown> | null> {
   const now = new Date().toISOString();
   const record = {
@@ -22,6 +27,7 @@ export async function offlineInsert(
   }
 
   await enqueue({ table, operation: 'insert', payload: record });
+  if (cacheKey) await cacheApplyInsert(cacheKey, record);
   return record;
 }
 
@@ -29,6 +35,7 @@ export async function offlineUpdate(
   table: string,
   id: string,
   updates: Record<string, unknown>,
+  cacheKey?: string,
 ): Promise<Record<string, unknown> | null> {
   const now = new Date().toISOString();
   const serverPayload = { ...updates, updated_at: now };
@@ -40,12 +47,14 @@ export async function offlineUpdate(
   }
 
   await enqueue({ table, operation: 'update', payload: fullPayload });
+  if (cacheKey) await cacheApplyUpdate(cacheKey, id, serverPayload);
   return fullPayload;
 }
 
 export async function offlineDelete(
   table: string,
   id: string,
+  cacheKey?: string,
 ): Promise<boolean> {
   if (navigator.onLine) {
     const { error } = await backendClient.from(table).delete().eq('id', id);
@@ -53,6 +62,7 @@ export async function offlineDelete(
   }
 
   await enqueue({ table, operation: 'delete', payload: { id } });
+  if (cacheKey) await cacheApplyDelete(cacheKey, id);
   return true;
 }
 

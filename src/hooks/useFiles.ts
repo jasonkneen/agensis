@@ -62,9 +62,9 @@ export function useFiles(workspaceId: string | null) {
   }, [workspaceId]);
 
   const deleteFile = useCallback(async (id: string) => {
-    await offlineDelete('uploaded_files', id);
+    await offlineDelete('uploaded_files', id, `files_${workspaceId}`);
     setFiles(prev => prev.filter(f => f.id !== id));
-  }, []);
+  }, [workspaceId]);
 
   return { files, loading, uploadFiles, deleteFile };
 }

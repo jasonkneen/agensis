@@ -33,7 +33,7 @@ export function useWorkspaces(userId: string | undefined) {
     description: string = ''
   ) => {
     if (!userId) return null;
-    const data = await offlineInsert('workspaces', { name, icon, description, user_id: userId });
+    const data = await offlineInsert('workspaces', { name, icon, description, user_id: userId }, 'workspaces');
     if (data) {
       const ws = data as unknown as Workspace;
       setWorkspaces(prev => [...prev, ws]);

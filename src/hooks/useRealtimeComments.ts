@@ -91,7 +91,7 @@ export function useRealtimeComments<T extends CommentRow>(
       user_id: userId ?? null,
       resolved: false,
     });
-    const data = await offlineInsert(config.table, payload);
+    const data = await offlineInsert(config.table, payload, `${config.table}_${filterValue}`);
     if (data) {
       const comment = config.castRow(data);
       setComments(prev => prev.some(c => c.id === comment.id) ? prev : [...prev, comment]);
@@ -101,22 +101,22 @@ export function useRealtimeComments<T extends CommentRow>(
   }, [filterValue, workspaceId, userId, config]);
 
   const updateComment = useCallback(async (id: string, updates: Partial<T>) => {
-    const result = await offlineUpdate(config.table, id, updates as Record<string, unknown>);
+    const result = await offlineUpdate(config.table, id, updates as Record<string, unknown>, `${config.table}_${filterValue}`);
     if (result) {
       setComments(prev => prev.map(c => c.id === id ? { ...c, ...result } as T : c));
     }
     return result;
-  }, [config.table]);
+    }, [config.table, filterValue]);
 
   const resolveComment = useCallback(async (id: string, resolved: boolean) => {
     return updateComment(id, { resolved } as Partial<T>);
   }, [updateComment]);
 
   const deleteComment = useCallback(async (id: string) => {
-    await offlineDelete(config.table, id);
+    await offlineDelete(config.table, id, `${config.table}_${filterValue}`);
     setComments(prev => prev.filter(c => c.id !== id && c.parent_id !== id));
     return true;
-  }, [config.table]);
+    }, [config.table, filterValue]);
 
   const topLevel = comments.filter(c => !c.parent_id);
   const replyMap = comments.reduce<Record<string, T[]>>((acc, c) => {

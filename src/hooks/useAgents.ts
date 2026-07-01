@@ -103,7 +103,7 @@ export function useAgents(workspaceId: string | null, userId?: string) {
       model: input.model ?? 'auto',
       run_mode: input.run_mode ?? 'builtin',
       enabled: true,
-    });
+    }, `agents_${workspaceId}`);
     if (data) {
       const agent = data as unknown as WorkspaceAgent;
       setAgents(prev => prev.some(a => a.id === agent.id) ? prev : [...prev, agent]);
@@ -113,18 +113,18 @@ export function useAgents(workspaceId: string | null, userId?: string) {
   }, [workspaceId, userId]);
 
   const updateAgent = useCallback(async (id: string, updates: Partial<WorkspaceAgent>) => {
-    const result = await offlineUpdate('workspace_agents', id, updates as Record<string, unknown>);
+    const result = await offlineUpdate('workspace_agents', id, updates as Record<string, unknown>, `agents_${workspaceId}`);
     if (result) {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...result } as WorkspaceAgent : a));
     }
     return result;
-  }, []);
+    }, [workspaceId]);
 
   const deleteAgent = useCallback(async (id: string) => {
-    await offlineDelete('workspace_agents', id);
+    await offlineDelete('workspace_agents', id, `agents_${workspaceId}`);
     setAgents(prev => prev.filter(a => a.id !== id));
     return true;
-  }, []);
+    }, [workspaceId]);
 
   return {
     agents,

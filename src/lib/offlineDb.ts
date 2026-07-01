@@ -143,6 +143,30 @@ export async function cacheGet<T = unknown>(key: string): Promise<T | null> {
   return result ? (result.data as T) : null;
 }
 
+// Keep the cached collection for `key` coherent with an offline mutation so a
+// reload while still offline reflects the queued change instead of the stale
+// pre-mutation snapshot (M8). No-ops if the cache holds a non-array (or nothing)
+// for that key — cachedFetch will repopulate it on the next successful fetch.
+type CachedRow = Record<string, unknown> & { id?: unknown };
+
+async function mutateCachedArray(key: string, fn: (rows: CachedRow[]) => CachedRow[]): Promise<void> {
+  const existing = await cacheGet<unknown>(key);
+  if (!Array.isArray(existing)) return;
+  await cacheSet(key, fn(existing as CachedRow[]));
+}
+
+export function cacheApplyInsert(key: string, record: CachedRow): Promise<void> {
+  return mutateCachedArray(key, rows => (rows.some(r => r?.id === record.id) ? rows : [...rows, record]));
+}
+
+export function cacheApplyUpdate(key: string, id: unknown, patch: CachedRow): Promise<void> {
+  return mutateCachedArray(key, rows => rows.map(r => (r?.id === id ? { ...r, ...patch } : r)));
+}
+
+export function cacheApplyDelete(key: string, id: unknown): Promise<void> {
+  return mutateCachedArray(key, rows => rows.filter(r => r?.id !== id));
+}
+
 export async function queueCount(): Promise<number> {
   const db = await openDb();
   const count = await req(tx(db, QUEUE_STORE, 'readonly').count());

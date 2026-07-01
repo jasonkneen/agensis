@@ -44,7 +44,7 @@ export function useDocumentVersions(
       title,
       content,
       version_number: nextVersion,
-    });
+    }, `versions_${documentId}`);
     if (data) {
       const version = data as unknown as DocumentVersion;
       setVersions((prev: DocumentVersion[]) => [version, ...prev]);

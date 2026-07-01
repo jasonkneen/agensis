@@ -85,7 +85,7 @@ export function useTasks(workspaceId: string | null, userId?: string) {
       due_date: input.due_date ?? null,
       source_type: input.source_type ?? 'manual',
       source_id: input.source_id ?? null,
-    });
+    }, `tasks_${workspaceId}`);
     if (data) {
       const task = data as unknown as Task;
       setTasks(prev => prev.some(t => t.id === task.id) ? prev : [task, ...prev]);
@@ -102,12 +102,12 @@ export function useTasks(workspaceId: string | null, userId?: string) {
     if (updates.status && updates.status !== 'done') {
       patch.completed_at = null;
     }
-    const result = await offlineUpdate('tasks', id, patch as Record<string, unknown>);
+    const result = await offlineUpdate('tasks', id, patch as Record<string, unknown>, `tasks_${workspaceId}`);
     if (result) {
       setTasks(prev => prev.map(t => t.id === id ? { ...t, ...result } as Task : t));
     }
     return result;
-  }, []);
+    }, [workspaceId]);
 
   const toggleTaskStatus = useCallback(async (task: Task) => {
     const next: TaskStatus = task.status === 'done' ? 'todo' : 'done';
@@ -115,10 +115,10 @@ export function useTasks(workspaceId: string | null, userId?: string) {
   }, [updateTask]);
 
   const deleteTask = useCallback(async (id: string) => {
-    await offlineDelete('tasks', id);
+    await offlineDelete('tasks', id, `tasks_${workspaceId}`);
     setTasks(prev => prev.filter(t => t.id !== id));
     return true;
-  }, []);
+    }, [workspaceId]);
 
   const openTasks = useMemo(() => tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled'), [tasks]);
   const doneTasks = useMemo(() => tasks.filter(t => t.status === 'done'), [tasks]);

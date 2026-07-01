@@ -100,7 +100,7 @@ export function useMemoryFileComments(
       content: input.content,
       anchor_text: input.anchor_text ?? '',
       resolved: false,
-    });
+    }, `memory_file_comments_${agentId}`);
     if (data) {
       const comment = data as unknown as MemoryFileComment;
       setComments(prev => prev.some(c => c.id === comment.id) ? prev : [...prev, comment]);
@@ -110,18 +110,18 @@ export function useMemoryFileComments(
   }, [agentId, path, workspaceId, userId]);
 
   const resolveComment = useCallback(async (id: string, resolved: boolean) => {
-    const result = await offlineUpdate('memory_file_comments', id, { resolved });
+    const result = await offlineUpdate('memory_file_comments', id, { resolved }, `memory_file_comments_${agentId}`);
     if (result) {
       setComments(prev => prev.map(c => c.id === id ? { ...c, ...result } as MemoryFileComment : c));
     }
     return result;
-  }, []);
+    }, [agentId]);
 
   const deleteComment = useCallback(async (id: string) => {
-    await offlineDelete('memory_file_comments', id);
+    await offlineDelete('memory_file_comments', id, `memory_file_comments_${agentId}`);
     setComments(prev => prev.filter(c => c.id !== id && c.parent_id !== id));
     return true;
-  }, []);
+    }, [agentId]);
 
   return {
     comments: pathComments,

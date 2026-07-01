@@ -68,7 +68,7 @@ export function useDocuments(workspaceId: string | null) {
       title,
       content: '',
       is_favorite: false,
-    });
+    }, `documents_${workspaceId}`);
     if (data) {
       const doc = data as unknown as Document;
       setDocuments(prev => [doc, ...prev]);
@@ -81,12 +81,12 @@ export function useDocuments(workspaceId: string | null) {
     const result = await offlineUpdate('documents', id, {
       ...updates,
       updated_at: new Date().toISOString(),
-    });
+    }, `documents_${workspaceId}`);
     if (result) {
       setDocuments(prev => prev.map(d => d.id === id ? { ...d, ...result } as Document : d));
     }
     return result;
-  }, []);
+    }, [workspaceId]);
 
   const autoSave = useCallback((id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -100,20 +100,20 @@ export function useDocuments(workspaceId: string | null) {
       clearTimeout(autoSaveTimer.current);
       autoSaveTimer.current = null;
     }
-    await offlineDelete('documents', id);
+    await offlineDelete('documents', id, `documents_${workspaceId}`);
     setDocuments(prev => prev.filter(d => d.id !== id));
     return true;
-  }, []);
+    }, [workspaceId]);
 
   const toggleFavorite = useCallback(async (id: string, currentValue: boolean) => {
     const result = await offlineUpdate('documents', id, {
       is_favorite: !currentValue,
       updated_at: new Date().toISOString(),
-    });
+    }, `documents_${workspaceId}`);
     if (result) {
       setDocuments(prev => prev.map(d => d.id === id ? { ...d, ...result } as Document : d));
     }
-  }, []);
+    }, [workspaceId]);
 
   const favorites = documents.filter(d => d.is_favorite);
   const recents = documents.slice(0, 5);

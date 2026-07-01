@@ -32,7 +32,7 @@ export function useMemory(workspaceId: string | null) {
       workspace_id: workspaceId,
       fact: fact.trim(),
       category,
-    });
+    }, `memory_${workspaceId}`);
     if (data) {
       setFacts(prev => [data as unknown as MemoryFact, ...prev]);
     }
@@ -43,16 +43,16 @@ export function useMemory(workspaceId: string | null) {
       fact,
       category,
       updated_at: new Date().toISOString(),
-    });
+    }, `memory_${workspaceId}`);
     if (result) {
       setFacts(prev => prev.map(f => f.id === id ? { ...f, ...result } as MemoryFact : f));
     }
-  }, []);
+    }, [workspaceId]);
 
   const deleteFact = useCallback(async (id: string) => {
-    await offlineDelete('memory_facts', id);
+    await offlineDelete('memory_facts', id, `memory_${workspaceId}`);
     setFacts(prev => prev.filter(f => f.id !== id));
-  }, []);
+    }, [workspaceId]);
 
   const categories = [...new Set(facts.map(f => f.category))];
 
