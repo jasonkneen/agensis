@@ -1263,7 +1263,7 @@ async function verifyAgentConnectToken(token, req = null) {
 async function verifyInviteToken(token) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
-    `select id, workspace_id, email from workspace_invites
+    `select id, workspace_id, email, role from workspace_invites
       where token = $1 and status in ('pending', 'accepted')
         and (expires_at is null or expires_at > now())
       limit 1`,
@@ -1272,7 +1272,7 @@ async function verifyInviteToken(token) {
   const invite = rows[0];
   if (!invite) return null;
   // An invite link is pre-authorization → a client joining through it is auto-approved.
-  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true };
+  return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true, role: invite.role };
 }
 
 // The one workspace MCP token (issued in settings). Authenticates any client into the
@@ -4306,6 +4306,7 @@ function createApp() {
     getRegistrationStatus,
     getAgentConnectionCommand: buildAgentConnectionCommand,
     enforceWorkspaceRole,
+    roleHasWorkspaceCapability,
     rateLimiter: mcpRateLimiter,
     rateLimitBlocked,
     runtimeSchemaReady,

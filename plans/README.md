@@ -17,7 +17,7 @@ correctness items plus two cheap, independent DX/tech-debt wins.
 |------|-------|----------|--------|------------|--------|
 | 001  | Bump `ws` past its pre-auth-reachable DoS advisory | P1 | S | — | DONE |
 | 002  | Harden file upload/serving against stored XSS | P1 | M | — | DONE |
-| 003  | Enforce invite role on MCP write tools | P1 | S | — | TODO |
+| 003  | Enforce invite role on MCP write tools | P1 | S | — | DONE |
 | 004  | Server-side password policy + rate limiting (both backends) | P1 | M | — | TODO |
 | 005  | Token expiry and revocation | P1 | M | — | TODO |
 | 006  | Fix canonical migration drift (`app_users` profile columns) | P1 | S | — | DONE |
