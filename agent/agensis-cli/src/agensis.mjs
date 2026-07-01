@@ -346,6 +346,7 @@ function buildPrompt(config, job) {
     agent.instructions ? `Additional instructions:\n${agent.instructions}` : "",
     tools ? `Enabled tools:\n${tools}` : "",
     skills ? `Enabled skills:\n${skills}` : "",
+    'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
     "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),

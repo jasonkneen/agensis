@@ -26,6 +26,12 @@ const SERVER_INSTRUCTIONS = [
   'want a message to actively wake mentioned/auto/direct agents into responding.',
   'All tools are scoped to your workspace. Docs, tasks, and workspace memory are',
   'shared with the whole team.',
+  'Each chat has a right-side widget rail the human can see: when you work a',
+  'multi-step task in a thread, use create_thread_item (kind "todo", "plan", or',
+  '"blocker") with that channel session_id to surface your plan and to-dos, mark',
+  'them done with update_thread_item as you go, and raise a "blocker" when you',
+  'need the human to answer something (read their reply from the item response',
+  'via list_thread_items). Keep it to a few real items, not every micro-step.',
 ].join(' ');
 
 // --- small helpers ----------------------------------------------------------
