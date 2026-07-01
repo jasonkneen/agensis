@@ -24,7 +24,7 @@ correctness items plus two cheap, independent DX/tech-debt wins.
 | 007  | Shared symlink-safe path guard (fix git-stage route) | P1 | S | — | DONE |
 | 008  | Fix loopback dev-fallback Host-header bypass | P2 | S | — | DONE |
 | 009  | Remove dead canvas multi-window "Group" button | P2 | S | — | DONE |
-| 010  | ESLint coverage for the backend | P2 | M | — | TODO |
+| 010  | ESLint coverage for the backend | P2 | M | — | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line
 rationale)

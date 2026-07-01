@@ -130,6 +130,7 @@ async function main() {
     ok(`list_tasks (${tasks.tasks.length} done)`);
 
     // --- memory ---
+    // eslint-disable-next-line no-unused-vars -- smoke-check only exercises the call succeeds, not its return value
     const mem = await callTool('add_memory', { fact: 'mcp smoke fact', category: 'test' });
     ok('add_memory');
     const mems = await callTool('get_workspace_memory', { category: 'test' });

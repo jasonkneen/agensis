@@ -200,6 +200,7 @@ function daemonBaseUrl() {
   return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL || process.env.AGENSIS_WS_BASE_URL || '');
 }
 
+// eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
 function requestBaseUrl(req) {
   const publicUrl = normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL || process.env.PUBLIC_URL || '');
   if (publicUrl) return publicUrl;

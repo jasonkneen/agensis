@@ -24,5 +24,21 @@ export default tseslint.config(
         { allowConstantExport: true },
       ],
     },
+  },
+  {
+    // Backend/tooling: plain Node CJS/ESM, not covered by the TS block above.
+    files: ['server/**/*.cjs', 'scripts/**/*.cjs', 'shared/**/*.mjs', 'netlify/functions/**/*.mjs', 'electron/**/*.cjs'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'commonjs',
+      globals: { ...globals.node },
+    },
+  },
+  {
+    files: ['shared/**/*.mjs', 'netlify/functions/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+    },
   }
 );

@@ -187,6 +187,7 @@ async function listManagedSecrets(workspaceId = null) {
 // ============================================================
 
 let cachedAuthSecret = null;
+// eslint-disable-next-line no-unused-vars -- write-only debug instrumentation for getAuthSecret()
 let cachedAuthSecretSource = '';
 
 // HMAC signing secret. In the split deploy (static frontend on Netlify + this
@@ -288,6 +289,7 @@ async function requireAuth(req, res, next) {
     if (!userId) return jsonError(res, 401, new Error('Authentication required'));
     req.userId = userId;
     next();
+  // eslint-disable-next-line no-unused-vars -- error intentionally not surfaced to the client response
   } catch (error) {
     jsonError(res, 401, new Error('Authentication failed'));
   }
@@ -407,6 +409,7 @@ async function resolveOperationWorkspace(table, { values, filters }) {
 // Enforce workspace membership for a db operation. Throws { status, message }
 // on denial. Unscoped operations on scoped tables are rejected so a caller
 // can't read/modify across all workspaces by omitting the filter.
+// eslint-disable-next-line no-unused-vars -- superseded by enforceDbOperationAccess; kept pending confirmation it is fully dead
 async function enforceWorkspaceAccess(userId, table, payload) {
   if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
   const resolved = await resolveOperationWorkspace(table, payload);
@@ -1658,6 +1661,7 @@ function agentContextFromRow(agent, coParticipants = []) {
 const CHANNEL_CONTEXT_LIMIT = 40;
 const conversationLocks = new Set();
 
+// eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
 function clampInt(value, min, max, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
@@ -1668,6 +1672,7 @@ function isAgentPlaceholder(row) {
   return row.sender_kind === 'agent' && /^Thinking \d/.test(textFromValue(row.content).trim());
 }
 
+// eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
 function dedupeAgentsById(agents) {
   const seen = new Set();
   const out = [];
