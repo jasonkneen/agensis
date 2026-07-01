@@ -24,6 +24,8 @@ import {
   Mic,
   Monitor,
   Palette,
+  PanelRightClose,
+  PanelRightOpen,
   Paperclip,
   Pencil,
   Pin,
@@ -1226,6 +1228,11 @@ export function ChatWindowContent({
                 collapsed={widgetsCollapsed}
                 onToggleCollapsed={() => setWidgetsCollapsed(v => !v)}
                 onJumpToMessage={handleJumpToMessage}
+                onBlockerAnswered={(item, response) => {
+                  // Post the answered blocker back into the chat so it's tracked
+                  // in the thread and wakes the agent that raised it.
+                  onSendMessage(`**Answered blocker:** ${item.content}\n\n${response}`, 'auto');
+                }}
               />
             )}
             <MessageScrollerButton direction="end" behavior="auto" onClick={() => setAutoScroll(true)} />

@@ -78,6 +78,7 @@ interface ThreadWidgetRailProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onJumpToMessage?: (messageId: string) => void;
+  onBlockerAnswered?: (item: ThreadItem, response: string) => void;
 }
 
 export function ThreadWidgetRail({
@@ -88,12 +89,21 @@ export function ThreadWidgetRail({
   collapsed,
   onToggleCollapsed,
   onJumpToMessage,
+  onBlockerAnswered,
 }: ThreadWidgetRailProps) {
   const { byKind, loading, toggleDone, answerBlocker, deleteItem } = useThreadItems(
     workspaceId,
     sessionId,
     userId,
   );
+
+  // Answering a blocker flips the item to `answered` (in-widget confirmation)
+  // AND posts the Q&A back into the chat so it's tracked in the thread and the
+  // agent that raised it actually gets woken with the answer.
+  const handleAnswer = useCallback((item: ThreadItem, response: string) => {
+    answerBlocker(item, response);
+    onBlockerAnswered?.(item, response);
+  }, [answerBlocker, onBlockerAnswered]);
 
   const [widgets, setWidgets] = useState<WidgetLayout[]>(DEFAULT_WIDGETS);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -212,7 +222,7 @@ export function ThreadWidgetRail({
             onResize={() => cycleSize(index)}
             onClose={() => closeWidget(w.kind)}
             onToggleDone={toggleDone}
-            onAnswer={answerBlocker}
+            onAnswer={handleAnswer}
             onDelete={deleteItem}
             onJumpToMessage={onJumpToMessage}
           />
