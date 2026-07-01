@@ -1453,6 +1453,15 @@
     0 3px 10px -4px rgba(20, 30, 50, 0.28);
 }
 
+/* Full-view (maximized / full-bounds) windows are edge-to-edge inside <main>'s
+   overflow-hidden, so the themed wrapper shadow clips into a hard straight line.
+   Full-bleed panels don't float — kill the wrapper shadow (matches the inner
+   surface's shadow-none in FloatingWindowShell). */
+:root[data-ui-theme="neo"] [data-floating-window][data-window-view-mode="full"],
+:root[data-ui-theme="tinyworld"] [data-floating-window][data-window-view-mode="full"] {
+  box-shadow: none;
+}
+
 :root[data-ui-theme="neo"] [data-slot="input-group-addon"][data-align="block-end"],
 :root[data-ui-theme="tinyworld"] [data-slot="input-group-addon"][data-align="block-end"] {
   min-height: 44px;
@@ -1631,6 +1640,13 @@
 }
 .thread-widget-card:hover {
   box-shadow: var(--shadow-lg);
+}
+/* Neo/brutal: match the 2px ink border every other card surface gets
+   ([data-slot="card"], line ~638). These cards aren't data-slot cards, so
+   without this they stayed at Tailwind's 1px .border while the shadow already
+   resolved to the hard --neo-shadow-md offset — thin edge, heavy shadow. */
+:root[data-ui-theme="neo"] .thread-widget-card {
+  border-width: 2px;
 }
 
 .chat-msg-jump-highlight {

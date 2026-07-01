@@ -561,7 +561,12 @@ export function FloatingWindowShell({
         <div
           data-window-surface
           className={cn(
-            'flex h-full min-h-0 flex-col overflow-hidden border shadow-xl backdrop-blur-xl',
+            'flex h-full min-h-0 flex-col overflow-hidden border backdrop-blur-xl',
+            // Full-view windows sit edge-to-edge (inset 0) inside <main>'s
+            // overflow-hidden, so a drop shadow gets clipped into a hard
+            // straight line. A full-bleed panel shouldn't float — drop the
+            // shadow; only genuinely floating windows keep it.
+            isFullView ? 'shadow-none' : 'shadow-xl',
             isFullView ? 'bg-card' : 'bg-card/45',
             isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}

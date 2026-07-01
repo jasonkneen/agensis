@@ -38,7 +38,7 @@ agensis is a multiplayer workspace app built with React, TypeScript, Vite, Neon 
 
 ## Tech stack
 
-- React 18
+- React 19
 - TypeScript
 - Vite
 - Neon Postgres
