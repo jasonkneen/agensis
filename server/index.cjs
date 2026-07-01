@@ -2107,8 +2107,12 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
 }
 
 async function hasActiveBurstJob(sessionId, agentId) {
+  // Include 'queued', not just 'running': an MCP-backed agent's job sits in
+  // 'queued' until its client polls and claims it, so two rapid triggers for the
+  // same session/agent (two quick DMs, or dispatch + comment-mention) would both
+  // pass a running-only guard and produce a duplicate turn (M14, 2026-07 review).
   const rows = await getDb().unsafe(
-    `select id from agent_jobs where session_id = $1 and agent_id = $2 and status = 'running' limit 1`,
+    `select id from agent_jobs where session_id = $1 and agent_id = $2 and status in ('queued', 'running') limit 1`,
     [sessionId, String(agentId)],
   );
   return rows.length > 0;
