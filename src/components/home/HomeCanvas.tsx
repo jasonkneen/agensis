@@ -138,12 +138,6 @@ export function HomeCanvas({
         className="pointer-events-none absolute inset-0"
         style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,0.42) 100%))' }}
       />
-      {/* Soft floor shadow beneath the composer so it reads as sitting on a
-          surface rather than pasted onto the image. */}
-      <div
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3"
-        style={{ background: 'linear-gradient(to top, color-mix(in srgb, var(--canvas-base) 35%, transparent), transparent)' }}
-      />
 
 
       <div className="pointer-events-auto relative z-10 flex w-full max-w-3xl flex-col items-center gap-5">
