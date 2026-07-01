@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
@@ -41,6 +41,14 @@ import {
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import { Card, CardContent } from './components/ui/card';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from './components/ui/context-menu';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -113,46 +121,77 @@ type DockEntry =
 function renderDockButton(
   win: FloatingWindow,
   focusedDockWindow: FloatingWindow | null,
-  handlers: { onOpen: () => void; onHide: () => void; onFocus: () => void },
+  handlers: { onOpen: () => void; onHide: () => void; onFocus: () => void; onClose?: () => void },
   bounce = false,
 ) {
   const active = focusedDockWindow?.id === win.id;
   const dockActionLabel = win.minimized ? 'Open' : active ? 'Hide' : 'Focus';
   return (
-    <Button
-      key={win.id}
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={() => {
-        if (win.minimized) {
-          handlers.onOpen();
-          return;
-        }
-        if (active) {
-          handlers.onHide();
-          return;
-        }
-        handlers.onFocus();
-      }}
-      className={cn(
-        'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
-        active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
-        win.minimized && 'text-muted-foreground',
-        bounce && 'dock-bounce',
-      )}
-      title={`${dockActionLabel} ${windowLabel(win)}`}
-      aria-label={`${dockActionLabel} ${windowLabel(win)}`}
-    >
-      {windowDockIcon(win.type)}
-      <span
-        aria-hidden
-        className={cn(
-          'absolute bottom-0.5 left-1/2 h-1 w-2 -translate-x-1/2 rounded-[2px]',
-          active ? 'bg-foreground' : win.minimized ? 'bg-muted-foreground/55' : 'bg-primary/65',
+    <ContextMenu key={win.id}>
+      <ContextMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => {
+            if (win.minimized) {
+              handlers.onOpen();
+              return;
+            }
+            if (active) {
+              handlers.onHide();
+              return;
+            }
+            handlers.onFocus();
+          }}
+          className={cn(
+            'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+            active && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+            win.minimized && 'text-muted-foreground',
+            bounce && 'dock-bounce',
+          )}
+          title={`${dockActionLabel} ${windowLabel(win)}`}
+          aria-label={`${dockActionLabel} ${windowLabel(win)}`}
+        >
+          {windowDockIcon(win.type)}
+          <span
+            aria-hidden
+            className={cn(
+              'absolute bottom-0.5 left-1/2 h-1 w-2 -translate-x-1/2 rounded-[2px]',
+              active ? 'bg-foreground' : win.minimized ? 'bg-muted-foreground/55' : 'bg-primary/65',
+            )}
+          />
+        </Button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuLabel className="truncate">{windowLabel(win)}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => (win.minimized ? handlers.onOpen() : handlers.onFocus())}>
+          <ArrowRight data-icon="inline-start" />
+          Switch to
+        </ContextMenuItem>
+        {win.minimized ? (
+          <ContextMenuItem onSelect={handlers.onOpen}>
+            <Maximize2 data-icon="inline-start" />
+            Restore
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onSelect={handlers.onHide}>
+            <Minimize2 data-icon="inline-start" />
+            Minimise
+          </ContextMenuItem>
         )}
-      />
-    </Button>
+        {handlers.onClose && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" onSelect={handlers.onClose}>
+              <Trash2 data-icon="inline-start" />
+              Close
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -1287,11 +1326,12 @@ function AppContent() {
                       name: a.name,
                       handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
                     }));
-                  const session = await createSubThread(messageId, slug, agent.id, agent.name, {
+                  await createSubThread(messageId, slug, agent.id, agent.name, {
                     contextMessage: messageContent,
                     additionalAgents: otherAgents,
                   });
-                  if (session) openSubThread(session);
+                  // Background task — don't open the sub-thread panel; let it run autonomously.
+                  // The user can view it from the Threads panel.
                 }}
                 onSendSubThreadMessage={sendSubThreadMessage}
                 useWorkspaceCtx={useWorkspaceCtx}
@@ -1397,6 +1437,7 @@ function AppContent() {
                       onOpen: () => { focusWindow(win.id); minimizeWindow(win.id); },
                       onHide: () => minimizeWindow(win.id),
                       onFocus: () => focusWindow(win.id),
+                      onClose: () => handleCloseWindow(win.id),
                     }, bouncingDockIds.has(win.id));
                   }
                   const { groupId, members } = entry;
@@ -1410,6 +1451,7 @@ function AppContent() {
                         onOpen: () => focusWindowGroup(groupId, member.id),
                         onHide: () => minimizeWindowGroup(groupId),
                         onFocus: () => focusWindowGroup(groupId, member.id),
+                        onClose: () => handleCloseWindow(member.id),
                       }, bouncingDockIds.has(member.id)))}
                       <Button
                         type="button"
@@ -2234,6 +2276,21 @@ function WorkspacePresenceAvatars({
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const hoverCloseTimer = useRef<number | null>(null);
+  const openOnHover = () => {
+    if (hoverCloseTimer.current) {
+      window.clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = null;
+    }
+    setExpanded(true);
+  };
+  const closeOnHover = () => {
+    if (hoverCloseTimer.current) window.clearTimeout(hoverCloseTimer.current);
+    hoverCloseTimer.current = window.setTimeout(() => setExpanded(false), 220);
+  };
+  useEffect(() => () => {
+    if (hoverCloseTimer.current) window.clearTimeout(hoverCloseTimer.current);
+  }, []);
 
   useEffect(() => {
     if (!expanded) return;
@@ -2260,7 +2317,13 @@ function WorkspacePresenceAvatars({
     { value: 'hidden', label: 'Muted' },
   ];
   return (
-    <div ref={panelRef} data-presence-panel className="relative flex flex-col items-end gap-2">
+    <div
+      ref={panelRef}
+      data-presence-panel
+      className="relative flex flex-col items-end gap-2"
+      onMouseEnter={openOnHover}
+      onMouseLeave={closeOnHover}
+    >
       {expanded && (
         <div className="absolute right-0 bottom-full z-10 mb-2 w-96 overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl">
           <div className="flex items-center justify-between border-b px-3 py-2">

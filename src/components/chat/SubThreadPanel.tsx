@@ -1,9 +1,10 @@
 import React, { useRef, useState, type CSSProperties } from 'react';
-import { Bot, HardDrive, FileText, Layers, MessageSquare, Mic, Paperclip, Plus, Send, User, X } from 'lucide-react';
+import { Bot, MessageSquare, Mic, Paperclip, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import {
   ComposerAddContent,
+  FileChip,
   buildFileContext,
   linkedUploadedFile,
   linkedProjectFile,
@@ -16,16 +17,6 @@ import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
-import {
-  Attachment,
-  AttachmentAction,
-  AttachmentActions,
-  AttachmentContent,
-  AttachmentMedia,
-  AttachmentGroup,
-  AttachmentTitle,
-  AttachmentDescription,
-} from '@/components/ui/attachment';
 import {
   Empty,
   EmptyDescription,
@@ -259,63 +250,31 @@ export function SubThreadPanel({
 
       <div className="channel-composer shrink-0 border-t border-border p-2">
         {hasAttachments && (
-          <AttachmentGroup className="mb-2">
+          <div className="mb-2 flex flex-wrap gap-1.5">
             {linkedFiles.map(file => (
-              <Attachment key={file.id} state="done" size="xs">
-                <AttachmentMedia variant="icon">
-                  {file.kind === 'uploaded' ? <Paperclip /> : <HardDrive />}
-                </AttachmentMedia>
-                <AttachmentContent>
-                  <AttachmentTitle>{file.name}</AttachmentTitle>
-                  {file.kind !== 'uploaded' && file.sourceLabel && (
-                    <AttachmentDescription>{file.sourceLabel}</AttachmentDescription>
-                  )}
-                </AttachmentContent>
-                <AttachmentActions>
-                  <AttachmentAction
-                    aria-label={`Remove ${file.name}`}
-                    onClick={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
-                  >
-                    <X />
-                  </AttachmentAction>
-                </AttachmentActions>
-              </Attachment>
+              <FileChip
+                key={file.id}
+                name={file.name}
+                onRemove={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
+              />
             ))}
             {linkedDocs.map(doc => (
-              <Attachment key={doc.id} state="done" size="xs">
-                <AttachmentMedia variant="icon"><FileText /></AttachmentMedia>
-                <AttachmentContent>
-                  <AttachmentTitle>{doc.title}</AttachmentTitle>
-                  <AttachmentDescription>Document context</AttachmentDescription>
-                </AttachmentContent>
-                <AttachmentActions>
-                  <AttachmentAction
-                    aria-label={`Remove ${doc.title}`}
-                    onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
-                  >
-                    <X />
-                  </AttachmentAction>
-                </AttachmentActions>
-              </Attachment>
+              <FileChip
+                key={doc.id}
+                name={doc.title}
+                label={doc.title}
+                onRemove={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
+              />
             ))}
             {linkedGroups.map(group => (
-              <Attachment key={group.id} state="done" size="xs">
-                <AttachmentMedia variant="icon"><Layers /></AttachmentMedia>
-                <AttachmentContent>
-                  <AttachmentTitle>{group.name}</AttachmentTitle>
-                  <AttachmentDescription>Canvas group context</AttachmentDescription>
-                </AttachmentContent>
-                <AttachmentActions>
-                  <AttachmentAction
-                    aria-label={`Remove ${group.name}`}
-                    onClick={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
-                  >
-                    <X />
-                  </AttachmentAction>
-                </AttachmentActions>
-              </Attachment>
+              <FileChip
+                key={group.id}
+                name={`${group.name}.canvas`}
+                label={group.name}
+                onRemove={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
+              />
             ))}
-          </AttachmentGroup>
+          </div>
         )}
 
         <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>

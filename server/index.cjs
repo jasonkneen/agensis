@@ -1692,6 +1692,135 @@ function directAgentParticipantFromSession(session) {
   return agentParticipants.find((participant) => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
 }
 
+// Comment tables that can @mention an agent, and how to describe the thing the
+// comment is anchored to (so the agent's DM ping links back to the source).
+const COMMENT_MENTION_TABLES = {
+  task_comments: {
+    anchorColumn: 'task_id',
+    describe: async (row) => {
+      const t = await getDb().unsafe('select title from tasks where id = $1 limit 1', [row.task_id]).catch(() => []);
+      const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)}`;
+      return { label: `task ${title}`, link: `agensis://task/${row.task_id}` };
+    },
+  },
+  document_comments: {
+    anchorColumn: 'document_id',
+    describe: async (row) => {
+      const d = await getDb().unsafe('select title from documents where id = $1 limit 1', [row.document_id]).catch(() => []);
+      const title = d[0]?.title ? `"${d[0].title}"` : `#${String(row.document_id).slice(0, 8)}`;
+      return { label: `document ${title}`, link: `agensis://document/${row.document_id}` };
+    },
+  },
+  memory_file_comments: {
+    anchorColumn: 'agent_id',
+    describe: async (row) => ({
+      label: `memory file "${row.path}"`,
+      link: `agensis://memory/${row.agent_id}/${encodeURIComponent(String(row.path || ''))}`,
+    }),
+  },
+};
+
+// Resolve (or lazily create) the human↔agent Direct message session for an agent.
+// Mirrors the client's find-or-create in App.tsx (handleAgentDirectMessage): a DM is
+// a chat_session in the 'Direct messages' folder whose sole/direct participant is the
+// agent. Workspaces are effectively single-human, so the DM keys on the agent alone.
+async function findOrCreateDirectSession(workspaceId, agent) {
+  const wantedId = String(agent.id || '');
+  const wantedHandle = slugHandle(agent.handle || agent.name || '');
+  const candidates = await getDb().unsafe(
+    "select * from chat_sessions where workspace_id = $1 and folder = 'Direct messages' and archived_at is null",
+    [workspaceId],
+  );
+  const match = candidates.find((session) => {
+    const participant = directAgentParticipantFromSession(session);
+    if (!participant) return false;
+    const pid = String(participant.agent_id || '');
+    const phandle = slugHandle(participant.handle || participant.name || '');
+    return (wantedId && pid === wantedId) || (wantedHandle && phandle === wantedHandle);
+  });
+  if (match) return match;
+
+  const handle = wantedHandle;
+  const title = agent.name || (handle ? `@${handle}` : 'Agent');
+  const participant = {
+    id: agent.id ? `agent:${agent.id}` : `agent:${handle}`,
+    kind: 'agent',
+    name: title,
+    handle: handle || null,
+    agent_id: agent.id || null,
+    user_id: null,
+    status: null,
+    direct: true,
+    added_at: new Date().toISOString(),
+  };
+  const created = await getDb().unsafe(
+    `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants)
+     values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb)
+     returning *`,
+    [workspaceId, title, resolveAnthropicModel(agent.model), JSON.stringify([participant])],
+  );
+  if (created[0]) notifyDbSubscribers('chat_sessions', 'INSERT', created);
+  return created[0] || null;
+}
+
+// When a human posts a comment that @mentions agents (on a task, document, or memory
+// file), wake each mentioned agent in its DM with a message that quotes the comment
+// and links back to the source — so "you were tagged" turns into a real, visible
+// response in the DM instead of a silent flag the agent has to poll for.
+async function dispatchCommentMentions({ table, row, authorUserId }) {
+  const config = COMMENT_MENTION_TABLES[table];
+  if (!config || !row) return;
+  const workspaceId = row.workspace_id;
+  if (!workspaceId) return;
+  const handles = parseAgentMentions(row.content);
+  if (handles.length === 0) return;
+
+  let authorName = 'A teammate';
+  if (authorUserId) {
+    const u = await getDb()
+      .unsafe('select display_name, email from app_users where id = $1 limit 1', [authorUserId])
+      .catch(() => []);
+    authorName = u[0]?.display_name || u[0]?.email || authorName;
+  }
+
+  let source = { label: 'a comment', link: '' };
+  try {
+    source = await config.describe(row);
+  } catch (error) {
+    console.error('describe comment source failed', error);
+  }
+
+  for (const handle of handles) {
+    try {
+      const agent = await resolveWorkspaceAgentByHandle(workspaceId, handle);
+      if (!agent) continue;
+      // Skip self-mentions (an agent tagging itself in its own note).
+      const session = await findOrCreateDirectSession(workspaceId, agent);
+      if (!session) continue;
+
+      const linkLine = source.link ? `\n\nSource: ${source.link}` : '';
+      const content =
+        `@${slugHandle(agent.handle || agent.name)} — ${authorName} tagged you in a comment on ${source.label}:\n\n` +
+        `> ${String(row.content || '').replace(/\n/g, '\n> ')}\n\n` +
+        `Pick this up and reply here in your DM.${linkLine}`;
+
+      const messageRows = await getDb().unsafe(
+        `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
+         values ($1, 'user', $2, 'user', $3, $4)
+         returning *`,
+        [session.id, content, String(authorUserId || ''), authorName],
+      );
+      notifyDbSubscribers('messages', 'INSERT', messageRows);
+
+      void continueConversation({ workspaceId, sessionId: session.id }).catch((error) =>
+        console.error('continueConversation (comment mention) failed', error),
+      );
+    } catch (error) {
+      console.error(`comment mention dispatch failed for @${handle}`, error);
+    }
+  }
+}
+
 async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
   const rows = threadParentId
     ? await getDb().unsafe(
@@ -4940,6 +5069,16 @@ function createApp() {
       );
 
       notifyDbSubscribers(table, 'INSERT', result);
+
+      // A human comment that @mentions an agent wakes that agent in its DM. Fire-and-
+      // forget so the insert responds immediately; each mention is guarded internally.
+      if (COMMENT_MENTION_TABLES[table]) {
+        for (const row of result) {
+          void dispatchCommentMentions({ table, row, authorUserId: req.userId }).catch((error) =>
+            console.error('dispatchCommentMentions failed', error),
+          );
+        }
+      }
 
       if (table === 'workspaces') {
         for (const row of result) {

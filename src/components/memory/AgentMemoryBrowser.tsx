@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
-import { ChevronLeft, Clock, FileText, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, Clock, Code2, Eye, FileText, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { useAgentMemory } from '../../hooks/useAgentMemory';
 import { useMemoryFileComments } from '../../hooks/useMemoryFileComments';
 import { DocumentComments } from '../editor/DocumentComments';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -48,6 +49,22 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
+
+  // Master-detail is responsive: above SPLIT_WIDTH the selected file opens as a
+  // right-hand panel with the list still visible; below it, the detail takes over
+  // the whole surface (the original full-swap behaviour).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) setWide(entry.contentRect.width >= 960);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Only agents that actually have mirrored files are worth showing as filters.
   const agentsWithFiles = useMemo(() => {
@@ -96,19 +113,44 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
     );
   }
 
-  // Detail view: a single file's content + its comment thread.
-  if (selectedFile) {
+  // Detail view: a single file's content (preview or source) + its comment thread.
+  // `showBack` shows a back arrow — only needed in the full-swap (narrow) layout,
+  // since in split mode the list stays visible alongside.
+  const renderDetail = (showBack: boolean) => {
+    if (!selectedFile) return null;
     return (
-      <div className="flex h-full overflow-hidden">
+      <div className="flex h-full min-w-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-2">
-            <Button type="button" variant="ghost" size="icon-sm" onClick={() => setSelectedPath(null)} aria-label="Back to files">
-              <ChevronLeft className="size-4" />
-            </Button>
+            {showBack && (
+              <Button type="button" variant="ghost" size="icon-sm" onClick={() => setSelectedPath(null)} aria-label="Back to files">
+                <ChevronLeft className="size-4" />
+              </Button>
+            )}
             <FileText className="size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{fileName(selectedFile.path)}</p>
               <p className="truncate text-xs text-muted-foreground">{selectedFile.path}</p>
+            </div>
+            <div className="flex shrink-0 items-center rounded-md border border-border bg-muted/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => setViewMode('preview')}
+                aria-pressed={viewMode === 'preview'}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium ${viewMode === 'preview' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                <Eye className="size-3.5" />
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('source')}
+                aria-pressed={viewMode === 'source'}
+                className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium ${viewMode === 'source' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                <Code2 className="size-3.5" />
+                Source
+              </button>
             </div>
             {selectedFile.editable ? (
               <Badge variant="outline" className="gap-1"><Pencil className="size-3" />Editable</Badge>
@@ -117,9 +159,19 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
             )}
           </div>
           <ScrollArea className="min-h-0 flex-1">
-            <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground">
-              {selectedFile.content_cache || '(empty file)'}
-            </pre>
+            {viewMode === 'preview' ? (
+              selectedFile.content_cache ? (
+                <div className="p-4">
+                  <MarkdownContent content={selectedFile.content_cache} />
+                </div>
+              ) : (
+                <p className="p-4 text-xs text-muted-foreground">(empty file)</p>
+              )
+            ) : (
+              <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground">
+                {selectedFile.content_cache || '(empty file)'}
+              </pre>
+            )}
           </ScrollArea>
         </div>
         <DocumentComments
@@ -134,25 +186,26 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
         />
       </div>
     );
-  }
+  };
 
-  // List view: agent filter chips + that agent's files.
-  return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border bg-card p-4">
-        <div className="flex items-start gap-4">
+  // List view: agent filter chips + that agent's files. `compact` tightens the
+  // padding for the narrow left column when a detail panel sits beside it.
+  const renderList = (compact: boolean) => (
+    <>
+      <div className={`shrink-0 border-b border-border bg-card ${compact ? 'p-3' : 'p-4'}`}>
+        <div className={`flex items-start ${compact ? 'gap-3' : 'gap-4'}`}>
           <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
             <FileText className="size-5" />
           </div>
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-semibold">Agent file memory</h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="truncate text-sm text-muted-foreground">
               {agentFiles.length} file{agentFiles.length === 1 ? '' : 's'} from {agentName(effectiveAgentId)}
             </p>
           </div>
           <Button type="button" size="sm" variant="outline" onClick={handleRefresh} disabled={!effectiveAgentId || refreshing}>
             <RefreshCw data-icon="inline-start" className={refreshing ? 'animate-spin' : ''} />
-            Refresh
+            {!compact && 'Refresh'}
           </Button>
         </div>
 
@@ -178,7 +231,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 p-4">
+        <div className={`flex flex-col gap-3 ${compact ? 'p-3' : 'p-4'}`}>
           {agentFiles.length === 0 ? (
             <Empty className="min-h-60 border-0">
               <EmptyHeader>
@@ -192,7 +245,12 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
           ) : (
             <ItemGroup className="gap-2">
               {agentFiles.map(file => (
-                <Item key={file.id} variant="outline" asChild>
+                <Item
+                  key={file.id}
+                  variant="outline"
+                  asChild
+                  className={selectedPath === file.path ? 'border-primary bg-primary/5' : undefined}
+                >
                   <button type="button" className="w-full text-left" onClick={() => setSelectedPath(file.path)}>
                     <ItemMedia variant="icon" className="size-9 rounded-xl bg-muted [&_svg]:size-5">
                       <FileText />
@@ -223,6 +281,30 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
           )}
         </div>
       </ScrollArea>
+    </>
+  );
+
+  const showFullDetail = !!selectedFile && !wide;
+  const showSplitDetail = !!selectedFile && wide;
+
+  return (
+    <div ref={containerRef} className="flex h-full overflow-hidden">
+      {showFullDetail ? (
+        renderDetail(true)
+      ) : (
+        <>
+          <div
+            className={
+              showSplitDetail
+                ? 'flex w-[340px] shrink-0 flex-col overflow-hidden border-r border-border'
+                : 'flex min-w-0 flex-1 flex-col overflow-hidden'
+            }
+          >
+            {renderList(showSplitDetail)}
+          </div>
+          {showSplitDetail && renderDetail(false)}
+        </>
+      )}
     </div>
   );
 }

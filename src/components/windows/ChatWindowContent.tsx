@@ -49,6 +49,7 @@ import { ChatThreadPanel } from '../chat/ChatThreadPanel';
 import { SubThreadPanel } from '../chat/SubThreadPanel';
 import {
   ComposerAddContent,
+  FileChip,
   buildFileContext,
   formatBytes,
   linkedProjectFile,
@@ -77,16 +78,6 @@ import type {
 } from '../../types';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Attachment,
-  AttachmentAction,
-  AttachmentActions,
-  AttachmentContent,
-  AttachmentDescription,
-  AttachmentGroup,
-  AttachmentMedia,
-  AttachmentTitle,
-} from '@/components/ui/attachment';
 import {
   Command,
   CommandEmpty,
@@ -1039,7 +1030,7 @@ export function ChatWindowContent({
                 variant={sidePanel === 'profile' ? 'secondary' : 'ghost'}
                 size="sm"
                 className="h-8 px-2"
-                onClick={() => openAgentProfilePanel()}
+                onClick={() => sidePanel === 'profile' ? closeSidePanel() : openAgentProfilePanel()}
               >
                 <Bot data-icon="inline-start" />
                 <span className="max-w-48 truncate font-semibold">{directAgent?.name || channelTitle || 'Direct message'}</span>
@@ -1281,67 +1272,31 @@ export function ChatWindowContent({
         )}
         <div className="channel-composer border-t border-border p-2">
           {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
-            <AttachmentGroup className="mb-2">
+            <div className="mb-2 flex flex-wrap gap-1.5">
               {linkedFiles.map(file => (
-                <Attachment key={file.id} state="done" size="xs">
-                  <AttachmentMedia variant="icon">
-                    {file.kind === 'uploaded' ? <Paperclip /> : <HardDrive />}
-                  </AttachmentMedia>
-                  <AttachmentContent>
-                    <AttachmentTitle>{file.name}</AttachmentTitle>
-                    {file.kind !== 'uploaded' && file.sourceLabel && (
-                      <AttachmentDescription>{file.sourceLabel}</AttachmentDescription>
-                    )}
-                  </AttachmentContent>
-                  <AttachmentActions>
-                    <AttachmentAction
-                      aria-label={`Remove ${file.name}`}
-                      onClick={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
-                    >
-                      <X />
-                    </AttachmentAction>
-                  </AttachmentActions>
-                </Attachment>
+                <FileChip
+                  key={file.id}
+                  name={file.name}
+                  onRemove={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
+                />
               ))}
               {linkedDocs.map(doc => (
-                <Attachment key={doc.id} state="done" size="xs">
-                  <AttachmentMedia variant="icon">
-                    <FileText />
-                  </AttachmentMedia>
-                  <AttachmentContent>
-                    <AttachmentTitle>{doc.title}</AttachmentTitle>
-                    <AttachmentDescription>Document context</AttachmentDescription>
-                  </AttachmentContent>
-                  <AttachmentActions>
-                    <AttachmentAction
-                      aria-label={`Remove ${doc.title}`}
-                      onClick={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
-                    >
-                      <X />
-                    </AttachmentAction>
-                  </AttachmentActions>
-                </Attachment>
+                <FileChip
+                  key={doc.id}
+                  name={doc.title}
+                  label={doc.title}
+                  onRemove={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
+                />
               ))}
               {linkedGroups.map(group => (
-                <Attachment key={group.id} state="done" size="xs">
-                  <AttachmentMedia variant="icon">
-                    <Layers />
-                  </AttachmentMedia>
-                  <AttachmentContent>
-                    <AttachmentTitle>{group.name}</AttachmentTitle>
-                    <AttachmentDescription>Canvas group context</AttachmentDescription>
-                  </AttachmentContent>
-                  <AttachmentActions>
-                    <AttachmentAction
-                      aria-label={`Remove ${group.name}`}
-                      onClick={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
-                    >
-                      <X />
-                    </AttachmentAction>
-                  </AttachmentActions>
-                </Attachment>
+                <FileChip
+                  key={group.id}
+                  name={`${group.name}.canvas`}
+                  label={group.name}
+                  onRemove={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
+                />
               ))}
-            </AttachmentGroup>
+            </div>
           )}
 
           <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
@@ -1713,7 +1668,8 @@ export function ChatWindowContent({
       <Dialog open={Boolean(subThreadPickerMessageId)} onOpenChange={open => { if (!open) setSubThreadPickerMessageId(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Start a sub-thread with…</DialogTitle>
+            <DialogTitle>Dispatch background task to…</DialogTitle>
+            <p className="mt-1 text-xs text-muted-foreground">The agent receives this message as a task and works autonomously. View progress in the Threads panel.</p>
           </DialogHeader>
           <div className="flex flex-col gap-1 py-2">
             {agents.filter(a => a.enabled !== false).map(agent => (
@@ -1728,6 +1684,7 @@ export function ChatWindowContent({
                     onCreateSubThread(subThreadPickerMessageId, agent, content);
                   }
                   setSubThreadPickerMessageId(null);
+                  setSidePanel('sub-threads');
                 }}
               >
                 <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">

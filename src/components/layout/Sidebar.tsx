@@ -8,6 +8,7 @@ import {
   Copy,
   CreditCard,
   FileText,
+  Filter,
   Folder,
   Hash,
   Layers3,
@@ -202,6 +203,13 @@ export function Sidebar({
     () => buildDirectMessageTargets(directSessions, directAgents, favoriteAgentKeys),
     [directSessions, directAgents, favoriteAgentKeys],
   );
+  const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('active');
+  const filteredDmTargets = React.useMemo(() => {
+    if (dmFilter === 'all') return directMessageTargets;
+    if (dmFilter === 'active') return directMessageTargets.filter(a => a.status === 'online');
+    if (dmFilter === 'busy') return directMessageTargets.filter(a => a.status === 'busy');
+    return directMessageTargets.filter(a => !a.status || (a.status !== 'online' && a.status !== 'busy'));
+  }, [directMessageTargets, dmFilter]);
   const groupedThreadSessions = React.useMemo(() => groupSessionsByFolder(threadSessions, 'Threads'), [threadSessions]);
   const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
   const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
@@ -507,11 +515,12 @@ export function Sidebar({
               id="direct-messages"
               label="Direct messages"
               icon={<Bot />}
-              count={directMessageTargets.length}
+              count={filteredDmTargets.length}
               open={openSections.has('direct-messages')}
               onOpenChange={open => toggleSection('direct-messages', open)}
+              headerActions={<DmFilterButton filter={dmFilter} onChange={setDmFilter} />}
             >
-              {directMessageTargets.map(agent => (
+              {filteredDmTargets.map(agent => (
                 <DirectAgentRow
                   key={getAgentKey(agent)}
                   agent={agent}
@@ -863,6 +872,51 @@ function copyAgentMention(agent: SidebarAgentTarget) {
   void navigator.clipboard?.writeText(`@${handle}`);
 }
 
+type DmFilter = 'active' | 'idle' | 'busy' | 'all';
+
+const DM_FILTER_OPTIONS: { label: string; value: DmFilter; dot?: string }[] = [
+  { label: 'Active', value: 'active', dot: 'bg-emerald-500' },
+  { label: 'Busy', value: 'busy', dot: 'bg-amber-500' },
+  { label: 'Idle', value: 'idle', dot: 'bg-muted-foreground/40' },
+  { label: 'All agents', value: 'all' },
+];
+
+function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: DmFilter) => void }) {
+  const current = DM_FILTER_OPTIONS.find(f => f.value === filter) || DM_FILTER_OPTIONS[0];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="sidebar-section-action"
+          aria-label={`Filter: ${current.label}`}
+          title={`Filter: ${current.label}`}
+          onClick={e => e.stopPropagation()}
+        >
+          {current.dot ? (
+            <span className={`size-2.5 rounded-full ${current.dot}`} />
+          ) : (
+            <Filter className="size-3.5" />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-36">
+        {DM_FILTER_OPTIONS.map(opt => (
+          <DropdownMenuItem key={opt.value} onSelect={() => onChange(opt.value)}>
+            {opt.dot ? (
+              <span className={`size-2 rounded-full ${opt.dot}`} />
+            ) : (
+              <Filter className="size-3.5 opacity-50" />
+            )}
+            {opt.label}
+            {filter === opt.value && <span className="ml-auto text-xs text-primary">✓</span>}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function DirectAgentRow({
   agent,
   favorite,
@@ -1029,6 +1083,7 @@ function SidebarSection({
   count,
   actionLabel,
   onAction,
+  headerActions,
   open,
   onOpenChange,
   children,
@@ -1039,6 +1094,7 @@ function SidebarSection({
   count: number;
   actionLabel?: string;
   onAction?: () => void;
+  headerActions?: React.ReactNode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
@@ -1080,6 +1136,7 @@ function SidebarSection({
             <Plus className="size-3.5" />
           </button>
         )}
+        {headerActions}
       </div>
       <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
         {children}

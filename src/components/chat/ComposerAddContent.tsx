@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Bot, Command as CommandIcon, FileText, FolderOpen, HardDrive, Layers, Paperclip, Sparkles, Upload, Wrench } from 'lucide-react';
+import { Bot, Command as CommandIcon, FileText, FolderOpen, HardDrive, Layers, Paperclip, Sparkles, Upload, Wrench, X } from 'lucide-react';
 import type { CanvasGroup, Document, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import { agentHandle } from '../../lib/agentAccent';
@@ -281,4 +281,26 @@ function ComposerAddRow({
 
 function ComposerAddEmpty({ children }: { children: ReactNode }) {
   return <div className="px-2 py-1 text-xs text-muted-foreground">{children}</div>;
+}
+
+export function FileChip({ name, label, onRemove }: { name: string; label?: string; onRemove: () => void }) {
+  const ext = name.includes('.') ? name.split('.').pop()?.toUpperCase().slice(0, 4) : null;
+  return (
+    <span className="inline-flex max-w-[200px] shrink-0 items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 text-xs text-foreground">
+      {ext && (
+        <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 text-[10px] font-bold leading-none text-primary">
+          {ext}
+        </span>
+      )}
+      <span className="min-w-0 truncate">{label || name}</span>
+      <button
+        type="button"
+        className="ml-0.5 shrink-0 rounded p-0.5 hover:bg-muted-foreground/20"
+        aria-label={`Remove ${name}`}
+        onClick={onRemove}
+      >
+        <X className="size-2.5" />
+      </button>
+    </span>
+  );
 }
