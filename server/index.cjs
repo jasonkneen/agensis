@@ -2733,6 +2733,17 @@ function getUploadExtension(name) {
   return dot >= 0 ? trimmed.slice(dot + 1).toLowerCase() : '';
 }
 
+// Deny-by-default lookup: plain bracket/dot access on a POJO also resolves
+// inherited members (e.g. `x.constructor` or `x.__proto__` would otherwise
+// "match" and return a non-undefined value), which would let an attacker
+// smuggle an extension past the allowlist. `Object.hasOwn` restricts the
+// lookup to the allowlist's own declared keys.
+function lookupUploadContentType(extension) {
+  return Object.hasOwn(UPLOAD_EXTENSION_CONTENT_TYPES, extension)
+    ? UPLOAD_EXTENSION_CONTENT_TYPES[extension]
+    : undefined;
+}
+
 const PROJECT_FILE_IGNORE_DIRS = new Set([
   '.git',
   '.hg',
@@ -3772,7 +3783,7 @@ function createApp() {
       // always derived server-side from the file extension via the allowlist
       // above (see plan 002 for the full rationale).
       const extension = getUploadExtension(name);
-      const normalizedType = UPLOAD_EXTENSION_CONTENT_TYPES[extension];
+      const normalizedType = lookupUploadContentType(extension);
       if (!extension || normalizedType === undefined) {
         return jsonError(res, 400, new Error(`Unsupported file type: .${extension || 'unknown'}`));
       }
@@ -3825,7 +3836,17 @@ function createApp() {
       const mustForceAttachment = FORCE_ATTACHMENT_EXTENSIONS.has(getUploadExtension(file.name))
         || FORCE_ATTACHMENT_CONTENT_TYPES.has(file.type);
       const disposition = mustForceAttachment ? 'attachment' : 'inline';
-      res.setHeader('Content-Type', file.type || 'application/octet-stream');
+      // IMPORTANT: the app's own viewer (ChatWindowContent's openUploadedFile)
+      // fetches this endpoint and calls response.blob(), then
+      // URL.createObjectURL()/window.open() on the blob. The Fetch/Blob APIs
+      // take the blob's type from the Content-Type header and completely
+      // IGNORE Content-Disposition — so forcing `attachment` alone does not
+      // stop that in-app viewer from rendering a stored `text/html`/
+      // `image/svg+xml` type as script in the app's own origin. When forcing
+      // attachment, the served Content-Type must ALSO be overridden to a
+      // safe, non-renderable value, regardless of what's stored.
+      const servedType = mustForceAttachment ? 'application/octet-stream' : (file.type || 'application/octet-stream');
+      res.setHeader('Content-Type', servedType);
       res.setHeader('Content-Disposition', `${disposition}; filename="${safeFileName(file.name)}"`);
       fs.createReadStream(fullPath).pipe(res);
     } catch (error) {

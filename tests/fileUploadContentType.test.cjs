@@ -243,6 +243,75 @@ test('a legitimate .png upload is unaffected — stays inline with Content-Type:
   });
 });
 
+test('a CRUD-bypass that sets a stored type to text/html directly is still served as a safe download', async () => {
+  // Simulates a write-role user PATCHing `uploaded_files.type` via the
+  // generic `/backend/db/uploaded_files` route (uploaded_files is in
+  // ALLOWED_TABLES) rather than going through the upload handler — the
+  // upload handler's own normalization never runs in that path. Verifies the
+  // serve route's belt-and-suspenders check on the STORED type. This matters
+  // because the app's own viewer (ChatWindowContent's openUploadedFile) uses
+  // fetch().blob(), which derives the blob's type from Content-Type and
+  // ignores Content-Disposition entirely — so Content-Type must also be
+  // overridden, not just the disposition.
+  const fakeDb = installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor');
+    const uploadResponse = await authedFetch(baseUrl, token, '/backend/files/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: 'ws-1',
+        name: 'photo.png',
+        type: 'image/png',
+        contentBase64: Buffer.from('not-really-a-png-but-fine-for-this-test').toString('base64'),
+      }),
+    });
+    const uploadBody = await uploadResponse.json();
+    assert.equal(uploadResponse.status, 200);
+
+    // Simulate the CRUD-bypass: mutate the stored row's type directly,
+    // bypassing the upload handler's normalization entirely.
+    const storedRow = fakeDb.uploadedFiles.get(uploadBody.data.id);
+    storedRow.type = 'text/html';
+
+    const contentResponse = await authedFetch(baseUrl, token, `/backend/files/${uploadBody.data.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.match(contentResponse.headers.get('content-disposition') || '', /^attachment;/);
+    assert.equal(contentResponse.headers.get('x-content-type-options'), 'nosniff');
+    // The critical assertion: served Content-Type must NOT be the dangerous
+    // stored value, since fetch().blob() only looks at Content-Type.
+    assert.notEqual(contentResponse.headers.get('content-type'), 'text/html');
+    assert.equal(contentResponse.headers.get('content-type'), 'application/octet-stream');
+  });
+});
+
+test('an extension that only "matches" the allowlist via prototype inheritance (e.g. .constructor) is rejected 400', async () => {
+  installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor');
+    const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: 'ws-1',
+        name: 'payload.constructor',
+        type: 'application/octet-stream',
+        contentBase64: Buffer.from('hi').toString('base64'),
+      }),
+    });
+
+    assert.equal(response.status, 400);
+  });
+});
+
 test('an upload with an extension outside the server-side allowlist (.exe) is rejected 400', async () => {
   installDb({
     authSecret: 'fixed-test-secret',
