@@ -3607,6 +3607,32 @@ async function logConnectionActivity(connection, eventType) {
   }
 }
 
+// H4 (2026-07 review): realtime subscriptions are authorized only at subscribe
+// time, so a member removed (or role-changed) mid-session keeps receiving a
+// workspace's live messages/canvas/tasks on their open socket until it drops.
+// When workspace_members changes, re-authorize every affected user's live
+// subscriptions against their CURRENT role and drop the ones that no longer
+// pass — reusing the same authoritative check as the subscribe path.
+async function revokeRealtimeAccessForMember(userId) {
+  for (const ws of websocketClients) {
+    if (String(ws.userId || '') !== String(userId)) continue;
+    const subscriptions = ws.subscriptions || [];
+    if (subscriptions.length === 0) continue;
+    const kept = [];
+    for (const subscription of subscriptions) {
+      try {
+        await authorizeRealtimeBinding(ws.userId, subscription.channel, subscription);
+        kept.push(subscription);
+      } catch {
+        try {
+          sendWs(ws, { type: 'system', event: 'unsubscribed', channel: subscription.channel, reason: 'access_revoked' });
+        } catch { /* socket already closing */ }
+      }
+    }
+    if (kept.length !== subscriptions.length) ws.subscriptions = kept;
+  }
+}
+
 function notifyDbSubscribers(table, eventType, rows) {
   const rowList = Array.isArray(rows) ? rows : [];
   if (rowList.length === 0) return;
@@ -3619,6 +3645,14 @@ function notifyDbSubscribers(table, eventType, rows) {
 
   if (table === 'workspace_agents') {
     refreshConnectedAgentConfigs(eventType, rowList);
+  }
+
+  // Prune the affected user's now-unauthorized subscriptions before fanning the
+  // change out to everyone else (removed members must stop receiving data).
+  if (table === 'workspace_members' && (eventType === 'DELETE' || eventType === 'UPDATE')) {
+    for (const row of rowList) {
+      if (row && row.user_id) void revokeRealtimeAccessForMember(row.user_id);
+    }
   }
 
   for (const ws of websocketClients) {
@@ -5389,6 +5423,13 @@ function resetTestState() {
   tokenVersionCache.clear();
 }
 
+// Test seam: register a fake WS client so the realtime-revocation path can be
+// exercised without a live socket server.
+function registerTestWebsocketClient(ws) {
+  websocketClients.add(ws);
+  return ws;
+}
+
 module.exports = {
   startBackendServer,
   createApp,
@@ -5397,6 +5438,8 @@ module.exports = {
     appendWorkspaceAccessClause,
     authorizeRealtimeBinding,
     authorizeRealtimeBroadcast,
+    revokeRealtimeAccessForMember,
+    registerTestWebsocketClient,
     buildWhereClause,
     capabilityForDbOperation,
     canManageWorkspace,
