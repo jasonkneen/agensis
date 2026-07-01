@@ -1366,12 +1366,7 @@ function allowLoopbackAgentDevFallback(req, token) {
   if (process.env.NODE_ENV === 'production') return false;
   if (!String(token || '').startsWith('aga_')) return false;
   const remote = req?.socket?.remoteAddress || '';
-  const host = String(req?.headers?.host || '');
-  return remote === '127.0.0.1'
-    || remote === '::1'
-    || remote === '::ffff:127.0.0.1'
-    || host.startsWith('127.0.0.1:')
-    || host.startsWith('localhost:');
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
 }
 
 function publicAgentConnection(row) {
@@ -4923,6 +4918,7 @@ module.exports = {
   startBackendServer,
   createApp,
   __test: {
+    allowLoopbackAgentDevFallback,
     appendWorkspaceAccessClause,
     authorizeRealtimeBinding,
     authorizeRealtimeBroadcast,
