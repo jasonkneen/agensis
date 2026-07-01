@@ -11,13 +11,12 @@ Every Critical/High/Medium finding has been fixed, plus 9 Low items. Test suite 
 
 **Fixed & merged to `main`:** H1 (cross-tenant write), H2 (rate-limit keying), H3 (comment-mention gate), H5 (WS realtime), H7 (CI green), H8 (CLI packaging), M1/L1 (table access).
 
-**Fixed on branch `fix/h4-realtime-revocation` (awaiting merge + `fly deploy`):** H4 (realtime revocation), M3 (MCP reaper), M4 (Netlify ai-chat auth), M6 (dispatch error surfacing), M7 (merge clock-skew), M9 (offline dead-letter), M12/M13 (SSE consumers), M14 (burst-job guard), L2 (pg error leak), L3 (signin lockout), L5 (non-active-window context), L7 (showcase code-split), L8 (unused dep), L10 (stray asset), L11/L13 (branding/URL).
+**Fixed on branch `fix/h4-realtime-revocation` (awaiting merge + `fly deploy`):** H4 (realtime revocation), M3 (MCP reaper), M4 (Netlify ai-chat auth), M6 (dispatch error surfacing), M7 (merge clock-skew), M9 (offline dead-letter), M12/M13 (SSE consumers), M14 (burst-job guard), M15 (active-job unique index across instances), L2 (pg error leak), L3 (signin lockout), L5 (non-active-window context), L7 (showcase code-split), L8 (unused dep), L10 (stray asset), L11/L13 (branding/URL).
 
 **⚠️ Not live until deployed:** backend fixes run on fly.dev and require `fly deploy`; frontend fixes ship on the next Netlify push.
 
 **Deferred — need an owner decision or carry risk:**
-- **M15** (cross-instance drain lock) — atomic index would fail daemon boot if duplicate active jobs exist; advisory lock breaks under postgres.js pooling. Needs dedupe migration + reserved-connection design. (M14 closed the common case.)
-- **M8** (offline cache stale) — needs a centralized `table → cacheKey` convention.
+- **M8** (offline cache stale) — needs a `table → cacheKey` convention threaded through ~10 hooks; low-severity (offline-reload edge case).
 - **L4** (hash invite tokens) — needs a migration for existing plaintext tokens.
 - **L6** (stale `netlify/database/migrations`) — confirmed NOT auto-applied by Netlify, but `plans/006` treats `0006` as canonical and defers the delete decision; left in place.
 - **L12** (PWA PNG icons) — needs generated PNG assets.
