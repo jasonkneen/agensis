@@ -554,16 +554,5 @@ export function useWindows() {
     );
   }, []);
 
-  const groupWindows = useCallback((ids: string[]) => {
-    if (ids.length < 2) return;
-    const groupId = `layout_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    setWindows(prev => prev.map(w => ids.includes(w.id) ? { ...w, layoutGroupId: groupId } : w));
-    setSelectedWindowIds([]);
-  }, []);
-
-  const ungroupWindows = useCallback((groupId: string) => {
-    setWindows(prev => prev.map(w => w.layoutGroupId === groupId ? { ...w, layoutGroupId: undefined } : w));
-  }, []);
-
-  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, groupWindows, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, ungroupWindows };
+  return { windows, openWindow, closeWindow, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
 }
