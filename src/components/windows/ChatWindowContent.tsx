@@ -306,6 +306,7 @@ export function ChatWindowContent({
   const [hashStartPos, setHashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
+  const [widgetsCollapsed, setWidgetsCollapsed] = useState(false);
   const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
@@ -648,6 +649,11 @@ export function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
+  // Floating thread widgets overlay the message list's right gutter. Reserve
+  // matching right padding on the message column (only while expanded) so a
+  // card never sits on top of message text.
+  const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
+  const reserveWidgetGutter = showWidgetRail && !widgetsCollapsed;
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
   const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
@@ -1168,7 +1174,7 @@ export function ChatWindowContent({
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
-              <MessageScrollerContent className="min-h-full gap-0 py-2">
+              <MessageScrollerContent className={cn('min-h-full gap-0 py-2 transition-[padding]', reserveWidgetGutter && 'pr-[312px]')}>
                 {clearedAt && hiddenCount > 0 && (
                   <button
                     type="button"
@@ -1224,6 +1230,15 @@ export function ChatWindowContent({
                 )}
               </MessageScrollerContent>
             </MessageScrollerViewport>
+            {showWidgetRail && (
+              <ThreadWidgetRail
+                workspaceId={workspaceId}
+                sessionId={inferredSessionId}
+                collapsed={widgetsCollapsed}
+                onToggleCollapsed={() => setWidgetsCollapsed(v => !v)}
+                onJumpToMessage={handleJumpToMessage}
+              />
+            )}
             <MessageScrollerButton direction="end" behavior="auto" onClick={() => setAutoScroll(true)} />
           </MessageScroller>
         </MessageScrollerProvider>
@@ -1560,13 +1575,6 @@ export function ChatWindowContent({
         </aside>
       )}
 
-      {!readOnly && (
-        <ThreadWidgetRail
-          workspaceId={workspaceId}
-          sessionId={inferredSessionId}
-          onJumpToMessage={handleJumpToMessage}
-        />
-      )}
 
       <Dialog open={catchUpOpen} onOpenChange={setCatchUpOpen}>
         <DialogContent className="max-w-lg">

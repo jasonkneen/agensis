@@ -4,7 +4,6 @@ import {
   ListChecks,
   Hand,
   X,
-  Plus,
   Maximize2,
   Minimize2,
   CornerDownRight,
@@ -18,8 +17,15 @@ import { useThreadItems } from '@/hooks/useThreadItems';
 import type { ThreadItem, ThreadItemKind } from '@/types';
 
 // ---------------------------------------------------------------------------
-// Layout persistence — per-session widget arrangement lives in localStorage so
-// the board survives reloads without needing a backend layout table (v1).
+// Floating widget overlay — cards float over the empty right gutter of the
+// message list (NOT a side panel). The overlay wrapper is click-through
+// (pointer-events-none); only the cards themselves capture events, so the
+// messages underneath stay scrollable/clickable in the gaps. The parent
+// reserves matching right padding on the message column so a card never sits
+// on top of message text.
+//
+// Layout (which widgets, their size + order) persists per session in
+// localStorage so the arrangement survives reloads without a backend table.
 // ---------------------------------------------------------------------------
 
 type WidgetSize = 1 | 2;
@@ -28,24 +34,17 @@ interface WidgetLayout {
   w: WidgetSize;
   h: WidgetSize;
 }
-interface RailLayout {
-  collapsed: boolean;
-  widgets: WidgetLayout[];
-}
 
-const DEFAULT_LAYOUT: RailLayout = {
-  collapsed: false,
-  widgets: [
-    { kind: 'todo', w: 1, h: 2 },
-    { kind: 'plan', w: 1, h: 2 },
-    { kind: 'blocker', w: 2, h: 1 },
-  ],
-};
+const DEFAULT_WIDGETS: WidgetLayout[] = [
+  { kind: 'todo', w: 1, h: 2 },
+  { kind: 'plan', w: 1, h: 2 },
+  { kind: 'blocker', w: 2, h: 1 },
+];
 
-const KIND_META: Record<ThreadItemKind, { label: string; icon: typeof ListTodo; addPlaceholder: string; empty: string }> = {
-  todo: { label: 'To-do', icon: ListTodo, addPlaceholder: 'Add a to-do…', empty: 'No to-dos yet' },
-  plan: { label: 'Plan', icon: ListChecks, addPlaceholder: 'Add a plan step…', empty: 'No plan yet' },
-  blocker: { label: 'Blockers', icon: Hand, addPlaceholder: 'Add a blocker…', empty: 'Nothing blocked' },
+const KIND_META: Record<ThreadItemKind, { label: string; icon: typeof ListTodo; empty: string }> = {
+  todo: { label: 'To-do', icon: ListTodo, empty: 'No to-dos yet' },
+  plan: { label: 'Plan', icon: ListChecks, empty: 'No plan yet' },
+  blocker: { label: 'Blockers', icon: Hand, empty: 'Nothing blocked' },
 };
 
 const ALL_KINDS: ThreadItemKind[] = ['todo', 'plan', 'blocker'];
@@ -54,20 +53,18 @@ function layoutKey(sessionId: string) {
   return `thread-widgets:${sessionId}`;
 }
 
-function loadLayout(sessionId: string): RailLayout {
+function loadWidgets(sessionId: string): WidgetLayout[] {
   try {
     const raw = localStorage.getItem(layoutKey(sessionId));
-    if (!raw) return DEFAULT_LAYOUT;
-    const parsed = JSON.parse(raw) as RailLayout;
-    if (!parsed || !Array.isArray(parsed.widgets)) return DEFAULT_LAYOUT;
-    // keep only known kinds, dedupe
+    if (!raw) return DEFAULT_WIDGETS;
+    const parsed = JSON.parse(raw) as { widgets?: WidgetLayout[] };
+    if (!parsed || !Array.isArray(parsed.widgets)) return DEFAULT_WIDGETS;
     const seen = new Set<ThreadItemKind>();
-    const widgets = parsed.widgets
+    return parsed.widgets
       .filter(w => ALL_KINDS.includes(w.kind) && !seen.has(w.kind) && seen.add(w.kind))
       .map(w => ({ kind: w.kind, w: (w.w === 2 ? 2 : 1) as WidgetSize, h: (w.h === 2 ? 2 : 1) as WidgetSize }));
-    return { collapsed: !!parsed.collapsed, widgets };
   } catch {
-    return DEFAULT_LAYOUT;
+    return DEFAULT_WIDGETS;
   }
 }
 
@@ -78,6 +75,8 @@ interface ThreadWidgetRailProps {
   sessionId: string | null;
   userId?: string;
   accent?: string;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onJumpToMessage?: (messageId: string) => void;
 }
 
@@ -86,81 +85,74 @@ export function ThreadWidgetRail({
   sessionId,
   userId,
   accent,
+  collapsed,
+  onToggleCollapsed,
   onJumpToMessage,
 }: ThreadWidgetRailProps) {
-  const { byKind, loading, createItem, toggleDone, answerBlocker, deleteItem } = useThreadItems(
+  const { byKind, loading, toggleDone, answerBlocker, deleteItem } = useThreadItems(
     workspaceId,
     sessionId,
     userId,
   );
 
-  const [layout, setLayout] = useState<RailLayout>(DEFAULT_LAYOUT);
+  const [widgets, setWidgets] = useState<WidgetLayout[]>(DEFAULT_WIDGETS);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
   // Load the saved arrangement whenever the thread changes.
   useEffect(() => {
     if (!sessionId) return;
-    setLayout(loadLayout(sessionId));
+    setWidgets(loadWidgets(sessionId));
   }, [sessionId]);
 
-  const persist = useCallback((next: RailLayout) => {
-    setLayout(next);
+  const persist = useCallback((next: WidgetLayout[]) => {
+    setWidgets(next);
     if (sessionId) {
-      try { localStorage.setItem(layoutKey(sessionId), JSON.stringify(next)); } catch { /* ignore quota */ }
+      try { localStorage.setItem(layoutKey(sessionId), JSON.stringify({ widgets: next })); } catch { /* ignore quota */ }
     }
   }, [sessionId]);
 
-  const setCollapsed = useCallback((collapsed: boolean) => {
-    persist({ ...layout, collapsed });
-  }, [layout, persist]);
-
   const cycleSize = useCallback((index: number) => {
-    const widgets = layout.widgets.slice();
-    const cur = widgets[index];
+    const next = widgets.slice();
+    const cur = next[index];
     if (!cur) return;
     // cycle 1x1 -> 1x2 -> 2x1 -> 2x2 -> 1x1
     const order: Array<[WidgetSize, WidgetSize]> = [[1, 1], [1, 2], [2, 1], [2, 2]];
     const idx = order.findIndex(([w, h]) => w === cur.w && h === cur.h);
     const [w, h] = order[(idx + 1) % order.length];
-    widgets[index] = { ...cur, w, h };
-    persist({ ...layout, widgets });
-  }, [layout, persist]);
+    next[index] = { ...cur, w, h };
+    persist(next);
+  }, [widgets, persist]);
 
   const closeWidget = useCallback((kind: ThreadItemKind) => {
-    persist({ ...layout, widgets: layout.widgets.filter(w => w.kind !== kind) });
-  }, [layout, persist]);
-
-  const addWidget = useCallback((kind: ThreadItemKind) => {
-    if (layout.widgets.some(w => w.kind === kind)) return;
-    persist({ ...layout, widgets: [...layout.widgets, { kind, w: 1, h: 2 }] });
-  }, [layout, persist]);
+    persist(widgets.filter(w => w.kind !== kind));
+  }, [widgets, persist]);
 
   const reorder = useCallback((from: number, to: number) => {
     if (from === to) return;
-    const widgets = layout.widgets.slice();
-    const [moved] = widgets.splice(from, 1);
-    widgets.splice(to, 0, moved);
-    persist({ ...layout, widgets });
-  }, [layout, persist]);
+    const next = widgets.slice();
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    persist(next);
+  }, [widgets, persist]);
 
-  const missingKinds = useMemo(
-    () => ALL_KINDS.filter(k => !layout.widgets.some(w => w.kind === k)),
-    [layout.widgets],
+  const hasItems = useMemo(
+    () => ALL_KINDS.some(k => (byKind[k]?.length ?? 0) > 0),
+    [byKind],
   );
 
   if (!sessionId || !workspaceId) return null;
 
-  // Collapsed → floating reopen chip (no panel chrome).
-  if (layout.collapsed) {
+  // Collapsed → a single floating reopen chip in the top-right corner.
+  if (collapsed) {
     return (
-      <div className="thread-widget-rail-collapsed flex h-full shrink-0 flex-col items-center px-1.5 py-3">
+      <div className="pointer-events-none absolute right-3 top-3 z-10">
         <button
           type="button"
-          className="thread-widget-card flex size-8 items-center justify-center rounded-full border border-black/5 bg-card text-muted-foreground transition-colors hover:text-foreground dark:border-white/10"
+          className="thread-widget-card pointer-events-auto flex size-8 items-center justify-center rounded-xl border border-black/5 bg-card text-muted-foreground transition-colors hover:text-foreground dark:border-white/10"
           title="Show widgets"
           aria-label="Show widgets"
-          onClick={() => setCollapsed(false)}
+          onClick={onToggleCollapsed}
         >
           <PanelRightOpen className="size-4" />
         </button>
@@ -169,37 +161,23 @@ export function ThreadWidgetRail({
   }
 
   return (
-    <div className="thread-widget-rail flex h-full w-[300px] shrink-0 flex-col overflow-y-auto px-3 py-3">
-      {/* floating controls — no panel header, just a subtle collapse chip */}
-      <div className="mb-2 flex shrink-0 items-center justify-end gap-1">
-        {missingKinds.map(kind => {
-          const Icon = KIND_META[kind].icon;
-          return (
-            <button
-              key={kind}
-              type="button"
-              className="flex size-6 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
-              title={`Add ${KIND_META[kind].label} widget`}
-              aria-label={`Add ${KIND_META[kind].label} widget`}
-              onClick={() => addWidget(kind)}
-            >
-              <Icon className="size-3.5" />
-            </button>
-          );
-        })}
+    // Click-through overlay pinned to the right gutter of the message surface.
+    <div className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-0 z-10 flex w-[300px] flex-col gap-2 overflow-hidden px-3 py-3">
+      {/* one quiet collapse control, top-right — no panel chrome, no add UI */}
+      <div className="flex shrink-0 items-center justify-end">
         <button
           type="button"
-          className="flex size-6 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+          className="pointer-events-auto flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
           title="Hide widgets"
           aria-label="Hide widgets"
-          onClick={() => setCollapsed(true)}
+          onClick={onToggleCollapsed}
         >
           <PanelRightClose className="size-3.5" />
         </button>
       </div>
 
-      <div className="grid min-h-0 grid-cols-2 gap-3 [grid-auto-flow:dense] [grid-auto-rows:158px]">
-        {layout.widgets.map((w, index) => (
+      <div className="grid min-h-0 flex-1 grid-cols-2 content-start gap-2 overflow-y-auto [grid-auto-flow:dense] [grid-auto-rows:150px]">
+        {widgets.map((w, index) => (
           <WidgetCard
             key={w.kind}
             index={index}
@@ -217,20 +195,19 @@ export function ThreadWidgetRail({
             }}
             onResize={() => cycleSize(index)}
             onClose={() => closeWidget(w.kind)}
-            onAdd={content => createItem({ kind: w.kind, content })}
             onToggleDone={toggleDone}
             onAnswer={answerBlocker}
             onDelete={deleteItem}
             onJumpToMessage={onJumpToMessage}
           />
         ))}
-        {layout.widgets.length === 0 && (
+        {widgets.length === 0 && hasItems && (
           <button
             type="button"
-            className="col-span-2 rounded-2xl border border-dashed border-border/60 p-4 text-center text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground"
-            onClick={() => ALL_KINDS.forEach(addWidget)}
+            className="pointer-events-auto col-span-2 rounded-xl border border-dashed border-border/60 p-3 text-center text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            onClick={() => persist(DEFAULT_WIDGETS)}
           >
-            No widgets — click to restore
+            Show widgets
           </button>
         )}
       </div>
@@ -252,7 +229,6 @@ interface WidgetCardProps {
   onDragEnd: () => void;
   onResize: () => void;
   onClose: () => void;
-  onAdd: (content: string) => void;
   onToggleDone: (item: ThreadItem) => void;
   onAnswer: (item: ThreadItem, response: string) => void;
   onDelete: (id: string) => void;
@@ -270,7 +246,6 @@ function WidgetCard({
   onDragEnd,
   onResize,
   onClose,
-  onAdd,
   onToggleDone,
   onAnswer,
   onDelete,
@@ -278,20 +253,12 @@ function WidgetCard({
 }: WidgetCardProps) {
   const meta = KIND_META[layout.kind];
   const Icon = meta.icon;
-  const [adding, setAdding] = useState('');
   const openCount = items.filter(i => i.status === 'open').length;
-
-  const submitAdd = () => {
-    const value = adding.trim();
-    if (!value) return;
-    onAdd(value);
-    setAdding('');
-  };
 
   return (
     <div
       className={cn(
-        'thread-widget thread-widget-card group/card relative flex flex-col overflow-hidden rounded-2xl border border-black/5 bg-card transition-shadow dark:border-white/10',
+        'thread-widget thread-widget-card group/card pointer-events-auto relative flex flex-col overflow-hidden rounded-xl border border-black/5 bg-card transition-shadow dark:border-white/10',
         layout.w === 2 ? 'col-span-2' : 'col-span-1',
         layout.h === 2 ? 'row-span-2' : 'row-span-1',
         isDragTarget && 'ring-2 ring-primary/60',
@@ -334,7 +301,7 @@ function WidgetCard({
       </div>
 
       {/* body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
         {loading && items.length === 0 ? (
           <p className="px-1 py-2 text-[11px] text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (
@@ -353,18 +320,6 @@ function WidgetCard({
             ))}
           </ul>
         )}
-      </div>
-
-      {/* add affordance — borderless, quiet until focused */}
-      <div className="flex shrink-0 items-center gap-1 px-3 pb-2.5 pt-1">
-        <Plus className="size-3 shrink-0 text-muted-foreground/50" />
-        <input
-          value={adding}
-          onChange={e => setAdding(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitAdd(); } }}
-          placeholder={meta.addPlaceholder}
-          className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[11px] outline-none focus:ring-0 placeholder:text-muted-foreground/50"
-        />
       </div>
     </div>
   );
