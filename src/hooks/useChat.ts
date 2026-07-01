@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
+import { computeThreadDivergence } from '../lib/threadMerge';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -607,8 +608,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     ]);
     const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id);
     const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id);
-    const parentDiverged = parentTop.filter((m: Message) => String(m.created_at) > splitAt);
-    const forkDiverged = forkTop.filter((m: Message) => String(m.created_at) > splitAt);
+    // Divergence by set-difference of the shared (copied) history — clock-skew
+    // safe (M7); see computeThreadDivergence.
+    const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);
 
     // Nothing happened in the fork after the split → merge is pure cleanup.
     if (forkDiverged.length === 0) {
