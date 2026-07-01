@@ -11,6 +11,7 @@ import {
   appendWorkspaceAccessClause,
   logMessageActivityIdempotent,
   createRateLimiter,
+  evaluatePasswordServerSide,
 } from '../../shared/backend-core.mjs';
 
 // H4 — Rate limiting. Module-scoped, in-memory fixed-window limiters.
@@ -19,6 +20,11 @@ import {
 // globally accurate. This is a first abuse-protection layer, not a hard quota.
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+// Plan 004 — auth hardening: signin is keyed per-email (matches the client's
+// documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
+// to slow down bulk account creation without punishing normal signup retries.
+const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 
 function clientIpFromRequest(req) {
   const forwarded = String(req.headers.get('x-forwarded-for') || '').split(',')[0].trim();
@@ -801,7 +807,11 @@ async function handleAuth(pathname, req) {
   if (!email || !password) return jsonError(400, new Error('Email and password are required'));
 
   if (pathname === '/backend/auth/signup') {
-    if (password.length < 6) return jsonError(400, new Error('Password must be at least 6 characters'));
+    const signupBlocked = rateLimitBlock(signupRateLimiter, clientIpFromRequest(req));
+    if (signupBlocked) return signupBlocked;
+
+    const policy = evaluatePasswordServerSide(password);
+    if (!policy.valid) return jsonError(400, new Error(policy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
     const existing = await query('select id from app_users where email = $1 limit 1', [email]);
     if (existing.length > 0) return jsonError(409, new Error('An account with that email already exists'));
 
@@ -812,6 +822,11 @@ async function handleAuth(pathname, req) {
     const user = rows[0];
     return json({ data: { user, token: issueToken(user.id) }, error: null });
   }
+
+  // signin — no complexity check (existing users must be able to log in with
+  // whatever password they already have); only rate-limit, keyed per-email.
+  const signinBlocked = rateLimitBlock(signinRateLimiter, `signin:${email}`);
+  if (signinBlocked) return signinBlocked;
 
   const rows = await query('select id, email, password_hash, display_name, accent_color, created_at from app_users where email = $1 limit 1', [email]);
   const user = rows[0];
@@ -875,7 +890,8 @@ async function handleChangeMyPassword(req, userId) {
   const currentPassword = String(body?.currentPassword || '');
   const newPassword = String(body?.newPassword || '');
   if (!currentPassword || !newPassword) return jsonError(400, new Error('Current and new password are required'));
-  if (newPassword.length < 6) return jsonError(400, new Error('New password must be at least 6 characters'));
+  const newPasswordPolicy = evaluatePasswordServerSide(newPassword);
+  if (!newPasswordPolicy.valid) return jsonError(400, new Error(newPasswordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
 
   const rows = await query('select id, password_hash from app_users where id = $1 limit 1', [userId]);
   const user = rows[0];
