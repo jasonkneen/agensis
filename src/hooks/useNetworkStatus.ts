@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
-import { peekQueue, dequeue, clearQueue as clearOfflineQueue } from '../lib/offlineDb';
+import { peekQueue, dequeue, recordSyncFailure, clearQueue as clearOfflineQueue } from '../lib/offlineDb';
 
 export function useNetworkStatus() {
   const [online, setOnline] = useState(navigator.onLine);
@@ -34,6 +34,7 @@ export function useNetworkStatus() {
       }
 
       let failedCount = 0;
+      let droppedCount = 0;
 
       for (const item of items) {
         try {
@@ -51,20 +52,33 @@ export function useNetworkStatus() {
           if (item.id != null) await dequeue(item.id);
           setPendingCount(prev => Math.max(0, prev - 1));
         } catch (error) {
-          failedCount++;
-          console.error('[offline-sync] Failed to flush queued change (skipping)', {
+          // Count a failed attempt; drop the entry once it has failed too many
+          // times so a permanently-broken "poison" change stops retrying every
+          // 30s and pinning the error banner (M9).
+          let dropped = false;
+          if (item.id != null) {
+            const result = await recordSyncFailure(item.id);
+            dropped = result.dropped;
+          }
+          if (dropped) {
+            droppedCount++;
+            setPendingCount(prev => Math.max(0, prev - 1));
+          } else {
+            failedCount++;
+          }
+          console.error(`[offline-sync] Failed to flush queued change${dropped ? ' (discarded after too many attempts)' : ' (will retry)'}`, {
             table: item.table,
             operation: item.operation,
             payload: item.payload,
             error,
           });
-          // Skip this item and continue processing remaining items so one
-          // permanently-broken entry does not block the entire queue.
         }
       }
 
       if (failedCount > 0) {
-        setSyncError(`${failedCount} queued change${failedCount === 1 ? '' : 's'} failed to sync`);
+        setSyncError(`${failedCount} queued change${failedCount === 1 ? '' : 's'} failed to sync — will retry`);
+      } else if (droppedCount > 0) {
+        setSyncError(`${droppedCount} queued change${droppedCount === 1 ? '' : 's'} couldn't be synced and ${droppedCount === 1 ? 'was' : 'were'} discarded`);
       } else {
         setSyncError(null);
       }

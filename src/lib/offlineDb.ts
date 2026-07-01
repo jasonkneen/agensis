@@ -7,6 +7,10 @@ const CACHE_STORE = 'data_cache';
 // without limit. Oldest entries are evicted first once either bound is exceeded.
 const MAX_QUEUE_ENTRIES = 5000;
 const QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// A queued mutation that keeps failing (duplicate PK, FK violation on a deleted
+// parent, etc.) is dropped after this many flush attempts so it can't retry
+// forever and pin the sync-error banner (M9).
+const MAX_SYNC_ATTEMPTS = 5;
 
 interface SyncEntry {
   id?: number;
@@ -14,6 +18,7 @@ interface SyncEntry {
   operation: 'insert' | 'update' | 'delete';
   payload: Record<string, unknown>;
   created_at: number;
+  attempts?: number;
 }
 
 interface CacheEntry {
@@ -101,6 +106,27 @@ export async function clearQueue(): Promise<void> {
   const db = await openDb();
   await req(tx(db, QUEUE_STORE, 'readwrite').clear());
   db.close();
+}
+
+// Record a failed flush attempt: increment the entry's attempt counter, and
+// drop it (dead-letter) once MAX_SYNC_ATTEMPTS is reached so a permanently
+// failing "poison" entry stops retrying every 30s forever (M9). Returns whether
+// the entry was dropped and its attempt count.
+export async function recordSyncFailure(id: number): Promise<{ dropped: boolean; attempts: number }> {
+  const db = await openDb();
+  try {
+    const entry = (await req(tx(db, QUEUE_STORE, 'readonly').get(id))) as SyncEntry | undefined;
+    if (!entry) return { dropped: false, attempts: 0 };
+    const attempts = (entry.attempts ?? 0) + 1;
+    if (attempts >= MAX_SYNC_ATTEMPTS) {
+      await req(tx(db, QUEUE_STORE, 'readwrite').delete(id));
+      return { dropped: true, attempts };
+    }
+    await req(tx(db, QUEUE_STORE, 'readwrite').put({ ...entry, attempts }));
+    return { dropped: false, attempts };
+  } finally {
+    db.close();
+  }
 }
 
 export async function cacheSet(key: string, data: unknown): Promise<void> {
