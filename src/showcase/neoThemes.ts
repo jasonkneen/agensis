@@ -316,10 +316,12 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   // a theme's own hand-tuned shadow ink when set; otherwise derive a quieter
   // ink-tinted neutral (much less ink than the light-mode 100%) so the offset
   // stays visible against near-black pages without washing out as a bright
-  // "halo". A flat translucent black was tried here and reverted — composited
+  // "halo". 34% lands the derived shadow near the hand-tuned seeds (#5f–#6e)
+  // so untuned Pop/Pastel dark themes read as crisply as the tuned groups.
+  // A flat translucent black was tried here and reverted — composited
   // over the near-black canvas most dark themes use, it reads as ~1.1:1
   // contrast (invisible) instead of a hard shadow.
-  const shadow = seed.shadow ?? (dark ? mix(ink, 22, `${paper} 78%`) : ink);
+  const shadow = seed.shadow ?? (dark ? mix(ink, 34, `${paper} 66%`) : ink);
   const dot = seed.dot ?? mix(ink, dark ? 15 : 13, 'transparent');
   const success = seed.success ?? (dark ? '#00e08a' : '#00c875');
   const warning = seed.warning ?? (dark ? '#ffd166' : '#f5d95f');

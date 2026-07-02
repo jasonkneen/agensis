@@ -160,10 +160,13 @@
   --text-primary: #2a2722;
   --text-secondary: #6f695f;
   --text-muted: #918979;
-  --accent: #d98a24;
-  --accent-hover: #c2761a;
-  --accent-subtle: rgba(217, 138, 36, 0.12);
-  --accent-border: rgba(217, 138, 36, 0.32);
+  /* Accent tokens derive from --primary so a picked accent preset (which sets
+     --primary) flows through TW; with the default (neutral) preset --primary is
+     TW's gold, so this is visually identical to the old hardcoded values. */
+  --accent: var(--primary);
+  --accent-hover: color-mix(in srgb, var(--primary) 82%, var(--foreground) 18%);
+  --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
+  --accent-border: color-mix(in srgb, var(--primary) 32%, transparent);
   --success: #2db37c;
   --warning: #e8a330;
   --error: #e8532a;
@@ -187,7 +190,7 @@
   --sh-accent-foreground: #2a2722;
   --sh-border: #e4d8c2;
   --input: #e4d8c2;
-  --ring: #d98a24;
+  --ring: var(--primary);
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] {
@@ -201,10 +204,12 @@
   --text-primary: #f5ecdc;
   --text-secondary: #c8bba7;
   --text-muted: #8d806e;
-  --accent: #f0b85d;
-  --accent-hover: #f5c877;
-  --accent-subtle: rgba(240, 184, 93, 0.14);
-  --accent-border: rgba(240, 184, 93, 0.34);
+  /* Derived from --primary — see the light block. Dark-mode hover lightens
+     toward white (the light block darkens toward ink). */
+  --accent: var(--primary);
+  --accent-hover: color-mix(in srgb, var(--primary) 82%, white 18%);
+  --accent-subtle: color-mix(in srgb, var(--primary) 14%, transparent);
+  --accent-border: color-mix(in srgb, var(--primary) 34%, transparent);
   --success: #65d7a0;
   --warning: #f0b85d;
   --error: #f27d5f;
@@ -223,12 +228,14 @@
   --secondary: #2a261f;
   --secondary-foreground: #f5ecdc;
   --muted: #2a261f;
-  --muted-foreground: #c8bba7;
+  /* Sits between --text-secondary (#c8bba7) and --text-muted (#8d806e) so the
+     secondary/muted/low ramp keeps three distinct steps (was == secondary). */
+  --muted-foreground: #a89c88;
   --sh-accent: #302b23;
   --sh-accent-foreground: #f5ecdc;
   --sh-border: #4a4031;
   --input: #4a4031;
-  --ring: #f0b85d;
+  --ring: var(--primary);
 }
 
 /* ============================================================
@@ -413,10 +420,14 @@
   --tw-control-inset: rgba(255, 255, 255, 0.92);
   --tw-control-bevel: rgba(87, 66, 40, 0.2);
   --tw-control-shadow: 0 2px 3px -1px rgba(50, 36, 16, 0.22);
-  --tw-control-ring: rgba(217, 138, 36, 0.4);
-  --tw-accent-outline: #a85d14;
-  --tw-accent-fill: rgba(232, 163, 48, 0.16);
-  --tw-accent-hover: rgba(232, 163, 48, 0.28);
+  /* Accent-driven controls follow --primary (so accent presets flow through);
+     the neutral --tw-control-* and the decorative --tw-gold-* flourish stay
+     fixed to preserve TinyWorld's warm-paper character. Outline is a dark shade
+     (legible as text/border), fills are light washes. */
+  --tw-control-ring: color-mix(in srgb, var(--primary) 40%, transparent);
+  --tw-accent-outline: color-mix(in srgb, var(--primary) 72%, var(--foreground) 28%);
+  --tw-accent-fill: color-mix(in srgb, var(--primary) 16%, transparent);
+  --tw-accent-hover: color-mix(in srgb, var(--primary) 28%, transparent);
   --tw-gold-outline: #9f7a2c;
   --tw-gold-fill: #fff3c1;
 }
@@ -428,10 +439,13 @@
   --tw-control-inset: rgba(255, 255, 255, 0.1);
   --tw-control-bevel: rgba(0, 0, 0, 0.42);
   --tw-control-shadow: 0 2px 5px -2px rgba(0, 0, 0, 0.58);
-  --tw-control-ring: rgba(240, 196, 104, 0.44);
-  --tw-accent-outline: #f3cf8a;
-  --tw-accent-fill: rgba(120, 86, 38, 0.72);
-  --tw-accent-hover: rgba(150, 112, 54, 0.86);
+  /* Dark: outline is a light shade of --primary (text on dark fill); fills are
+     dark shades mixed toward the canvas so any accent hue stays in-family.
+     Neutral --tw-control-* and decorative --tw-gold-* stay fixed. */
+  --tw-control-ring: color-mix(in srgb, var(--primary) 44%, transparent);
+  --tw-accent-outline: color-mix(in srgb, var(--primary) 80%, white 20%);
+  --tw-accent-fill: color-mix(in srgb, var(--primary) 30%, var(--canvas-base));
+  --tw-accent-hover: color-mix(in srgb, var(--primary) 42%, var(--canvas-base));
   --tw-gold-outline: #f0c468;
   --tw-gold-fill: rgba(118, 79, 28, 0.82);
 }

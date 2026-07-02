@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { syncNeoTheme, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
 import { syncNormalTheme } from '../showcase/normalThemes';
+import { applyThemePreset, getStoredPreset } from '../showcase/themePresets';
 
 export type ThemeMode = 'light' | 'dark' | 'system' | 'tinyworld-light' | 'tinyworld-dark' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
 
@@ -47,6 +48,14 @@ function applyTheme(mode: ThemeMode) {
   // Normal themes overwrite the accent preset vars applied by syncNeoTheme's
   // non-neo branch so they win cleanly without any ordering dependency.
   syncNormalTheme(mode);
+  // syncNormalTheme's clear branch strips --primary/--ring/--sh-accent (they're
+  // in NORMAL_MANAGED_KEYS) for classic + tinyworld, wiping the accent preset
+  // that syncNeoTheme's non-neo branch just applied. App.tsx only re-asserts it
+  // on mount, so without this a light<->dark toggle silently drops the accent.
+  // Re-assert last for the families that keep a preset (not neo, not normal-*).
+  if (family !== 'neo' && mode !== 'normal-light' && mode !== 'normal-dark') {
+    applyThemePreset(getStoredPreset());
+  }
 }
 
 export function useTheme() {
