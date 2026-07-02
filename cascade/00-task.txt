@@ -1,3 +1,19 @@
-Theme applet controls (buttons/inputs/selects/cards) to the active app theme
-(classic/neo-brutal/neo-soft/tinyworld, light+dark). Rework the applet creation
-process so ALL applets inherit themed controls, not just kanban. Verify visually.
+Plan an agent marketplace for the agensis codebase.
+
+Requirements:
+- Users can create an agent and publish it publicly to a marketplace.
+- Published agents get: marketplace avatar image, banner image, name, description,
+  a feature list, a skills summary, and pricing — per-task, per-hour, or per-request.
+- Published agents execute on OTHER users' hardware/infrastructure (the renter's side),
+  so execution must be sandboxed with strong isolation: no possibility of the renting
+  user's files/filesystem being exposed to the agent owner, and no possibility of the
+  agent owner's proprietary agent logic/config leaking to the renter beyond what's
+  intended.
+- Must support pluggable custom sandbox backends an agent owner can select/configure
+  for their agent to run inside (e.g. a local sb-style sandbox, E2B, others later).
+
+Task: produce an implementation plan (phased, with data model changes, security/
+sandboxing architecture, API surface, UI surface) grounded in this actual codebase's
+current architecture (daemon, workspace/agent model, MCP tooling, run_mode=external
+pattern, existing UI conventions) — not a generic marketplace plan. Planning only,
+no code edits.

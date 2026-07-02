@@ -7,6 +7,13 @@ import WebSocket from "ws";
 import { runCli } from "./cli.mjs";
 import { createQueue } from "./queue.mjs";
 import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
+import {
+  writeAgentMirror,
+  writeHeartbeatFile,
+  writeHeartbeatFileSync,
+  readAgentStatus,
+  statusFilePath,
+} from "./state.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
@@ -23,6 +30,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let ws = null;
   let reconnectTimer = null;
   let heartbeatTimer = null;
+  let fileHeartbeatTimer = null;
   let acceptedJobCount = 0;
   let resolveWait = null;
   let queue = null;
@@ -32,6 +40,11 @@ export async function runAgensisDaemon(rawConfig = {}) {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (fileHeartbeatTimer) clearInterval(fileHeartbeatTimer);
+    // Leave the last-known ts in place, but mark the daemon stopped so a watchdog reading
+    // heartbeat.json sees an intentional shutdown rather than inferring death from a stale
+    // timestamp. Sync so it lands before any process.exit races us.
+    writeHeartbeatFileSync(config, { status: "stopped", connected: false });
     try {
       ws?.close();
     } catch {
@@ -86,36 +99,18 @@ export async function runAgensisDaemon(rawConfig = {}) {
         // server merges into the persisted row) so the server can compare them against
         // the last synced values without persisting an unconfirmed candidate hash. On a
         // mismatch the server nudges a full re-push, keeping the agents list fresh.
-        void computeCapabilities(config)
-          .then((caps) => {
-            send(ws, {
-              action: "agent_heartbeat",
-              capabilitiesHash: caps.capabilitiesHash,
-              memoryHash: caps.memoryHash,
-              metadata: {
-                busy: queue.active() > 0,
-                queueSize: queue.size(),
-                cwd: config.cwd,
-                model: config.model,
-                permissionMode: config.permissionMode,
-                permissionFlags: permissionFlagsForMode(config.permissionMode),
-              },
-            });
-          })
-          .catch(() => {
-            // Detection failed — still send a liveness beat so we don't look offline.
-            send(ws, {
-              action: "agent_heartbeat",
-              metadata: {
-                busy: queue.active() > 0,
-                queueSize: queue.size(),
-                cwd: config.cwd,
-                model: config.model,
-                permissionMode: config.permissionMode,
-                permissionFlags: permissionFlagsForMode(config.permissionMode),
-              },
-            });
+        // Also fold in the agent-owned status.json (its self-declared status/note) so a
+        // running agent can update how it appears without any extra transport.
+        void Promise.all([
+          computeCapabilities(config).catch(() => null),
+          readAgentStatus(config).catch(() => null),
+        ]).then(([caps, agentStatus]) => {
+          send(ws, {
+            action: "agent_heartbeat",
+            ...(caps ? { capabilitiesHash: caps.capabilitiesHash, memoryHash: caps.memoryHash } : {}),
+            metadata: heartbeatMetadata(config, queue, agentStatus),
           });
+        });
       }, config.heartbeatMs);
       if (heartbeatTimer.unref) heartbeatTimer.unref();
     });
@@ -126,6 +121,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (message.type === "agent_registered") {
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
+        void writeAgentMirror(config, message.agent).catch(() => {});
         void pushMemorySnapshot(ws, config);
         void pushCapabilitiesSnapshot(ws, config);
         return;
@@ -133,6 +129,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (message.type === "agent_config") {
         applyAgentConfig(config, message.agent);
         log(`Updated config for @${config.handle || "agent"}: model=${config.model}, permission=${config.permissionMode}`);
+        void writeAgentMirror(config, message.agent).catch(() => {});
         return;
       }
       if (message.type === "agent_memory_refresh") {
@@ -189,6 +186,25 @@ export async function runAgensisDaemon(rawConfig = {}) {
       log(`Socket error: ${error?.message || error}`);
     });
   };
+
+  // Independent liveness file, written for the whole process lifetime — NOT gated on the
+  // socket. This lets an external watchdog distinguish a dead daemon (stale `ts`) from a
+  // healthy daemon that merely lost the server (fresh `ts`, `connected:false`). The WS
+  // heartbeat above is the server's liveness signal; this file is everyone else's.
+  const writeFileBeat = async () => {
+    const agentStatus = await readAgentStatus(config).catch(() => null);
+    await writeHeartbeatFile(config, {
+      busy: queue.active() > 0,
+      active: queue.active(),
+      queueSize: queue.size(),
+      connected: ws?.readyState === WebSocket.OPEN,
+      agentStatus: agentStatus?.status,
+      agentNote: agentStatus?.note,
+    }).catch(() => {});
+  };
+  void writeFileBeat();
+  fileHeartbeatTimer = setInterval(() => { void writeFileBeat(); }, config.heartbeatMs);
+  if (fileHeartbeatTimer.unref) fileHeartbeatTimer.unref();
 
   connect();
   await new Promise((resolve) => {
@@ -383,6 +399,7 @@ function buildPrompt(config, job) {
     tools ? `Enabled tools:\n${tools}` : "",
     skills ? `Enabled skills:\n${skills}` : "",
     'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
+    `Status file: you can report your own working status by overwriting the JSON file at ${statusFilePath(config)} with e.g. {"status":"working","note":"short summary of what you're doing"}. Your daemon reads it on its next heartbeat (~${Math.round((config.heartbeatMs || 15000) / 1000)}s) and surfaces it on your agent card. Optional and best-effort — overwrite the whole file, keep note under ~200 chars, and there's no need to clear it.`,
     "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),
@@ -533,6 +550,24 @@ function normalizePermissionMode(value) {
 
 function permissionFlagsForMode(permissionMode) {
   return normalizePermissionMode(permissionMode) === "yolo" ? ["--no-sandbox", "--yolo"] : [];
+}
+
+// Build the heartbeat metadata sent to the server, folding in the agent's self-declared
+// status (from status.json) when present. The server merges this object into the stored
+// connection row, so agentStatus/agentNote surface on the agent card for free.
+function heartbeatMetadata(config, queue, agentStatus) {
+  const metadata = {
+    busy: queue.active() > 0,
+    queueSize: queue.size(),
+    cwd: config.cwd,
+    model: config.model,
+    permissionMode: config.permissionMode,
+    permissionFlags: permissionFlagsForMode(config.permissionMode),
+  };
+  if (agentStatus?.status) metadata.agentStatus = agentStatus.status;
+  if (agentStatus?.note) metadata.agentNote = agentStatus.note;
+  if (agentStatus?.status || agentStatus?.note) metadata.agentStatusAt = new Date().toISOString();
+  return metadata;
 }
 
 function applyAgentConfig(config, agent) {
