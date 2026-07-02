@@ -27,3 +27,5 @@ build/icon.png
 # Local Netlify folder
 .netlify
 /.playwright-mcp
+/cascade
+/cascade
