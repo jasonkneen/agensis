@@ -84,6 +84,12 @@ export function useAgentStatusFeed(
     return map;
   }, [agents]);
 
+  const agentById = useMemo(() => {
+    const map = new Map<string, WorkspaceAgent>();
+    for (const agent of agents) if (agent.id) map.set(agent.id, agent);
+    return map;
+  }, [agents]);
+
   useEffect(() => {
     const agentUsers = presenceUsers.filter(u => u.kind === 'agent');
     const nextEvents: AgentStatusUpdate[] = [];
@@ -155,12 +161,13 @@ export function useAgentStatusFeed(
           const verb = extractActivityVerb(content);
           const text = activityLine(verb, content);
           if (idx === -1) {
+            const agent = agentById.get(agentId);
             const avatar = avatarByKey.get(`agent:${agentId}`) || null;
             const entry: AgentStatusUpdate = {
               id: `${agentId}:${row.id}`,
               agentId,
-              handle: null,
-              name: row.sender_name || 'Agent',
+              handle: agent?.handle ?? null,
+              name: agent?.name || row.sender_name || 'Agent',
               avatar,
               text,
               kind: 'activity',
