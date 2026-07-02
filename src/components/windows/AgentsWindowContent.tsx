@@ -1512,7 +1512,12 @@ function AgentDetailPane({
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Monitor className="size-3 shrink-0" />
                       <span className="font-medium text-foreground">{connection.status}</span>
-                      <span className="min-w-0 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
+                      {connection.last_seen_at && (
+                        <span className="shrink-0 text-muted-foreground/70" title={`Last heartbeat: ${formatAgentDate(connection.last_seen_at)}`}>
+                          HB {formatRelativeTime(connection.last_seen_at)}
+                        </span>
+                      )}
                     </div>
                     {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
                     {connection.capabilities && (connection.capabilities.skills.length > 0 || connection.capabilities.clis.length > 0 || connection.capabilities.mcpServers.length > 0) && (
@@ -1903,6 +1908,20 @@ function formatAgentDate(value?: string | null) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
   return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Compact "time since last heartbeat" for the profile panel — "3s" / "5m" / "2h" / "4d".
+function formatRelativeTime(value?: string | null) {
+  if (!value) return '';
+  const then = new Date(value).getTime();
+  if (!Number.isFinite(then)) return '';
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
 }
 
 function modelOptions(current: string) {

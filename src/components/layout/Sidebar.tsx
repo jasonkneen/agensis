@@ -97,14 +97,19 @@ function AgentStatusFeedOverlay({
 
   if (!feed.current || !rect) return null;
 
+  // Fixed width regardless of message length — it used to size to content
+  // ("max-content"), which made the bubble jump wider/narrower on every
+  // update. A constant width (sidebar width + a modest stick-out) keeps the
+  // box stable; text wraps and clamps inside it instead.
+  const bubbleWidth = Math.min(rect.width + 40, window.innerWidth - rect.left - 16);
+
   return createPortal(
     <div
       className="pointer-events-none fixed z-[9500]"
       style={{
         left: rect.left,
         bottom: rect.bottom,
-        width: 'max-content',
-        maxWidth: Math.min(rect.width + 120, window.innerWidth - rect.left - 16),
+        width: bubbleWidth,
       }}
     >
       <div className="pointer-events-auto">

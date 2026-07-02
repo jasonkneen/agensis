@@ -125,6 +125,9 @@ export async function runAgensisDaemon(rawConfig = {}) {
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
         void writeAgentMirror(config, message.agent).catch(() => {});
+        // Seed heartbeat.md (what to do on each beat) if it doesn't exist yet; never
+        // clobbers an existing file, so human/agent edits persist across restarts.
+        void ensureHeartbeatMd(config).catch(() => {});
         void pushMemorySnapshot(ws, config);
         void pushCapabilitiesSnapshot(ws, config);
         return;
@@ -302,7 +305,7 @@ async function runAgentJob(config, job, { signal }) {
   const started = Date.now();
   log(`Starting job ${job.id}`);
   const command = buildAgentCommand(config, job);
-  const prompt = buildPrompt(config, job);
+  const prompt = await buildPrompt(config, job);
   let fullContent = "";
   let latest = "";
   let lastDeltaAt = 0;
@@ -382,12 +385,18 @@ async function runAgentJob(config, job, { signal }) {
   }
 }
 
-function buildPrompt(config, job) {
+async function buildPrompt(config, job) {
   const agent = job.agent || {};
   const skills = Array.isArray(agent.skills) ? agent.skills.join(", ") : String(agent.skills || "");
   const tools = Array.isArray(agent.tools) ? agent.tools.join(", ") : String(agent.tools || "");
   const model = resolveJobModel(config, job);
   const permissionMode = resolveJobPermissionMode(config, job);
+  // Editable "what to do on each heartbeat" doc. Inlined so the agent sees its recurring
+  // instructions without a tool call; the path is given so it can edit them.
+  const heartbeatMd = await readHeartbeatMd(config).catch(() => null);
+  const heartbeatSection = heartbeatMd
+    ? `Heartbeat (recurring instructions — edit at ${heartbeatMdPath(config)}):\n${heartbeatMd}`
+    : "";
   const sections = [
     "You are running as a local agensis workspace agent daemon.",
     `Workspace: ${job.workspaceId || config.workspace}`,
@@ -403,6 +412,7 @@ function buildPrompt(config, job) {
     skills ? `Enabled skills:\n${skills}` : "",
     'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
     `Status file: you can report your own working status by overwriting the JSON file at ${statusFilePath(config)} with e.g. {"status":"working","note":"short summary of what you're doing"}. Your daemon reads it on its next heartbeat (~${Math.round((config.heartbeatMs || 15000) / 1000)}s) and surfaces it on your agent card. Optional and best-effort — overwrite the whole file, keep note under ~200 chars, and there's no need to clear it.`,
+    heartbeatSection,
     "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),

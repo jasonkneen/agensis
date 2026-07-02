@@ -9,6 +9,9 @@ import {
   writeHeartbeatFile,
   writeHeartbeatFileSync,
   readAgentStatus,
+  ensureHeartbeatMd,
+  heartbeatMdPath,
+  readHeartbeatMd,
 } from '../../agent/agensis-cli/src/state.mjs';
 
 let home: string;
@@ -59,6 +62,33 @@ describe('resolveStateDir / statusFilePath', () => {
   it('falls back to placeholder segments when ids are empty', () => {
     const dir = resolveStateDir({ workspace: '', agent: '', homedir: home });
     expect(dir).toBe(path.join(home, '.agensis', 'workspace', 'agent'));
+  });
+});
+
+describe('heartbeat.md (ensure / read)', () => {
+  it('seeds a default heartbeat.md when absent and returns its contents', async () => {
+    const ok = await ensureHeartbeatMd(config);
+    expect(ok).toBe(true);
+    const seeded = await fs.readFile(heartbeatMdPath(config), 'utf8');
+    expect(seeded).toContain('# Heartbeat');
+    const read = await readHeartbeatMd(config);
+    expect(read).toContain('status.json');
+  });
+
+  it('never overwrites an existing heartbeat.md (human/agent edits survive)', async () => {
+    await ensureHeartbeatMd(config);
+    await fs.writeFile(heartbeatMdPath(config), 'my custom heartbeat plan');
+    const ok = await ensureHeartbeatMd(config);
+    expect(ok).toBe(true);
+    expect(await fs.readFile(heartbeatMdPath(config), 'utf8')).toBe('my custom heartbeat plan');
+    expect(await readHeartbeatMd(config)).toBe('my custom heartbeat plan');
+  });
+
+  it('readHeartbeatMd returns null when the file is missing or empty', async () => {
+    expect(await readHeartbeatMd(config)).toBeNull();
+    await fs.mkdir(resolveStateDir(config), { recursive: true });
+    await fs.writeFile(heartbeatMdPath(config), '   \n  ');
+    expect(await readHeartbeatMd(config)).toBeNull();
   });
 });
 

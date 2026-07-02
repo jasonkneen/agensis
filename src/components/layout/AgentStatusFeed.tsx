@@ -80,7 +80,9 @@ function FeedRow({ update, onDismiss }: { update: AgentStatusUpdate; onDismiss: 
               <X className="size-2.5" />
             </button>
           </div>
-          <div className="pixel-font mt-1 break-words text-[8px] text-foreground">{update.text}</div>
+          <div className="pixel-bubble-text pixel-font mt-1 break-words text-[8px] text-foreground">
+            {update.text}
+          </div>
         </div>
       </div>
     </div>
@@ -157,7 +159,9 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
                 </button>
               )}
             </div>
-            <div className={`pixel-font mt-1 break-words text-[8px] text-foreground ${done ? '' : 'pixel-caret'}`}>
+            <div
+              className={`pixel-bubble-text pixel-font mt-1 break-words text-[8px] text-foreground ${done ? '' : 'pixel-caret'}`}
+            >
               {shown}
             </div>
             <div className="mt-2 flex items-center gap-1">

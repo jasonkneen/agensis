@@ -3759,6 +3759,7 @@ select {
    tracks the theme. */
 .pixel-bubble {
   position: relative;
+  width: 100%;
   background: var(--card, #1b1b1f);
   color: var(--card-foreground, #f4f4f5);
   border: 2px solid var(--border, #3a3a42);
@@ -3767,6 +3768,18 @@ select {
     2px 2px 0 2px var(--border, #3a3a42);
   padding: 6px 8px;
   border-radius: 2px;
+}
+/* Fixed-height text area so the bubble doesn't grow/shrink as messages of
+   different lengths come through — clamps to 2 lines with an ellipsis
+   instead of reflowing the whole sidebar on every update. */
+.pixel-bubble-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  min-height: 24px;
+  max-height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Little pixel tail pointing left toward the avatar. */
 .pixel-bubble::before {
