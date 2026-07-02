@@ -1070,14 +1070,26 @@ function AgentRow({
         </div>
         {activeConnections.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
-            {activeConnections.slice(0, 3).map(connection => (
-              <div key={connection.id} className="agent-meta-row flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
-                <Monitor className="size-3 shrink-0" />
-                <span className="shrink-0 font-medium text-foreground">Daemon</span>
-                <span className="shrink-0">{connection.status}</span>
-                <span className="min-w-0 flex-1 truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
-              </div>
-            ))}
+            {activeConnections.slice(0, 3).map(connection => {
+              // Self-declared status the agent wrote to its status.json, folded into the
+              // heartbeat metadata by the daemon (agentStatus / agentNote).
+              const agentStatus = typeof connection.metadata?.agentStatus === 'string' ? connection.metadata.agentStatus : '';
+              const agentNote = typeof connection.metadata?.agentNote === 'string' ? connection.metadata.agentNote : '';
+              const selfStatus = [agentStatus, agentNote].filter(Boolean).join(' — ');
+              return (
+                <div key={connection.id} className="agent-meta-row flex min-w-0 flex-col gap-0.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Monitor className="size-3 shrink-0" />
+                    <span className="shrink-0 font-medium text-foreground">Daemon</span>
+                    <span className="shrink-0">{connection.status}</span>
+                    <span className="min-w-0 flex-1 truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
+                  </div>
+                  {selfStatus && (
+                    <div className="min-w-0 truncate pl-[18px] italic opacity-90" title={selfStatus}>{selfStatus}</div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {connectionCommand && (
