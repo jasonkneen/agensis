@@ -28,7 +28,7 @@ export interface AgentStatusUpdate {
   ts: number;
 }
 
-const MAX_QUEUE = 20;
+const MAX_QUEUE = 8;
 
 function statusToUpdate(
   prev: string | undefined,
@@ -133,7 +133,17 @@ export function useAgentStatusFeed(
 
     seededRef.current = true;
     if (nextEvents.length) {
-      setQueue(q => [...q, ...nextEvents].slice(-MAX_QUEUE));
+      setQueue(q => {
+        // A "wrapped up" bookend is redundant noise if this agent already has
+        // a queued entry — the activity/completion patch below already covers
+        // it with a more useful line. Only keep it as a fallback for jobs that
+        // finished with no activity heartbeat at all.
+        const filtered = nextEvents.filter(
+          ev => ev.kind !== 'done' || !q.some(item => item.agentId === ev.agentId),
+        );
+        if (!filtered.length) return q;
+        return [...q, ...filtered].slice(-MAX_QUEUE);
+      });
     }
   }, [presenceUsers, avatarByKey]);
 
@@ -160,7 +170,13 @@ export function useAgentStatusFeed(
       const content = typeof row.content === 'string' ? row.content : '';
       const placeholder = isActivityPlaceholderMessage(row);
       setQueue(q => {
-        const idx = q.findIndex(item => item.agentId === agentId);
+        // Search from the tail: an agent should only ever occupy the most
+        // recent slot it was last written to, so if it somehow appears twice
+        // we patch the newer one instead of resurrecting a stale older entry.
+        let idx = -1;
+        for (let i = q.length - 1; i >= 0; i -= 1) {
+          if (q[i].agentId === agentId) { idx = i; break; }
+        }
         if (placeholder) {
           const verb = extractActivityVerb(content);
           const text = activityLine(verb, content);
@@ -200,16 +216,23 @@ export function useAgentStatusFeed(
   );
 
   // Auto-advance so the bubble catches up to the latest activity on its own —
-  // no more relying on a manual click through a growing backlog. Re-armed on
-  // every queue change, including in-place activity patches, so an update
-  // that's still actively changing gets the full dwell time before we move on.
-  // Paused while the stack is expanded so a click-to-read doesn't get yanked
-  // out from under the user.
+  // no more relying on a manual click through a growing backlog. Keyed off the
+  // *currently shown* entry's own id+text (not the whole queue array), so an
+  // update that's still actively changing gets the full dwell time before we
+  // move on — but an unrelated agent's activity queuing up behind it does NOT
+  // reset this clock. Without that distinction the timer never fires in a busy
+  // multi-agent workspace (it keeps getting re-armed by other agents' churn),
+  // the backlog grows unbounded, and the bubble ends up showing stale info long
+  // after it's out of date. Paused while the stack is expanded so a
+  // click-to-read doesn't get yanked out from under the user.
+  const front = queue[0];
+  const frontKey = front ? `${front.id}:${front.text}` : '';
+  const hasBacklog = queue.length > 1;
   useEffect(() => {
-    if (expanded || queue.length <= 1) return;
+    if (expanded || !hasBacklog) return;
     const timer = window.setTimeout(() => setQueue(q => q.slice(1)), AUTO_ADVANCE_MS);
     return () => window.clearTimeout(timer);
-  }, [queue, expanded]);
+  }, [frontKey, hasBacklog, expanded]);
 
   // Collapse back to the compact bubble once the backlog empties out from
   // under an expanded view (e.g. dismissed one-by-one down to nothing).

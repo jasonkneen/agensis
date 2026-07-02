@@ -13,6 +13,9 @@ import {
   writeHeartbeatFileSync,
   readAgentStatus,
   statusFilePath,
+  ensureHeartbeatMd,
+  heartbeatMdPath,
+  readHeartbeatMd,
 } from "./state.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;

@@ -24,8 +24,31 @@ import path from "node:path";
 
 const STATUS_FILE = "status.json";
 const HEARTBEAT_FILE = "heartbeat.json";
+const HEARTBEAT_MD_FILE = "heartbeat.md";
 const AGENT_FILE = "agent.json";
 const SOUL_FILE = "soul.md";
+
+// Cap on how much heartbeat.md we read back into the prompt — it's human/agent-editable,
+// so a runaway edit shouldn't be able to balloon every job's prompt.
+const MAX_HEARTBEAT_MD_BYTES = 16 * 1024;
+
+// Seed text written to heartbeat.md the first time an agent's state dir is created. It is
+// meant to be edited (by the human or the agent) — the daemon never overwrites an existing
+// file, so edits survive restarts. Its contents are injected into every job prompt.
+const DEFAULT_HEARTBEAT_MD = `# Heartbeat
+
+This file tells you what to do on each heartbeat — the recurring "still here, still
+working" moment. Edit it freely; the daemon reads it but never overwrites your edits.
+
+On each heartbeat:
+
+- Keep \`status.json\` fresh — overwrite it with \`{"status":"...","note":"..."}\` so your
+  card reflects what you're actually doing right now.
+- If you're blocked, say so in the note rather than going silent.
+- If you've finished and there's nothing to do, a short idle note is fine.
+
+Add your own recurring checks below.
+`;
 
 // Caps so an agent can't write a giant status blob that we then ship on every beat.
 const MAX_STATUS_BYTES = 8 * 1024;
@@ -55,6 +78,10 @@ export function resolveStateDir({ workspace, agent, homedir = os.homedir() } = {
 
 export function statusFilePath(config) {
   return path.join(resolveStateDir(config), STATUS_FILE);
+}
+
+export function heartbeatMdPath(config) {
+  return path.join(resolveStateDir(config), HEARTBEAT_MD_FILE);
 }
 
 // Create the state dir if needed. Returns the dir, or null if it can't be created.
@@ -195,4 +222,34 @@ function clampField(value) {
   if (value == null) return "";
   const text = String(value).trim().replace(/\s+/g, " ");
   return text.slice(0, MAX_STATUS_FIELD);
+}
+
+// Seed heartbeat.md with the default text ONLY if it doesn't already exist. This file is
+// editable by the human and the agent; the daemon must never clobber those edits, so an
+// existing file (even empty) is left untouched. Best-effort — never throws.
+export async function ensureHeartbeatMd(config) {
+  const dir = await ensureStateDir(config);
+  if (!dir) return false;
+  const file = path.join(dir, HEARTBEAT_MD_FILE);
+  try {
+    await fsp.access(file);
+    return true; // already present — leave the human's/agent's edits alone
+  } catch {
+    // not present — seed it
+  }
+  return writeFileAtomic(file, DEFAULT_HEARTBEAT_MD);
+}
+
+// Read heartbeat.md back for prompt injection. Returns the trimmed contents, or null when
+// absent, unreadable, empty, or oversized. Never throws.
+export async function readHeartbeatMd(config) {
+  const file = path.join(resolveStateDir(config), HEARTBEAT_MD_FILE);
+  try {
+    const stat = await fsp.stat(file);
+    if (!stat.isFile() || stat.size > MAX_HEARTBEAT_MD_BYTES) return null;
+    const raw = (await fsp.readFile(file, "utf8")).trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
 }
