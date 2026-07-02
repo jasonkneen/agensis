@@ -794,6 +794,26 @@ export function ChatWindowContent({
     return Array.from(map.values()).slice(0, 6);
   }, [agentConnections, agents, persistedParticipants, presenceUsers]);
 
+  // Agents @mentioned in the current draft that aren't channel participants yet.
+  // On send, the server adds them to the roster (ensureMentionedParticipants), so
+  // we surface a small heads-up here. Mirrors the server mention regex + is a
+  // no-op in 1:1 DMs. Matches on persisted participants (the roster the server
+  // checks), not transient presence.
+  const mentionedNotInChannel = useMemo(() => {
+    if (isDirectMessage) return [] as string[];
+    const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
+    const names = new Map<string, string>();
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(input))) {
+      const handle = match[2];
+      const agent = agents.find(item => agentMatchesLookupKey(item, handle));
+      if (!agent) continue;
+      if (persistedParticipants.some(p => participantMatchesLookupKey(p, handle))) continue;
+      names.set(agent.id, agent.name || agentHandle(agent));
+    }
+    return Array.from(names.values());
+  }, [input, agents, persistedParticipants, isDirectMessage]);
+
   const agentAvatarLookup = useMemo(
     () => buildAgentAvatarLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
@@ -850,7 +870,7 @@ export function ChatWindowContent({
     return next;
   };
 
-  const conversationMode = channelMeta?.conversation_mode ?? 'mention';
+  const conversationMode = channelMeta?.conversation_mode ?? 'auto';
   const autoInterject = conversationMode === 'auto';
 
   const handleToggleAutoInterject = async () => {
@@ -1157,15 +1177,22 @@ export function ChatWindowContent({
               <>
                 <Button
                   type="button"
-                  variant={autoInterject ? 'secondary' : 'ghost'}
+                  variant={autoInterject ? 'default' : 'outline'}
                   size="sm"
-                  className="h-8 px-2"
+                  className={cn(
+                    'h-8 gap-1 px-2.5 font-medium transition-colors',
+                    autoInterject
+                      ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90'
+                      : 'text-muted-foreground',
+                  )}
                   aria-pressed={autoInterject}
-                  title={autoInterject ? 'Auto: agents chime in automatically when relevant' : 'Mentions only: agents reply when @mentioned'}
+                  title={autoInterject
+                    ? 'Auto is ON — agents in this channel chime in automatically when a message is relevant to them. Click to switch to mentions-only.'
+                    : 'Auto is OFF — agents only reply when @mentioned. Click to let them chime in automatically.'}
                   onClick={() => { void handleToggleAutoInterject(); }}
                 >
-                  <Zap data-icon="inline-start" />
-                  Auto
+                  <Zap data-icon="inline-start" className={autoInterject ? 'fill-current' : undefined} />
+                  {autoInterject ? 'Auto on' : 'Auto off'}
                 </Button>
                 <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
                   <RotateCcw data-icon="inline-start" />
@@ -1443,6 +1470,13 @@ export function ChatWindowContent({
               </Command>
             )}
 
+            {mentionedNotInChannel.length > 0 && (
+              <div className="px-1 pb-1 text-xs text-muted-foreground">
+                {mentionedNotInChannel.length === 1
+                  ? `${mentionedNotInChannel[0]} isn't in this channel yet — they'll be added when you send.`
+                  : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
+              </div>
+            )}
             <InputGroup className="h-auto flex-col items-stretch">
               <InputGroupTextarea
                 ref={inputRef}

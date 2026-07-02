@@ -610,7 +610,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS is_favorite boolean NOT NULL DEFAULT false;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS participants jsonb NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
-    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'mention';
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'auto';
+    ALTER TABLE chat_sessions ALTER COLUMN conversation_mode SET DEFAULT 'auto';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS max_agent_turns integer NOT NULL DEFAULT 10;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS auto_rounds integer NOT NULL DEFAULT 3;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -2113,20 +2114,26 @@ function isWatcherAgent(agent) {
   return /\bwatch(?:er|ing)?\b/.test(haystack);
 }
 
-// Single cheap LLM call: decide whether ONE candidate watcher should interject.
+// Single cheap LLM call: decide whether ONE candidate agent should interject.
 // Returns the chosen agent row or null. Never throws (fail closed).
-async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates }) {
+// `lastSpeakerHandle` (when set) is the agent the human replied immediately
+// after — the primary candidate for "is this for you, or do you pass it on?".
+async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates, lastSpeakerHandle = '' }) {
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
   const roster = candidates
     .map((a) => `- @${slugHandle(a.handle || a.name)}: ${textFromValue(a.description || a.soul || a.name).slice(0, 160)}`)
     .join('\n');
+  const lastSpeakerLine = lastSpeakerHandle
+    ? `The human posted immediately after @${lastSpeakerHandle}. If the latest message reads as a reply, answer, or follow-up to @${lastSpeakerHandle} (or continues that exchange), prefer @${lastSpeakerHandle} — unless another agent is a clearly better fit to take it or the message is plainly meant for someone else. That agent can always pass it on.`
+    : '';
   const prompt = [
     'You route a team chat. A human just posted in a channel where NO agent was @mentioned.',
-    'Decide whether exactly ONE of these watcher agents should proactively chime in because it is clearly,',
+    'Decide whether exactly ONE of these agents should proactively chime in because it is clearly,',
     'specifically relevant to the latest human message. Most messages need NO interjection — only pick an',
     'agent when it would add real, on-topic value. When unsure, pick null.',
+    lastSpeakerLine,
     '',
-    'Watcher agents:',
+    'Agents in this channel:',
     roster,
     '',
     'Recent context (oldest first):',
@@ -2135,7 +2142,7 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
     `Latest human message:\n${humanMessage}`,
     '',
     'Respond with STRICT JSON only, no prose: {"agent": "<handle>" | null, "reason": "<short>"}',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   let text;
   try {
@@ -2163,6 +2170,65 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
     return candidates.find((a) => slugHandle(a.handle || a.name) === handle) || null;
   } catch {
     return null; // unparseable => fail closed
+  }
+}
+
+// When a human @mentions an agent that isn't yet a channel participant, add it
+// to the session's participant roster so it shows in the channel and becomes an
+// auto-interject candidate for later turns. 1:1 DMs are left isolated. Returns
+// the count added (0 = nothing to do). Best-effort; never throws to the caller.
+async function ensureMentionedParticipants(workspaceId, session, content) {
+  try {
+    const directTarget = directAgentParticipantFromSession(session);
+    if (directTarget && directTarget.direct) return 0; // private DMs stay 1:1
+    const handles = parseAgentMentions(content);
+    if (handles.length === 0) return 0;
+    const existing = parseJsonArray(session.participants);
+    const existingAgentIds = new Set(
+      existing.filter((p) => p && p.kind === 'agent' && p.agent_id).map((p) => String(p.agent_id)),
+    );
+    const agents = await getDb().unsafe(
+      'select id, name, handle, enabled from workspace_agents where workspace_id = $1',
+      [workspaceId],
+    );
+    const byHandle = new Map();
+    for (const agent of agents) {
+      if (!isAgentEnabled(agent)) continue;
+      byHandle.set(slugHandle(agent.handle || agent.name), agent);
+      const nameHandle = slugHandle(agent.name);
+      if (!byHandle.has(nameHandle)) byHandle.set(nameHandle, agent);
+    }
+    const additions = [];
+    const seen = new Set();
+    for (const handle of handles) {
+      const agent = byHandle.get(handle);
+      if (!agent) continue;
+      const id = String(agent.id);
+      if (existingAgentIds.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      additions.push({
+        id: `agent:${id}`,
+        kind: 'agent',
+        agent_id: id,
+        user_id: null,
+        name: agent.name,
+        handle: slugHandle(agent.handle || agent.name),
+        status: null,
+        direct: false,
+        added_at: new Date().toISOString(),
+      });
+    }
+    if (additions.length === 0) return 0;
+    const merged = [...existing, ...additions];
+    const updated = await getDb().unsafe(
+      'update chat_sessions set participants = $1, updated_at = now() where id = $2 returning *',
+      [JSON.stringify(merged), session.id],
+    );
+    if (updated.length > 0) notifyDbSubscribers('chat_sessions', 'UPDATE', updated);
+    return additions.length;
+  } catch (error) {
+    console.error('ensureMentionedParticipants failed', error?.message || error);
+    return 0; // best-effort; dispatch still proceeds
   }
 }
 
@@ -2473,19 +2539,36 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
         }
         // Context-aware auto-interject (opt-in: conversation_mode === 'auto'). A pure
         // fallback when no explicit target exists; fires once per human message
-        // (agentTurns === 0, latest author is the human), candidate pool limited to
-        // channel participant watchers, single cheap Haiku call that fails CLOSED.
+        // (agentTurns === 0, latest author is the human). The candidate pool is
+        // every enabled agent that is a channel participant UNION every agent that
+        // has recently posted in this channel — so a human replying right after an
+        // agent draws that agent back in to decide "is this for me, or pass it on?".
+        // A single cheap Haiku call picks ONE agent or null (fails CLOSED).
         if (!nextAgent && conversationMode === 'auto' && agentTurns === 0 && latestAuthorAgentId === '') {
-          const candidates = [...participantAgentIds]
+          const candidateIds = new Set();
+          for (const id of participantAgentIds) candidateIds.add(String(id));
+          // Recent agent authors (newest first): the last one to speak is the
+          // primary candidate — that's who the human is most likely replying to.
+          let lastAgentAuthorId = '';
+          for (let i = rows.length - 1; i >= 0; i--) {
+            const r = rows[i];
+            if (r.sender_kind === 'agent' && r.sender_id) {
+              if (!lastAgentAuthorId) lastAgentAuthorId = String(r.sender_id);
+              candidateIds.add(String(r.sender_id));
+            }
+          }
+          const candidates = [...candidateIds]
             .map((id) => agents.find((agent) => String(agent.id) === id))
-            .filter(isWatcherAgent);
+            .filter((agent) => agent && isAgentEnabled(agent));
           if (candidates.length > 0) {
             const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
             const contextLines = rows
               .slice(Math.max(0, startIdx - 5), startIdx)
               .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
               .join('\n');
-            const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates });
+            const lastAgent = candidates.find((agent) => String(agent.id) === lastAgentAuthorId);
+            const lastSpeakerHandle = lastAgent ? slugHandle(lastAgent.handle || lastAgent.name) : '';
+            const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates, lastSpeakerHandle });
             if (watcher) nextAgent = watcher;
           }
         }
@@ -4826,6 +4909,12 @@ function createApp() {
       // straight from the database. We only decide here whether to kick it off.
       const mentions = parseAgentMentions(content);
       const directTarget = directAgentParticipantFromSession(sessionRows[0]);
+      // A human @mentioning an agent that isn't a channel participant yet adds it
+      // to the roster (awaited so continueConversation re-reads the updated set).
+      // No-op for 1:1 DMs and for mentions of already-present agents.
+      if (mentions.length > 0) {
+        await ensureMentionedParticipants(workspaceId, sessionRows[0], content);
+      }
       const threadTarget = mentions.length === 0 && threadParentId
         ? await inferThreadAgentTarget(sessionId, threadParentId)
         : null;
@@ -5727,5 +5816,7 @@ module.exports = {
     getRegistrationStatus,
     touchMcpPresence,
     hasMcpPresence,
+    ensureMentionedParticipants,
+    parseAgentMentions,
   },
 };
