@@ -32,10 +32,16 @@ function FeedAvatar({ avatar, kind }: { avatar: string | null; kind: AgentStatus
     );
   }
   const src = avatar && isImageAvatar(avatar) ? renderablePetAssetUrl(avatar) : undefined;
+  // Whatever the agent was assigned, show it. Image → the image; a short text
+  // avatar (e.g. "MI", "AI") → those initials, not a generic robot; only a
+  // truly empty avatar falls back to the Bot glyph.
+  const initials = !src && avatar ? avatar.trim().slice(0, 2).toUpperCase() : '';
   return (
     <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-sm border-2 border-border bg-muted">
       {src ? (
         <img src={src} alt="" className="pixel-avatar size-full object-cover" />
+      ) : initials ? (
+        <span className="pixel-font text-[8px] leading-none text-foreground">{initials}</span>
       ) : (
         <Bot className="size-4 text-muted-foreground" />
       )}
