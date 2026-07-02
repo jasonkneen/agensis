@@ -11,13 +11,12 @@ Every Critical/High/Medium finding has been fixed, plus 9 Low items. Test suite 
 
 **Fixed & merged to `main`:** H1 (cross-tenant write), H2 (rate-limit keying), H3 (comment-mention gate), H5 (WS realtime), H7 (CI green), H8 (CLI packaging), M1/L1 (table access).
 
-**Fixed on branch `fix/h4-realtime-revocation` (awaiting merge + `fly deploy`):** H4 (realtime revocation), M3 (MCP reaper), M4 (Netlify ai-chat auth), M6 (dispatch error surfacing), M7 (merge clock-skew), M9 (offline dead-letter), M12/M13 (SSE consumers), M14 (burst-job guard), M15 (active-job unique index across instances), M8 (offline cache coherence), L2 (pg error leak), L3 (signin lockout), L5 (non-active-window context), L7 (showcase code-split), L8 (unused dep), L10 (stray asset), L11/L13 (branding/URL), L12 (PWA/home-screen PNG icons).
+**Fixed on branch `fix/h4-realtime-revocation` (awaiting merge + `fly deploy`):** H4 (realtime revocation), M3 (MCP reaper), M4 (Netlify ai-chat auth), M6 (dispatch error surfacing), M7 (merge clock-skew), M9 (offline dead-letter), M12/M13 (SSE consumers), M14 (burst-job guard), M15 (active-job unique index across instances), M8 (offline cache coherence), L2 (pg error leak), L3 (signin lockout), L5 (non-active-window context), L7 (showcase code-split), L8 (unused dep), L10 (stray asset), L11/L13 (branding/URL), L12 (PWA/home-screen PNG icons), L4 (invite tokens hashed at rest + show-once UX).
 
 **⚠️ Not live until deployed:** backend fixes run on fly.dev and require `fly deploy`; frontend fixes ship on the next Netlify push.
 
-**Deferred — need an owner decision / infra:**
-- **L4** (hash invite tokens) — the invites **list route returns the plaintext `token`** so the UI can re-display/copy the invite link. Hashing at rest requires changing that to a show-the-token-once UX (like agent tokens) — a product decision, not a safe storage-only change.
-- **H6** (upload durability) — needs a Fly volume provisioned before `[[mounts]]` + `AGENSIS_UPLOAD_ROOT` can be wired (adding the mount for a non-existent volume would break deploys).
+**Every finding is now implemented except one infra step:**
+- **H6** (upload durability) — code + config staged: the wiring (volume-create command, `AGENSIS_UPLOAD_ROOT`, `[[mounts]]`) is in `fly.toml` as a documented commented block. Activating it is a one-line uncomment once you run `fly volumes create agensis_uploads --region fra --size 3`. Left commented because a mount for a non-existent volume breaks `fly deploy`. (For multi-machine scale-out, object storage is the better long-term answer — a single volume is durable but not shared.)
 - **L4** (hash invite tokens) — needs a migration for existing plaintext tokens.
 - **L6** (stale `netlify/database/migrations`) — confirmed NOT auto-applied by Netlify, but `plans/006` treats `0006` as canonical and defers the delete decision; left in place.
 - **L12** (PWA PNG icons) — needs generated PNG assets.
