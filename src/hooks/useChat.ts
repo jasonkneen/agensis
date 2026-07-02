@@ -582,15 +582,20 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       // Dispatch failed. If there's a direct-AI fallback (agent/direct
       // participant) fall through to it; otherwise surface the failure instead
       // of returning silently and leaving the user's message looking sent (M6).
+      // Only append the notice when the target is the on-screen session — the
+      // `messages` state belongs to the active session, so writing a foreign
+      // session_id row into it would surface the error in the wrong pane.
       if (!agent && !directParticipant) {
-        setMessages(prev => [...prev, {
-          id: crypto.randomUUID(),
-          session_id: session.id,
-          role: 'assistant',
-          content: "Couldn't reach the agent — your message was posted but no reply was generated. Please try sending it again.",
-          thread_parent_id: threadParentId ?? null,
-          created_at: new Date().toISOString(),
-        }]);
+        if (activeSession?.id === session.id) {
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(),
+            session_id: session.id,
+            role: 'assistant',
+            content: "Couldn't reach the agent — your message was posted but no reply was generated. Please try sending it again.",
+            thread_parent_id: threadParentId ?? null,
+            created_at: new Date().toISOString(),
+          }]);
+        }
         return;
       }
     } else if (!agent) {

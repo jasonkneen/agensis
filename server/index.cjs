@@ -1200,6 +1200,18 @@ function hashAgentToken(token) {
   return crypto.createHash('sha256').update(String(token || '')).digest('hex');
 }
 
+// Invite-token lookup params (L4). $1 is always the hash of the presented token
+// (matches new hashed invites). $2 is the raw presented value ONLY when it is
+// NOT itself a 64-hex hash — so a real legacy plaintext token (32-char base64url)
+// still matches its stored plaintext, but a stored hash leaked from the DB and
+// submitted verbatim gets hashed again and matches nothing. Without this guard,
+// `token in (plaintext, hash)` let a leaked stored hash authenticate as itself.
+function inviteTokenLookupParams(token) {
+  const hashed = hashAgentToken(token);
+  const legacy = /^[a-f0-9]{64}$/i.test(String(token || '')) ? hashed : token;
+  return [hashed, legacy];
+}
+
 function createAgentConnectToken() {
   return `aga_${crypto.randomBytes(32).toString('base64url')}`;
 }
@@ -1455,7 +1467,7 @@ async function verifyInviteToken(token) {
       where token in ($1, $2) and status in ('pending', 'accepted')
         and (expires_at is null or expires_at > now())
       limit 1`,
-    [token, hashAgentToken(token)],
+    inviteTokenLookupParams(token),
   );
   const invite = rows[0];
   if (!invite) return null;
@@ -5109,7 +5121,7 @@ function createApp() {
            join workspaces w on w.id = i.workspace_id
            left join app_users cu on cu.id = i.created_by
           where i.token in ($1, $2) limit 1`,
-        [token, hashAgentToken(token)],
+        inviteTokenLookupParams(token),
       );
       const invite = rows[0];
       if (!invite) return jsonError(res, 404, new Error('Invite not found'));
@@ -5123,7 +5135,7 @@ function createApp() {
   app.post('/backend/invites/:token/accept', requireAuth, async (req, res) => {
     try {
       const token = String(req.params.token || '').trim();
-      const inviteRows = await getDb().unsafe('select * from workspace_invites where token in ($1, $2) limit 1', [token, hashAgentToken(token)]);
+      const inviteRows = await getDb().unsafe('select * from workspace_invites where token in ($1, $2) limit 1', inviteTokenLookupParams(token));
       const invite = inviteRows[0];
       if (!invite) return jsonError(res, 404, new Error('Invite not found'));
       if (invite.status === 'revoked') return jsonError(res, 410, new Error('This invite has been revoked'));

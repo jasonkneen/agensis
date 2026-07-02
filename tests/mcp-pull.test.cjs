@@ -44,14 +44,26 @@ test('verifyInviteToken resolves a valid invite to a workspace identity', async 
   assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
 });
 
-test('verifyInviteToken looks up by BOTH plaintext and hash (L4 dual-path)', async () => {
-  // The presented plaintext matches a legacy invite ($1) OR a new hashed one
-  // ($2 = sha256 hex). Assert both are passed so both keep working.
+test('verifyInviteToken looks up by hash + legacy plaintext for a normal token (L4 dual-path)', async () => {
+  // A normal (non-hash) presented token: $1 = its sha256 hash (matches new
+  // hashed invites), $2 = the raw plaintext (matches legacy invites).
   const db = use([{ match: /from workspace_invites where token in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '', role: 'viewer' }] }]);
   await verifyInviteToken('plain-token');
   const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
-  assert.equal(call.params[0], 'plain-token', 'legacy plaintext path');
-  assert.match(call.params[1], /^[a-f0-9]{64}$/, 'hashed path is sha256 hex of the presented token');
+  assert.match(call.params[0], /^[a-f0-9]{64}$/, 'first param is the sha256 hash (new hashed invites)');
+  assert.equal(call.params[1], 'plain-token', 'second param is the raw plaintext (legacy invites)');
+});
+
+test('verifyInviteToken never matches a submitted raw hash against a stored hash (L4 leak guard)', async () => {
+  // A 64-hex value (e.g. a hash leaked from the DB) must NOT authenticate as its
+  // own token: both params are hashes-of-the-input, so neither equals the input.
+  const stolenHash = 'a'.repeat(64);
+  const db = use([{ match: /from workspace_invites where token in/, rows: () => [] }]);
+  await verifyInviteToken(stolenHash);
+  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
+  assert.notEqual(call.params[0], stolenHash, 'does not query for the raw submitted hash');
+  assert.notEqual(call.params[1], stolenHash, 'legacy branch also does not use the raw submitted hash');
+  assert.match(call.params[0], /^[a-f0-9]{64}$/);
 });
 
 test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {
