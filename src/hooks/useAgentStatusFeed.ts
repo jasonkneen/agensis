@@ -57,12 +57,22 @@ function completionLine(content: string): string {
   return firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine || 'wrapped up';
 }
 
+/** How long a queued update stays on screen before auto-advancing to the next one. */
+const AUTO_ADVANCE_MS = 4500;
+
 export interface AgentStatusFeedState {
   current: AgentStatusUpdate | null;
+  /** Full backlog (current first) for stack rendering when expanded. */
+  queue: AgentStatusUpdate[];
   /** Updates newer/behind the current one still waiting to be seen. */
   pending: number;
+  /** Whether the sidebar has expanded the stack into an individually-dismissable list. */
+  expanded: boolean;
+  toggleExpanded: () => void;
   next: () => void;
   dismiss: () => void;
+  /** Dismiss one specific update out of the stack (used by the expanded list). */
+  dismissOne: (id: string) => void;
   dismissAll: () => void;
 }
 
@@ -72,6 +82,7 @@ export function useAgentStatusFeed(
   workspaceId?: string | null,
 ): AgentStatusFeedState {
   const [queue, setQueue] = useState<AgentStatusUpdate[]>([]);
+  const [expanded, setExpanded] = useState(false);
   const prevStatus = useRef<Map<string, string>>(new Map());
   const seededRef = useRef(false);
 
@@ -191,11 +202,33 @@ export function useAgentStatusFeed(
     },
   );
 
+  // Auto-advance so the bubble catches up to the latest activity on its own —
+  // no more relying on a manual click through a growing backlog. Re-armed on
+  // every queue change, including in-place activity patches, so an update
+  // that's still actively changing gets the full dwell time before we move on.
+  // Paused while the stack is expanded so a click-to-read doesn't get yanked
+  // out from under the user.
+  useEffect(() => {
+    if (expanded || queue.length <= 1) return;
+    const timer = window.setTimeout(() => setQueue(q => q.slice(1)), AUTO_ADVANCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [queue, expanded]);
+
+  // Collapse back to the compact bubble once the backlog empties out from
+  // under an expanded view (e.g. dismissed one-by-one down to nothing).
+  useEffect(() => {
+    if (queue.length === 0) setExpanded(false);
+  }, [queue.length]);
+
   return {
     current: queue[0] ?? null,
+    queue,
     pending: Math.max(0, queue.length - 1),
+    expanded,
+    toggleExpanded: () => setExpanded(e => !e),
     next: () => setQueue(q => q.slice(1)),
     dismiss: () => setQueue(q => q.slice(1)),
+    dismissOne: (id: string) => setQueue(q => q.filter(item => item.id !== id)),
     dismissAll: () => setQueue([]),
   };
 }
