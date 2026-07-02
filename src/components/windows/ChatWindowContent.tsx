@@ -140,6 +140,7 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
+import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { cn } from '@/lib/utils';
 
 interface ChatWindowContentProps {
@@ -209,34 +210,6 @@ type ParticipantCandidate = ChannelParticipant & {
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
-
-// Activity-status placeholder: an agent/assistant row whose content is a bare
-// activity verb emitted by the daemon while it works. The daemon updates this
-// same row in place once real content streams in. Ordered longest-first so
-// "looking up" matches before "looking".
-const ACTIVITY_VERBS = [
-  'looking up', 'summarizing', 'reviewing', 'reasoning', 'processing',
-  'generating', 'executing', 'analyzing', 'searching', 'fetching',
-  'planning', 'reading', 'editing', 'writing', 'checking', 'running',
-  'browsing', 'thinking',
-] as const;
-const ACTIVITY_STATUS_RE = new RegExp(
-  `^(${ACTIVITY_VERBS.join('|')})[\\s\\w.,…]*$`,
-  'i',
-);
-function extractActivityVerb(content: string): string {
-  const lower = content.trim().toLowerCase();
-  for (const verb of ACTIVITY_VERBS) {
-    if (lower.startsWith(verb)) return verb;
-  }
-  return 'thinking';
-}
-function isThinkingPlaceholderMessage(
-  msg: Pick<ChatMessage, 'sender_kind' | 'role' | 'content'>,
-): boolean {
-  if (!(msg.sender_kind === 'agent' || msg.role === 'assistant')) return false;
-  return ACTIVITY_STATUS_RE.test(safeMessageText(msg.content).trim());
-}
 
 export function ChatWindowContent({
   messages,
@@ -741,7 +714,7 @@ export function ChatWindowContent({
   const thinkingAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of displayMessages) {
-      if (!isThinkingPlaceholderMessage(m)) continue;
+      if (!isActivityPlaceholderMessage(m)) continue;
       const name = (m.sender_name || directAgent?.name || 'Agent').trim();
       const activity = extractActivityVerb(safeMessageText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
@@ -1886,7 +1859,7 @@ function ChatMessageBubble({
   const rawContent = safeMessageText(msg.content);
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
-  const isThinkingPlaceholder = isThinkingPlaceholderMessage(msg);
+  const isThinkingPlaceholder = isActivityPlaceholderMessage(msg);
   const placeholderActivity = isThinkingPlaceholder ? extractActivityVerb(rawContent) : 'thinking';
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');

@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkspacePresenceUser } from './useWorkspacePresence';
-import type { WorkspaceAgent } from '../types';
+import type { Message, WorkspaceAgent } from '../types';
+import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { extractActivityVerb, isActivityPlaceholderMessage } from '../lib/activityStatus';
 
 /**
- * v1 data source for the sidebar agent status feed. We watch each agent's
- * presence `status` and emit a queued "update" on every transition — an agent
- * going busy reads as "started a job", going idle as "wrapped up". This is real,
- * already-flowing data (no new backend), and the queue is the notification-style
- * stack the human clicks through. Richer agent-posted status lines can push into
- * the same queue later without changing the component contract.
+ * Data source for the sidebar agent status feed. Two layers feed the same
+ * queue:
+ *  1. Presence `status` transitions (busy/idle) — coarse "started a job" /
+ *     "wrapped up" bookends, always available even for agents that never post
+ *     an activity line.
+ *  2. A workspace-wide `messages` subscription that watches for the same
+ *     activity-placeholder rows chat windows already parse (see
+ *     `lib/activityStatus`) — "thinking", "reading src/App.tsx", "searching",
+ *     etc. — so the bubble reflects what the agent is actually doing, not just
+ *     two canned strings, and updates live in place while that agent is the
+ *     one currently shown.
  */
 export interface AgentStatusUpdate {
   id: string;
@@ -17,7 +24,7 @@ export interface AgentStatusUpdate {
   name: string;
   avatar: string | null;
   text: string;
-  kind: 'start' | 'done' | 'info';
+  kind: 'start' | 'done' | 'info' | 'activity';
   ts: number;
 }
 
@@ -37,6 +44,19 @@ function statusToUpdate(
   return null;
 }
 
+/** "reading" -> "Reading…" for a short, human status line. */
+function activityLine(verb: string, content: string): string {
+  const capitalized = verb.charAt(0).toUpperCase() + verb.slice(1);
+  const rest = content.trim().slice(verb.length).trim();
+  return rest ? `${capitalized} ${rest}…` : `${capitalized}…`;
+}
+
+/** First line of the agent's real (non-placeholder) reply, trimmed for the bubble. */
+function completionLine(content: string): string {
+  const firstLine = content.trim().split('\n')[0] || '';
+  return firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine || 'wrapped up';
+}
+
 export interface AgentStatusFeedState {
   current: AgentStatusUpdate | null;
   /** Updates newer/behind the current one still waiting to be seen. */
@@ -49,6 +69,7 @@ export interface AgentStatusFeedState {
 export function useAgentStatusFeed(
   presenceUsers: WorkspacePresenceUser[],
   agents: WorkspaceAgent[],
+  workspaceId?: string | null,
 ): AgentStatusFeedState {
   const [queue, setQueue] = useState<AgentStatusUpdate[]>([]);
   const prevStatus = useRef<Map<string, string>>(new Map());
@@ -105,6 +126,63 @@ export function useAgentStatusFeed(
       setQueue(q => [...q, ...nextEvents].slice(-MAX_QUEUE));
     }
   }, [presenceUsers, avatarByKey]);
+
+  // Live activity text: watch agent-authored messages workspace-wide (same
+  // activity-placeholder rows chat windows already render) and patch whichever
+  // queue entry belongs to that agent in place, so the bubble tracks the
+  // agent's actual progress (thinking → reading → editing → done) instead of
+  // sitting on the two generic presence strings above for the whole job.
+  const deduper = useRealtimeDeduper();
+  useTableSubscription<Message>(
+    {
+      enabled: !!workspaceId,
+      channelName: `messages:workspace:${workspaceId}:agent-activity`,
+      table: 'messages',
+      event: '*',
+      schema: 'public',
+      filter: `workspace_id=eq.${workspaceId}`,
+    },
+    (payload) => {
+      if (!deduper.shouldProcess(payload)) return;
+      const row = payload.new;
+      if (!row || row.sender_kind !== 'agent' || !row.sender_id) return;
+      const agentId = row.sender_id;
+      const content = typeof row.content === 'string' ? row.content : '';
+      const placeholder = isActivityPlaceholderMessage(row);
+      setQueue(q => {
+        const idx = q.findIndex(item => item.agentId === agentId);
+        if (placeholder) {
+          const verb = extractActivityVerb(content);
+          const text = activityLine(verb, content);
+          if (idx === -1) {
+            const avatar = avatarByKey.get(`agent:${agentId}`) || null;
+            const entry: AgentStatusUpdate = {
+              id: `${agentId}:${row.id}`,
+              agentId,
+              handle: null,
+              name: row.sender_name || 'Agent',
+              avatar,
+              text,
+              kind: 'activity',
+              ts: Date.now(),
+            };
+            return [...q, entry].slice(-MAX_QUEUE);
+          }
+          const next = [...q];
+          next[idx] = { ...next[idx], text, kind: 'activity', ts: Date.now() };
+          return next;
+        }
+        // Real content replacing (or following) a placeholder — refine that
+        // agent's entry into a completion line instead of leaving it on the
+        // last activity verb. If there's no entry yet (e.g. a very fast job),
+        // there's nothing to refine — presence's "wrapped up" bookend covers it.
+        if (idx === -1) return q;
+        const next = [...q];
+        next[idx] = { ...next[idx], text: completionLine(content), kind: 'done', ts: Date.now() };
+        return next;
+      });
+    },
+  );
 
   return {
     current: queue[0] ?? null,

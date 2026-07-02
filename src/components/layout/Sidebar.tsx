@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import {
   Archive,
   Bot,
@@ -57,6 +58,62 @@ import { Separator } from '@/components/ui/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentStatusFeed } from './AgentStatusFeed';
 import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
+
+/**
+ * The sidebar panel clips its own content (`overflow-hidden`, for the rounded
+ * neo-brutal corners) so the status bubble can't render inline — anything wide
+ * enough to reach the edge gets cut off instead of "sticking out" onto the
+ * canvas like a real speech bubble. Portal it to `document.body` and position
+ * it with a measured rect off the sidebar's own ref instead.
+ */
+function AgentStatusFeedOverlay({
+  anchorRef,
+  feed,
+}: {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  feed: AgentStatusFeedState;
+}) {
+  const [rect, setRect] = React.useState<{ left: number; bottom: number; width: number } | null>(null);
+
+  React.useEffect(() => {
+    const el = anchorRef.current;
+    if (!el || !feed.current) {
+      setRect(null);
+      return;
+    }
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      setRect({ left: box.left, bottom: window.innerHeight - box.bottom, width: box.width });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [anchorRef, feed.current]);
+
+  if (!feed.current || !rect) return null;
+
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[9500]"
+      style={{
+        left: rect.left,
+        bottom: rect.bottom,
+        width: 'max-content',
+        maxWidth: Math.min(rect.width + 120, window.innerWidth - rect.left - 16),
+      }}
+    >
+      <div className="pointer-events-auto">
+        <AgentStatusFeed feed={feed} />
+      </div>
+    </div>,
+    document.body,
+  );
+}
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 
@@ -381,6 +438,7 @@ export function Sidebar({
   };
 
   return (
+    <>
     <aside
       ref={sidebarRef}
       data-sidebar-panel
@@ -625,12 +683,6 @@ export function Sidebar({
         </div>
       </ScrollArea>
 
-      {agentStatusFeed?.current && (
-        <div className="shrink-0 border-t border-border pb-1">
-          <AgentStatusFeed feed={agentStatusFeed} />
-        </div>
-      )}
-
       <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
         <div className="flex items-center gap-2">
           <DropdownMenu>
@@ -685,6 +737,8 @@ export function Sidebar({
         onPointerDown={handleResizeStart}
       />
     </aside>
+    {agentStatusFeed && <AgentStatusFeedOverlay anchorRef={sidebarRef} feed={agentStatusFeed} />}
+    </>
   );
 }
 

@@ -15,6 +15,7 @@ import {
 } from './ComposerAddContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
+import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -97,9 +98,9 @@ export function SubThreadPanel({
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of messages) {
-      if (!isActivityPlaceholderMsg(m)) continue;
+      if (!isActivityPlaceholderMessage(m)) continue;
       const name = (m.sender_name || 'Agent').trim();
-      const activity = extractActivityVerbST(safeText(m.content));
+      const activity = extractActivityVerb(safeText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
     }
     return entries;
@@ -431,8 +432,8 @@ function SubThreadBubble({
   const content = safeText(msg.content);
   const artifact = content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
-  const isActivityPlaceholder = isActivityPlaceholderMsg(msg);
-  const placeholderActivity = isActivityPlaceholder ? extractActivityVerbST(content) : 'thinking';
+  const isActivityPlaceholder = isActivityPlaceholderMessage(msg);
+  const placeholderActivity = isActivityPlaceholder ? extractActivityVerb(content) : 'thinking';
   const placeholderLabel = placeholderActivity.charAt(0).toUpperCase() + placeholderActivity.slice(1);
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const canOpenAgentProfile = msg.sender_kind === 'agent' && Boolean(msg.sender_id || msg.sender_name);
@@ -513,24 +514,3 @@ function safeText(value: unknown): string {
   return String(value);
 }
 
-const ACTIVITY_VERBS_ST = [
-  'looking up', 'summarizing', 'reviewing', 'reasoning', 'processing',
-  'generating', 'executing', 'analyzing', 'searching', 'fetching',
-  'planning', 'reading', 'editing', 'writing', 'checking', 'running',
-  'browsing', 'thinking',
-] as const;
-const ACTIVITY_STATUS_RE_ST = new RegExp(
-  `^(${ACTIVITY_VERBS_ST.join('|')})[\\s\\w.,…]*$`,
-  'i',
-);
-function extractActivityVerbST(content: string): string {
-  const lower = content.trim().toLowerCase();
-  for (const verb of ACTIVITY_VERBS_ST) {
-    if (lower.startsWith(verb)) return verb;
-  }
-  return 'thinking';
-}
-function isActivityPlaceholderMsg(msg: Pick<ChatMessage, 'sender_kind' | 'role' | 'content'>): boolean {
-  if (!(msg.sender_kind === 'agent' || msg.role === 'assistant')) return false;
-  return ACTIVITY_STATUS_RE_ST.test(safeText(msg.content).trim());
-}

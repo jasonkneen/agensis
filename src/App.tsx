@@ -669,7 +669,7 @@ function AppContent() {
     agentConnections,
     agents,
   });
-  const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents);
+  const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents, activeWorkspaceId || null);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
     const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';

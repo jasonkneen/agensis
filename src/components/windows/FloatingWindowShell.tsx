@@ -79,8 +79,11 @@ function getSidebarFallbackInset(): number {
   return rect && rect.width > 0 ? Math.max(0, Math.round(rect.right)) : 0;
 }
 
-function clampWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): WindowBounds {
-  const viewport = getShellViewport(shell);
+function clampWindowBounds(
+  bounds: WindowBounds,
+  shell: HTMLElement | null,
+  viewport: ReturnType<typeof getShellViewport> = getShellViewport(shell),
+): WindowBounds {
   const width = clampDimension(bounds.width, MIN_WINDOW_WIDTH, Math.max(1, viewport.width - MAXIMIZED_EDGE_INSET * 2));
   const height = clampDimension(bounds.height, MIN_WINDOW_HEIGHT, Math.max(1, viewport.height - MAXIMIZED_TOP_RESERVE - MAXIMIZED_BOTTOM_RESERVE - MAXIMIZED_EDGE_INSET));
   return {
@@ -185,12 +188,28 @@ function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: ViewportR
     .filter(bounds => bounds.width >= MIN_WINDOW_WIDTH && bounds.height >= MIN_WINDOW_HEIGHT);
 }
 
-function getSnapPreviewBounds(
+type DragSnapshot = {
+  viewport: ReturnType<typeof getShellViewport>;
+  otherBounds: WindowBounds[];
+};
+
+// Capture the workspace viewport + every OTHER window's bounds ONCE at drag
+// start. Other windows can't move during a single-pointer drag, so re-querying
+// them on every pointermove (querySelectorAll + a getBoundingClientRect per
+// window = a forced sync reflow ~100×/sec) was pure layout thrash. Snapshot,
+// then read cached numbers per frame.
+function captureDragSnapshot(shell: HTMLElement | null): DragSnapshot {
+  const viewport = getShellViewport(shell);
+  return { viewport, otherBounds: getOtherWindowBounds(shell, viewport.rect) };
+}
+
+function computeSnapPreview(
   clientX: number,
   clientY: number,
+  snapshot: DragSnapshot,
   shell: HTMLElement | null,
 ): WindowBounds | null {
-  const viewport = getShellViewport(shell);
+  const { viewport } = snapshot;
   const rect = viewport.rect;
   const pointerX = rect ? clientX - rect.left : clientX;
   const pointerY = rect ? clientY - rect.top : clientY;
@@ -206,14 +225,18 @@ function getSnapPreviewBounds(
 
   // Snapping is panel-relative: empty workspace edges must not steal a drag.
   // A full-view panel still works as a split target because its own bounds cover
-  // the workspace and are included in getOtherWindowBounds().
-  for (const bounds of getOtherWindowBounds(shell, rect)) {
+  // the workspace and are included in the snapshot's otherBounds.
+  for (const bounds of snapshot.otherBounds) {
     if (!pointerInsideBounds(pointerX, pointerY, bounds)) continue;
     const edge = nearestEdge(pointerX, pointerY, bounds);
-    if (edge) return clampWindowBounds(splitBounds(bounds, edge), shell);
+    if (edge) return clampWindowBounds(splitBounds(bounds, edge), shell, viewport);
   }
 
   return null;
+}
+
+function snapKey(bounds: WindowBounds | null): string | null {
+  return bounds ? `${bounds.x},${bounds.y},${bounds.width},${bounds.height}` : null;
 }
 
 function restoreBoundsForDrag(
@@ -326,6 +349,32 @@ export function FloatingWindowShell({
 
     const siblings = groupSiblingShells(shellRef.current, win.groupId, win.id);
 
+    // Snapshot once — other windows can't move during this drag. The snap check
+    // then runs against cached numbers, at most once per animation frame, and
+    // only touches React state when the snapped bounds actually change.
+    const snapshot = captureDragSnapshot(shellRef.current);
+    let rafId: number | null = null;
+    let pendingX = 0;
+    let pendingY = 0;
+    let lastSnapKey: string | null = snapKey(null);
+
+    const evaluateSnap = () => {
+      rafId = null;
+      const snap = computeSnapPreview(pendingX, pendingY, snapshot, shellRef.current);
+      const key = snapKey(snap);
+      if (key !== lastSnapKey) {
+        lastSnapKey = key;
+        setSnapPreview(snap);
+      }
+    };
+
+    const cancelSnapFrame = () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    };
+
     const onMove = (ev: PointerEvent) => {
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
@@ -335,10 +384,17 @@ export function FloatingWindowShell({
       // A tiled group moves as one unit — drag every sibling's shell in lockstep
       // so the gesture reads as dragging a single combined view, not two windows.
       siblings.forEach(sibling => sibling.style.setProperty('transform', transform));
-      setSnapPreview(getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current));
+      // Position tracks the pointer synchronously (above); only the snap
+      // evaluation is rAF-throttled so it can't re-render the applet per event.
+      pendingX = ev.clientX;
+      pendingY = ev.clientY;
+      if (rafId === null) {
+        rafId = window.requestAnimationFrame(evaluateSnap);
+      }
     };
 
     const onUp = (ev: PointerEvent) => {
+      cancelSnapFrame();
       if (dragRef.current) {
         const dx = ev.clientX - dragRef.current.startX;
         const dy = ev.clientY - dragRef.current.startY;
@@ -348,7 +404,10 @@ export function FloatingWindowShell({
           width: startBounds.width,
           height: startBounds.height,
         };
-        const next = getSnapPreviewBounds(ev.clientX, ev.clientY, shellRef.current) || clampWindowBounds(fallback, shellRef.current);
+        // Land where the last-shown preview was — compute from the SAME snapshot,
+        // not a fresh query, so the drop matches what the user saw.
+        const next = computeSnapPreview(ev.clientX, ev.clientY, snapshot, shellRef.current)
+          || clampWindowBounds(fallback, shellRef.current);
         if (shellRef.current) {
           shellRef.current.style.left = `${next.x}px`;
           shellRef.current.style.top = `${next.y}px`;
@@ -372,6 +431,7 @@ export function FloatingWindowShell({
     };
 
     const onCancel = () => {
+      cancelSnapFrame();
       shellRef.current?.style.removeProperty('transform');
       siblings.forEach(sibling => sibling.style.removeProperty('transform'));
       dragRef.current = null;

@@ -14,7 +14,7 @@ import type { AgentStatusFeedState, AgentStatusUpdate } from '../../hooks/useAge
 // anything else = idle. The kind already rides on every queued update, so this
 // is expression for free — no new data, no new assets.
 function petStateForKind(kind: AgentStatusUpdate['kind']) {
-  if (kind === 'start') return 'running';
+  if (kind === 'start' || kind === 'activity') return 'running';
   if (kind === 'done') return 'waving';
   return 'idle';
 }
