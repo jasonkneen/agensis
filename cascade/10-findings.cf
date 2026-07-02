@@ -1,0 +1,15 @@
+HUMAN: Analyzed handshake capability sync; 12 findings, one schema+deploy dependency.
+
+FIND F1 sev=high area=daemon loc=agent/agensis-cli/src/agensis.mjs:99-103#"void pushMemorySnapshot(ws, config);" note=hook pushCapabilitiesSnapshot() beside pushMemorySnapshot in agent_registered branch; reconnect resync is free since branch fires on every WS re-register dep=F2
+FIND F2 sev=high area=daemon loc=agent/agensis-cli/src/agensis.mjs:517-533#"action: \"agent_memory_sync\"," note=new pushCapabilitiesSnapshot mirrors this fn exactly: try/catch, send {action:'agent_capabilities_sync', workspaceId, agentId, capabilities:{skills,clis,mcpServers,memoryRoot}}; reuse deriveMemoryRoot for memoryRoot field
+FIND F3 sev=high area=daemon loc=server/index.cjs:3358-3373#"function detectSkillLibraries(workspacePath = '')" note=detection logic lives in SERVER; daemon is separate pkg — must PORT scan logic into agensis.mjs; scan ~/.claude/skills + cwd/.claude/skills + ~/.codex/skills; CLI detection: fs.existsSync over PATH dirs; MCP servers from ~/.claude.json or .mcp.json (best-effort, never fail handshake)
+FIND F4 sev=high area=schema loc=server/index.cjs:662-679#"CREATE TABLE IF NOT EXISTS agent_connections" note=add ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS capabilities jsonb DEFAULT '{}'::jsonb; DDL runs on fly.dev deploy NOT local restart
+FIND F5 sev=high area=server loc=server/index.cjs:4052-4055#"if (message.action === 'agent_memory_sync')" note=add agent_capabilities_sync branch; handler validates workspaceId/agentId match socket identity, UPDATE agent_connections SET capabilities=$1, notifyDbSubscribers dep=F4
+FIND F6 sev=med area=server loc=server/index.cjs:68#"JSON_COLUMNS_BY_TABLE" note=add 'capabilities' to agent_connections Set dep=F4
+FIND F7 sev=med area=server loc=server/index.cjs:1572-1588#"function publicAgentConnection(row)" note=add capabilities: parseJsonObject(row.capabilities) — all notifyDbSubscribers paths route through here dep=F5
+FIND F8 sev=med area=types loc=src/types/index.ts#"export interface AgentConnection" note=add capabilities?: {skills:string[];clis:string[];mcpServers:string[];memoryRoot?:string}; optional — external-MCP agents never run daemon
+FIND F9 sev=med area=frontend loc=src/components/windows/AgentsWindowContent.tsx:791#"{capabilities &&" note=COLLISION: existing `capabilities` is SystemCapabilities (server-host detection); add NEW per-connection runtime block at agent connection rows; name distinctly runtimeCapabilities to avoid shadowing dep=F7,F8
+FIND F10 sev=low area=daemon loc=server/index.cjs:4657#"agent_memory_refresh" note=parity gap: capabilities go stale if user installs skills mid-session; optionally add agent_capabilities_refresh nudge; defer if scope-tight
+FIND F11 sev=low area=daemon note=MCP source clarification: use ~/.claude.json and project .mcp.json not settings.json; best-effort only
+FIND F12 sev=info area=deploy note=order: F4 schema→deploy→F5/F6/F7 server→F8 types→F9 frontend→F1/F2/F3 daemon; old daemons send nothing — handler tolerates absence, no version gate needed
+DONE stage=F find=12 open=0 tok~=400

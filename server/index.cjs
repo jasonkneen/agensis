@@ -65,7 +65,7 @@ const JSON_COLUMNS_BY_TABLE = {
   chat_sessions: new Set(['participants']),
   canvas_objects: new Set(['points']),
   workspace_agents: new Set(['tools', 'skills']),
-  agent_connections: new Set(['metadata']),
+  agent_connections: new Set(['metadata', 'capabilities']),
   agent_jobs: new Set(['metadata']),
   activity_events: new Set(['metadata']),
   messages: new Set(['reactions']),
@@ -669,10 +669,12 @@ async function ensureRuntimeSchema() {
       cwd text DEFAULT '',
       status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
       metadata jsonb DEFAULT '{}'::jsonb,
+      capabilities jsonb DEFAULT '{}'::jsonb,
       connected_at timestamptz DEFAULT now(),
       last_seen_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
+    ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS capabilities jsonb DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status);
@@ -1581,6 +1583,7 @@ function publicAgentConnection(row) {
     cwd: row.cwd,
     status: row.status,
     metadata: parseJsonObject(row.metadata),
+    capabilities: parseJsonObject(row.capabilities),
     connected_at: row.connected_at,
     last_seen_at: row.last_seen_at,
     updated_at: row.updated_at,
@@ -2703,6 +2706,28 @@ async function handleAgentMemorySync(ws, message) {
 
   if (upserted.length > 0) notifyDbSubscribers('agent_memory_files', 'INSERT', upserted);
   if (pruned.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', pruned);
+}
+
+async function handleAgentCapabilitiesSync(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth) throw forbidden('Agent token is required');
+  const workspaceId = ws.workspaceId || auth.workspaceId;
+  const connectionId = ws.agentConnectionId;
+  if (!workspaceId || !connectionId) throw forbidden('Agent is not registered');
+
+  const capabilities = {
+    skills: Array.isArray(message.skills) ? message.skills : [],
+    clis: Array.isArray(message.clis) ? message.clis : [],
+    mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
+    memoryRoot: typeof message.memoryRoot === 'string' ? message.memoryRoot : null,
+  };
+
+  const rows = await getDb().unsafe(
+    `update agent_connections set capabilities = $2::jsonb, updated_at = now()
+     where id = $1 returning *`,
+    [connectionId, JSON.stringify(capabilities)],
+  );
+  if (rows.length > 0) notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
 }
 
 // Finalize ONE agent job (daemon push OR MCP pull) with its result, then resume the
@@ -4053,6 +4078,10 @@ function attachRealtime(server) {
           await handleAgentMemorySync(ws, message);
           return;
         }
+        if (message.action === 'agent_capabilities_sync') {
+          await handleAgentCapabilitiesSync(ws, message);
+          return;
+        }
       } catch (error) {
         sendWs(ws, { type: 'error', message: error?.message || 'Realtime request rejected' });
       }
@@ -4658,6 +4687,21 @@ function createApp() {
       // lands as a realtime change on agent_memory_files. The POST never blocks on it.
       const connection = findConnectedAgent(agent.workspace_id, agent.id, agent.handle || agent.name);
       if (connection) sendWs(connection.ws, { type: 'agent_memory_refresh' });
+      res.json({ data: { nudged: Boolean(connection) }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/agents/:id/capabilities-refresh', requireAuth, async (req, res) => {
+    try {
+      const agentId = String(req.params.id || '').trim();
+      const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+      const agent = rows[0];
+      if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+      await enforceWorkspaceRole(req.userId, agent.workspace_id, 'read');
+      const connection = findConnectedAgent(agent.workspace_id, agent.id, agent.handle || agent.name);
+      if (connection) sendWs(connection.ws, { type: 'agent_capabilities_refresh' });
       res.json({ data: { nudged: Boolean(connection) }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);

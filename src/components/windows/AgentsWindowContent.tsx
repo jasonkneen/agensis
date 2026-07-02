@@ -1503,6 +1503,36 @@ function AgentDetailPane({
                       <span className="min-w-0 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
                     </div>
                     {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
+                    {connection.capabilities && (connection.capabilities.skills.length > 0 || connection.capabilities.clis.length > 0 || connection.capabilities.mcpServers.length > 0) && (
+                      <div className="mt-1.5 space-y-1">
+                        {connection.capabilities.skills.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="shrink-0 text-muted-foreground/60">Skills:</span>
+                            {connection.capabilities.skills.slice(0, 8).map(s => (
+                              <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{s}</span>
+                            ))}
+                            {connection.capabilities.skills.length > 8 && <span className="text-muted-foreground/60">+{connection.capabilities.skills.length - 8}</span>}
+                          </div>
+                        )}
+                        {connection.capabilities.clis.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
+                            {connection.capabilities.clis.map(c => (
+                              <span key={c} className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">{c}</span>
+                            ))}
+                          </div>
+                        )}
+                        {connection.capabilities.mcpServers.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="shrink-0 text-muted-foreground/60">MCP:</span>
+                            {connection.capabilities.mcpServers.slice(0, 6).map(m => (
+                              <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
+                            ))}
+                            {connection.capabilities.mcpServers.length > 6 && <span className="text-muted-foreground/60">+{connection.capabilities.mcpServers.length - 6}</span>}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

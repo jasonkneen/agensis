@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import os from "node:os";
 import process from "node:process";
 import WebSocket from "ws";
@@ -100,6 +102,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
         void pushMemorySnapshot(ws, config);
+        void pushCapabilitiesSnapshot(ws, config);
         return;
       }
       if (message.type === "agent_config") {
@@ -109,6 +112,10 @@ export async function runAgensisDaemon(rawConfig = {}) {
       }
       if (message.type === "agent_memory_refresh") {
         void pushMemorySnapshot(ws, config);
+        return;
+      }
+      if (message.type === "agent_capabilities_refresh") {
+        void pushCapabilitiesSnapshot(ws, config);
         return;
       }
       if (message.type === "error") {
@@ -508,6 +515,74 @@ function applyAgentConfig(config, agent) {
   if (permissionMode) config.permissionMode = normalizePermissionMode(permissionMode);
   if (agent.memory_dir !== undefined || agent.memoryDir !== undefined) {
     config.memoryDir = String(agent.memory_dir ?? agent.memoryDir ?? "").trim();
+  }
+}
+
+// Detect installed skills from well-known skill directories.
+function detectSkills(cwd) {
+  const dirs = [
+    path.join(os.homedir(), ".claude", "skills"),
+    path.join(os.homedir(), ".codex", "skills"),
+    path.join(cwd || process.cwd(), ".claude", "skills"),
+  ];
+  const names = new Set();
+  for (const dir of dirs) {
+    try {
+      const entries = fs.readdirSync(dir);
+      for (const entry of entries) {
+        if (entry.endsWith(".md")) names.add(entry.slice(0, -3));
+      }
+    } catch {
+      // directory doesn't exist — skip
+    }
+  }
+  return [...names].sort();
+}
+
+// Check which well-known CLIs are on PATH.
+function detectClis() {
+  const targets = ["claude", "codex", "gh", "node", "npm", "python3", "git", "fly", "vercel"];
+  const pathDirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  return targets.filter(cli =>
+    pathDirs.some(dir => {
+      try { return fs.existsSync(path.join(dir, cli)); } catch { return false; }
+    })
+  );
+}
+
+// Read MCP server names from ~/.claude.json if present.
+function detectMcpServers() {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    const servers = parsed?.mcpServers;
+    if (servers && typeof servers === "object") return Object.keys(servers).sort();
+  } catch {
+    // file missing or malformed — not fatal
+  }
+  return [];
+}
+
+// Push a snapshot of this agent's runtime capabilities (skills, CLIs, MCP servers,
+// memory root) to the server. Fire-and-forget; never fatal.
+async function pushCapabilitiesSnapshot(ws, config) {
+  try {
+    const skills = detectSkills(config.cwd);
+    const clis = detectClis();
+    const mcpServers = detectMcpServers();
+    const memoryRoot = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir }) || null;
+    send(ws, {
+      action: "agent_capabilities_sync",
+      workspaceId: config.workspace,
+      agentId: config.agent,
+      skills,
+      clis,
+      mcpServers,
+      memoryRoot,
+    });
+    log(`Capabilities synced — skills:${skills.length} clis:${clis.length} mcp:${mcpServers.length}`);
+  } catch (error) {
+    log(`Capabilities sync skipped: ${error?.message || error}`);
   }
 }
 

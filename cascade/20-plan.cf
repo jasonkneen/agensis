@@ -1,0 +1,65 @@
+HUMAN: 10-step plan — schema first, server handler, types, frontend, daemon last.
+
+PLAN P4<-F4 op=insert at=server/index.cjs:678#"CREATE INDEX IF NOT EXISTS idx_agent_connections_status" why=add-capabilities-column ref=server/index.cjs:662-679 test="node server/index.cjs --check 2>/dev/null || true" order=1
+<<<P4
+    ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS capabilities jsonb DEFAULT '{}'::jsonb;
+>>>
+
+PLAN P6<-F6 op=edit at=server/index.cjs:68#"agent_connections: new Set(['metadata'])" why=json-parse-on-read ref=server/index.cjs:64-71 test="npx tsc --noEmit" order=2
+# Change to: agent_connections: new Set(['metadata', 'capabilities']),
+
+PLAN P7<-F7 op=insert at=server/index.cjs:1586#"updated_at: row.updated_at," why=expose-capabilities ref=server/index.cjs:1572-1588 test="npx tsc --noEmit" order=3
+# Add after: capabilities: parseJsonObject(row.capabilities),
+
+PLAN P5a<-F5 op=insert at=server/index.cjs:2706#"end of handleAgentMemorySync" why=new-handler ref=server/index.cjs:2659-2706 test="npx tsc --noEmit" order=4
+<<<P5a
+async function handleAgentCapabilitiesSync(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth) throw forbidden('Agent token is required');
+  const workspaceId = ws.workspaceId || auth.workspaceId;
+  const agentId = ws.agentId || auth.agentId;
+  const connectionId = ws.agentConnectionId;
+  if (!workspaceId || !agentId || !connectionId) throw forbidden('Agent is not registered');
+  const caps = message.capabilities && typeof message.capabilities === 'object' ? message.capabilities : {};
+  const normalized = {
+    skills: Array.isArray(caps.skills) ? caps.skills.map(String).slice(0, 200) : [],
+    clis: Array.isArray(caps.clis) ? caps.clis.map(String).slice(0, 100) : [],
+    mcpServers: Array.isArray(caps.mcpServers) ? caps.mcpServers.map(String).slice(0, 100) : [],
+    ...(caps.memoryRoot ? { memoryRoot: String(caps.memoryRoot).slice(0, 1024) } : {}),
+  };
+  const rows = await getDb().unsafe(
+    'update agent_connections set capabilities = $2, updated_at = now() where id = $1 returning *',
+    [connectionId, JSON.stringify(normalized)],
+  );
+  if (rows[0]) notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+}
+>>>
+
+PLAN P5b<-F5 op=insert at=server/index.cjs:4055#"return;" why=dispatch-action ref=server/index.cjs:4052-4056 test="npx tsc --noEmit" order=5
+<<<P5b
+        if (message.action === 'agent_capabilities_sync') {
+          await handleAgentCapabilitiesSync(ws, message);
+          return;
+        }
+>>>
+
+PLAN P10<-F10 op=insert at=server/index.cjs:4660#"sendWs(connection.ws, { type: 'agent_memory_refresh' })" why=refresh-parity ref=server/index.cjs:4657-4663 test="npx tsc --noEmit" order=6
+# Add after the agent_memory_refresh sendWs line: if (connection) sendWs(connection.ws, { type: 'agent_capabilities_refresh' });
+
+PLAN P8<-F8 op=insert at=src/types/index.ts:387#"updated_at: string;" why=type-capabilities ref=src/types/index.ts:374-387 test="npx tsc --noEmit" order=7
+<<<P8
+  capabilities?: {
+    skills: string[];
+    clis: string[];
+    mcpServers: string[];
+    memoryRoot?: string;
+  };
+>>>
+
+PLAN P9<-F9 op=insert at=src/components/windows/AgentsWindowContent.tsx#"connection daemon row" why=render-runtime-caps ref=src/components/windows/AgentsWindowContent.tsx:1071-1082 test="npx tsc --noEmit" order=8
+
+PLAN P2<-F2,F3 op=insert at=agent/agensis-cli/src/agensis.mjs:534#"end of pushMemorySnapshot" why=detect-and-push-caps ref=agent/agensis-cli/src/agensis.mjs:517-534 test="node --check agent/agensis-cli/src/agensis.mjs 2>/dev/null || true" order=9
+
+PLAN P1<-F1 op=insert at=agent/agensis-cli/src/agensis.mjs:102#"void pushMemorySnapshot(ws, config);" why=call-on-register ref=agent/agensis-cli/src/agensis.mjs:99-103 test="node --check agent/agensis-cli/src/agensis.mjs" order=10
+
+DONE stage=O plan=10 tok~=600

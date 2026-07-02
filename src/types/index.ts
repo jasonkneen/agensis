@@ -371,6 +371,13 @@ export interface WorkspaceAgent {
   updated_at: string;
 }
 
+export interface AgentCapabilities {
+  skills: string[];
+  clis: string[];
+  mcpServers: string[];
+  memoryRoot: string | null;
+}
+
 export interface AgentConnection {
   id: string;
   workspace_id: string;
@@ -381,6 +388,7 @@ export interface AgentConnection {
   cwd: string;
   status: 'online' | 'offline' | 'busy';
   metadata: Record<string, unknown>;
+  capabilities?: AgentCapabilities;
   connected_at: string;
   last_seen_at: string;
   updated_at: string;
