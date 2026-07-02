@@ -418,6 +418,13 @@ const APPLET_THEME_TOKEN_NAMES: Record<string, string> = {
   shadowSm: '--shadow-sm',
   shadowMd: '--shadow-md',
   shadowLg: '--shadow-lg',
+  radiusSm: '--radius-sm',
+  radiusMd: '--radius-md',
+  radiusLg: '--radius-lg',
+  radiusXl: '--radius-xl',
+  success: '--success',
+  warning: '--warning',
+  error: '--error',
 };
 
 function injectAppletHostTheme(html: string, theme: ReturnType<typeof readAppletTheme>) {
@@ -446,8 +453,13 @@ function readAppletTheme() {
   const root = document.documentElement;
   const style = getComputedStyle(root);
   const token = (name: string) => style.getPropertyValue(name).trim();
+  const family = root.getAttribute('data-ui-theme') || 'classic';
+  // No single --border-width token exists; the neo family renders 2px "brutal"
+  // borders app-wide while every other family is 1px. Derive it so applets can
+  // match the control weight of the active theme.
+  const borderWidth = family === 'neo' ? '2px' : '1px';
   return {
-    family: root.getAttribute('data-ui-theme') || 'classic',
+    family,
     scheme: root.getAttribute('data-theme') || 'light',
     tokens: {
       background: token('--background'),
@@ -473,6 +485,17 @@ function readAppletTheme() {
       shadowSm: token('--shadow-sm'),
       shadowMd: token('--shadow-md'),
       shadowLg: token('--shadow-lg'),
+      radiusSm: token('--radius-sm'),
+      radiusMd: token('--radius-md'),
+      radiusLg: token('--radius-lg'),
+      radiusXl: token('--radius-xl'),
+      success: token('--success'),
+      warning: token('--warning'),
+      error: token('--error'),
+      shadowX: token('--neo-shadow-x'),
+      shadowY: token('--neo-shadow-y'),
+      borderWidth,
+      neoStyle: root.getAttribute('data-neo-style') || '',
     },
   };
 }

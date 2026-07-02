@@ -2102,17 +2102,6 @@ function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
 // "watcher" agent in unprompted, when that agent is clearly relevant. A cheap
 // Haiku call is the relevance gate; it fails CLOSED (any error => no interject).
 const AUTO_INTERJECT_MODEL = 'claude-haiku-4-5';
-const WATCHER_HANDLES = new Set(['q', 'mills', 'research', 'scout']);
-
-function isWatcherAgent(agent) {
-  if (!agent || !isAgentEnabled(agent)) return false;
-  const handle = slugHandle(agent.handle || agent.name);
-  if (WATCHER_HANDLES.has(handle)) return true;
-  // Role heuristic: explicit "watcher" markers only — kept narrow on purpose so
-  // we never widen the candidate pool into ordinary participants.
-  const haystack = `${agent.description || ''} ${agent.system_prompt || ''} ${agent.soul || ''}`.toLowerCase();
-  return /\bwatch(?:er|ing)?\b/.test(haystack);
-}
 
 // Single cheap LLM call: decide whether ONE candidate agent should interject.
 // Returns the chosen agent row or null. Never throws (fail closed).

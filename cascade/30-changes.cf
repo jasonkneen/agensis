@@ -1,0 +1,7 @@
+HUMAN: All 5 applied+verified in-browser (classic vs neo-brutal, live switch no reload). tsc+build clean.
+CHG C1<-P1 st=ok ver=pass t="tsc 0; readAppletTheme now emits radius/border-width/shadow-x-y/neo-style"
+CHG C2<-P2 st=ok ver=pass t="shared AGENSIS_APPLET_BASE_CSS + AGENSIS_APPLET_THEME_JS; alias-only, no drift"
+CHG C3<-P3 st=ok ver=pass t="kanban: btn radius 6px->0px, shadow soft->hard 2px, border 1->2px, accent lane hdr; LIVE switch"
+CHG C4<-P4 st=ok ver=pass t="calc: container radius 10->0, border 1->2, eq blue->pink accent; LIVE switch"
+CHG C5<-P5 st=ok ver=pass t="agent-browser probe + screenshots both applets; controls change shape/shadow/border/accent"
+DONE stage=S ok=5 blk=0 esc=0

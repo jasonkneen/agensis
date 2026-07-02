@@ -1,0 +1,3 @@
+Theme applet controls (buttons/inputs/selects/cards) to the active app theme
+(classic/neo-brutal/neo-soft/tinyworld, light+dark). Rework the applet creation
+process so ALL applets inherit themed controls, not just kanban. Verify visually.

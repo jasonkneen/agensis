@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkspacePresenceUser } from './useWorkspacePresence';
-import type { Agent } from '../types';
+import type { WorkspaceAgent } from '../types';
 
 /**
  * v1 data source for the sidebar agent status feed. We watch each agent's
@@ -48,7 +48,7 @@ export interface AgentStatusFeedState {
 
 export function useAgentStatusFeed(
   presenceUsers: WorkspacePresenceUser[],
-  agents: Agent[],
+  agents: WorkspaceAgent[],
 ): AgentStatusFeedState {
   const [queue, setQueue] = useState<AgentStatusUpdate[]>([]);
   const prevStatus = useRef<Map<string, string>>(new Map());
@@ -57,7 +57,7 @@ export function useAgentStatusFeed(
   const avatarByKey = useMemo(() => {
     const map = new Map<string, string>();
     for (const agent of agents) {
-      if (agent.agentId) map.set(`agent:${agent.agentId}`, agent.avatar);
+      if (agent.id) map.set(`agent:${agent.id}`, agent.avatar);
       if (agent.handle) map.set(`handle:${agent.handle}`, agent.avatar);
     }
     return map;

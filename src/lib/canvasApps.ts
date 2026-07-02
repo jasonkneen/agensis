@@ -69,6 +69,75 @@ export interface AgensisAppletInit {
   } | null;
 }
 
+/**
+ * Shared applet theming contract.
+ *
+ * The host (CanvasObjectRenderer) delivers the active app theme to every applet
+ * two ways, and BOTH write the same `--agensis-*` custom properties:
+ *   1. Static: `injectAppletHostTheme` bakes a <style> into the iframe srcDoc
+ *      (correct first paint, no JS needed) — see readAppletTheme() for the token
+ *      list. Values are already resolved (e.g. --agensis-radius-md: 0px in neo).
+ *   2. Live: on theme switch a `agensis:init` postMessage carries theme.tokens
+ *      and AGENSIS_APPLET_THEME_JS re-writes the same `--agensis-*` names.
+ *
+ * Applets MUST style off the semantic `--app-*` vars below (or the `--agensis-*`
+ * aliases directly) and NEVER off bare `--radius-md`/`--shadow-md`, because those
+ * canonical names go stale on live switch (baked once into srcDoc). Reading the
+ * `--agensis-*` alias keeps both paths coherent. Any applet that includes
+ * AGENSIS_APPLET_BASE_CSS + AGENSIS_APPLET_THEME_JS inherits themed controls
+ * (radius, shadow, border weight, accent) across classic / neo / tinyworld.
+ */
+export const AGENSIS_APPLET_BASE_CSS = `
+    :root {
+      color-scheme: light dark;
+      /* Surfaces */
+      --app-bg: var(--agensis-canvas-base, var(--agensis-background, #f7f4ec));
+      --app-panel: var(--agensis-card, var(--agensis-canvas-elevated, #fffaf0));
+      --app-raised: var(--agensis-canvas-overlay, var(--agensis-canvas-raised, var(--app-panel)));
+      /* Text */
+      --app-ink: var(--agensis-text-primary, var(--agensis-foreground, #202024));
+      --app-muted: var(--agensis-text-muted, var(--agensis-muted-foreground, #6d6760));
+      /* Lines & fills */
+      --app-line: var(--agensis-border, #2b2926);
+      --app-soft: var(--agensis-secondary, var(--agensis-muted, #ece3d1));
+      --app-accent: var(--agensis-primary, var(--agensis-accent, #4b7fd7));
+      --app-accent-ink: var(--agensis-primary-foreground, #ffffff);
+      --app-ok: var(--agensis-success, #2f9b69);
+      --app-warn: var(--agensis-warning, #d6942c);
+      --app-err: var(--agensis-error, #d64c4c);
+      /* Shape — flow straight from the active theme (0px+hard-shadow in neo-brutal,
+         rounded+soft in classic/tinyworld). */
+      --app-radius: var(--agensis-radius-md, 8px);
+      --app-radius-sm: var(--agensis-radius-sm, 6px);
+      --app-radius-lg: var(--agensis-radius-lg, 12px);
+      --app-shadow: var(--agensis-shadow-sm, 2px 2px 0 rgba(0,0,0,.14));
+      --app-shadow-md: var(--agensis-shadow-md, 4px 4px 0 rgba(0,0,0,.18));
+      --app-border-w: var(--agensis-border-width, 1px);
+    }`;
+
+/**
+ * Shared live-theme applier. Mirrors the host's `--agensis-<kebab>` alias naming
+ * and sanitization exactly, so the static and live theme paths can never drift.
+ * Inline into an applet's <script>, then call `applyAgensisTheme(payload.theme)`.
+ */
+export const AGENSIS_APPLET_THEME_JS = `
+      function applyAgensisTheme(theme) {
+        if (!theme) return;
+        document.body.dataset.family = theme.family || "classic";
+        document.body.dataset.scheme = theme.scheme || "light";
+        var tokens = theme.tokens || {};
+        if (tokens.neoStyle) document.body.dataset.neoStyle = tokens.neoStyle;
+        var root = document.documentElement;
+        for (var key in tokens) {
+          if (!Object.prototype.hasOwnProperty.call(tokens, key)) continue;
+          var value = tokens[key];
+          if (value == null || value === "") continue;
+          var name = "--agensis-" + key.replace(/[A-Z]/g, function (m) { return "-" + m.toLowerCase(); });
+          root.style.setProperty(name, String(value).replace(/[<>{};]/g, ""));
+        }
+        root.style.setProperty("color-scheme", theme.scheme === "dark" ? "dark" : "light");
+      }`;
+
 function buildTaskKanbanAppHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -76,120 +145,85 @@ function buildTaskKanbanAppHtml() {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
+    ${AGENSIS_APPLET_BASE_CSS}
     :root {
-      color-scheme: light dark;
-      --bg: #f7f4ec;
-      --panel: #fffaf0;
-      --card: #fffaf0;
-      --ink: #202024;
-      --muted: #6d6760;
-      --line: #2b2926;
-      --soft: #ece3d1;
-      --accent: #4b7fd7;
-      --accent-ink: #ffffff;
-      --ok: #2f9b69;
-      --warn: #d6942c;
-      --shadow: 4px 4px 0 rgba(0,0,0,.18);
-      font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #161514;
-        --panel: #24211d;
-        --card: #181614;
-        --ink: #f4efe4;
-        --muted: #b5aa99;
-        --line: #f4efe4;
-        --soft: #332e27;
-        --accent: #78a8ff;
-        --accent-ink: #101010;
-        --ok: #70d39e;
-        --warn: #f0b85d;
-        --shadow: 4px 4px 0 rgba(0,0,0,.55);
-      }
+      font: 13px/1.45 var(--agensis-font, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); }
+    html, body { margin: 0; min-height: 100%; background: var(--app-bg); color: var(--app-ink); }
     body { overflow: hidden; }
     button, input, select, textarea { font: inherit; color: inherit; }
     .app { display: grid; grid-template-rows: auto auto 1fr; height: 100vh; gap: 10px; padding: 12px; }
     header { display: flex; align-items: center; gap: 10px; }
     h1 { margin: 0; font-size: 17px; line-height: 1.1; letter-spacing: 0; }
-    .meta { color: var(--muted); font-size: 12px; }
+    .meta { color: var(--app-muted); font-size: 12px; }
     .toolbar { display: grid; grid-template-columns: minmax(160px, 1fr) 130px auto; gap: 8px; }
     .agentbar { display: grid; grid-template-columns: minmax(120px, 170px) minmax(180px, 1fr) auto; gap: 8px; }
     input, select, textarea {
       width: 100%;
       min-width: 0;
-      border: 2px solid var(--line);
-      border-radius: 6px;
-      background: var(--panel);
+      border: var(--app-border-w) solid var(--app-line);
+      border-radius: var(--app-radius-sm);
+      background: var(--app-panel);
       padding: 8px 9px;
       outline: none;
-      box-shadow: 2px 2px 0 rgba(0,0,0,.12);
+      box-shadow: var(--app-shadow);
     }
     button {
-      border: 2px solid var(--line);
-      border-radius: 6px;
-      background: var(--accent);
-      color: var(--accent-ink);
+      border: var(--app-border-w) solid var(--app-line);
+      border-radius: var(--app-radius-sm);
+      background: var(--app-accent);
+      color: var(--app-accent-ink);
       padding: 8px 10px;
       font-weight: 750;
       cursor: pointer;
-      box-shadow: 2px 2px 0 rgba(0,0,0,.18);
+      box-shadow: var(--app-shadow);
       white-space: nowrap;
+      transition: transform .08s ease, box-shadow .08s ease;
     }
-    button.secondary { background: var(--panel); color: var(--ink); }
+    button.secondary { background: var(--app-panel); color: var(--app-ink); }
     .board { min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 10px; overflow: auto; padding: 2px 2px 8px; }
     .lane {
       min-width: 170px;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      border: 2px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
+      border: var(--app-border-w) solid var(--app-line);
+      border-radius: var(--app-radius);
+      background: var(--app-panel);
+      box-shadow: var(--app-shadow-md);
       overflow: hidden;
     }
-    .lane h2 { margin: 0; padding: 9px 10px; border-bottom: 2px solid var(--line); font-size: 13px; background: var(--soft); }
+    .lane h2 { margin: 0; padding: 9px 10px; border-bottom: var(--app-border-w) solid var(--app-line); font-size: 13px; background: var(--app-soft); }
     .cards { min-height: 120px; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
     .card {
-      border: 2px solid var(--line);
-      border-radius: 6px;
-      background: var(--card);
+      border: var(--app-border-w) solid var(--app-line);
+      border-radius: var(--app-radius-sm);
+      background: var(--app-raised);
       padding: 8px;
-      box-shadow: 2px 2px 0 rgba(0,0,0,.14);
+      box-shadow: var(--app-shadow);
     }
     .card-title { font-weight: 750; overflow-wrap: anywhere; }
     .card-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; }
-    .pill { border: 1px solid var(--line); border-radius: 99px; padding: 2px 7px; color: var(--muted); font-size: 11px; background: var(--panel); }
+    .pill { border: 1px solid var(--app-line); border-radius: 99px; padding: 2px 7px; color: var(--app-muted); font-size: 11px; background: var(--app-panel); }
     .mini { padding: 4px 7px; font-size: 11px; box-shadow: none; }
-    .runs { border-top: 2px solid var(--line); background: var(--soft); max-height: 76px; overflow: auto; padding: 7px 8px; color: var(--muted); font-size: 12px; }
+    .runs { border-top: var(--app-border-w) solid var(--app-line); background: var(--app-soft); max-height: 76px; overflow: auto; padding: 7px 8px; color: var(--app-muted); font-size: 12px; }
     .run { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
-    body[data-family="neo"] {
-      font-weight: 650;
-    }
-    body[data-family="neo"] input,
-    body[data-family="neo"] select,
-    body[data-family="neo"] textarea,
-    body[data-family="neo"] button,
-    body[data-family="neo"] .lane,
-    body[data-family="neo"] .card {
-      border-radius: 4px;
-      box-shadow: var(--shadow);
-    }
+    /* Neo family: chunkier weight, accent lane headers, and the signature
+       press-into-the-shadow interaction. Radius/shadow/border already flow from
+       the theme tokens above, so no per-family shape overrides are needed. */
+    body[data-family="neo"] { font-weight: 650; }
     body[data-family="neo"] .lane h2 {
-      background: var(--accent);
-      color: var(--accent-ink);
+      background: var(--app-accent);
+      color: var(--app-accent-ink);
     }
     body[data-family="neo"] button.secondary,
     body[data-family="neo"] .pill {
-      background: var(--panel);
-      color: var(--ink);
+      background: var(--app-panel);
+      color: var(--app-ink);
     }
-    body[data-family="neo"] button:hover {
-      transform: translate(4px, 4px);
+    body[data-family="neo"] button:active {
+      transform: translate(var(--agensis-shadow-x, 2px), var(--agensis-shadow-y, 2px));
       box-shadow: none;
     }
     @media (max-width: 760px) {
@@ -276,28 +310,10 @@ function buildTaskKanbanAppHtml() {
         tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
         agents = Array.isArray(payload.agents) ? payload.agents : [];
         state = Object.assign({ agentRuns: [] }, payload.state || {});
-        applyTheme(payload.theme);
+        applyAgensisTheme(payload.theme);
         render();
       });
-      function setVar(name, value) {
-        if (value) document.documentElement.style.setProperty(name, value);
-      }
-      function applyTheme(theme) {
-        if (!theme || !theme.tokens) return;
-        var tokens = theme.tokens || {};
-        document.body.dataset.family = theme.family || "classic";
-        document.body.dataset.scheme = theme.scheme || "light";
-        setVar("--bg", tokens.canvasBase || tokens.background);
-        setVar("--panel", tokens.card || tokens.canvasElevated);
-        setVar("--card", tokens.canvasOverlay || tokens.canvasRaised || tokens.card);
-        setVar("--ink", tokens.textPrimary || tokens.foreground || tokens.cardForeground);
-        setVar("--muted", tokens.textMuted || tokens.mutedForeground);
-        setVar("--line", tokens.border);
-        setVar("--soft", tokens.secondary || tokens.muted || tokens.canvasRaised);
-        setVar("--accent", tokens.primary || tokens.accent);
-        setVar("--accent-ink", tokens.primaryForeground || tokens.background);
-        setVar("--shadow", tokens.shadowSm || "4px 4px 0 var(--line)");
-      }
+${AGENSIS_APPLET_THEME_JS}
       function taskCount(status) {
         return tasks.filter(function (task) { return task.status === status && !task.parent_id; }).length;
       }
@@ -382,25 +398,28 @@ function buildCalculatorAppHtml() {
 <title>Calculator</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+${AGENSIS_APPLET_BASE_CSS}
+  /* Calculator palette derives entirely from the shared theme contract, so the
+     control colours, radius and border weight track the active app theme
+     (classic / neo-brutal / tinyworld, light + dark). */
   :root {
-    --bg: #1a1a2e;
-    --surface: #16213e;
-    --surface2: #0f3460;
-    --accent: #e94560;
-    --text: #eaeaea;
-    --text-muted: #888;
-    --btn-num: #1e2a4a;
-    --btn-num-hover: #26366a;
-    --btn-op: #0f3460;
-    --btn-op-hover: #1a4a8a;
-    --btn-eq: #e94560;
-    --btn-eq-hover: #ff6b6b;
-    --btn-clear: #2d4a7a;
-    --btn-clear-hover: #3a6aaa;
-    --radius: 12px;
-    --shadow: 0 4px 24px rgba(0,0,0,0.4);
-    --font: system-ui, -apple-system, sans-serif;
+    --bg: var(--app-bg);
+    --surface: var(--app-panel);
+    --surface2: var(--app-soft);
+    --accent: var(--app-accent);
+    --text: var(--app-ink);
+    --text-muted: var(--app-muted);
+    --btn-num: var(--app-panel);
+    --btn-num-hover: var(--app-soft);
+    --btn-op: var(--app-soft);
+    --btn-op-hover: var(--app-line);
+    --btn-eq: var(--app-accent);
+    --btn-eq-hover: var(--app-accent);
+    --btn-clear: var(--app-soft);
+    --btn-clear-hover: var(--app-line);
+    --radius: var(--app-radius);
+    --shadow: var(--app-shadow-md);
+    --font: var(--agensis-font, system-ui, -apple-system, sans-serif);
   }
 
   body {
@@ -419,6 +438,7 @@ function buildCalculatorAppHtml() {
     width: 100%;
     max-width: 340px;
     background: var(--surface);
+    border: var(--app-border-w) solid var(--app-line);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     overflow: hidden;
@@ -460,9 +480,9 @@ function buildCalculatorAppHtml() {
   .grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 1px;
-    background: rgba(0,0,0,0.3);
-    padding: 1px;
+    gap: var(--app-border-w);
+    background: var(--app-line);
+    padding: var(--app-border-w);
   }
 
   button {
@@ -484,18 +504,18 @@ function buildCalculatorAppHtml() {
   button:active { transform: scale(0.95); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-  button.op { background: var(--btn-op); color: #7eb8f7; font-size: 22px; }
+  button.op { background: var(--btn-op); color: var(--app-accent); font-size: 22px; }
   button.op:hover { background: var(--btn-op-hover); }
 
   button.eq {
     background: var(--btn-eq);
-    color: #fff;
+    color: var(--app-accent-ink);
     font-size: 24px;
     font-weight: 300;
   }
-  button.eq:hover { background: var(--btn-eq-hover); }
+  button.eq:hover { background: var(--btn-eq-hover); filter: brightness(1.08); }
 
-  button.clear { background: var(--btn-clear); color: #7eb8f7; }
+  button.clear { background: var(--btn-clear); color: var(--app-muted); }
   button.clear:hover { background: var(--btn-clear-hover); }
 
   button.zero { grid-column: span 2; }
@@ -553,22 +573,8 @@ const ST = {
   error:     false,
 };
 
-// ── Theme from agensis ─────────────────────────────────────────────────────
-function applyTheme(theme) {
-  if (!theme) return;
-  const root = document.documentElement;
-  const map = {
-    '--bg':       theme.background || theme.bg,
-    '--surface':  theme.surface,
-    '--surface2': theme.surface2 || theme.surfaceAlt,
-    '--accent':   theme.accent || theme.primary,
-    '--text':     theme.text || theme.foreground,
-    '--text-muted': theme.textMuted || theme.muted,
-  };
-  for (const [k, v] of Object.entries(map)) {
-    if (v) root.style.setProperty(k, v);
-  }
-}
+// ── Theme from agensis (shared contract) ───────────────────────────────────
+${AGENSIS_APPLET_THEME_JS}
 
 // ── Display ────────────────────────────────────────────────────────────────
 const mainEl = document.getElementById('main');
@@ -740,7 +746,7 @@ document.addEventListener('keydown', e => {
 window.addEventListener('message', e => {
   if (!e.data || e.data.type !== 'agensis:init') return;
   const { state, theme } = e.data.payload || {};
-  if (theme) applyTheme(theme);
+  if (theme) applyAgensisTheme(theme);
   if (state) {
     ST.current = state.current ?? '0';
     ST.prev    = state.prev    ?? null;
