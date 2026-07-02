@@ -1660,6 +1660,17 @@ function isConnectionSocketLive(connectionId) {
   return Boolean(entry && entry.ws?.readyState === 1 && entry.ws.isAlive !== false);
 }
 
+// Whether a connection's socket is still OPEN (readyState only, deliberately NOT the
+// pessimistic isAlive pong flag). Used by the burst-job guard to decide if a daemon
+// job's worker still exists. Mirroring findConnectedAgent's readyState-only gate keeps
+// the guard and dispatch in agreement: if the guard says "phantom, don't block", the
+// same connection wouldn't count as dispatchable either — so no duplicate turn can
+// slip through the brief ping/pong window. Single-process, like the connection map.
+function isConnectionSocketOpen(connectionId) {
+  const entry = connectedAgents.get(connectionId);
+  return Boolean(entry && entry.ws?.readyState === 1);
+}
+
 function agentRuntimePayload(agent) {
   if (!agent) return null;
   const permissionMode = normalizeAgentPermissionMode(agent.permission_mode || agent.permissionMode);
@@ -2177,16 +2188,46 @@ async function insertActiveAgentJob(sql, params, placeholderMessageId = null) {
   }
 }
 
+// A queued/running job is "live" only if the worker meant to answer it still exists.
+// Trusting status alone let a phantom job (a daemon that vanished, or an MCP client
+// that left) wedge a session forever — new turns were silently dropped while a
+// healthy, reconnected agent sat unable to speak in its own DM.
+function isAgentJobLive(job, agentId) {
+  const mode = parseJsonObject(job.metadata).mode;
+  if (mode === 'mcp') {
+    // A CLAIMED (running) MCP turn keeps no heartbeat — presence (40s TTL) is only
+    // touched on claim/submit, but a turn can legitimately run up to the 240s MCP
+    // reaper window. So treat running MCP jobs as live (the reaper is the backstop);
+    // only gate QUEUED ones on presence, since an unclaimed job needs a live client
+    // to ever be answered. Gating running jobs on presence would kill a live turn
+    // mid-flight and dispatch a duplicate.
+    return job.status === 'running' ? true : hasMcpPresence(agentId);
+  }
+  if (mode === 'builtin') return true; // runs in-process; an interrupted one is cleared by startup reconcile
+  // daemon (or legacy rows with no explicit mode): live only while its socket is open.
+  return job.connection_id ? isConnectionSocketOpen(job.connection_id) : false;
+}
+
 async function hasActiveBurstJob(sessionId, agentId) {
   // Include 'queued', not just 'running': an MCP-backed agent's job sits in
   // 'queued' until its client polls and claims it, so two rapid triggers for the
   // same session/agent (two quick DMs, or dispatch + comment-mention) would both
   // pass a running-only guard and produce a duplicate turn (M14, 2026-07 review).
   const rows = await getDb().unsafe(
-    `select id from agent_jobs where session_id = $1 and agent_id = $2 and status in ('queued', 'running') limit 1`,
+    `select id, status, connection_id, metadata, started_at from agent_jobs
+      where session_id = $1 and agent_id = $2 and status in ('queued', 'running')`,
     [sessionId, String(agentId)],
   );
-  return rows.length > 0;
+  let blocking = false;
+  for (const job of rows) {
+    if (isAgentJobLive(job, agentId)) { blocking = true; continue; }
+    // Phantom: its worker is gone, so it can never produce a result and must not
+    // wedge the session. Finalize it now — awaited so the row is 'error' before the
+    // caller dispatches a fresh turn, otherwise the M15 one-active-job unique index
+    // would bounce the retry and the human would have to send again.
+    await finalizeStuckJob(job, 'the previous turn was abandoned');
+  }
+  return blocking;
 }
 
 // Runs exactly one agent turn (builtin or daemon), rebuilding context from the DB.
@@ -2491,9 +2532,14 @@ function agentLiveMessageContent(message) {
 // a spinner when the daemon disconnects, crashes, or simply never answers.
 async function finalizeStuckJob(job, reason) {
   try {
+    // Use 'error' (not 'failed'): the agent_jobs.status CHECK constraint only permits
+    // queued/running/done/error/cancelled. Writing 'failed' throws a constraint
+    // violation that the surrounding try/catch swallows, so the job would stay
+    // 'running' forever — the exact bug that let a phantom job wedge a DM indefinitely
+    // (reaper, connection-drop cleanup, and startup reconcile all funnel through here).
     const updated = await getDb().unsafe(
-      `update agent_jobs set status = 'failed', updated_at = now() where id = $1 and status = 'running' returning id`,
-      [job.id],
+      `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status = 'running' returning id`,
+      [job.id, `Agent stopped responding (${reason})`],
     );
     if (updated.length === 0) return; // a real result already finalized it
     const meta = parseJsonObject(job.metadata);
@@ -5614,6 +5660,8 @@ module.exports = {
     verifyMcpToken,
     createWorkspaceMcpToken,
     runAgentTurn,
+    hasActiveBurstJob,
+    finalizeStuckJob,
     claimMcpJob,
     submitMcpJobResult,
     reapStuckMcpJobs,
