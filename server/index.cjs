@@ -1164,7 +1164,7 @@ async function verifyPassword(password, passwordHash) {
 
 function resolveAnthropicModel(model) {
   const value = String(model || '').trim();
-  if (!value || value === 'auto' || value === 'claude-fable-5') return DEFAULT_AI_MODEL;
+  if (!value || value === 'auto') return DEFAULT_AI_MODEL;
   return value;
 }
 
