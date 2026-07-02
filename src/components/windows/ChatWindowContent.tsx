@@ -140,7 +140,7 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
-import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { cn } from '@/lib/utils';
 
 interface ChatWindowContentProps {
@@ -1787,23 +1787,11 @@ function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initial
   return isAgent ? <Bot className="size-4" /> : <span>{initials}</span>;
 }
 
-// Live "Thinking Ns" timer for agent placeholders — ticks locally from the
-// placeholder's created_at so it counts up even before any streamed content
-// (or realtime update) arrives.
-function ThinkingIndicator({ startedAt, activity = 'thinking' }: { startedAt?: string | null; activity?: string }) {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const start = startedAt ? new Date(startedAt).getTime() : Date.now();
-    const tick = () => setElapsed(Math.max(0, Math.round((Date.now() - start) / 1000)));
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-  }, [startedAt]);
-  const label = activity.charAt(0).toUpperCase() + activity.slice(1);
+function ThinkingIndicator({ text = 'Thinking…' }: { text?: string }) {
   return (
     <span className="flex items-center gap-2 text-muted-foreground">
       <Spinner className="size-3" />
-      {label} {elapsed}s
+      {text}
     </span>
   );
 }
@@ -1860,7 +1848,7 @@ function ChatMessageBubble({
   const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
   const displayContent = artifact ? artifact.remainingText : rawContent;
   const isThinkingPlaceholder = isActivityPlaceholderMessage(msg);
-  const placeholderActivity = isThinkingPlaceholder ? extractActivityVerb(rawContent) : 'thinking';
+  const placeholderText = isThinkingPlaceholder ? activityLine(extractActivityVerb(rawContent), rawContent) : '';
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
   const initials = senderName.slice(0, 2).toUpperCase() || (isUser ? 'ME' : 'AI');
@@ -1924,11 +1912,11 @@ function ChatMessageBubble({
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
             {isThinkingPlaceholder ? (
-              <ThinkingIndicator startedAt={msg.created_at} activity={placeholderActivity} />
+              <ThinkingIndicator text={placeholderText} />
             ) : displayContent ? (
               <MarkdownContent content={displayContent} streaming={isStreaming} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (
-              <ThinkingIndicator startedAt={msg.created_at} />
+              <ThinkingIndicator />
             ) : (
               <span className="text-muted-foreground">{unavailableMessage}</span>
             )}

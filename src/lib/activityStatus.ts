@@ -36,3 +36,20 @@ export function isActivityPlaceholderMessage(
   const content = typeof msg.content === 'string' ? msg.content : '';
   return ACTIVITY_STATUS_RE.test(content.trim());
 }
+
+/**
+ * "reading src/App.tsx" -> "Reading src/App.tsx…" for a short, human status line.
+ *
+ * "thinking" is the generic fallback verb (see `extractActivityVerb`) and
+ * carries no differentiating detail — the daemon re-posts it as a heartbeat
+ * roughly once a second while the model reasons, and that heartbeat's content
+ * wobbles by trailing punctuation/whitespace alone. Pin it to one fixed
+ * string so surfaces don't re-render/retype on every tick; verbs with real
+ * detail (reading a path, editing a file) still reflect their content.
+ */
+export function activityLine(verb: string, content: string): string {
+  if (verb === 'thinking') return 'Thinking…';
+  const capitalized = verb.charAt(0).toUpperCase() + verb.slice(1);
+  const rest = content.trim().slice(verb.length).trim();
+  return rest ? `${capitalized} ${rest}…` : `${capitalized}…`;
+}

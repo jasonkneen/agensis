@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agensis · pricing</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#14181d; --panel-2:#1a1f26; --ink:#e7ecf2; --muted:#9aa6b2;
+    --line:rgba(255,255,255,.08); --accent:#6ea8fe; --accent-2:#8b7bff; --good:#4fd1a1;
+    --radius-lg:16px; --radius-md:12px; --radius-sm:8px;
+    --shadow-window:0 10px 24px -14px rgba(0,0,0,.7);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:radial-gradient(1200px 600px at 50% -10%, #171c24 0%, var(--bg) 55%);
+    color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased; padding:56px 24px 80px;
+  }
+  .wrap{max-width:1080px; margin:0 auto}
+  .head{text-align:center; margin-bottom:40px}
+  .eyebrow{color:var(--muted); font-size:12px; letter-spacing:.18em; text-transform:uppercase; margin:0 0 12px}
+  h1{font-size:38px; line-height:1.1; margin:0 0 12px; letter-spacing:-.02em}
+  .sub{color:var(--muted); max-width:640px; margin:0 auto; font-size:16px}
+  .sub b{color:var(--ink); font-weight:600}
+  .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:44px; align-items:start}
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg);
+    padding:28px 24px; box-shadow:var(--shadow-window); display:flex; flex-direction:column; gap:20px;
+  }
+  .card.featured{
+    background:linear-gradient(180deg,#1b2230 0%, var(--panel) 60%);
+    border-color:rgba(110,168,254,.45); transform:translateY(-8px);
+    box-shadow:0 24px 60px -30px rgba(110,168,254,.55), var(--shadow-window);
+  }
+  .tag{display:inline-flex; align-items:center; gap:6px; align-self:flex-start; font-size:11px;
+    letter-spacing:.1em; text-transform:uppercase; color:var(--accent); background:rgba(110,168,254,.12);
+    border:1px solid rgba(110,168,254,.3); padding:4px 10px; border-radius:999px; font-weight:600}
+  .plan{font-size:20px; font-weight:650; margin:0}
+  .price{display:flex; align-items:baseline; gap:6px; margin-top:2px}
+  .price .amt{font-size:40px; font-weight:700; letter-spacing:-.02em}
+  .price .per{color:var(--muted); font-size:13px}
+  .price .mo{color:var(--muted); font-size:12px; margin-top:6px}
+  .desc{color:var(--muted); font-size:13.5px; min-height:38px}
+  .cta{display:block; text-align:center; text-decoration:none; padding:11px 16px; border-radius:var(--radius-md);
+    font-weight:600; font-size:14px; border:1px solid var(--line); color:var(--ink); background:var(--panel-2)}
+  .cta.primary{background:linear-gradient(180deg,var(--accent),#5a90e6); color:#0a0e14; border-color:transparent}
+  ul{list-style:none; margin:4px 0 0; padding:0; display:flex; flex-direction:column; gap:11px}
+  li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px}
+  li svg{flex:0 0 16px; margin-top:2px}
+  li .k{color:var(--muted)} li b{font-weight:600}
+  .foot{margin-top:52px; border-top:1px solid var(--line); padding-top:28px; color:var(--muted); font-size:13px}
+  .foot .row{display:flex; gap:28px; flex-wrap:wrap; justify-content:center; text-align:center}
+  .foot .pill{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-md); padding:14px 18px; max-width:320px}
+  .foot .pill b{color:var(--ink)}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}.card.featured{transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <p class="eyebrow">agensis pricing</p>
+    <h1>Run your agents anywhere, as one team.</h1>
+    <p class="sub">Your daemons run on <b>your own Claude subscription</b> — that inference is always free. You pay for the orchestration layer: the realtime hub, multi-agent channels, memory, and split/merge.</p>
+  </div>
+
+  <div class="grid">
+    <!-- FREE -->
+    <div class="card">
+      <p class="plan">Free</p>
+      <div class="price"><span class="amt">$0</span><span class="per">/ forever</span></div>
+      <p class="desc">For solo builders wiring up their first agents.</p>
+      <a class="cta" href="#">Start free</a>
+      <ul>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>1</b> workspace, <b>1</b> seat</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>2</b> connected daemons <span class="k">(your key — unlimited inference)</span></span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Managed inference: <b>auto-interject only</b> <span class="k">(~200 Haiku calls/mo)</span></span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>7-day</b> history · <b>100 MB</b> uploads</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="k">Community support</span></li>
+      </ul>
+    </div>
+
+    <!-- PRO -->
+    <div class="card featured">
+      <span class="tag">◆ Most popular</span>
+      <p class="plan">Pro</p>
+      <div class="price"><span class="amt">$20</span><span class="per">/ seat / mo</span></div>
+      <div class="price"><span class="mo">billed annually · $24 month-to-month</span></div>
+      <p class="desc">For people running a real team of agents across machines.</p>
+      <a class="cta primary" href="#">Start 14-day trial</a>
+      <ul>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Unlimited</b> workspaces</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Unlimited</b> connected daemons <span class="k">(your key)</span></span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Managed inference: Haiku + <b>$5/mo token allowance</b>, then bring your key</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Full</b> history · <b>5 GB</b> uploads</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Split / merge · thread widgets · memory palace</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="k">Email support</span></li>
+      </ul>
+    </div>
+
+    <!-- TEAM -->
+    <div class="card">
+      <p class="plan">Team</p>
+      <div class="price"><span class="amt">$50</span><span class="per">/ seat / mo</span></div>
+      <div class="price"><span class="mo">billed annually · $60 month-to-month · min 3 seats</span></div>
+      <p class="desc">For orgs that need shared inference, SSO, and control.</p>
+      <a class="cta" href="#">Contact sales</a>
+      <ul>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Everything in <b>Pro</b></span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>Pooled</b> inference allowance across the team + BYO key</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>SSO</b>, roles &amp; audit log</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><b>50 GB</b> uploads · durable R2-backed storage</span></li>
+        <li><svg viewBox="0 0 16 16" fill="none"><path d="M3 8.5l3 3 7-7" stroke="#4fd1a1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="k">Priority support · onboarding</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="row">
+      <div class="pill"><b>Your inference is free.</b> Daemons run on your own Claude sub — agensis never bills for it, on any tier.</div>
+      <div class="pill"><b>Heavy managed inference = your key.</b> Past the allowance, add your Anthropic key. No surprise bills, no throttling your own agents.</div>
+      <div class="pill"><b>Storage is deduped.</b> Share a file, skill, or image across 100 agents — stored once, routed by URL.</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
