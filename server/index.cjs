@@ -1449,11 +1449,13 @@ async function verifyAgentConnectToken(token, req = null) {
 async function verifyInviteToken(token) {
   if (!token || typeof token !== 'string') return null;
   const rows = await getDb().unsafe(
+    // Dual-path (L4): new invites store the token hash; legacy invites store the
+    // plaintext. Match either so both keep working during the transition.
     `select id, workspace_id, email, role from workspace_invites
-      where token = $1 and status in ('pending', 'accepted')
+      where token in ($1, $2) and status in ('pending', 'accepted')
         and (expires_at is null or expires_at > now())
       limit 1`,
-    [token],
+    [token, hashAgentToken(token)],
   );
   const invite = rows[0];
   if (!invite) return null;
@@ -5060,15 +5062,21 @@ function createApp() {
       const allowedRoles = ['admin', 'editor', 'commenter', 'viewer'];
       const role = allowedRoles.includes(req.body?.role) ? req.body.role : 'editor';
       const email = String(req.body?.email || '').trim().toLowerCase();
+      // L4: store only the token HASH at rest (like agent/workspace tokens); the
+      // plaintext is returned once below for the creator to copy and is never
+      // recoverable afterward. Legacy invites created before this still hold a
+      // plaintext token and keep working via the dual-path lookup in verify.
       const token = crypto.randomBytes(24).toString('base64url');
       const rows = await getDb().unsafe(
         `insert into workspace_invites (workspace_id, token, email, role, status, created_by, expires_at)
          values ($1, $2, $3, $4, 'pending', $5, now() + interval '14 days')
          returning *`,
-        [workspaceId, token, email, role, req.userId],
+        [workspaceId, hashAgentToken(token), email, role, req.userId],
       );
       notifyDbSubscribers('workspace_invites', 'INSERT', rows);
-      res.json({ data: rows[0], error: null });
+      // Return the plaintext token ONCE (not persisted) so the UI can show the
+      // invite link at creation; the stored row only carries the hash.
+      res.json({ data: { ...rows[0], token }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -5100,8 +5108,8 @@ function createApp() {
            from workspace_invites i
            join workspaces w on w.id = i.workspace_id
            left join app_users cu on cu.id = i.created_by
-          where i.token = $1 limit 1`,
-        [token],
+          where i.token in ($1, $2) limit 1`,
+        [token, hashAgentToken(token)],
       );
       const invite = rows[0];
       if (!invite) return jsonError(res, 404, new Error('Invite not found'));
@@ -5115,7 +5123,7 @@ function createApp() {
   app.post('/backend/invites/:token/accept', requireAuth, async (req, res) => {
     try {
       const token = String(req.params.token || '').trim();
-      const inviteRows = await getDb().unsafe('select * from workspace_invites where token = $1 limit 1', [token]);
+      const inviteRows = await getDb().unsafe('select * from workspace_invites where token in ($1, $2) limit 1', [token, hashAgentToken(token)]);
       const invite = inviteRows[0];
       if (!invite) return jsonError(res, 404, new Error('Invite not found'));
       if (invite.status === 'revoked') return jsonError(res, 410, new Error('This invite has been revoked'));

@@ -40,8 +40,18 @@ test.afterEach(() => resetTestState());
 // --- invite-token auth (the ONE link) --------------------------------------
 
 test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
-  use([{ match: /from workspace_invites where token = \$1 and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
+  use([{ match: /from workspace_invites where token in \(\$1, \$2\) and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
   assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
+});
+
+test('verifyInviteToken looks up by BOTH plaintext and hash (L4 dual-path)', async () => {
+  // The presented plaintext matches a legacy invite ($1) OR a new hashed one
+  // ($2 = sha256 hex). Assert both are passed so both keep working.
+  const db = use([{ match: /from workspace_invites where token in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '', role: 'viewer' }] }]);
+  await verifyInviteToken('plain-token');
+  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
+  assert.equal(call.params[0], 'plain-token', 'legacy plaintext path');
+  assert.match(call.params[1], /^[a-f0-9]{64}$/, 'hashed path is sha256 hex of the presented token');
 });
 
 test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {

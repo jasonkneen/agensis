@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Check,
-  Copy,
   Crown,
   Link2,
   Mail,
@@ -66,7 +65,6 @@ export function UsersWindowContent({
   const [newEmail, setNewEmail] = useState('');
   const [creating, setCreating] = useState(false);
   const [copiedCreate, setCopiedCreate] = useState(false);
-  const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   const handleCreateInvite = async () => {
@@ -84,12 +82,6 @@ export function UsersWindowContent({
     } finally {
       setCreating(false);
     }
-  };
-
-  const handleCopyInvite = async (invite: WorkspaceInvite) => {
-    await navigator.clipboard?.writeText(inviteUrl(inviteOrigin, invite.token));
-    setCopiedInviteId(invite.id);
-    window.setTimeout(() => setCopiedInviteId(null), 1600);
   };
 
   const handleRemove = (memberId: string) => {
@@ -279,16 +271,10 @@ export function UsersWindowContent({
                   </ItemContent>
                   {invite.status === 'pending' && (
                     <ItemActions>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleCopyInvite(invite)}
-                        aria-label={`Copy invite link for ${invite.email || 'anyone with the link'}`}
-                      >
-                        {copiedInviteId === invite.id ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-                        {copiedInviteId === invite.id ? 'Copied' : 'Copy link'}
-                      </Button>
+                      {/* The invite link is shown once at creation and stored
+                          only as a hash, so it can't be re-copied here (L4).
+                          Revoke and create a new one if the link was lost. */}
+                      <span className="text-xs text-muted-foreground">Link shown once</span>
                       <Button
                         type="button"
                         variant="ghost"
