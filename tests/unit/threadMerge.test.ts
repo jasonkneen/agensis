@@ -8,6 +8,10 @@ function msg(id: string, created_at: string, content: string, role: Message['rol
   return { id, session_id: 's', role, content, created_at } as Message;
 }
 
+function msgFrom(id: string, created_at: string, content: string, sender_id: string): Message {
+  return { id, session_id: 's', role: 'assistant', content, created_at, sender_kind: 'agent', sender_id } as Message;
+}
+
 describe('computeThreadDivergence', () => {
   it('separates each branch post-split divergence from shared history', () => {
     // Shared history (copied into the fork at split): a, b.
@@ -36,6 +40,18 @@ describe('computeThreadDivergence', () => {
     const { forkDiverged } = computeThreadDivergence(parentTop, forkTop);
     expect(forkDiverged.map(m => m.content)).toEqual(['real fork work']);
     expect(forkDiverged.length).toBeGreaterThan(0); // would have been 0 under the clock bug
+  });
+
+  it('treats same-timestamp/content messages from different senders as distinct', () => {
+    // Two agents reply with identical text at the same instant on the two
+    // branches — including sender_id in the identity keeps them from cancelling
+    // out as "shared", so each branch's reply is correctly seen as divergence.
+    const parentTop = [msgFrom('p1', '2026-07-01T10:00:00.000Z', 'done', 'agent-A')];
+    const forkTop = [msgFrom('f1', '2026-07-01T10:00:00.000Z', 'done', 'agent-B')];
+
+    const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);
+    expect(parentDiverged.map(m => m.id)).toEqual(['p1']);
+    expect(forkDiverged.map(m => m.id)).toEqual(['f1']);
   });
 
   it('reports no divergence when the fork never diverged (pure-cleanup merge)', () => {

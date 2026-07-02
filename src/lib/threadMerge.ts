@@ -2,10 +2,13 @@ import { messageText } from './chatStream';
 import type { Message } from '../types';
 
 // Identity of a top-level message for split/merge divergence. splitSession copies
-// a message into the fork preserving created_at, role, and content, so these three
-// fields uniquely tie a copy back to its original.
+// a message into the fork preserving created_at, role, sender, and content, so
+// these fields tie a copy back to its original. Sender fields are included to
+// make an accidental identity collision (a genuine post-split message that
+// happens to match a copied one) require matching the author too, not just the
+// same timestamp+content.
 function messageIdentity(m: Message): string {
-  return `${m.created_at}|${m.role}|${messageText(m.content)}`;
+  return `${m.created_at}|${m.role}|${m.sender_kind ?? ''}|${m.sender_id ?? ''}|${messageText(m.content)}`;
 }
 
 /**
