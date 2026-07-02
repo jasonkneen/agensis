@@ -92,6 +92,7 @@ import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
 import { useDockAttention } from './hooks/useDockAttention';
 import { useWorkspacePresence, windowLabel, type WorkspacePresenceUser } from './hooks/useWorkspacePresence';
+import { useAgentStatusFeed } from './hooks/useAgentStatusFeed';
 import { useWorkspaceKnowledge, type WorkspaceContextCounts } from './hooks/useWorkspaceKnowledge';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
@@ -668,6 +669,7 @@ function AppContent() {
     agentConnections,
     agents,
   });
+  const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
     const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';
@@ -1426,6 +1428,7 @@ function AppContent() {
         floatingWindows={windows}
         documentPresence={itemPresence.documentPresence}
         chatPresence={itemPresence.chatPresence}
+        agentStatusFeed={agentStatusFeed}
         themeMode={themeMode}
         onThemeChange={setTheme}
         userEmail={user.email || ''}

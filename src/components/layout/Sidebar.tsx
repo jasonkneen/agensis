@@ -55,6 +55,8 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { AccountDialog } from '../account/AccountDialog';
+import { AgentStatusFeed } from './AgentStatusFeed';
+import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 
@@ -118,6 +120,7 @@ interface SidebarProps {
   floatingWindows: FloatingWindow[];
   documentPresence?: Record<string, ItemPresenceUser[]>;
   chatPresence?: Record<string, ItemPresenceUser[]>;
+  agentStatusFeed?: AgentStatusFeedState;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
   userEmail: string;
@@ -161,6 +164,7 @@ export function Sidebar({
   floatingWindows,
   documentPresence = {},
   chatPresence = {},
+  agentStatusFeed,
   themeMode,
   onThemeChange,
   onOpenSettings,
@@ -620,6 +624,12 @@ export function Sidebar({
             {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
         </div>
       </ScrollArea>
+
+      {agentStatusFeed?.current && (
+        <div className="shrink-0 border-t border-border pb-1">
+          <AgentStatusFeed feed={agentStatusFeed} />
+        </div>
+      )}
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
         <div className="flex items-center gap-2">

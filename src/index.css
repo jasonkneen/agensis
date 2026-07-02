@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Press+Start+2P&display=swap');
 
 /* The general UI font picker's remaining 13 families (Settings -> Font) load
    lazily, one at a time, only for whichever font is actually selected — see
@@ -3729,4 +3729,78 @@ select {
 /* Light mode (base theme only — not neo, not tinyworld) panels get a white border */
 :root[data-theme="light"]:not([data-ui-theme="neo"]):not([data-ui-theme="tinyworld"]) [data-window-surface] {
   border-color: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* ── Agent status feed (sidebar bottom): pixel-art speech bubble + typewriter ──
+   The pixel aesthetic is CSS-only chrome: a stepped bubble border drawn with
+   layered box-shadows (no anti-aliasing), the Press Start 2P bitmap font, and
+   nearest-neighbour image scaling so avatars read crisp at small sizes. Swap in
+   generated pixel sprites later without touching this styling. */
+.pixel-font {
+  font-family: 'Press Start 2P', 'IBM Plex Mono', monospace;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+.pixel-avatar {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+/* Stepped 2px border with no rounded corners, built from four inset shadows so
+   the edge stays hard at any zoom. Uses currentColor-independent tokens so it
+   tracks the theme. */
+.pixel-bubble {
+  position: relative;
+  background: var(--card, #1b1b1f);
+  color: var(--card-foreground, #f4f4f5);
+  border: 2px solid var(--border, #3a3a42);
+  box-shadow:
+    0 0 0 2px var(--background, #0c0c0e),
+    2px 2px 0 2px var(--border, #3a3a42);
+  padding: 6px 8px;
+  border-radius: 2px;
+}
+/* Little pixel tail pointing left toward the avatar. */
+.pixel-bubble::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 12px;
+  width: 6px;
+  height: 6px;
+  background: var(--card, #1b1b1f);
+  border-left: 2px solid var(--border, #3a3a42);
+  border-bottom: 2px solid var(--border, #3a3a42);
+  transform: rotate(45deg);
+}
+/* Blinking block caret at the end of the typewriter line. */
+.pixel-caret::after {
+  content: '\2588';
+  margin-left: 1px;
+  animation: pixel-caret-blink 1s steps(1) infinite;
+}
+@keyframes pixel-caret-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+/* Pixel button: hard-edged, presses down 1px on active. */
+.pixel-btn {
+  font-family: 'Press Start 2P', 'IBM Plex Mono', monospace;
+  font-size: 7px;
+  line-height: 1;
+  padding: 4px 5px;
+  border: 2px solid var(--border, #3a3a42);
+  background: var(--muted, #26262b);
+  color: var(--muted-foreground, #a1a1aa);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: none;
+}
+.pixel-btn:hover {
+  color: var(--foreground, #f4f4f5);
+  background: var(--accent, #303036);
+}
+.pixel-btn:active {
+  transform: translate(1px, 1px);
 }
