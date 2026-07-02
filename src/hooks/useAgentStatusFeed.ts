@@ -44,8 +44,18 @@ function statusToUpdate(
   return null;
 }
 
-/** "reading" -> "Reading…" for a short, human status line. */
+/**
+ * "reading" -> "Reading…" for a short, human status line.
+ *
+ * "thinking" is the generic fallback verb (see `extractActivityVerb`) and
+ * carries no differentiating detail — the daemon re-posts it as a heartbeat
+ * roughly once a second while the model reasons, and that heartbeat's content
+ * wobbles by trailing punctuation/whitespace alone. Pin it to one fixed
+ * string so the bubble doesn't re-render/retype on every tick; verbs with
+ * real detail (reading a path, editing a file) still reflect their content.
+ */
 function activityLine(verb: string, content: string): string {
+  if (verb === 'thinking') return 'Thinking…';
   const capitalized = verb.charAt(0).toUpperCase() + verb.slice(1);
   const rest = content.trim().slice(verb.length).trim();
   return rest ? `${capitalized} ${rest}…` : `${capitalized}…`;
@@ -186,6 +196,10 @@ export function useAgentStatusFeed(
             };
             return [...q, entry].slice(-MAX_QUEUE);
           }
+          // Same status as last tick (typically the "Thinking…" heartbeat) —
+          // bail without touching state so the bubble doesn't re-render or
+          // replay its typewriter animation for no visible change.
+          if (q[idx].text === text) return q;
           const next = [...q];
           next[idx] = { ...next[idx], text, kind: 'activity', ts: Date.now() };
           return next;
