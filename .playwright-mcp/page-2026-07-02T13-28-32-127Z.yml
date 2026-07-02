@@ -1,0 +1,11 @@
+- generic [ref=e4]:
+  - img [ref=e6]
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]: "@coder"
+      - generic [ref=e11]: "+2"
+    - generic [ref=e12]: started a job█
+    - generic [ref=e13]:
+      - button ">" [ref=e14] [cursor=pointer]
+      - button "X" [ref=e15] [cursor=pointer]
+      - button "CLR" [ref=e16] [cursor=pointer]

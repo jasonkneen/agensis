@@ -2687,7 +2687,37 @@ async function registerAgentConnection(ws, message) {
   sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
 }
 
-async function updateAgentHeartbeat(ws, metadata = {}) {
+// The "format we need" gate: stored capabilities must have the three array fields and a
+// string|null memoryRoot. A row that fails this (never synced, or malformed) is treated
+// as drifted so the heartbeat nudges a fresh snapshot to self-heal it.
+function capabilitiesShapeValid(caps) {
+  return Boolean(caps)
+    && Array.isArray(caps.skills)
+    && Array.isArray(caps.clis)
+    && Array.isArray(caps.mcpServers)
+    && (caps.memoryRoot === null || typeof caps.memoryRoot === 'string');
+}
+
+// Pure drift decision, extracted so it can be unit-tested without a DB. Given the last
+// stored capabilities and the hashes the daemon just sent on its heartbeat, decide which
+// full-snapshot re-pushes to nudge. Rules:
+//  - Only act on a hash the daemon actually sent (older daemons omit them → no nudge).
+//  - Capabilities drift when the stored row is malformed OR its stored hash differs.
+//  - Memory drift when the stored memoryHash differs.
+// The stored reference only advances when a real snapshot lands, so a genuine mismatch
+// resolves in ~1 round-trip rather than looping every beat.
+function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash } = {}) {
+  const nudges = [];
+  if (capabilitiesHash && (!capabilitiesShapeValid(stored) || capabilitiesHash !== stored.hash)) {
+    nudges.push('agent_capabilities_refresh');
+  }
+  if (memoryHash && memoryHash !== (stored && stored.memoryHash)) {
+    nudges.push('agent_memory_refresh');
+  }
+  return nudges;
+}
+
+async function updateAgentHeartbeat(ws, metadata = {}, hashes = {}) {
   const connectionId = ws.agentConnectionId;
   if (!connectionId) throw forbidden('Agent is not registered');
   const rows = await getDb().unsafe(
@@ -2698,6 +2728,20 @@ async function updateAgentHeartbeat(ws, metadata = {}) {
     [connectionId, metadata.busy ? 'busy' : 'online', JSON.stringify(metadata || {})],
   );
   notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+
+  // Capability/memory drift check. The heartbeat carries the daemon's current hashes;
+  // compare them against what we last stored on a snapshot (the update above leaves the
+  // `capabilities` column untouched, so this reads the last synced reference). On a
+  // mismatch — or malformed stored capabilities — nudge the daemon to re-push the full
+  // snapshot. Guarded on hash presence so older daemons that don't send hashes never get
+  // nudged. The stored reference only advances when the real snapshot lands, so a
+  // mismatch resolves in ~1 round-trip rather than looping.
+  if (rows.length > 0) {
+    const stored = parseJsonObject(rows[0].capabilities);
+    for (const nudge of capabilitiesDriftNudges(stored, hashes || {})) {
+      sendWs(ws, { type: nudge });
+    }
+  }
 }
 
 // Ingest a full snapshot of an agent's file-memory palace pushed by its daemon.
@@ -2766,6 +2810,11 @@ async function handleAgentCapabilitiesSync(ws, message) {
     clis: Array.isArray(message.clis) ? message.clis : [],
     mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
     memoryRoot: typeof message.memoryRoot === 'string' ? message.memoryRoot : null,
+    // Daemon-owned drift hashes. Stored as the reference the heartbeat drift-check
+    // compares against; the server never recomputes these (avoids a cross-runtime
+    // canonicalization contract). Advances only when a real snapshot lands here.
+    hash: typeof message.hash === 'string' ? message.hash : null,
+    memoryHash: typeof message.memoryHash === 'string' ? message.memoryHash : null,
   };
 
   const rows = await getDb().unsafe(
@@ -4109,7 +4158,10 @@ function attachRealtime(server) {
           return;
         }
         if (message.action === 'agent_heartbeat') {
-          await updateAgentHeartbeat(ws, message.metadata || {});
+          await updateAgentHeartbeat(ws, message.metadata || {}, {
+            capabilitiesHash: message.capabilitiesHash,
+            memoryHash: message.memoryHash,
+          });
           return;
         }
         if (message.action === 'agent_job_result') {
@@ -5661,6 +5713,8 @@ module.exports = {
     createWorkspaceMcpToken,
     runAgentTurn,
     hasActiveBurstJob,
+    capabilitiesShapeValid,
+    capabilitiesDriftNudges,
     finalizeStuckJob,
     claimMcpJob,
     submitMcpJobResult,

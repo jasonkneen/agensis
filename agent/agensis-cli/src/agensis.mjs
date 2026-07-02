@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import process from "node:process";
 import WebSocket from "ws";
 import { runCli } from "./cli.mjs";
 import { createQueue } from "./queue.mjs";
-import { deriveMemoryRoot, snapshotMemory } from "./memory.mjs";
+import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_HEARTBEAT_MS = 15 * 1000;
@@ -14,7 +15,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
-export const AGENSIS_CLI_VERSION = "0.1.15";
+export const AGENSIS_CLI_VERSION = "0.1.16";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
@@ -80,17 +81,41 @@ export async function runAgensisDaemon(rawConfig = {}) {
         },
       });
       heartbeatTimer = setInterval(() => {
-        send(ws, {
-          action: "agent_heartbeat",
-          metadata: {
-            busy: queue.active() > 0,
-            queueSize: queue.size(),
-            cwd: config.cwd,
-            model: config.model,
-            permissionMode: config.permissionMode,
-            permissionFlags: permissionFlagsForMode(config.permissionMode),
-          },
-        });
+        // Carry the current capability/memory drift hashes alongside the liveness
+        // beat. They ride as distinct top-level fields (NOT inside metadata, which the
+        // server merges into the persisted row) so the server can compare them against
+        // the last synced values without persisting an unconfirmed candidate hash. On a
+        // mismatch the server nudges a full re-push, keeping the agents list fresh.
+        void computeCapabilities(config)
+          .then((caps) => {
+            send(ws, {
+              action: "agent_heartbeat",
+              capabilitiesHash: caps.capabilitiesHash,
+              memoryHash: caps.memoryHash,
+              metadata: {
+                busy: queue.active() > 0,
+                queueSize: queue.size(),
+                cwd: config.cwd,
+                model: config.model,
+                permissionMode: config.permissionMode,
+                permissionFlags: permissionFlagsForMode(config.permissionMode),
+              },
+            });
+          })
+          .catch(() => {
+            // Detection failed — still send a liveness beat so we don't look offline.
+            send(ws, {
+              action: "agent_heartbeat",
+              metadata: {
+                busy: queue.active() > 0,
+                queueSize: queue.size(),
+                cwd: config.cwd,
+                model: config.model,
+                permissionMode: config.permissionMode,
+                permissionFlags: permissionFlagsForMode(config.permissionMode),
+              },
+            });
+          });
       }, config.heartbeatMs);
       if (heartbeatTimer.unref) heartbeatTimer.unref();
     });
@@ -112,6 +137,10 @@ export async function runAgensisDaemon(rawConfig = {}) {
       }
       if (message.type === "agent_memory_refresh") {
         void pushMemorySnapshot(ws, config);
+        // Re-push capabilities too so the server's stored memoryHash advances to match
+        // the freshly-synced palace; otherwise the heartbeat drift-check would keep
+        // nudging a memory refresh every beat.
+        void pushCapabilitiesSnapshot(ws, config);
         return;
       }
       if (message.type === "agent_capabilities_refresh") {
@@ -563,24 +592,45 @@ function detectMcpServers() {
   return [];
 }
 
+function sha1Short(str) {
+  return crypto.createHash("sha1").update(String(str)).digest("hex").slice(0, 16);
+}
+
+// Detect this agent's current runtime capabilities and compute the two daemon-owned
+// drift hashes. The daemon is the single authority for these hashes: it emits them on
+// both the full snapshot (agent_capabilities_sync) and every heartbeat, so the server
+// never has to recompute a canonical form — it just compares the heartbeat hash against
+// the last value it stored on a snapshot. `capabilitiesHash` covers skills/CLIs/MCP;
+// `memoryHash` covers the palace file list (stat-only, no content reads).
+async function computeCapabilities(config) {
+  const skills = detectSkills(config.cwd);
+  const clis = detectClis();
+  const mcpServers = detectMcpServers();
+  const memoryRoot = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir }) || null;
+  // Arrays are already sorted at detection, so this canonical form is stable.
+  const capabilitiesHash = sha1Short(JSON.stringify({ skills, clis, mcpServers, memoryRoot }));
+  const memoryHash = sha1Short(await memoryFingerprint(memoryRoot));
+  return { skills, clis, mcpServers, memoryRoot, capabilitiesHash, memoryHash };
+}
+
 // Push a snapshot of this agent's runtime capabilities (skills, CLIs, MCP servers,
-// memory root) to the server. Fire-and-forget; never fatal.
+// memory root) to the server, carrying the daemon-owned hashes so the server can store
+// them as the reference the heartbeat drift-check compares against. Fire-and-forget.
 async function pushCapabilitiesSnapshot(ws, config) {
   try {
-    const skills = detectSkills(config.cwd);
-    const clis = detectClis();
-    const mcpServers = detectMcpServers();
-    const memoryRoot = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir }) || null;
+    const caps = await computeCapabilities(config);
     send(ws, {
       action: "agent_capabilities_sync",
       workspaceId: config.workspace,
       agentId: config.agent,
-      skills,
-      clis,
-      mcpServers,
-      memoryRoot,
+      skills: caps.skills,
+      clis: caps.clis,
+      mcpServers: caps.mcpServers,
+      memoryRoot: caps.memoryRoot,
+      hash: caps.capabilitiesHash,
+      memoryHash: caps.memoryHash,
     });
-    log(`Capabilities synced — skills:${skills.length} clis:${clis.length} mcp:${mcpServers.length}`);
+    log(`Capabilities synced — skills:${caps.skills.length} clis:${caps.clis.length} mcp:${caps.mcpServers.length}`);
   } catch (error) {
     log(`Capabilities sync skipped: ${error?.message || error}`);
   }

@@ -114,6 +114,29 @@ export async function readMemoryFile(root, relPath) {
   return { content, byteSize: buf.length, truncated };
 }
 
+// Cheap drift fingerprint: enumerate the palace and stat each file (path + size +
+// mtime) WITHOUT reading contents, so this is safe to run on every heartbeat. Returns
+// a stable canonical string; the daemon hashes it and the server compares that hash to
+// the last synced value to decide whether a full snapshot re-push is needed. Empty
+// string when there is no palace (nothing to mirror).
+export async function memoryFingerprint(root) {
+  const realRootPath = await realRoot(root);
+  if (!realRootPath) return "";
+  const files = [];
+  await walk(realRootPath, realRootPath, 0, files);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  const parts = [];
+  for (const file of files) {
+    try {
+      const s = await fs.stat(path.join(realRootPath, file.path));
+      parts.push(`${file.path}:${s.size}:${Math.floor(s.mtimeMs)}`);
+    } catch {
+      // vanished between enumerate and stat — skip
+    }
+  }
+  return parts.join("|");
+}
+
 // Full snapshot the daemon pushes up: every memory file with its content.
 export async function snapshotMemory(root) {
   const files = await enumerateMemoryFiles(root);
