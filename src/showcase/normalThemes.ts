@@ -167,6 +167,24 @@ export const NORMAL_THEMES: NormalTheme[] = [
     light: { bg: '#ffffff', elevated: '#ffffff', raised: '#f6f8fa', muted: '#eaeef2', fg: '#1f2328', fgMuted: '#636c76', primary: '#0969da', onPrimary: '#ffffff', border: '#d0d7de' },
     dark:  { bg: '#0d1117', elevated: '#161b22', raised: '#21262d', muted: '#0d1117', fg: '#e6edf3', fgMuted: '#8b949e', primary: '#2f81f7', onPrimary: '#ffffff', border: '#30363d' },
   },
+  {
+    id: 'everforest', label: 'Everforest', group: 'Developer',
+    swatch: ['#8da101', '#f4f0d9', '#fdf6e3'],
+    light: { bg: '#fdf6e3', elevated: '#fffbef', raised: '#f4f0d9', muted: '#eeead4', fg: '#414b50', fgMuted: '#829181', primary: '#8da101', onPrimary: '#fffbef', border: '#ddd8be' },
+    dark:  { bg: '#2d353b', elevated: '#343f44', raised: '#3d484d', muted: '#272e33', fg: '#d3c6aa', fgMuted: '#859289', primary: '#a7c080', onPrimary: '#2d353b', border: '#4f585e' },
+  },
+  {
+    id: 'rose-pine', label: 'Rosé Pine', group: 'Developer',
+    swatch: ['#c4a7e7', '#1f1d2e', '#191724'],
+    light: { bg: '#faf4ed', elevated: '#fffaf3', raised: '#f2e9e1', muted: '#ece0d6', fg: '#575279', fgMuted: '#797593', primary: '#907aa9', onPrimary: '#fffaf3', border: '#dfd8ca' },
+    dark:  { bg: '#191724', elevated: '#1f1d2e', raised: '#26233a', muted: '#151320', fg: '#e0def4', fgMuted: '#908caa', primary: '#c4a7e7', onPrimary: '#191724', border: '#403d52' },
+  },
+  {
+    id: 'kanagawa', label: 'Kanagawa', group: 'Developer',
+    swatch: ['#7e9cd8', '#16161d', '#1f1f28'],
+    light: { bg: '#e9e2c4', elevated: '#f2eccf', raised: '#ded6ac', muted: '#d4cb9c', fg: '#545464', fgMuted: '#716e61', primary: '#4d699b', onPrimary: '#f2eccf', border: '#cfc79a' },
+    dark:  { bg: '#1f1f28', elevated: '#16161d', raised: '#2a2a37', muted: '#181820', fg: '#dcd7ba', fgMuted: '#727169', primary: '#7e9cd8', onPrimary: '#1f1f28', border: '#363646' },
+  },
 
   // ── Tinted — muted accent washes ─────────────────────────────────────────
   {
@@ -192,6 +210,12 @@ export const NORMAL_THEMES: NormalTheme[] = [
     swatch: ['#d97706', '#fef3c7', '#fffbeb'],
     light: { bg: '#fffbeb', elevated: '#ffffff', raised: '#fef3c7', muted: '#fde68a', fg: '#78350f', fgMuted: '#b45309', primary: '#d97706', onPrimary: '#ffffff', border: '#fcd34d' },
     dark:  { bg: '#1c0d00', elevated: '#3d1f00', raised: '#541e00', muted: '#120900', fg: '#fef3c7', fgMuted: '#fbbf24', primary: '#f59e0b', onPrimary: '#1c0d00', border: '#541e00' },
+  },
+  {
+    id: 'sepia', label: 'Sepia', group: 'Tinted',
+    swatch: ['#a8642a', '#fbf5e6', '#f4ecd8'],
+    light: { bg: '#f4ecd8', elevated: '#fbf5e6', raised: '#ebe1c8', muted: '#e2d6b8', fg: '#433422', fgMuted: '#7a6a52', primary: '#a8642a', onPrimary: '#fbf5e6', border: '#d8cbac' },
+    dark:  { bg: '#1c1710', elevated: '#262016', raised: '#322a1d', muted: '#181309', fg: '#ece0c8', fgMuted: '#a3927a', primary: '#d08a4e', onPrimary: '#1c1710', border: '#453a28' },
   },
 ];
 

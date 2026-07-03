@@ -306,9 +306,14 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
 
   // NOTE: color-mix percentages must sum to 100% — a smaller sum makes the
   // result translucent, which would let surfaces bleed through.
-  const card = seed.card ?? (dark ? mix(paper, 88, '#ffffff 12%') : mix(paper, 42, '#ffffff 58%'));
-  const raised = seed.raised ?? (dark ? mix(paper, 80, '#ffffff 20%') : mix(paper, 84, `${ink} 16%`));
-  const muted = seed.muted ?? (dark ? mix(paper, 92, '#ffffff 8%') : mix(paper, 86, `${ink} 14%`));
+  // Dark surfaces lift toward the theme's own `primary` (not flat white), so
+  // elevated/inset/muted fills carry the palette's hue and read as *warm/rich
+  // dark with dimension* instead of near-black grey. Most themes still set
+  // card/raised explicitly; this hue-tint reaches every dark theme's muted
+  // fill and gives new palettes depth without per-theme tuning.
+  const card = seed.card ?? (dark ? mix(paper, 89, `${primary} 11%`) : mix(paper, 42, '#ffffff 58%'));
+  const raised = seed.raised ?? (dark ? mix(paper, 81, `${primary} 19%`) : mix(paper, 84, `${ink} 16%`));
+  const muted = seed.muted ?? (dark ? mix(paper, 91, `${primary} 9%`) : mix(paper, 86, `${ink} 14%`));
   const overlay = card;
   const textSecondary = mix(ink, 78, `${paper} 22%`);
   const textMuted = mix(ink, 52, `${paper} 48%`);
@@ -428,6 +433,18 @@ export const NEO_THEMES: NeoTheme[] = [
     light: { paper: '#eef6ff', ink: INK, primary: '#6fb7ff', onPrimary: INK },
     dark: { paper: '#0a1018', ink: '#e6f1ff', primary: '#6fb7ff', onPrimary: INK, card: '#101a26', raised: '#172435' },
   },
+  {
+    id: 'cobalt', label: 'Cobalt', group: 'Pop', style: 'press',
+    swatch: ['#3b5bdb', '#ffd84a', '#eef2ff'],
+    light: { paper: '#eef2ff', ink: INK, primary: '#3b5bdb', onPrimary: '#ffffff' },
+    dark: { paper: '#0a0d1a', ink: '#e4e9ff', primary: '#5c7cfa', onPrimary: INK, card: '#111631', raised: '#182046', shadow: '#454f80' },
+  },
+  {
+    id: 'flamingo', label: 'Flamingo', group: 'Pop', style: 'balloon',
+    swatch: ['#ff5d8f', '#5be3b0', '#fff0f5'],
+    light: { paper: '#fff0f5', ink: INK, primary: '#ff5d8f', onPrimary: '#ffffff' },
+    dark: { paper: '#170b11', ink: '#ffe4ee', primary: '#ff6b9d', onPrimary: INK, card: '#22111a', raised: '#2d1824', shadow: '#6d4657' },
+  },
 
   // ───────────────────────── DARK — loud on near-black ────────────────────
   {
@@ -484,6 +501,18 @@ export const NEO_THEMES: NeoTheme[] = [
     light: { paper: '#fff1f3', ink: '#1a070b', primary: '#ff3b6b', onPrimary: '#ffffff' },
     dark: { paper: '#120709', ink: '#ffe3e8', primary: '#ff4d74', onPrimary: '#ffffff', card: '#1d0d11', raised: '#281218', shadow: '#6e4049' },
   },
+  {
+    id: 'deep-sea', label: 'Deep Sea', group: 'Dark', style: 'block',
+    swatch: ['#2dd4bf', '#ffd166', '#071413'],
+    light: { paper: '#e8f4f2', ink: '#06201d', primary: '#0d9488', onPrimary: '#ffffff' },
+    dark: { paper: '#071413', ink: '#dbf3ef', primary: '#2dd4bf', onPrimary: INK, card: '#0d1f1d', raised: '#132b28', shadow: '#3f5f5a' },
+  },
+  {
+    id: 'plum-noir', label: 'Plum Noir', group: 'Dark', style: 'gallery',
+    swatch: ['#b968e6', '#ffd84a', '#100a16'],
+    light: { paper: '#f6f0fb', ink: '#1a0f24', primary: '#8b3fc4', onPrimary: '#ffffff' },
+    dark: { paper: '#100a16', ink: '#efe4f8', primary: '#b968e6', onPrimary: INK, card: '#1a1024', raised: '#241633', shadow: '#544066' },
+  },
 
   // ───────────────────────── MONO & PRINT — ink-forward ───────────────────
   {
@@ -515,6 +544,12 @@ export const NEO_THEMES: NeoTheme[] = [
     swatch: ['#2d2d2d', '#ffd84a', '#e9e9e9'],
     light: { paper: '#ededed', ink: '#161616', primary: '#2d2d2d', onPrimary: '#ffffff', warning: '#ffd84a' },
     dark: { paper: '#121212', ink: '#ededed', primary: '#e6e6e6', onPrimary: '#121212', card: '#1c1c1c', raised: '#262626', shadow: '#555' },
+  },
+  {
+    id: 'slate-ink', label: 'Slate Ink', group: 'Mono & Print', style: 'blueprint',
+    swatch: ['#3d5a72', '#ff6b5f', '#0c1014'],
+    light: { paper: '#eceef1', ink: '#12181f', primary: '#3d5a72', onPrimary: '#ffffff', raised: '#e0e3e8', muted: '#e6e9ed' },
+    dark: { paper: '#0c1014', ink: '#e2e8ef', primary: '#6b91b0', onPrimary: '#0c1014', card: '#141a20', raised: '#1c242c', shadow: '#43505c' },
   },
 
   // ───────────────────────── PASTEL — soft paper, candy accents ───────────

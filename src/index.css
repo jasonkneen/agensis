@@ -150,13 +150,15 @@
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="light"] {
-  --canvas-base: #f4ede0;
-  --canvas-elevated: #fffaf0;
-  --canvas-raised: #f3ecdc;
-  --canvas-overlay: #ffffff;
-  --border: #e4d8c2;
-  --border-subtle: #efe5d3;
-  --border-strong: #c8c0b4;
+  /* Four distinct warm tiers (base ↔ raised were near-identical before, so
+     surfaces read as one flat cream). Paper carries a touch more gold. */
+  --canvas-base: #f2e9d7;
+  --canvas-elevated: #fdf8ec;
+  --canvas-raised: #ebe0ca;
+  --canvas-overlay: #fffdf6;
+  --border: #e2d5bb;
+  --border-subtle: #ede2ce;
+  --border-strong: #c7bca4;
   --text-primary: #2a2722;
   --text-secondary: #6f695f;
   --text-muted: #918979;
@@ -174,33 +176,35 @@
   --shadow-md: 0 12px 30px -18px rgba(50,35,10,0.24), 0 2px 6px -2px rgba(50,35,10,0.1);
   --shadow-lg: 0 18px 50px -20px rgba(50,35,10,0.28), 0 2px 8px -2px rgba(50,35,10,0.12);
   --shadow-window: 0 12px 28px -18px rgba(50,35,10,0.34);
-  --background: #f4ede0;
+  --background: #f2e9d7;
   --foreground: #2a2722;
-  --card: #fffaf0;
+  --card: #fdf8ec;
   --card-foreground: #2a2722;
-  --popover: #fffaf0;
+  --popover: #fdf8ec;
   --popover-foreground: #2a2722;
   --primary: #d98a24;
   --primary-foreground: #3a2408;
-  --secondary: #f3ecdc;
+  --secondary: #ebe0ca;
   --secondary-foreground: #2a2722;
-  --muted: #f3ecdc;
+  --muted: #ebe0ca;
   --muted-foreground: #6f695f;
-  --sh-accent: #ebe3d2;
+  --sh-accent: #e8ddc8;
   --sh-accent-foreground: #2a2722;
-  --sh-border: #e4d8c2;
-  --input: #e4d8c2;
+  --sh-border: #e2d5bb;
+  --input: #e2d5bb;
   --ring: var(--primary);
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] {
-  --canvas-base: #181714;
-  --canvas-elevated: #211f1b;
-  --canvas-raised: #2a261f;
-  --canvas-overlay: #302b23;
-  --border: #4a4031;
-  --border-subtle: #352f27;
-  --border-strong: #70624f;
+  /* Warmer espresso ramp — surfaces lean into brown/gold rather than neutral
+     grey-black, so the dark mode reads as warm-dark with dimension. */
+  --canvas-base: #17150f;
+  --canvas-elevated: #221d14;
+  --canvas-raised: #2c2518;
+  --canvas-overlay: #372d1c;
+  --border: #4d4230;
+  --border-subtle: #37301f;
+  --border-strong: #756550;
   --text-primary: #f5ecdc;
   --text-secondary: #c8bba7;
   --text-muted: #8d806e;
@@ -217,24 +221,24 @@
   --shadow-md: 0 14px 36px -18px rgba(0,0,0,0.65), 0 2px 8px -2px rgba(0,0,0,0.45);
   --shadow-lg: 0 18px 54px -20px rgba(0,0,0,0.75), 0 2px 10px -2px rgba(0,0,0,0.5);
   --shadow-window: 0 12px 28px -18px rgba(0,0,0,0.62);
-  --background: #181714;
+  --background: #17150f;
   --foreground: #f5ecdc;
-  --card: #211f1b;
+  --card: #221d14;
   --card-foreground: #f5ecdc;
-  --popover: #211f1b;
+  --popover: #221d14;
   --popover-foreground: #f5ecdc;
   --primary: #f0b85d;
   --primary-foreground: #101010;
-  --secondary: #2a261f;
+  --secondary: #2c2518;
   --secondary-foreground: #f5ecdc;
-  --muted: #2a261f;
+  --muted: #2c2518;
   /* Sits between --text-secondary (#c8bba7) and --text-muted (#8d806e) so the
      secondary/muted/low ramp keeps three distinct steps (was == secondary). */
   --muted-foreground: #a89c88;
-  --sh-accent: #302b23;
+  --sh-accent: #372d1c;
   --sh-accent-foreground: #f5ecdc;
-  --sh-border: #4a4031;
-  --input: #4a4031;
+  --sh-border: #4d4230;
+  --input: #4d4230;
   --ring: var(--primary);
 }
 
