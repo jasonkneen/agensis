@@ -362,6 +362,10 @@ class RealtimeManager {
 
   private socket: WebSocket | null = null;
   private channels = new Set<LocalChannel>();
+  // Workspace-agnostic server "system" events (e.g. a new frontend deploy going
+  // live), keyed by event name. These ride the existing socket — no dedicated
+  // connection — so delivery is best-effort while any channel keeps the socket open.
+  private systemListeners = new Map<string, Set<(payload: unknown) => void>>();
   private pendingMessages: string[] = [];
   private reconnectTimer: number | null = null;
   private reconnectAttempts = 0;
@@ -411,6 +415,10 @@ class RealtimeManager {
         const message = JSON.parse(String(event.data || '{}'));
         if (message?.type === 'system' && message?.event === 'authenticated') {
           this.onAuthenticated();
+          return;
+        }
+        if (message?.type === 'system' && typeof message?.event === 'string') {
+          this.emitSystemEvent(message.event, message.payload);
           return;
         }
         for (const channel of this.channels) {
@@ -498,6 +506,35 @@ class RealtimeManager {
       return;
     }
     this.send({ action: 'unsubscribe', channel: channel.name });
+  }
+
+  onSystemEvent(event: string, callback: (payload: unknown) => void): () => void {
+    let listeners = this.systemListeners.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      this.systemListeners.set(event, listeners);
+    }
+    listeners.add(callback);
+    // A system listener piggybacks on the socket the app's channels already keep
+    // open; it does not itself justify a dedicated connection.
+    return () => {
+      const set = this.systemListeners.get(event);
+      if (!set) return;
+      set.delete(callback);
+      if (set.size === 0) this.systemListeners.delete(event);
+    };
+  }
+
+  private emitSystemEvent(event: string, payload: unknown) {
+    const listeners = this.systemListeners.get(event);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      try {
+        listener(payload);
+      } catch {
+        // a listener throwing must not break delivery to the others
+      }
+    }
   }
 
   send(message: Record<string, unknown>) {
@@ -669,6 +706,24 @@ class LocalChannel {
 
 export function getBackendBaseUrl() {
   return BACKEND_BASE;
+}
+
+export interface DeployPublishedPayload {
+  commit: string | null;
+  branch: string | null;
+  site: string | null;
+  url: string | null;
+  at: string | null;
+}
+
+// Subscribe to the server's `deploy_published` system event — fired when Netlify
+// finishes publishing a new frontend to the CDN (see the netlify-deploy-hook route).
+// Returns an unsubscribe function. Best-effort: relies on the realtime socket the
+// app's channels already keep open.
+export function onDeployPublished(callback: (payload: DeployPublishedPayload) => void): () => void {
+  return realtimeManager.onSystemEvent('deploy_published', (payload) => {
+    callback((payload ?? {}) as DeployPublishedPayload);
+  });
 }
 
 export const backendClient: BackendClient = {

@@ -64,6 +64,7 @@ import { Spinner } from './components/ui/spinner';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
+import { useDeployNotification } from './hooks/useDeployNotification';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
@@ -540,6 +541,9 @@ export default function App() {
 
 function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
+  // Offer a "reload" toast when Netlify publishes a new frontend (server broadcasts
+  // deploy_published over the realtime socket).
+  useDeployNotification();
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -1120,8 +1124,10 @@ function AppContent() {
       return;
     }
     toast.success(`Split created — “${forked.title}” added under its parent`, { id: pending });
-    // Make the fork the live thread and open it tiled beside the source.
-    setActiveSession(forked);
+    // Split is a point-in-time duplicate: the source keeps the live session
+    // slot (and any in-flight job), the fork opens as its own independent,
+    // non-active window (InactiveChatWindow) so it never borrows the
+    // source's streaming state or looks like it's still processing.
     openSplitWindow(source.id, {
       title: forked.title || 'Split',
       sessionId: forked.id,
@@ -1134,7 +1140,7 @@ function AppContent() {
       entity_id: forked.id,
       title: `Split thread: ${forked.title}`,
     });
-  }, [splitSession, setActiveSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
+  }, [splitSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
 
   const handleMergeThread = useCallback(async (fork: ChatSession) => {
     const pending = toast.loading(`Merging “${fork.title || 'split'}” into its parent…`);

@@ -281,6 +281,39 @@ async function verifyToken(token) {
   return userId;
 }
 
+// Verify a Netlify outgoing-webhook signature. When a JWS secret is configured on
+// the Netlify deploy notification, Netlify sends an `X-Webhook-Signature` header: a
+// compact JWS (`base64url(header).base64url(payload).base64url(signature)`) signed
+// HS256 with that secret, whose payload carries `sha256` = hex SHA-256 of the exact
+// request body. We (a) verify the HS256 signature proves it came from Netlify and
+// (b) confirm the body hash matches so the payload wasn't swapped in transit.
+// Returns true only if both hold. Pure in-process crypto — no I/O, so the hook acks fast.
+function verifyNetlifyDeploySignature(signatureHeader, rawBody, secret) {
+  if (!secret || typeof signatureHeader !== 'string') return false;
+  const parts = signatureHeader.split('.');
+  if (parts.length !== 3) return false;
+  const [encodedHeader, encodedPayload, encodedSig] = parts;
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const expectedSig = crypto.createHmac('sha256', secret).update(signingInput).digest('base64url');
+  const a = Buffer.from(encodedSig);
+  const b = Buffer.from(expectedSig);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  // Signature is authentic; now bind it to this exact body.
+  let claimedHash;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    claimedHash = typeof payload?.sha256 === 'string' ? payload.sha256.toLowerCase() : '';
+  } catch {
+    return false;
+  }
+  if (!claimedHash) return false;
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody || ''));
+  const bodyHash = crypto.createHash('sha256').update(body).digest('hex');
+  const x = Buffer.from(claimedHash);
+  const y = Buffer.from(bodyHash);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
 // Express middleware: require a valid Bearer token, set req.userId.
 async function requireAuth(req, res, next) {
   try {
@@ -4073,6 +4106,18 @@ function relayBroadcast(channel, event, payload) {
   }
 }
 
+// Fan a message out to EVERY authenticated socket, ignoring channel subscriptions.
+// Used for workspace-agnostic system events (e.g. a new frontend deploy going live)
+// that every connected client should hear regardless of what they're subscribed to.
+function broadcastGlobal(message) {
+  let delivered = 0;
+  for (const ws of websocketClients) {
+    sendWs(ws, message);
+    delivered += 1;
+  }
+  return delivered;
+}
+
 function tokenFromWsRequest(req) {
   try {
     const url = new URL(req.url || '', 'http://localhost');
@@ -4289,7 +4334,15 @@ function attachRealtime(server) {
 function createApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: '50mb' }));
+  // Capture the raw request bytes alongside the parsed JSON. Netlify signs its
+  // outgoing deploy webhooks with a JWS whose payload carries the SHA-256 of the
+  // exact request body, so verifying that signature (see verifyNetlifyDeploySignature)
+  // requires the untouched bytes — express.json otherwise discards them. Storing a
+  // reference to the already-allocated buffer costs nothing.
+  app.use(express.json({
+    limit: '50mb',
+    verify: (req, _res, buf) => { req.rawBody = buf; },
+  }));
   // Runtime schema fallback (ensureRuntimeSchema) runs by default so dev bootstrap
   // keeps working with zero config. Set AGENSIS_RUNTIME_SCHEMA=false in production
   // and run `npm run migrate` instead, once the supabase/migrations/*.sql files are
@@ -4740,6 +4793,58 @@ function createApp() {
       res.json({ data: { sha: shaOut.trim(), summary: stdout.trim() }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // Netlify deploy-notification receiver. Point a Netlify "Deploy succeeded"
+  // outgoing webhook at this URL; when a new frontend publishes to the CDN, Netlify
+  // POSTs the deploy object here and we fan a `deploy_published` system event to every
+  // connected client so the app can offer a "new version — reload" nudge. Public by
+  // design (Netlify has no bearer token); authenticity comes from the JWS signature.
+  //
+  // Fast-ack: everything here is synchronous in-memory (HMAC + one socket loop, no DB,
+  // no outbound calls), so we always respond quickly. Netlify silently disables hooks
+  // whose receiver is slow or errors on ITS legitimate requests — a correctly-signed
+  // request always reaches the 200 below; only forgeries get a 401, which cannot
+  // disable the real hook.
+  app.post('/backend/netlify-deploy-hook', (req, res) => {
+    try {
+      const secret = process.env.NETLIFY_WEBHOOK_JWS_SECRET || '';
+      const signature = req.get('X-Webhook-Signature') || req.get('x-webhook-signature') || '';
+      if (secret) {
+        if (!verifyNetlifyDeploySignature(signature, req.rawBody, secret)) {
+          return res.status(401).json({ data: null, error: 'Invalid signature' });
+        }
+      } else {
+        // No secret configured → we cannot prove the sender. Accept (so the feature
+        // works before the secret is wired) but log it so it isn't a silent gap.
+        console.warn('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — accepting unsigned deploy webhook');
+      }
+
+      const deploy = req.body || {};
+      // Netlify's "Deploy succeeded" event is the published-and-live signal; its body
+      // reports state 'ready'. If some other event is wired here, only broadcast on a
+      // ready/published state so we never nag on a build-started or failed hook.
+      const state = typeof deploy.state === 'string' ? deploy.state.toLowerCase() : '';
+      const isPublished = state === '' || state === 'ready' || state === 'current';
+      if (!isPublished) {
+        return res.status(200).json({ data: { ignored: true, state }, error: null });
+      }
+
+      const payload = {
+        commit: deploy.commit_ref || deploy.commit_url || null,
+        branch: deploy.branch || null,
+        site: deploy.name || null,
+        url: deploy.deploy_ssl_url || deploy.ssl_url || deploy.url || null,
+        at: deploy.published_at || deploy.updated_at || null,
+      };
+      const delivered = broadcastGlobal({ type: 'system', event: 'deploy_published', payload });
+      console.log(`[netlify-hook] deploy_published broadcast to ${delivered} client(s)`, payload.commit || '');
+      return res.status(200).json({ data: { broadcast: delivered }, error: null });
+    } catch (error) {
+      // Never 500 on Netlify's own request — that risks the hook being auto-disabled.
+      console.error('[netlify-hook] handler error', error);
+      return res.status(200).json({ data: { error: 'handled' }, error: null });
     }
   });
 
@@ -5807,5 +5912,6 @@ module.exports = {
     hasMcpPresence,
     ensureMentionedParticipants,
     parseAgentMentions,
+    verifyNetlifyDeploySignature,
   },
 };
