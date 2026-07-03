@@ -683,6 +683,42 @@
   box-shadow: var(--neo-shadow-md);
 }
 
+/* Floating menu / popover / overlay family. The shadcn base gives these a soft
+   1px `ring-1 ring-foreground/10` plus a blurred `shadow-md` — which reads as
+   generic, not brutal, so they never matched the dialogs/cards above. Route
+   them through the same brutal language: a solid 2px ink border (--border,
+   which resolves to --neo-edge per scheme) and a hard offset shadow. The
+   notifications panel is a Popover, so it's covered here too. Overriding
+   box-shadow wholesale also clears the base ring+blur (both live on box-shadow
+   in Tailwind). Sub-menus and tooltips get the tighter sm offset. */
+:root[data-ui-theme="neo"] [data-slot="popover-content"],
+:root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
+:root[data-ui-theme="neo"] [data-slot="context-menu-content"],
+:root[data-ui-theme="neo"] [data-slot="menubar-content"],
+:root[data-ui-theme="neo"] [data-slot="menubar"],
+:root[data-ui-theme="neo"] [data-slot="hover-card-content"] {
+  border-width: 2px;
+  border-color: var(--border);
+  box-shadow: var(--neo-shadow-md);
+}
+
+:root[data-ui-theme="neo"] [data-slot="dropdown-menu-sub-content"],
+:root[data-ui-theme="neo"] [data-slot="context-menu-sub-content"],
+:root[data-ui-theme="neo"] [data-slot="menubar-sub-content"],
+:root[data-ui-theme="neo"] [data-slot="tooltip-content"] {
+  border-width: 2px;
+  border-color: var(--neo-edge);
+  box-shadow: var(--neo-shadow-sm);
+}
+
+/* Sonner toasts ship their own stylesheet (soft 1px border + blurred shadow),
+   so override with !important to force the brutal edge + hard offset. */
+:root[data-ui-theme="neo"] [data-sonner-toast] {
+  border-width: 2px !important;
+  border-color: var(--border) !important;
+  box-shadow: var(--neo-shadow-md) !important;
+}
+
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="outline"],
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="muted"] {
   border-width: 2px;
