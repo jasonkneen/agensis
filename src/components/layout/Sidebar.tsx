@@ -75,9 +75,14 @@ function AgentStatusFeedOverlay({
 }) {
   const [rect, setRect] = React.useState<{ left: number; bottom: number; width: number } | null>(null);
 
+  // Keep the overlay mounted whenever there's something to show OR the feed is
+  // muted — the muted state renders a restore pill (not a bubble), so we still
+  // need a measured anchor rect even with no current update.
+  const visible = !!feed.current || feed.muted;
+
   React.useEffect(() => {
     const el = anchorRef.current;
-    if (!el || !feed.current) {
+    if (!el || !visible) {
       setRect(null);
       return;
     }
@@ -93,9 +98,9 @@ function AgentStatusFeedOverlay({
       observer.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [anchorRef, feed.current]);
+  }, [anchorRef, visible]);
 
-  if (!feed.current || !rect) return null;
+  if (!visible || !rect) return null;
 
   // Fixed width regardless of message length — it used to size to content
   // ("max-content"), which made the bubble jump wider/narrower on every

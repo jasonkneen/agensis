@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Bot, X, ChevronRight, ChevronDown } from 'lucide-react';
+import { Bot, X, ChevronRight, ChevronDown, Bell, BellOff } from 'lucide-react';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import type { AgentStatusFeedState, AgentStatusUpdate } from '../../hooks/useAgentStatusFeed';
 
@@ -90,8 +90,27 @@ function FeedRow({ update, onDismiss }: { update: AgentStatusUpdate; onDismiss: 
 }
 
 export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
-  const { current, queue, pending, expanded } = feed;
+  const { current, queue, pending, expanded, muted } = feed;
   const { shown, done } = useTypewriter(current?.text ?? '');
+
+  // Muted: the whole feed is hidden. Leave a single restore pill where the
+  // bubble sits so the user can bring it back with one click. Persisted, so it
+  // stays hidden across reloads until they un-mute.
+  if (muted) {
+    return (
+      <div className="flex px-2 pt-1">
+        <button
+          type="button"
+          className="pixel-btn"
+          onClick={feed.toggleMuted}
+          aria-label="Show agent status feed"
+          title="Show agent status"
+        >
+          <Bell className="size-2.5" />
+        </button>
+      </div>
+    );
+  }
 
   if (!current) return null;
 
@@ -114,6 +133,15 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
           <span className="pixel-font text-[7px] uppercase text-muted-foreground">
             {queue.length} update{queue.length === 1 ? '' : 's'}
           </span>
+          <button
+            type="button"
+            className={queue.length > 1 ? 'pixel-btn' : 'pixel-btn ml-auto'}
+            onClick={feed.toggleMuted}
+            aria-label="Hide agent status feed"
+            title="Hide status feed"
+          >
+            <BellOff className="size-2.5" />
+          </button>
           {queue.length > 1 && (
             <button type="button" className="pixel-btn ml-auto" onClick={feed.dismissAll} aria-label="Clear all updates">
               CLR ALL
@@ -172,6 +200,15 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
               )}
               <button type="button" className="pixel-btn" onClick={feed.dismiss} aria-label="Dismiss update">
                 <X className="size-2.5" />
+              </button>
+              <button
+                type="button"
+                className={pending > 0 ? 'pixel-btn' : 'pixel-btn ml-auto'}
+                onClick={feed.toggleMuted}
+                aria-label="Hide agent status feed"
+                title="Hide status feed"
+              >
+                <BellOff className="size-2.5" />
               </button>
               {pending > 0 && (
                 <button type="button" className="pixel-btn ml-auto" onClick={feed.dismissAll} aria-label="Clear all updates">

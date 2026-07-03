@@ -30,6 +30,17 @@ export interface AgentStatusUpdate {
 
 const MAX_QUEUE = 8;
 
+/** localStorage key for the persistent "hide the status feed" toggle. */
+const MUTE_KEY = 'agensis_status_feed_muted';
+
+function readMuted(): boolean {
+  try {
+    return localStorage.getItem(MUTE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 function statusToUpdate(
   prev: string | undefined,
   next: string,
@@ -61,6 +72,9 @@ export interface AgentStatusFeedState {
   pending: number;
   /** Whether the sidebar has expanded the stack into an individually-dismissable list. */
   expanded: boolean;
+  /** Persistent "hide the whole feed" toggle — survives reload via localStorage. */
+  muted: boolean;
+  toggleMuted: () => void;
   toggleExpanded: () => void;
   next: () => void;
   dismiss: () => void;
@@ -76,6 +90,7 @@ export function useAgentStatusFeed(
 ): AgentStatusFeedState {
   const [queue, setQueue] = useState<AgentStatusUpdate[]>([]);
   const [expanded, setExpanded] = useState(false);
+  const [muted, setMuted] = useState<boolean>(readMuted);
   const prevStatus = useRef<Map<string, string>>(new Map());
   const seededRef = useRef(false);
 
@@ -181,6 +196,12 @@ export function useAgentStatusFeed(
           const verb = extractActivityVerb(content);
           const text = activityLine(verb, content);
           if (idx === -1) {
+            // A bare "Thinking…" heartbeat carries no detail and the daemon
+            // re-posts it ~once/sec — don't let it pop a fresh bubble on its
+            // own. Real activity verbs (reading/editing/searching…) and the
+            // presence "started a job" bookend still create entries; thinking
+            // only ever *patches* an entry that already exists.
+            if (verb === 'thinking') return q;
             const agent = agentById.get(agentId);
             const avatar = avatarByKey.get(`agent:${agentId}`) || null;
             const entry: AgentStatusUpdate = {
@@ -245,6 +266,17 @@ export function useAgentStatusFeed(
     queue,
     pending: Math.max(0, queue.length - 1),
     expanded,
+    muted,
+    toggleMuted: () =>
+      setMuted(m => {
+        const nextVal = !m;
+        try {
+          localStorage.setItem(MUTE_KEY, nextVal ? '1' : '0');
+        } catch {
+          /* private mode / storage disabled — stay in-memory for this session */
+        }
+        return nextVal;
+      }),
     toggleExpanded: () => setExpanded(e => !e),
     next: () => setQueue(q => q.slice(1)),
     dismiss: () => setQueue(q => q.slice(1)),
