@@ -19,10 +19,81 @@ interface MarkdownContentProps {
 }
 
 export function MarkdownContent({ content, compact = false, streaming = false, onMentionClick }: MarkdownContentProps) {
-  const blocks = parseBlocks(streaming ? closeOpenMarkers(content) : content);
+  // Only resolve frontmatter once the message has settled — mid-stream content
+  // may still be growing the `---` block itself and would flicker as it parses.
+  const frontmatter = streaming ? null : parseFrontmatter(content);
+  const bodyContent = frontmatter ? frontmatter.body : content;
+  const blocks = parseBlocks(streaming ? closeOpenMarkers(bodyContent) : bodyContent);
   return (
     <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
+      {frontmatter && <FrontmatterHeader meta={frontmatter.meta} />}
       {blocks.map((block, index) => renderBlock(block, index, onMentionClick, streaming))}
+    </div>
+  );
+}
+
+type FrontmatterValue = string | Record<string, string>;
+
+// Minimal flat-YAML frontmatter reader: a leading `---` block of `key: value`
+// lines, with one level of 2-space-indented nesting (e.g. a `metadata:` object).
+// Not a general YAML parser — matches the shape memory/doc files actually use.
+function parseFrontmatter(content: string): { meta: Record<string, FrontmatterValue>; body: string } | null {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  if (lines[0]?.trim() !== '---') return null;
+
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === '---') { end = i; break; }
+  }
+  if (end === -1) return null;
+
+  const meta: Record<string, FrontmatterValue> = {};
+  let currentKey: string | null = null;
+  for (let i = 1; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+
+    const nested = line.match(/^\s{2,}([\w.-]+):\s*(.*)$/);
+    if (nested && currentKey) {
+      const existing = meta[currentKey];
+      const obj = typeof existing === 'object' && existing ? existing : {};
+      obj[nested[1]] = nested[2].trim();
+      meta[currentKey] = obj;
+      continue;
+    }
+
+    const top = line.match(/^([\w.-]+):\s*(.*)$/);
+    if (top) {
+      currentKey = top[1];
+      meta[currentKey] = top[2].trim();
+    }
+  }
+
+  if (!meta.name && !meta.description) return null;
+  const body = lines.slice(end + 1).join('\n').replace(/^\n+/, '');
+  return { meta, body };
+}
+
+function FrontmatterHeader({ meta }: { meta: Record<string, FrontmatterValue> }) {
+  const name = typeof meta.name === 'string' ? meta.name : '';
+  const description = typeof meta.description === 'string' ? meta.description : '';
+  const metadata = (typeof meta.metadata === 'object' && meta.metadata ? meta.metadata : {}) as Record<string, string>;
+  const title = name.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const badges = Object.entries(metadata).filter(([key]) => key !== 'originSessionId');
+
+  if (!title && !description && badges.length === 0) return null;
+
+  return (
+    <div className="chat-markdown-frontmatter">
+      {title && <div className="chat-markdown-frontmatter-title">{title}</div>}
+      {description && <p className="chat-markdown-frontmatter-desc">{description}</p>}
+      {badges.length > 0 && (
+        <div className="chat-markdown-frontmatter-meta">
+          {badges.map(([key, value]) => (
+            <span key={key} className="chat-markdown-frontmatter-badge">{value}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

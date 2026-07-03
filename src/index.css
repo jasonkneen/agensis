@@ -2474,6 +2474,49 @@ button[data-slot="badge"][data-variant="default"]:hover {
   text-underline-offset: 2px;
 }
 
+.chat-markdown-frontmatter {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--canvas-base) 60%, transparent);
+}
+
+.chat-markdown-frontmatter-title {
+  font-size: 1.05em;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.chat-markdown-frontmatter-desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92em;
+  line-height: 1.4;
+}
+
+.chat-markdown-frontmatter-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.chat-markdown-frontmatter-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: var(--canvas-base);
+  padding: 0.1rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
 * {
   box-sizing: border-box;
 }
