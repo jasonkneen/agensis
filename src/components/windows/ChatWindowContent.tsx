@@ -61,6 +61,14 @@ import {
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import {
+  BUILTIN_SLASH_ITEMS,
+  matchSlashItems,
+  groupSlashItems,
+  slashInsertText,
+  type SlashItem,
+  type SlashActionId,
+} from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, type SystemCapabilities } from '../../lib/backendClient';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import type {
@@ -257,12 +265,15 @@ export function ChatWindowContent({
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [showGroupPicker, setShowGroupPicker] = useState(false);
+  const [showSlashPicker, setShowSlashPicker] = useState(false);
   const [addContextOpen, setAddContextOpen] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [groupPickerQuery, setGroupPickerQuery] = useState('');
+  const [slashQuery, setSlashQuery] = useState('');
   const [atStartPos, setAtStartPos] = useState(-1);
   const [hashStartPos, setHashStartPos] = useState(-1);
+  const [slashStartPos, setSlashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
   const [widgetsCollapsed, setWidgetsCollapsed] = useState(true);
@@ -352,6 +363,23 @@ export function ChatWindowContent({
       : [];
     return [...packages, ...commands, ...codexServer, ...agentTools].slice(0, 10);
   }, [agents, systemCapabilities]);
+
+  // Insert-kind slash items enumerated from what the workspace advertises. Today
+  // this is the connected agents' flat skill names; the real `.claude/commands`
+  // and skill sub-commands (parent:child) arrive once the daemon enumeration is
+  // wired through the capabilities sync (commit 2). The shape below already carries
+  // `parent`, so richer data drops in without touching the menu.
+  const enumeratedSlashItems = useMemo<SlashItem[]>(() => {
+    const items: SlashItem[] = [];
+    const seen = new Set<string>();
+    for (const name of new Set(agents.flatMap(agent => normalizeStringList(agent.skills)))) {
+      const id = `skill:${name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push({ id, name, kind: 'skill', run: 'insert', detail: 'Skill' });
+    }
+    return items;
+  }, [agents]);
 
   const buildGroupContext = (groups: CanvasGroup[]): string => {
     return groups.map(group => {
@@ -510,6 +538,20 @@ export function ChatWindowContent({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showSlashPicker) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSlashPicker();
+        return;
+      }
+      // Tab or Enter completes the top-ranked command and closes the / menu.
+      if ((e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) && filteredSlash.length > 0) {
+        e.preventDefault();
+        handleSlashSelect(filteredSlash[0]);
+        return;
+      }
+    }
+
     if (showDocPicker) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -577,18 +619,42 @@ export function ChatWindowContent({
       }
     }
 
+    if (showSlashPicker && slashStartPos >= 0) {
+      const afterSlash = value.slice(slashStartPos + 1);
+      if (afterSlash.indexOf(' ') === -1) {
+        setSlashQuery(afterSlash);
+      } else {
+        closeSlashPicker();
+      }
+    }
+
     const cursor = e.target.selectionStart || 0;
     if (value[cursor - 1] === '@' && !showDocPicker) {
       setShowDocPicker(true);
       setShowGroupPicker(false);
+      setShowSlashPicker(false);
       setDocPickerQuery('');
       setAtStartPos(cursor - 1);
     }
     if (value[cursor - 1] === '#' && !showGroupPicker) {
       setShowGroupPicker(true);
       setShowDocPicker(false);
+      setShowSlashPicker(false);
       setGroupPickerQuery('');
       setHashStartPos(cursor - 1);
+    }
+    // `/` opens the command menu, but only at the start of a word (start of input
+    // or right after whitespace) so it never fires inside URLs like http://.
+    if (
+      value[cursor - 1] === '/' &&
+      !showSlashPicker &&
+      (cursor === 1 || /\s/.test(value[cursor - 2] || ''))
+    ) {
+      setShowSlashPicker(true);
+      setShowDocPicker(false);
+      setShowGroupPicker(false);
+      setSlashQuery('');
+      setSlashStartPos(cursor - 1);
     }
   };
 
@@ -638,6 +704,61 @@ export function ChatWindowContent({
     [displayMessages, clearCutoffMs],
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
+
+  // Slash menu: built-ins that actually have a home here + the enumerated inserts,
+  // fuzzy-ranked and grouped for display. `/split` only when splitting is wired;
+  // `/restore` only when there's a cleared view to bring back.
+  const availableBuiltins = useMemo(
+    () => BUILTIN_SLASH_ITEMS.filter(item => {
+      if (item.action === 'split') return !!onSplitThread;
+      if (item.action === 'restore') return !!clearedAt;
+      return true;
+    }),
+    [onSplitThread, clearedAt],
+  );
+  const slashItems = useMemo(
+    () => [...availableBuiltins, ...enumeratedSlashItems],
+    [availableBuiltins, enumeratedSlashItems],
+  );
+  const filteredSlash = useMemo(() => matchSlashItems(slashItems, slashQuery), [slashItems, slashQuery]);
+  const slashGroups = useMemo(() => groupSlashItems(filteredSlash), [filteredSlash]);
+
+  const runSlashAction = useCallback((action: SlashActionId) => {
+    if (action === 'clear') clearView();
+    else if (action === 'restore') restoreView();
+    else if (action === 'split') onSplitThread?.();
+  }, [clearView, restoreView, onSplitThread]);
+
+  const closeSlashPicker = useCallback(() => {
+    setShowSlashPicker(false);
+    setSlashQuery('');
+    setSlashStartPos(-1);
+  }, []);
+
+  const handleSlashSelect = useCallback((item: SlashItem) => {
+    const target = inputRef.current;
+    const selectionEnd = target?.selectionStart ?? input.length;
+    const before = input.slice(0, Math.max(0, slashStartPos));
+    const after = input.slice(selectionEnd);
+    if (item.run === 'action') {
+      // Built-in: strip the /token entirely, then fire the app action.
+      setInput(`${before}${after.replace(/^\s+/, '')}`);
+      closeSlashPicker();
+      if (item.action) runSlashAction(item.action);
+      window.requestAnimationFrame(() => inputRef.current?.focus());
+      return;
+    }
+    // Insert-kind: replace the /token with the command text the agent will read.
+    const token = slashInsertText(item);
+    const needsSpaceAfter = after.length === 0 || !/^\s/.test(after);
+    setInput(`${before}${token}${needsSpaceAfter ? ' ' : ''}${after}`);
+    closeSlashPicker();
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      const cursor = before.length + token.length + (needsSpaceAfter ? 1 : 0);
+      inputRef.current?.setSelectionRange(cursor, cursor);
+    });
+  }, [input, slashStartPos, closeSlashPicker, runSlashAction]);
 
   // Open the sub-thread side panel whenever activeSubThread is set (e.g. after creation)
   useEffect(() => {
@@ -1360,6 +1481,52 @@ export function ChatWindowContent({
           )}
 
           <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+            {showSlashPicker && (
+              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                <CommandList className="max-h-[min(260px,44vh)]">
+                  <CommandEmpty>No commands or skills match.</CommandEmpty>
+                  {slashGroups.map(group => {
+                    if (group.type === 'builtin') {
+                      return (
+                        <CommandGroup key="builtin" heading="Built-in">
+                          {group.items.map(item => (
+                            <SlashRow key={item.id} item={item} badge="runs" onSelect={() => handleSlashSelect(item)}>
+                              <Terminal className="size-4" />
+                            </SlashRow>
+                          ))}
+                        </CommandGroup>
+                      );
+                    }
+                    if (group.type === 'command') {
+                      return (
+                        <CommandGroup key="command" heading="Commands">
+                          {group.items.map(item => (
+                            <SlashRow key={item.id} item={item} badge="insert" onSelect={() => handleSlashSelect(item)}>
+                              <CommandIcon className="size-4" />
+                            </SlashRow>
+                          ))}
+                        </CommandGroup>
+                      );
+                    }
+                    return (
+                      <CommandGroup key={`skill:${group.label}`} heading={group.label}>
+                        {group.parent && (
+                          <SlashRow item={group.parent} badge="insert" onSelect={() => handleSlashSelect(group.parent!)}>
+                            <Sparkles className="size-4" />
+                          </SlashRow>
+                        )}
+                        {group.children.map(child => (
+                          <SlashRow key={child.id} item={child} badge="insert" indented onSelect={() => handleSlashSelect(child)}>
+                            <CornerDownRight className="size-4" />
+                          </SlashRow>
+                        ))}
+                      </CommandGroup>
+                    );
+                  })}
+                </CommandList>
+              </Command>
+            )}
+
             {showDocPicker && (
               <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                 <CommandList className="max-h-[min(240px,40vh)]">
@@ -1476,6 +1643,7 @@ export function ChatWindowContent({
                     if (open) {
                       setShowDocPicker(false);
                       setShowGroupPicker(false);
+                      closeSlashPicker();
                     }
                   }}>
                     <PopoverTrigger asChild>
@@ -3616,4 +3784,38 @@ function safeMessageText(value: unknown): string {
     }
   }
   return String(value);
+}
+
+// One row in the `/` command menu. Built-ins show a "runs" badge (they execute);
+// everything else shows "insert" (drops a text token). `indented` nudges skill
+// sub-commands under their parent to make the parent→child relationship visible.
+function SlashRow({
+  item,
+  badge,
+  indented,
+  onSelect,
+  children,
+}: {
+  item: SlashItem;
+  badge: string;
+  indented?: boolean;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <CommandItem
+      value={item.id}
+      className={`rounded-lg px-2 py-1.5${indented ? ' ml-3' : ''}`}
+      onSelect={onSelect}
+    >
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        {children}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">/{item.name}</span>
+        {item.detail && <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>}
+      </span>
+      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{badge}</span>
+    </CommandItem>
+  );
 }
