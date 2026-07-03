@@ -312,6 +312,11 @@
 :root[data-ui-theme="neo"][data-theme="light"] {
   --neo-ink: #0a0a0a;
   --neo-shadow-ink: #0a0a0a;
+  /* Border ink. In light this IS the full ink — the classic black-on-cream
+     brutal outline (unchanged). Dark softens it (see the dark block) so borders
+     stop reading as glaring near-white on near-black. All neo *border* usages
+     route through this; text/dot/shadow stay on --neo-ink. */
+  --neo-edge: var(--neo-ink);
 
   --canvas-base: color-mix(in srgb, var(--primary) 13%, white 87%);
   --canvas-elevated: #ffffff;
@@ -359,15 +364,23 @@
   /* Recessive warm taupe — visible on #141414/#1e1e1e, but quieter than the
      bright border so the offset reads as a shadow, not a white echo. */
   --neo-shadow-ink: #6b6258;
+  /* Softened border ink for dark. Full --neo-ink (near-white) outlines on
+     near-black read as harsh glare — brutal wants confident borders, not a
+     white cage. Mixing 64% ink with the theme's own paper lands a warm mid-tone
+     (~6:1 on the canvas) that keeps the borders structural and present but drops
+     the glare. Text stays on full --neo-ink. Nudge the 64% up for crisper /
+     down for softer. Derives per-theme automatically (uses --neo-ink +
+     --background, both set per theme by expand()). */
+  --neo-edge: color-mix(in srgb, var(--neo-ink) 64%, var(--background));
 
   --canvas-base: #141414;
   --canvas-elevated: #1e1e1e;
   --canvas-raised: #272727;
   --canvas-overlay: #1b1b1b;
 
-  --border: var(--neo-ink);
+  --border: var(--neo-edge);
   --border-subtle: color-mix(in srgb, var(--neo-ink) 16%, transparent);
-  --border-strong: var(--neo-ink);
+  --border-strong: var(--neo-edge);
 
   --text-primary: #f7f1ec;
   --text-secondary: #cfc7bd;
@@ -376,7 +389,7 @@
   --accent: var(--primary);
   --accent-hover: color-mix(in srgb, var(--primary) 84%, var(--foreground) 16%);
   --accent-subtle: color-mix(in srgb, var(--primary) 26%, transparent);
-  --accent-border: var(--neo-ink);
+  --accent-border: var(--neo-edge);
 
   --success: #00e08a;
   --warning: #ffd166;
@@ -396,9 +409,9 @@
   --muted-foreground: #cfc7bd;
   --sh-accent: color-mix(in srgb, var(--primary) 88%, white 12%);
   --sh-accent-foreground: var(--primary-foreground);
-  --sh-border: var(--neo-ink);
-  --input: var(--neo-ink);
-  --ring: var(--neo-ink);
+  --sh-border: var(--neo-edge);
+  --input: var(--neo-edge);
+  --ring: var(--neo-edge);
   /* Keep the workspace photo subtle in neo dark — brutal wants a clean,
      high-contrast canvas, not a muddy photo bleeding under the panels. */
   --home-bg-image-opacity: 0.14;
@@ -716,7 +729,7 @@
    a shadow but no visible ink border, unlike every other bordered surface. */
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="destructive"] {
-  border-color: var(--neo-ink);
+  border-color: var(--neo-edge);
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"]:hover,
@@ -3538,7 +3551,7 @@ select {
   letter-spacing: 0.04em;
   font-weight: 700 !important;
   border-width: 2px !important;
-  border-color: var(--neo-ink) !important;
+  border-color: var(--neo-edge) !important;
   box-shadow: var(--neo-shadow-xs) !important;
 }
 /* profile flavours — square + airy for editorial/terminal, chunkier for the
@@ -3561,7 +3574,7 @@ select {
 :root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"] {
   height: 26px !important;
   width: 46px !important;
-  border: 2.5px solid var(--neo-ink) !important;
+  border: 2.5px solid var(--neo-edge) !important;
   background: var(--canvas-elevated) !important;
   box-shadow: var(--neo-shadow-xs);
 }
@@ -3572,7 +3585,7 @@ select {
 :root[data-ui-theme="neo"] [data-slot="switch"][data-size="default"] [data-slot="switch-thumb"] {
   width: 18px !important;
   height: 18px !important;
-  border: 2px solid var(--neo-ink) !important;
+  border: 2px solid var(--neo-edge) !important;
   background: var(--error) !important; /* coral knob when off */
   box-shadow: none !important;
 }
@@ -3584,7 +3597,7 @@ select {
 /* ---- brutal tables: filled header row + thick ink dividers ----------------- */
 :root[data-ui-theme="neo"] [data-slot="table-head"] {
   background: color-mix(in srgb, var(--primary) 20%, var(--card)) !important;
-  border-bottom: 2.5px solid var(--neo-ink) !important;
+  border-bottom: 2.5px solid var(--neo-edge) !important;
   color: var(--foreground) !important;
   font-family: var(--neo-mono);
   text-transform: uppercase;
@@ -3602,7 +3615,7 @@ select {
    Skip variant="line" — that variant is deliberately a borderless underline
    strip (see tabs.tsx), so the brutal pill/box treatment would defeat it. */
 :root[data-ui-theme="neo"] [data-slot="tabs-list"]:not([data-variant="line"]) {
-  border: 2px solid var(--neo-ink);
+  border: 2px solid var(--neo-edge);
   border-radius: var(--radius-md);
   background: var(--canvas-elevated);
   box-shadow: var(--neo-shadow-xs);
@@ -3610,7 +3623,7 @@ select {
 :root[data-ui-theme="neo"] [data-slot="tabs-list"]:not([data-variant="line"]) [data-slot="tabs-trigger"][data-state="active"] {
   background: var(--primary) !important;
   color: var(--primary-foreground) !important;
-  border: 2px solid var(--neo-ink);
+  border: 2px solid var(--neo-edge);
   box-shadow: var(--neo-shadow-xs);
 }
 
@@ -3619,7 +3632,7 @@ select {
 :root[data-ui-theme="neo"] .neo-mark {
   background: var(--primary);
   color: var(--primary-foreground);
-  border: 2px solid var(--neo-ink);
+  border: 2px solid var(--neo-edge);
   box-shadow: var(--neo-shadow-xs);
   padding: 0 0.28em;
   border-radius: 3px;
@@ -3644,7 +3657,7 @@ select {
   font-size: 0.72rem;
   background: var(--card);
   color: var(--foreground);
-  border: 2.5px solid var(--neo-ink);
+  border: 2.5px solid var(--neo-edge);
   border-radius: var(--radius-sm);
   padding: 0.28em 0.6em;
   box-shadow: var(--neo-shadow-sm);
@@ -3659,7 +3672,7 @@ select {
    right exactly as before. */
 :root[data-ui-theme="neo"] [data-window-titlebar] {
   background: var(--canvas-raised) !important;
-  border-bottom: 2.5px solid var(--neo-ink) !important;
+  border-bottom: 2.5px solid var(--neo-edge) !important;
   font-family: var(--neo-mono);
 }
 /* traffic-light dots disabled
@@ -3680,12 +3693,12 @@ select {
 }
 /* sidebar header matches window titlebar treatment */
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
-  border-top: 2.5px solid var(--neo-ink) !important;
-  border-left: 2.5px solid var(--neo-ink) !important;
+  border-top: 2.5px solid var(--neo-edge) !important;
+  border-left: 2.5px solid var(--neo-edge) !important;
 }
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] {
   background: var(--canvas-raised) !important;
-  border-bottom: 2.5px solid var(--neo-ink) !important;
+  border-bottom: 2.5px solid var(--neo-edge) !important;
   font-family: var(--neo-mono);
   border-radius: 0 !important;
   padding: 0 !important;
@@ -3753,19 +3766,19 @@ select {
   background: var(--card) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  border: 2.5px solid var(--neo-ink) !important;
+  border: 2.5px solid var(--neo-edge) !important;
   box-shadow: var(--neo-shadow-md) !important;
 }
 
 :root[data-ui-theme="neo"] .dock-window-group {
-  border: 2px solid var(--neo-ink) !important;
+  border: 2px solid var(--neo-edge) !important;
   background: var(--muted) !important;
   box-shadow: var(--neo-shadow-xs) !important;
 }
 
 :root[data-ui-theme="neo"] .presence-avatar-group [data-slot="avatar"],
 :root[data-ui-theme="neo"] .presence-avatar-overflow {
-  border: 2px solid var(--neo-ink) !important;
+  border: 2px solid var(--neo-edge) !important;
   box-shadow: var(--neo-shadow-xs) !important;
 }
 
