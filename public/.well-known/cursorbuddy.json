@@ -1,0 +1,87 @@
+{
+  "name": "agensis",
+  "summary": "Agensis is a realtime collaborative workspace for chat, documents, memory, tasks, files, AI agents, and a shared canvas. The root app shows sign-in until authenticated, then opens the workspace shell.",
+  "appearance": {
+    "activation": "hover",
+    "greeting": "Need help finding your way around agensis?"
+  },
+  "important": [
+    "Sign in or create an account to reach the workspace.",
+    "The left sidebar opens channels, threads, documents, direct agent messages, tasks, memory, activity, agents, users, and applets.",
+    "The center workspace is a shared realtime canvas with floating windows and a bottom dock.",
+    "The home composer starts workspace-level chat and can link documents with @.",
+    "AI Agents is where agents are created, edited, connected to daemon clients, and given webhooks.",
+    "Production agent daemon WebSockets require a separate long-running backend configured with AGENSIS_DAEMON_BASE_URL."
+  ],
+  "avoid": [
+    "Do not ask users for API keys, database URLs, auth secrets, or other credentials.",
+    "Do not assume live daemon agents are available on static or serverless-only hosts.",
+    "Do not invent builder or live-agent path routes; this app exposes the workspace shell and a /#showcase gallery."
+  ],
+  "actions": [
+    { "label": "Show workspace tour", "tour": true },
+    {
+      "label": "Explain agents",
+      "task": "Explain how to open Agents from the sidebar, create or edit an agent, and copy a connection command. Mention that live daemon connections depend on backend configuration."
+    },
+    {
+      "label": "Explain the canvas",
+      "task": "Explain the shared canvas, floating windows, the bottom dock, realtime presence, and the workspace composer in a short practical overview."
+    },
+    { "label": "Open showcase", "href": "/#showcase" }
+  ],
+  "tour": [
+    {
+      "selector": "main",
+      "say": "If you are signed out, this page is the auth gate. After sign-in, the same root route becomes the workspace canvas.",
+      "holdMs": 4200
+    },
+    {
+      "selector": "[data-sidebar-panel]",
+      "say": "The sidebar is the primary navigation for workspaces, channels, documents, direct agent messages, tasks, memory, agents, users, and applets.",
+      "holdMs": 5200
+    },
+    {
+      "selector": ".home-workspace-composer",
+      "say": "Use the workspace composer for broad chat. Type @ to link a document when the document picker is available.",
+      "holdMs": 4400
+    },
+    {
+      "selector": "[data-workspace-viewport]",
+      "say": "This is the shared workspace viewport. Canvas objects, floating windows, realtime presence, and drawing tools live here.",
+      "holdMs": 5000
+    },
+    {
+      "selector": ".workspace-window-dock",
+      "say": "Open windows are managed from the bottom dock, including chat, documents, memory, tasks, activity, and agents.",
+      "holdMs": 4300
+    },
+    {
+      "selector": ".workspace-bottom-controls",
+      "say": "Presence and notifications sit in the lower-right workspace controls.",
+      "holdMs": 3600
+    },
+    {
+      "selector": ".agents-window-body",
+      "say": "When the Agents window is open, this area lists agents, status filters, creation tools, connection commands, and webhook controls.",
+      "holdMs": 5000
+    }
+  ],
+  "pages": {
+    "/": {
+      "summary": "The root app route. Signed-out users see authentication; signed-in users see the realtime workspace shell.",
+      "important": [
+        "There are no separate builder or live-agent pathname routes in this app.",
+        "The component gallery is reached by the /#showcase hash, not by a pathname route."
+      ],
+      "actions": [
+        { "label": "Show workspace tour", "tour": true },
+        {
+          "label": "Where do agents live?",
+          "task": "Tell the user to open Agents from the sidebar, then explain Create Agent, Connect a client, connection commands, and daemon backend requirements."
+        },
+        { "label": "Open showcase", "href": "/#showcase" }
+      ]
+    }
+  }
+}

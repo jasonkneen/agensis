@@ -1,0 +1,67 @@
+{
+  "name": "agensis landing",
+  "summary": "This independent static landing page introduces agensis, links visitors to the app and source, and explains features, team collaboration, pricing, and the optional cloud-storage waitlist.",
+  "appearance": {
+    "activation": "hover",
+    "greeting": "Want a quick tour of agensis?"
+  },
+  "important": [
+    "The hero explains agensis as a collaborative workspace for chat, documents, memory, files, and a realtime canvas.",
+    "Features live at #features.",
+    "Team collaboration details live at #teams.",
+    "Pricing and the optional cloud-storage waitlist live at #pricing.",
+    "The current landing page has no contact form."
+  ],
+  "avoid": [
+    "Do not ask for payment details on this page.",
+    "Do not claim there is a contact form.",
+    "Do not claim builder or live-agent pages exist in this landing app."
+  ],
+  "actions": [
+    { "label": "Show landing tour", "tour": true },
+    { "label": "Features", "href": "/#features" },
+    { "label": "For teams", "href": "/#teams" },
+    { "label": "Pricing", "href": "/#pricing" },
+    {
+      "label": "Explain waitlist",
+      "task": "Explain that the landing page presents the app as free to run locally and lists optional cloud storage with a waitlist CTA in the pricing section."
+    }
+  ],
+  "tour": [
+    {
+      "selector": "header",
+      "say": "The top navigation links to Features, For teams, and the GitHub project.",
+      "holdMs": 3600
+    },
+    {
+      "selector": "section.relative.overflow-hidden",
+      "say": "The hero frames agensis as a collaborative workspace for chat, documents, memory, files, and a shared realtime canvas.",
+      "holdMs": 4800
+    },
+    {
+      "selector": "#features",
+      "say": "Features covers the canvas, inline AI chat, documents, memory, live presence, and local-first setup.",
+      "holdMs": 4600
+    },
+    {
+      "selector": "#teams",
+      "say": "The teams section explains workspaces, member roles, local windows, presence, and shared canvas context.",
+      "holdMs": 4600
+    },
+    {
+      "selector": "#pricing",
+      "say": "Pricing says the app is free to run locally and presents optional cloud storage with a waitlist call to action.",
+      "holdMs": 5200
+    },
+    {
+      "selector": "footer",
+      "say": "The footer keeps the brand and licensing details visible.",
+      "holdMs": 3200
+    }
+  ],
+  "pages": {
+    "/": {
+      "summary": "The landing homepage with hero, features, team collaboration, pricing, and waitlist sections."
+    }
+  }
+}
