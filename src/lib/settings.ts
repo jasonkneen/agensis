@@ -21,6 +21,7 @@ export interface AppSettings {
   ui_theme_preset: string;
   ui_neo_theme: string;
   ui_normal_theme: string;
+  ui_tw_theme: string;
   ui_panel_translucency: number;
   ui_sidebar_translucency: number;
   ui_glass_blur: number;
@@ -39,6 +40,7 @@ const DEFAULTS: AppSettings = {
   ui_theme_preset: 'neutral',
   ui_neo_theme: 'blueprint',
   ui_normal_theme: '',
+  ui_tw_theme: 'gold',
   ui_panel_translucency: 76,
   ui_sidebar_translucency: 74,
   ui_glass_blur: 14,

@@ -20,6 +20,7 @@ import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, t
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
+import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -370,8 +371,10 @@ function AppearancePanel({
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
   const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
+  const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
   const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
   const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
+  const isTinyWorld = themeMode === 'tinyworld-light' || themeMode === 'tinyworld-dark';
   // Derive which style tab is active from the current mode
   const themeStyleTab: 'normal' | 'brutal' = isNeoFamily ? 'brutal' : 'normal';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
@@ -520,6 +523,48 @@ function AppearancePanel({
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
+              </div>
+            )}
+
+            {/* TinyWorld world grid — repaints the paper; composes with the
+                accent preset above (world paper + your picked accent). */}
+            {isTinyWorld && (
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">TinyWorld</div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {TW_WORLDS.map(w => {
+                    const active = twTheme === w.id;
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => {
+                          setTwTheme(w.id);
+                          setSetting('ui_tw_theme', w.id);
+                          applyTwTheme(w.id);
+                        }}
+                        aria-pressed={active}
+                        title={w.label}
+                        className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
+                      >
+                        <span className="flex shrink-0 overflow-hidden rounded-sm border border-border">
+                          {w.swatch.map((c, i) => (
+                            <span key={i} className="size-3.5" style={{ background: c }} />
+                          ))}
+                        </span>
+                        <span className="truncate font-medium">{w.label}</span>
+                        {active && (
+                          <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                            <Check className="size-3" strokeWidth={3} />
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <FieldDescription>
+                  Repaints TinyWorld’s paper. Your accent (above) stays on top — pick a world for the mood, an accent for the highlight.
+                </FieldDescription>
               </div>
             )}
 

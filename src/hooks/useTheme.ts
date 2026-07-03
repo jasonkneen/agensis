@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { syncNeoTheme, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
 import { syncNormalTheme } from '../showcase/normalThemes';
+import { syncTwTheme, findTwTheme, getStoredTwTheme } from '../showcase/twThemes';
 import { applyThemePreset, getStoredPreset } from '../showcase/themePresets';
 
 export type ThemeMode = 'light' | 'dark' | 'system' | 'tinyworld-light' | 'tinyworld-dark' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
@@ -33,8 +34,15 @@ function applyTheme(mode: ThemeMode) {
     const paper = findNeoTheme(getStoredNeoTheme())[scheme].paper;
     if (/^#|^rgb|^hsl|^oklch/.test(paper)) neoBg = paper;
   }
+  let twBg = scheme === 'dark' ? '#181714' : '#f4ede0';
+  if (family === 'tinyworld') {
+    // Match the html fallback / status-bar colour to the active world's paper
+    // when it's a plain colour (skip derived color-mix values).
+    const paper = findTwTheme(getStoredTwTheme())[scheme].paper;
+    if (/^#|^rgb|^hsl|^oklch/.test(paper)) twBg = paper;
+  }
   const bg = family === 'tinyworld'
-    ? (scheme === 'dark' ? '#181714' : '#f4ede0')
+    ? twBg
     : family === 'neo'
       ? neoBg
       : (scheme === 'dark' ? '#0c0c0c' : '#f8f8f8');
@@ -56,6 +64,11 @@ function applyTheme(mode: ThemeMode) {
   if (family !== 'neo' && mode !== 'normal-light' && mode !== 'normal-dark') {
     applyThemePreset(getStoredPreset());
   }
+  // Reconcile the TinyWorld paper layer (world canvas/border/text/flourish).
+  // Worlds deliberately don't own --primary/--sh-accent, so this composes with
+  // the accent preset just applied above rather than fighting it: tinyworld →
+  // apply the stored world's light/dark paper; other families → clear it.
+  syncTwTheme(mode);
 }
 
 export function useTheme() {
