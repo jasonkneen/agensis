@@ -2379,6 +2379,28 @@ button[data-slot="badge"][data-variant="default"]:hover {
   overflow-x: auto;
 }
 
+/* Mermaid diagrams — contain wide graphs to the chat column (no horizontal bleed)
+   and let the SVG scale down on narrow widths. */
+.chat-mermaid {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.4rem 0;
+  padding: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--canvas-base);
+  text-align: center;
+}
+
+.chat-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.chat-mermaid-error code {
+  color: var(--text-muted);
+}
+
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;

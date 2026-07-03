@@ -1,4 +1,5 @@
 import React from 'react';
+import { MermaidDiagram } from './MermaidDiagram';
 
 type Block =
   | { type: 'code'; language: string; content: string }
@@ -21,7 +22,7 @@ export function MarkdownContent({ content, compact = false, streaming = false, o
   const blocks = parseBlocks(streaming ? closeOpenMarkers(content) : content);
   return (
     <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
-      {blocks.map((block, index) => renderBlock(block, index, onMentionClick))}
+      {blocks.map((block, index) => renderBlock(block, index, onMentionClick, streaming))}
     </div>
   );
 }
@@ -155,9 +156,15 @@ function splitTableRow(row: string) {
     .map(cell => cell.trim());
 }
 
-function renderBlock(block: Block, index: number, onMentionClick?: (mention: string) => void) {
+function renderBlock(block: Block, index: number, onMentionClick?: (mention: string) => void, streaming = false) {
   switch (block.type) {
     case 'code':
+      // Render mermaid fences as diagrams — but only once the block is complete.
+      // While streaming, the fence body is still arriving and would fail to parse,
+      // so show it as a plain code block until the message settles.
+      if (block.language === 'mermaid' && !streaming) {
+        return <MermaidDiagram key={index} code={block.content} />;
+      }
       return (
         <pre key={index} className="chat-markdown-code">
           {block.language && <span className="chat-markdown-code-lang">{block.language}</span>}
