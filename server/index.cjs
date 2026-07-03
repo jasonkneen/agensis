@@ -2912,6 +2912,9 @@ async function handleAgentCapabilitiesSync(ws, message) {
 
   const capabilities = {
     skills: Array.isArray(message.skills) ? message.skills : [],
+    // Slash commands the daemon enumerated on the user's machine: [{name, parent}].
+    // Optional (older daemons don't send it) — the slash-commands endpoint tolerates absence.
+    commands: Array.isArray(message.commands) ? message.commands : [],
     clis: Array.isArray(message.clis) ? message.clis : [],
     mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
     memoryRoot: typeof message.memoryRoot === 'string' ? message.memoryRoot : null,
@@ -3605,6 +3608,38 @@ function detectSkillLibraries(workspacePath = '') {
       count: isDirectory ? countDirectoryEntries(candidate.path, entry => !entry.name.startsWith('.')) : exists ? 1 : 0,
     };
   });
+}
+
+// Merge the slash commands/skills that connected daemons pushed (each in its
+// agent_connections.capabilities) into a single deduped SlashItem[] the composer's
+// `/` menu can render. Built-ins are client-side, so they're intentionally absent
+// here. Shape mirrors src/lib/slashCommands.ts's SlashItem. Pure for unit testing.
+function mergeSlashCommands(capabilitiesList) {
+  const byId = new Map();
+  const put = (item) => {
+    if (!item.name || byId.has(item.id)) return;
+    byId.set(item.id, item);
+  };
+  for (const caps of capabilitiesList || []) {
+    if (!caps || typeof caps !== 'object') continue;
+    const commands = Array.isArray(caps.commands) ? caps.commands : [];
+    for (const entry of commands) {
+      const name = entry && typeof entry.name === 'string' ? entry.name : '';
+      if (!name) continue;
+      const parent = entry.parent && typeof entry.parent === 'string' ? entry.parent : null;
+      if (parent) {
+        put({ id: `skill-command:${parent}:${name}`, name, kind: 'skill-command', parent, run: 'insert', detail: parent });
+      } else {
+        put({ id: `command:${name}`, name, kind: 'command', run: 'insert', detail: 'Command' });
+      }
+    }
+    const skills = Array.isArray(caps.skills) ? caps.skills : [];
+    for (const skill of skills) {
+      if (typeof skill !== 'string' || !skill) continue;
+      put({ id: `skill:${skill}`, name: skill, kind: 'skill', run: 'insert', detail: 'Skill' });
+    }
+  }
+  return Array.from(byId.values());
 }
 
 async function detectCapabilities(workspacePath = '') {
@@ -4422,6 +4457,28 @@ function createApp() {
     try {
       const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
       res.json({ data: await detectCapabilities(workspacePath), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // Slash commands/skills the connected daemons actually expose on their machines.
+  // The composer's `/` menu can't see the user's filesystem (only fly's), so it
+  // sources the real commands from what each daemon pushed on its capability sync.
+  app.get('/backend/system/slash-commands', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.query.workspaceId || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const rows = await getDb().unsafe(
+        `select capabilities
+         from agent_connections
+         where workspace_id = $1
+           and last_seen_at > now() - interval '24 hours'`,
+        [workspaceId],
+      );
+      const items = mergeSlashCommands(rows.map(row => parseJsonObject(row.capabilities)));
+      res.json({ data: items, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -5898,6 +5955,7 @@ module.exports = {
     hasActiveBurstJob,
     capabilitiesShapeValid,
     capabilitiesDriftNudges,
+    mergeSlashCommands,
     finalizeStuckJob,
     claimMcpJob,
     submitMcpJobResult,

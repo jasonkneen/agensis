@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import { runCli } from "./cli.mjs";
 import { createQueue } from "./queue.mjs";
 import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
+import { detectCommandEntries, detectSkillNames } from "./slashEnum.mjs";
 import {
   writeAgentMirror,
   writeHeartbeatFile,
@@ -596,26 +597,6 @@ function applyAgentConfig(config, agent) {
 }
 
 // Detect installed skills from well-known skill directories.
-function detectSkills(cwd) {
-  const dirs = [
-    path.join(os.homedir(), ".claude", "skills"),
-    path.join(os.homedir(), ".codex", "skills"),
-    path.join(cwd || process.cwd(), ".claude", "skills"),
-  ];
-  const names = new Set();
-  for (const dir of dirs) {
-    try {
-      const entries = fs.readdirSync(dir);
-      for (const entry of entries) {
-        if (entry.endsWith(".md")) names.add(entry.slice(0, -3));
-      }
-    } catch {
-      // directory doesn't exist — skip
-    }
-  }
-  return [...names].sort();
-}
-
 // Check which well-known CLIs are on PATH.
 function detectClis() {
   const targets = ["claude", "codex", "gh", "node", "npm", "python3", "git", "fly", "vercel"];
@@ -651,14 +632,17 @@ function sha1Short(str) {
 // the last value it stored on a snapshot. `capabilitiesHash` covers skills/CLIs/MCP;
 // `memoryHash` covers the palace file list (stat-only, no content reads).
 async function computeCapabilities(config) {
-  const skills = detectSkills(config.cwd);
+  const skills = detectSkillNames({ cwd: config.cwd });
+  const commands = detectCommandEntries({ cwd: config.cwd });
   const clis = detectClis();
   const mcpServers = detectMcpServers();
   const memoryRoot = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir }) || null;
-  // Arrays are already sorted at detection, so this canonical form is stable.
-  const capabilitiesHash = sha1Short(JSON.stringify({ skills, clis, mcpServers, memoryRoot }));
+  // Arrays are already sorted/stable at detection, so this canonical form is stable.
+  // `commands` is included so the drift-check re-pushes when the user's slash
+  // commands change.
+  const capabilitiesHash = sha1Short(JSON.stringify({ skills, commands, clis, mcpServers, memoryRoot }));
   const memoryHash = sha1Short(await memoryFingerprint(memoryRoot));
-  return { skills, clis, mcpServers, memoryRoot, capabilitiesHash, memoryHash };
+  return { skills, commands, clis, mcpServers, memoryRoot, capabilitiesHash, memoryHash };
 }
 
 // Push a snapshot of this agent's runtime capabilities (skills, CLIs, MCP servers,
@@ -672,13 +656,14 @@ async function pushCapabilitiesSnapshot(ws, config) {
       workspaceId: config.workspace,
       agentId: config.agent,
       skills: caps.skills,
+      commands: caps.commands,
       clis: caps.clis,
       mcpServers: caps.mcpServers,
       memoryRoot: caps.memoryRoot,
       hash: caps.capabilitiesHash,
       memoryHash: caps.memoryHash,
     });
-    log(`Capabilities synced — skills:${caps.skills.length} clis:${caps.clis.length} mcp:${caps.mcpServers.length}`);
+    log(`Capabilities synced — skills:${caps.skills.length} commands:${caps.commands.length} clis:${caps.clis.length} mcp:${caps.mcpServers.length}`);
   } catch (error) {
     log(`Capabilities sync skipped: ${error?.message || error}`);
   }

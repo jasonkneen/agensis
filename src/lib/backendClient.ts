@@ -886,6 +886,23 @@ export interface SystemCapabilities {
   codexAppServer: { available: boolean; command: string; transports: string[] };
 }
 
+// Slash commands/skills the connected daemons expose on their machines (the composer
+// can't see the user's filesystem directly). Returns [] on any failure — the `/` menu
+// still has its client-side built-ins.
+export async function getSlashCommands(workspaceId?: string): Promise<import('./slashCommands').SlashItem[]> {
+  if (!workspaceId) return [];
+  try {
+    const response = await fetch(apiUrl(`/backend/system/slash-commands?workspaceId=${encodeURIComponent(workspaceId)}`), {
+      headers: apiAuthHeaders(),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.error || !Array.isArray(payload?.data)) return [];
+    return payload.data as import('./slashCommands').SlashItem[];
+  } catch {
+    return [];
+  }
+}
+
 export async function getSystemCapabilities(workspacePath?: string): Promise<SystemCapabilities | null> {
   const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : '';
   try {

@@ -69,7 +69,7 @@ import {
   type SlashItem,
   type SlashActionId,
 } from '../../lib/slashCommands';
-import { apiAuthHeaders, apiUrl, backendClient, type SystemCapabilities } from '../../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import type {
   CanvasGroup,
@@ -271,6 +271,7 @@ export function ChatWindowContent({
   const [docPickerQuery, setDocPickerQuery] = useState('');
   const [groupPickerQuery, setGroupPickerQuery] = useState('');
   const [slashQuery, setSlashQuery] = useState('');
+  const [remoteSlashItems, setRemoteSlashItems] = useState<SlashItem[]>([]);
   const [atStartPos, setAtStartPos] = useState(-1);
   const [hashStartPos, setHashStartPos] = useState(-1);
   const [slashStartPos, setSlashStartPos] = useState(-1);
@@ -364,22 +365,39 @@ export function ChatWindowContent({
     return [...packages, ...commands, ...codexServer, ...agentTools].slice(0, 10);
   }, [agents, systemCapabilities]);
 
-  // Insert-kind slash items enumerated from what the workspace advertises. Today
-  // this is the connected agents' flat skill names; the real `.claude/commands`
-  // and skill sub-commands (parent:child) arrive once the daemon enumeration is
-  // wired through the capabilities sync (commit 2). The shape below already carries
-  // `parent`, so richer data drops in without touching the menu.
+  // Real slash commands the connected daemons enumerated on their own machines —
+  // loose `.claude/commands`, folder-namespaced `parent:child` commands, and skills.
+  // Fetched from the backend (which merges each daemon's capability push) since the
+  // composer can't see the user's filesystem directly.
+  useEffect(() => {
+    if (!workspaceId) {
+      setRemoteSlashItems([]);
+      return;
+    }
+    let cancelled = false;
+    getSlashCommands(workspaceId)
+      .then(items => { if (!cancelled) setRemoteSlashItems(items); })
+      .catch(() => { if (!cancelled) setRemoteSlashItems([]); });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
+
+  // Insert-kind slash items: the real daemon-enumerated commands/skills, plus the
+  // connected agents' advertised skill names as a fallback (deduped by id). The
+  // `parent` field drives the nested display for skill-commands.
   const enumeratedSlashItems = useMemo<SlashItem[]>(() => {
     const items: SlashItem[] = [];
     const seen = new Set<string>();
+    const push = (item: SlashItem) => {
+      if (seen.has(item.id)) return;
+      seen.add(item.id);
+      items.push(item);
+    };
+    for (const item of remoteSlashItems) push(item);
     for (const name of new Set(agents.flatMap(agent => normalizeStringList(agent.skills)))) {
-      const id = `skill:${name}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      items.push({ id, name, kind: 'skill', run: 'insert', detail: 'Skill' });
+      push({ id: `skill:${name}`, name, kind: 'skill', run: 'insert', detail: 'Skill' });
     }
     return items;
-  }, [agents]);
+  }, [remoteSlashItems, agents]);
 
   const buildGroupContext = (groups: CanvasGroup[]): string => {
     return groups.map(group => {
