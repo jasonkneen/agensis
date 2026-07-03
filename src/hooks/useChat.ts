@@ -195,9 +195,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       await backendClient.from('messages').insert(copies);
     }
 
-    // 3. Register the fork. The caller sets it active + opens the split window;
-    //    the active-session effect then fetches the copied rows from the DB (a
-    //    brand-new session has no message cache, so nothing renders stale).
+    // 3. Register the fork. The caller opens it as its own (non-active) split
+    //    window; it fetches the copied rows itself via useSessionMessages, so
+    //    it never needs to borrow the parent's active-session state.
     setSessions(prev => [forked, ...prev]);
     return forked;
   }, [workspaceId]);
@@ -641,8 +641,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       backendClient.from('messages').select('*').eq('session_id', parentId).order('created_at', { ascending: true }),
       backendClient.from('messages').select('*').eq('session_id', fork.id).order('created_at', { ascending: true }),
     ]);
-    const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id);
-    const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id);
+    const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
+    const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
     // Divergence by set-difference of the shared (copied) history — clock-skew
     // safe (M7); see computeThreadDivergence.
     const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);
