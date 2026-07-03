@@ -676,6 +676,11 @@ function applyNeoThemeVars(theme: NeoTheme, scheme: NeoScheme) {
   // knob, table chrome, button feel) can branch per style, not just per token.
   root.setAttribute('data-neo-style', theme.style);
   for (const [k, v] of Object.entries(RADII[s.radius])) root.style.setProperty(k, v);
+  // Main window/panel corners always follow Blueprint's crisper radius,
+  // regardless of style — only small controls (buttons, badges, chips) vary
+  // with the style's own radius tier. Keeps "soft"/"sticker"/"balloon" pill
+  // corners scoped to controls instead of blowing up whole windows.
+  root.style.setProperty('--radius-xl', RADII.default['--radius-xl']);
   root.style.setProperty('--neo-font', s.font);
   root.style.setProperty('--neo-display', s.display);
   root.style.setProperty('--neo-display-weight', s.weight);
