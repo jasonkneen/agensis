@@ -15,3 +15,7 @@ Depth requested: stop after PLAN. Produce cascade/10-findings.cf (Stage F) and
 cascade/20-plan.cf (Stage O) with grounded, citation-backed fix specs. Do NOT
 execute Stage S — no code should be edited as part of this run. The plan is the
 deliverable; a human decides what to apply and how.
+
+ANSWER Q1: netlify/functions/backend.mjs is live in production. Treat F2
+(forgeable auth secret fallback) and F4/F5 (triple-backend drift) as live,
+exploitable, full priority — not legacy/dead code.
