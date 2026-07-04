@@ -444,16 +444,24 @@ function socketUrl(baseUrl, token, config = {}) {
   return url.toString();
 }
 
-function agentBackendUrl(baseUrl) {
+export function agentBackendUrl(baseUrl) {
   const url = new URL(baseUrl);
-  if ((url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "0.0.0.0") && url.port === "8888") {
-    // Netlify/Vite dev on :8888 serves HTTP functions only. The agent
+  if (shouldUseLocalAgentBackend(url)) {
+    // Local web app ports serve Vite/Netlify UI and HTTP functions; the agent
     // websocket backend is the local API server on :3142.
     url.protocol = "http:";
     url.hostname = "127.0.0.1";
     url.port = "3142";
   }
   return url;
+}
+
+function shouldUseLocalAgentBackend(url) {
+  if (!(url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "0.0.0.0")) return false;
+  if (url.port === "3142") return false;
+  if (url.port === "5173" || url.port === "8888") return true;
+  const port = Number(url.port || 0);
+  return port >= 49152 && port <= 65535;
 }
 
 function isLocalBackendUrl(baseUrl) {
