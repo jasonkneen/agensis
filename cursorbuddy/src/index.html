@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CursorBuddy - personal AI buddies for every surface</title>
+  <meta name="description" content="CursorBuddy is the personal AI buddy surface for Agensis agents across websites, browsers, desktop, mobile, and SDK installs.">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./config.js" defer></script>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="site-header" data-account-surface>
+    <a class="brand" href="#top" aria-label="CursorBuddy home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>CursorBuddy</span>
+    </a>
+    <nav aria-label="Primary">
+      <a href="#platform">Platform</a>
+      <a href="#account">Account</a>
+      <a href="#schema">Schema</a>
+      <a href="#launch">Launch</a>
+    </nav>
+    <a class="button button-yellow" href="#signup">Start building</a>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <h1>One buddy. Every place you work.</h1>
+        <p class="lede">
+          CursorBuddy is the customer app for personal AI companions that guide,
+          train, onboard, talk, and front Agensis agents across web, extension,
+          desktop, mobile, and SDK installs.
+        </p>
+        <div class="actions">
+          <a class="button button-yellow" href="#signup">Create account</a>
+          <a class="button" href="#launch">View weekend path</a>
+        </div>
+      </div>
+
+      <div class="buddy-board" aria-label="CursorBuddy product map">
+        <div class="window">
+          <div class="bar"><span></span><span></span><span></span><b>agensis / cursorbuddy</b></div>
+          <div class="workspace">
+            <div class="rail">
+              <b>SURFACES</b>
+              <span>Web inject</span>
+              <span>Extension</span>
+              <span>Desktop</span>
+              <span>Mobile</span>
+            </div>
+            <div class="mission">
+              <div class="bubble">Hi. I can guide this page, run an agent, or stand by.</div>
+              <div class="task">Pause field agent <small>queued command</small></div>
+              <div class="task mint">Provider policy <small>workspace controlled</small></div>
+              <div class="task pink">Billing + credits <small>Stripe backed</small></div>
+            </div>
+          </div>
+        </div>
+        <div class="buddy" aria-hidden="true">
+          <i class="hair"></i><i class="head"></i><i class="body"></i><i class="leg left"></i><i class="leg right"></i>
+        </div>
+      </div>
+    </section>
+
+    <section class="strip" aria-label="CursorBuddy deployment contract">
+      <span>Second Netlify site</span>
+      <span>Same Agensis repo</span>
+      <span>Shared auth and DB</span>
+      <span>No runtime fork</span>
+    </section>
+
+    <section class="grid-section" id="platform">
+      <div>
+        <h2>Built as an Agensis platform surface.</h2>
+        <p>
+          The site is intentionally separate from the main Agensis UI, but it
+          uses Agensis users, workspaces, agents, billing routes, and provider
+          secret handling.
+        </p>
+      </div>
+      <div class="cards">
+        <article><b>Auth</b><span>Username/password now, Netlify social ingress bridged into Agensis sessions later.</span></article>
+        <article><b>Teams</b><span>Workspaces and members stay in Agensis. CursorBuddy adds pet and instance policy.</span></article>
+        <article><b>Providers</b><span>Default inference lives at site/workspace scope; user override is explicit policy.</span></article>
+        <article><b>Agents</b><span>Pause, resume, stop, and reconfigure are queued as commands for active field agents.</span></article>
+      </div>
+    </section>
+
+    <section class="account-panel" id="account">
+      <div>
+        <h2>Account surface</h2>
+        <p>
+          This page is the future shell for profile, pets, groups, billing,
+          invoices, support, close-account flows, provider configuration, and
+          Agensis CLI setup.
+        </p>
+      </div>
+      <form id="signup" class="signup" novalidate>
+        <label>
+          Email
+          <input name="email" type="email" autocomplete="email" placeholder="you@example.com">
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="new-password" placeholder="Create password">
+        </label>
+        <button class="button button-yellow" type="submit">Create preview account</button>
+        <p id="signupStatus" role="status">Preview only. Backend wiring stays in Agensis.</p>
+      </form>
+    </section>
+
+    <section class="schema" id="schema">
+      <h2>Schema contract</h2>
+      <div class="schema-grid">
+        <code>cursorbuddy_profiles</code>
+        <code>cursorbuddy_groups</code>
+        <code>cursorbuddy_pets</code>
+        <code>cursorbuddy_instances</code>
+        <code>cursorbuddy_client_policies</code>
+        <code>cursorbuddy_provider_configs</code>
+        <code>cursorbuddy_agent_commands</code>
+        <code>cursorbuddy_billing_customers</code>
+        <code>cursorbuddy_invoices</code>
+        <code>cursorbuddy_support_tickets</code>
+      </div>
+    </section>
+
+    <section class="launch" id="launch">
+      <h2>Weekend path</h2>
+      <ol>
+        <li>Create the second Netlify site with package directory <code>cursorbuddy</code>.</li>
+        <li>Attach the CursorBuddy domain and keep Agensis on its current deploy.</li>
+        <li>Apply the CursorBuddy schema after reviewing the contract.</li>
+        <li>Wire signup/signin to <code>/backend/auth/signup</code> and <code>/backend/auth/signin</code>.</li>
+        <li>Expose billing, provider policy, pets, and field-agent commands through Agensis routes.</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>
