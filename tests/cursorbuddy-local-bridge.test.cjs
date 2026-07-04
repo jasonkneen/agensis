@@ -45,6 +45,8 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
     assert.equal(health.connection.connected, true);
     assert.equal(health.connection.agentId, 'agent-1');
     assert.equal(health.connection.workspaceId, 'ws-1');
+    assert.equal(health.model, 'claude-haiku-4-5');
+    assert.equal(health.daemonModel, 'test-model');
     assert.match(health.endpoints.control, /\/cursorbuddy\/control$/);
     assert.match(health.endpoints.controlStream, /\/cursorbuddy\/control\/stream$/);
 
@@ -199,6 +201,10 @@ test('CursorBuddy local bridge does not treat daemon commands as model ids', asy
   assert.match(source, /function modelLooksLikeCommand\(value\)/);
   assert.match(source, /function requestedModelForLocalBridge\(requestedModel, fallbackModel\)/);
   assert.match(source, /modelLooksLikeCommand\(model\)/);
+  assert.match(source, /const DEFAULT_CURSORBUDDY_CONVERSATION_MODEL = "claude-haiku-4-5"/);
+  assert.match(source, /function normalizeCursorBuddyModel\(value\)/);
+  assert.match(source, /model === "haiku-4\.5"/);
+  assert.match(source, /function cursorBuddyConversationModel\(config = \{\}\)/);
   assert.match(source, /function fastLocalReply\(payload, context\)/);
   assert.match(source, /function createStreamJsonParser\(onDelta = \(\) => \{\}\)/);
   assert.match(source, /payload\.stream === true/);
