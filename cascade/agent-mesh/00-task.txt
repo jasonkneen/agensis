@@ -1,0 +1,63 @@
+Architecture design — agent-to-agent direct connectivity, hub-and-spoke preserved in the UI.
+
+Stop after PLAN (Stage O). Do NOT execute Stage S — no code should be edited as part of
+this run. Produce cascade/agent-mesh/10-findings.cf (Stage F) and cascade/agent-mesh/
+20-plan.cf (Stage O) with grounded, citation-backed specs.
+
+GOAL: today every agent daemon (agent/agensis-cli/src/agensis.mjs) only ever talks to the
+hub server (server/index.cjs, Fastify + WS/realtime + Postgres). All messaging, job
+dispatch, and status updates round-trip through the hub even when two agent daemons are
+on the same LAN and could talk directly. We want:
+
+1. DISCOVERY — a daemon can discover peer daemons on the same local network (same
+   workspace, same LAN/mesh), not just agents the hub tells it about.
+2. ADVERTISE-TO-HUB — a daemon advertises its direct-reachability (address/port/transport)
+   and availability back to the hub using the SAME fire-and-forget pattern already
+   established for agent_capabilities_sync / the heartbeat capability-drift-sync (see
+   memory: heartbeat-capability-drift-sync, agent-state-files-feature; code:
+   server/index.cjs capabilitiesDriftNudges, agent_connections.capabilities jsonb column).
+   Do not invent a second sync mechanism — extend the existing one.
+3. DIRECT CHANNEL — when two daemons are both reachable, job handoff / collaboration
+   messages go directly daemon-to-daemon instead of hub-relayed, with a fallback to
+   hub-relay when direct isn't reachable (NAT/different network/offline).
+4. UI MUST NOT CHANGE SHAPE — the agents list keeps showing spoke agents nested under a
+   hub agent (workspace_agents rows, existing agent-list hierarchy/UI in
+   src/components — e.g. AgentsWindowContent.tsx). This is true regardless of whether a
+   given message actually went direct or via hub relay: the hub is always informed and
+   always the source of truth for "this agent exists and is part of this workspace,"
+   direct connectivity is purely a data-path optimization underneath that.
+
+CONSTRAINTS — use ONLY this codebase's existing architecture/terms:
+- workspace_agents (config/identity), agent_connections (per-machine runtime state,
+  including the `capabilities` jsonb column), agent_register / agent_memory_sync /
+  agent_capabilities_sync handshake actions in server/index.cjs, and the daemon's existing
+  push-on-register + heartbeat pattern in agensis.mjs.
+- Do NOT reuse or reference moltrats/vibeclaw/moltbook/"Burrow"/crumb-economy language or
+  that codebase directly. This is a from-scratch design for agensis, informed only by the
+  general concept.
+- PRIOR ART TO BUILD ON, NOT REDO: cascade/p2p-inference/20-plan.cf P1 already plans
+  extending capabilitiesDriftNudges (server/index.cjs:2781-2813) with a
+  capabilities.sharedModels[]-style block riding the existing drift/heartbeat beat, plus an
+  in-memory liveShared Map<agentId,{ws,busy,ttl}> reusing the mcp presence TTL pattern
+  (server/index.cjs). That plan was scoped to model-sharing; treat its mechanism (advertise
+  extra fields over the SAME capabilities-drift channel, keep a live in-memory presence map
+  with TTL) as the template for advertising direct-reachability info here instead of
+  designing a new channel. Cross-reference it, don't duplicate the analysis.
+- Node daemon, not a browser: no native WebRTC/RTCPeerConnection available. Evaluate
+  direct-connection transport options realistically for a Node process (e.g. plain
+  WebSocket/TCP server the daemon opens locally on the LAN, mutual auth via the existing
+  join-token/agent-token machinery, mDNS/LAN broadcast or hub-relayed offer/answer for
+  address exchange) vs. always-relay-through-hub as the safe fallback.
+- Security: any direct daemon-to-daemon channel must authenticate using agensis's existing
+  token/identity machinery (join tokens, agent registration tokens) — do not invent a new
+  trust mechanism.
+
+DELIVERABLE covers specifically:
+- Discovery mechanism design (how a spoke finds peers: hub-mediated peer list vs. local
+  network broadcast/mDNS, and how that reconciles with workspace scoping/security)
+- Advertise protocol: exact schema/column additions needed (or reuse of existing
+  `capabilities` jsonb) and the daemon-side + server-side code sites to touch
+- Direct transport choice with a concrete recommendation (not just options) given the
+  Node-daemon constraint, address/NAT-traversal handling, and the hub-relay fallback path
+- How the existing agents-list hierarchy renders correctly with zero visual change while
+  the transport underneath varies
