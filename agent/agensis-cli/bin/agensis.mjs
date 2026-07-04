@@ -11,6 +11,7 @@ import {
   writeDaemonProfile,
 } from "../src/connectProfiles.mjs";
 import { claimCursorBuddyConnectionKey } from "../src/cursorbuddyConnect.mjs";
+import { runSetupFlow } from "../src/setupFlow.mjs";
 
 function parseArgs(argv) {
   const args = { command: "connect" };
@@ -48,6 +49,10 @@ function parseArgs(argv) {
       args.lanListener = true;
       continue;
     }
+    if (key === "noCursorbuddyBridge") {
+      args.cursorBuddyBridge = false;
+      continue;
+    }
     if (key === "yolo" || key === "noSandbox") {
       args.permissionMode = "yolo";
       continue;
@@ -72,6 +77,7 @@ Usage:
   agensis --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
   agensis connect --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
   agensis connect [--profile <name>]
+  agensis setup [--url <agensis-url>] [--profile <name>] [--handle <name>]
   agensis buddy connect --key <cbk_...> [--url <agensis-url>] [options]
 
 Required:
@@ -92,6 +98,8 @@ Options:
   --no-sandbox            Alias for --permission-mode yolo
   --timeout-ms <ms>       Kill a job after this time, default: 1800000
   --heartbeat-ms <ms>     Local terminal heartbeat interval, default: 15000
+  --cursorbuddy-port <n>  Local CursorBuddy discovery/chat port, default: 8787
+  --no-cursorbuddy-bridge Disable local CursorBuddy discovery/chat bridge
   --once                  Run one queued job then exit
   --lan                   Opt in to the agent-mesh LAN listener for direct
                           daemon-to-daemon job handoff (default: off)
@@ -142,8 +150,15 @@ async function main() {
     if (daemonArgs.once) process.exit(0);
     return;
   }
+  if (args.command === "setup") {
+    const daemonArgs = await runSetupFlow(args);
+    daemonArgs.exitOnOnce = true;
+    await runAgensisDaemon({ ...args, ...daemonArgs });
+    if (daemonArgs.once) process.exit(0);
+    return;
+  }
   if (args.command !== "connect") {
-    throw new Error(`Unknown command "${args.command}". Use "agensis --url ...", "agensis connect --url ...", or "agensis buddy connect --key ...".`);
+    throw new Error(`Unknown command "${args.command}". Use "agensis setup", "agensis connect --url ...", or "agensis buddy connect --key ...".`);
   }
   const daemonArgs = await daemonArgsForConnect(args);
   daemonArgs.exitOnOnce = true;

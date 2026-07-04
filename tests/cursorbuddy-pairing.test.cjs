@@ -40,6 +40,9 @@ function makeDb() {
           updated_at: null,
         }];
       }
+      if (normalized.startsWith('select w.id from workspaces w left join workspace_members')) {
+        return [{ id: 'ws-1' }];
+      }
       if (normalized.startsWith('insert into cursorbuddy_connection_keys')) {
         const [workspaceId, agentId, createdBy, keyHash, name, surface, scope, domain, metadata] = params;
         const row = {
@@ -67,6 +70,9 @@ function makeDb() {
       }
       if (normalized.startsWith('select * from workspace_agents where id = $1 and workspace_id')) {
         return agents.filter((row) => row.id === params[0] && row.workspace_id === params[1]);
+      }
+      if (normalized.startsWith('select * from workspace_agents where workspace_id = $1 and handle = $2')) {
+        return agents.filter((row) => row.workspace_id === params[0] && row.handle === params[1]);
       }
       if (normalized.startsWith('insert into workspace_agents')) {
         const [workspaceId, name, handle, description, systemPrompt, permissionMode] = params;
@@ -190,6 +196,49 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
 
   assert.ok(db.calls.some((call) => call.normalized.includes('insert into workspace_agents')), 'claim creates a daemon workspace agent');
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
+});
+
+test('Agensis CLI setup creates or reuses a primary daemon agent and returns daemon args', async () => {
+  const db = makeDb();
+  __test.setTestDb(db);
+  const token = await __test.issueToken('user-1', '1');
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/backend/agensis/setup/connect`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        host: 'OzBook-M3-4.local',
+        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        handle: 'mac',
+        name: 'mac',
+        baseUrl,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.data.workspaceId, 'ws-1');
+    assert.equal(body.data.agentId, 'agent-1');
+    assert.match(body.data.token, /^aga_/);
+    assert.match(body.data.command, /agensis connect --url/);
+    assert.deepEqual(body.data.daemonArgs, {
+      command: 'connect',
+      url: baseUrl,
+      token: body.data.token,
+      workspace: 'ws-1',
+      agent: 'agent-1',
+      handle: 'mac',
+      name: 'mac',
+      cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+      model: 'claude-opus-4-8',
+      permissionMode: 'default',
+    });
+  });
+
+  assert.ok(db.calls.some((call) => call.normalized.includes('select * from workspace_agents where workspace_id = $1 and handle = $2')), 'setup looks for an existing machine agent by handle');
+  assert.ok(db.calls.some((call) => call.normalized.includes('insert into workspace_agents')), 'setup creates a primary machine agent when needed');
+  assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'setup rotates an aga_ daemon token');
 });
 
 test('CursorBuddy pairing helpers keep key shape and surface normalization stable', () => {

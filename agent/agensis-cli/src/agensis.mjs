@@ -6,6 +6,7 @@ import process from "node:process";
 import WebSocket from "ws";
 import { runCli } from "./cli.mjs";
 import { createQueue } from "./queue.mjs";
+import { startCursorBuddyLocalBridge } from "./cursorbuddyLocalBridge.mjs";
 import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
 import { detectCommandEntries, detectSkillNames } from "./slashEnum.mjs";
 import {
@@ -39,6 +40,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let resolveWait = null;
   let queue = null;
   let lastSocketErrorCode = '';
+  let cursorBuddyBridge = null;
 
   // --- Agent-mesh (F1/F5/F6/F7): opt-in LAN listener + peer ticket/list plumbing for
   // direct daemon-to-daemon job handoff. Every human<->agent turn stays hub-relayed
@@ -173,6 +175,10 @@ export async function runAgensisDaemon(rawConfig = {}) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (fileHeartbeatTimer) clearInterval(fileHeartbeatTimer);
+    if (cursorBuddyBridge) {
+      void cursorBuddyBridge.close().catch(() => {});
+      cursorBuddyBridge = null;
+    }
     stopLanListener();
     // Leave the last-known ts in place, but mark the daemon stopped so a watchdog reading
     // heartbeat.json sees an intentional shutdown rather than inferring death from a stale
@@ -195,6 +201,16 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (config.once) stop();
     },
   });
+
+  if (config.cursorBuddyBridge) {
+    cursorBuddyBridge = await startCursorBuddyLocalBridge(config, {
+      port: config.cursorBuddyPort,
+      log,
+    }).catch((error) => {
+      log(`CursorBuddy local bridge unavailable: ${error?.message || error}`);
+      return null;
+    });
+  }
 
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -421,6 +437,8 @@ function normalizeConfig(raw) {
     once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
     onRegistered: typeof raw.onRegistered === "function" ? raw.onRegistered : null,
+    cursorBuddyBridge: raw.cursorBuddyBridge !== false && process.env.AGENSIS_CURSORBUDDY_BRIDGE !== "0",
+    cursorBuddyPort: Number(raw.cursorBuddyPort || process.env.AGENSIS_CURSORBUDDY_PORT || 8787),
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
     // Default OFF — a daemon never opens a network listener unless asked to.
     lanListener: Boolean(raw.lanListener || raw.lan || process.env.AGENSIS_LAN === "1"),

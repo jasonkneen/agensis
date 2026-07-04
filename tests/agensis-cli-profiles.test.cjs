@@ -81,11 +81,12 @@ test('daemon profile merge lets one-off flags override the cached profile', asyn
   assert.equal(merged.once, true);
 });
 
-test('bare connect setup message points users at the copied Agensis command', async () => {
+test('bare connect setup message points users at Agensis setup first', async () => {
   const { daemonProfileSetupMessage } = await loadModule();
   const message = daemonProfileSetupMessage('default');
   assert.match(message, /No saved Agensis daemon profile/);
-  assert.match(message, /Open Agensis > AI Agents/);
-  assert.match(message, /Copy connection command/);
+  assert.match(message, /Run: agensis setup/);
+  assert.match(message, /primary local agent/);
+  assert.match(message, /copy a connection command/);
   assert.match(message, /agensis connect/);
 });

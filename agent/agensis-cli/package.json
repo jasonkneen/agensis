@@ -19,7 +19,7 @@
     ".": "./src/agensis.mjs"
   },
   "scripts": {
-    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs && node --check src/memory.mjs",
+    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs && node --check src/memory.mjs && node --check src/setupFlow.mjs && node --check src/cursorbuddyLocalBridge.mjs",
     "link": "npm link && bun link",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm run check",
@@ -29,8 +29,14 @@
     "bin/agensis.mjs",
     "src/agensis.mjs",
     "src/cli.mjs",
+    "src/connectProfiles.mjs",
+    "src/cursorbuddyConnect.mjs",
+    "src/cursorbuddyLocalBridge.mjs",
     "src/queue.mjs",
     "src/memory.mjs",
+    "src/setupFlow.mjs",
+    "src/slashEnum.mjs",
+    "src/state.mjs",
     "README.md",
     "LICENSE"
   ],

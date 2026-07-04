@@ -20,6 +20,8 @@ const PROFILE_KEYS = [
   "heartbeatMs",
   "maxConcurrency",
   "lanListener",
+  "cursorBuddyBridge",
+  "cursorBuddyPort",
 ];
 
 export function daemonProfileName(value = DEFAULT_PROFILE) {
@@ -125,10 +127,12 @@ export function daemonProfileSetupMessage(name = DEFAULT_PROFILE) {
     `No saved Agensis daemon profile found for "${profile}".`,
     "",
     "To connect the main agent once:",
-    "1. Open Agensis > AI Agents.",
-    "2. Create or select the agent that should run on this machine.",
-    "3. Click Copy connection command.",
-    "4. Run that full agensis connect command from the repo folder.",
+    "1. Run: agensis setup",
+    "2. Sign in or create an account in the browser.",
+    "3. Approve this machine as your primary local agent.",
+    "",
+    "Manual fallback: open Agensis > AI Agents, copy a connection command,",
+    "and run that full agensis connect command from the repo folder.",
     "",
     "After the daemon registers successfully, this CLI saves the profile locally.",
     `Then restart it with: agensis connect${profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`}`,

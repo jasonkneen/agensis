@@ -579,6 +579,7 @@ function AppContent() {
   const [showCanvasGrid, setShowCanvasGrid] = useState(false);
   const [canvasGridBackground] = useState(() => CANVAS_BACKGROUNDS[Math.floor(Math.random() * CANVAS_BACKGROUNDS.length)]);
   const activeSceneRef = useRef<HTMLDivElement>(null);
+  const setupCallbackInFlightRef = useRef(false);
 
   const { workspaces, loading: wsLoading, createWorkspace } = useWorkspaces(user?.id);
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
@@ -1004,25 +1005,101 @@ function AppContent() {
     openWindow('users', { title: 'Users', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
-  // CursorBuddy links unauthenticated users here with
-  // ?source=cursorbuddy&referrer=cursorbuddy&intent=connect. Once login
-  // completes, take them straight to the live agent/connection surface.
+  // CursorBuddy and the Agensis CLI link unauthenticated users here. Once login
+  // completes, CursorBuddy opens the agent surface; CLI setup additionally posts
+  // a daemon connection payload back to the local setup callback.
   useEffect(() => {
     if (!user) return;
     const params = new URLSearchParams(window.location.search);
     const source = (params.get('source') || '').toLowerCase();
     const referrer = (params.get('referrer') || '').toLowerCase();
     const intent = (params.get('intent') || '').toLowerCase();
-    if (source !== 'cursorbuddy' && referrer !== 'cursorbuddy') return;
+    const isCursorBuddy = source === 'cursorbuddy' || referrer === 'cursorbuddy';
+    const isAgensisCli = source === 'agensis-cli' || referrer === 'agensis-cli';
+    if (!isCursorBuddy && !isAgensisCli) return;
     if (intent && !['connect', 'login', 'setup'].includes(intent)) return;
 
+    const cleanupLaunchParams = () => {
+      for (const key of ['source', 'referrer', 'intent', 'callback', 'state', 'profile', 'host', 'cwd', 'handle', 'name']) {
+        params.delete(key);
+      }
+      const qs = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
+    };
+
+    const callback = params.get('callback') || '';
+    const state = params.get('state') || '';
+    if (isAgensisCli && intent === 'setup' && callback && state) {
+      if (wsLoading || setupCallbackInFlightRef.current) return;
+      setupCallbackInFlightRef.current = true;
+      const workspaceId = activeWorkspaceId || workspaces[0]?.id || '';
+      const callbackUrl = (() => {
+        try {
+          const url = new URL(callback);
+          if (url.protocol !== 'http:') return null;
+          if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return null;
+          return url.toString();
+        } catch {
+          return null;
+        }
+      })();
+      if (!callbackUrl) {
+        setupCallbackInFlightRef.current = false;
+        toast.error('Agensis setup callback was not a local URL.');
+        cleanupLaunchParams();
+        return;
+      }
+
+      const payload = {
+        workspaceId,
+        profile: params.get('profile') || 'default',
+        host: params.get('host') || '',
+        cwd: params.get('cwd') || '',
+        handle: params.get('handle') || '',
+        name: params.get('name') || '',
+        baseUrl: window.location.origin,
+      };
+      void (async () => {
+        try {
+          const res = await fetch(apiUrl('/backend/agensis/setup/connect'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+            body: JSON.stringify(payload),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body?.data?.daemonArgs) {
+            throw new Error(body?.error?.message || body?.message || `Setup failed (${res.status})`);
+          }
+          const callbackRes = await fetch(callbackUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              state,
+              profile: payload.profile,
+              daemonArgs: body.data.daemonArgs,
+              workspaceId: body.data.workspaceId,
+              agentId: body.data.agentId,
+            }),
+          });
+          if (!callbackRes.ok) {
+            const callbackBody = await callbackRes.json().catch(() => ({}));
+            throw new Error(callbackBody?.error || `Local setup callback failed (${callbackRes.status})`);
+          }
+          toast.success('Agensis CLI connected.');
+          handleOpenAgents();
+          cleanupLaunchParams();
+        } catch (error) {
+          setupCallbackInFlightRef.current = false;
+          toast.error(String(error instanceof Error ? error.message : error));
+        }
+      })();
+      return;
+    }
+
+    if (!isCursorBuddy) return;
     handleOpenAgents();
-    params.delete('source');
-    params.delete('referrer');
-    params.delete('intent');
-    const qs = params.toString();
-    window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
-  }, [user, handleOpenAgents]);
+    cleanupLaunchParams();
+  }, [user, wsLoading, activeWorkspaceId, workspaces, handleOpenAgents]);
 
   // Quick "copy invite link" used by the presence popup: mints an editor invite
   // for the active workspace and copies the shareable URL.

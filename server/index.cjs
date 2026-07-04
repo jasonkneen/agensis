@@ -1348,6 +1348,72 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
   return rows[0];
 }
 
+async function resolveSetupWorkspace(userId, requestedWorkspaceId = '') {
+  const requested = String(requestedWorkspaceId || '').trim();
+  if (requested) {
+    await enforceWorkspaceRole(userId, requested, 'manage');
+    return requested;
+  }
+
+  const rows = await getDb().unsafe(
+    `select w.id
+     from workspaces w
+     left join workspace_members wm on wm.workspace_id = w.id and wm.user_id = $1
+     where w.user_id = $1 or (wm.user_id = $1 and wm.role in ('owner', 'admin'))
+     order by w.user_id = $1 desc, w.created_at asc
+     limit 1`,
+    [userId],
+  );
+  if (rows[0]?.id) return rows[0].id;
+
+  const created = await getDb().unsafe(
+    `insert into workspaces (name, description, icon, user_id)
+     values ('Work', 'Primary Agensis workspace', 'home', $1)
+     returning id`,
+    [userId],
+  );
+  const workspaceId = created[0].id;
+  await seedDefaultAgents(workspaceId, userId);
+  return workspaceId;
+}
+
+async function ensurePrimaryDaemonAgent({ workspaceId, userId, handle, name, host, cwd, permissionMode }) {
+  const resolvedHandle = slugHandle(handle || host || 'agensis');
+  const resolvedName = String(name || host || 'Agensis daemon').trim().slice(0, 80) || 'Agensis daemon';
+  const existing = await getDb().unsafe(
+    'select * from workspace_agents where workspace_id = $1 and handle = $2 limit 1',
+    [workspaceId, resolvedHandle],
+  );
+  if (existing[0]) return existing[0];
+
+  const metadata = {
+    runtime: 'agensis-cli',
+    host: String(host || '').trim().slice(0, 160),
+    cwd: String(cwd || '').trim().slice(0, 500),
+    primary: true,
+  };
+  const rows = await getDb().unsafe(
+    `insert into workspace_agents
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+     values
+       ($1, $2, $3, $4, $5, 'auto', 'daemon', $6, 'AI', '#ffe04a', true, $7, $8::jsonb, $9::jsonb)
+     returning *`,
+    [
+      workspaceId,
+      resolvedName,
+      resolvedHandle,
+      'Primary local Agensis CLI daemon for this machine.',
+      'You are the primary local Agensis daemon for this machine. Coordinate local CLIs, CursorBuddy surfaces, browser extensions, desktop clients, and subagents through Agensis. Keep actions logged and route source edits through the authorized local checkout.',
+      normalizeAgentPermissionMode(permissionMode || 'default'),
+      userId,
+      JSON.stringify([{ type: 'runtime', name: 'agensis-cli', metadata }]),
+      JSON.stringify(['primary-daemon', 'cursorbuddy', 'agent-mesh', 'local-source-edit']),
+    ],
+  );
+  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
+  return rows[0];
+}
+
 function normalizeBaseUrl(value) {
   const text = String(value || '').trim().replace(/\/+$/, '');
   if (!text) return '';
@@ -5218,6 +5284,61 @@ function createApp() {
         [req.userId],
       );
       res.json({ data: rows.map(publicWorkspace), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/agensis/setup/connect', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = await resolveSetupWorkspace(req.userId, req.body?.workspaceId || req.body?.workspace_id);
+      const host = String(req.body?.host || '').trim().slice(0, 160);
+      const cwd = String(req.body?.cwd || '').trim().slice(0, 500);
+      const agent = await ensurePrimaryDaemonAgent({
+        workspaceId,
+        userId: req.userId,
+        handle: req.body?.handle,
+        name: req.body?.name || host || 'Agensis daemon',
+        host,
+        cwd,
+        permissionMode: req.body?.permissionMode || req.body?.permission_mode,
+      });
+      const baseUrl = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+        || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
+        || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
+      const payload = await buildAgentConnectionCommand({
+        agentId: agent.id,
+        workspaceId,
+        handle: req.body?.handle || agent.handle || agent.name,
+        model: req.body?.model || agent.model,
+        permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
+        baseUrl,
+      });
+      const daemonArgs = {
+        command: 'connect',
+        url: payload.baseUrl || baseUrl || requestBaseUrl(req),
+        token: payload.token,
+        workspace: workspaceId,
+        agent: agent.id,
+        handle: payload.handle || agent.handle,
+        name: payload.agent?.name || agent.name,
+        cwd: cwd || '',
+        model: payload.model,
+        permissionMode: payload.permissionMode,
+      };
+      res.json({
+        data: {
+          workspaceId,
+          agentId: agent.id,
+          workspace_id: workspaceId,
+          agent_id: agent.id,
+          agent: payload.agent,
+          token: payload.token,
+          command: payload.command,
+          daemonArgs,
+        },
+        error: null,
+      });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
