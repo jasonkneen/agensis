@@ -502,9 +502,139 @@ function laneKeyForJob(job) {
   return `${session}::${thread}`;
 }
 
+const CURSOR_BUDDY_CONTROL_SUBJECT_RE = /\b(cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\b/i;
+const CURSOR_BUDDY_SAY_RE_LIST = [
+  /\b(?:make|have|tell)\s+(?:the\s+)?(?:cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\s+(?:say|speak)\s+(.+)$/i,
+  /\b(?:say|speak)\s+(.+)$/i,
+];
+
+function cleanupCursorBuddySpeech(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^[`"'“”‘’]+|[`"'“”‘’?.!]+$/g, "")
+    .trim()
+    .slice(0, 1200);
+}
+
+function extractCursorBuddySpeech(text) {
+  for (const pattern of CURSOR_BUDDY_SAY_RE_LIST) {
+    const match = String(text || "").match(pattern);
+    const speech = cleanupCursorBuddySpeech(match?.[1] || "");
+    if (speech) return speech;
+  }
+  return "";
+}
+
+function parseCursorBuddyControlIntent(message) {
+  const text = String(message || "").replace(/\s+/g, " ").trim();
+  if (!text || text.length > 500) return null;
+  const directCommand = /^(wave|say|speak|open|show|hide|hush|close|dismiss)\b/i.test(text);
+  const mentionsBuddy = CURSOR_BUDDY_CONTROL_SUBJECT_RE.test(text);
+  if (!directCommand && !mentionsBuddy) return null;
+
+  const source = "agensis-native-control";
+  if (/\b(hide|hush|close|dismiss|clear)\b.*\b(bubble|prompt|dialog|panel|options|menu)\b/i.test(text) || /^hush\b/i.test(text)) {
+    return { action: "hush", source };
+  }
+  if (/\b(open|show|bring up|get back|display)\b.*\b(prompt|bubble|dialog|panel|options|menu)\b/i.test(text) || /^open\b/i.test(text)) {
+    return { action: "open", source };
+  }
+
+  const speech = extractCursorBuddySpeech(text);
+  if (speech && (mentionsBuddy || /^(say|speak)\b/i.test(text))) {
+    return { action: "say", text: speech, source };
+  }
+
+  if (/\b(wave|waves|waving)\b/i.test(text)) {
+    return { action: "wave", text: speech, source };
+  }
+
+  return null;
+}
+
+async function postCursorBuddyControlCommand(config, intent) {
+  const port = Number(config.cursorBuddyPort || 8787);
+  const url = `http://127.0.0.1:${port}/cursorbuddy/control`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(intent),
+  });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (!response.ok || body?.ok === false) {
+    throw new Error(body?.error || `CursorBuddy control failed with HTTP ${response.status}`);
+  }
+  return body;
+}
+
+function cursorBuddyControlResultText(intent) {
+  if (intent.action === "wave") return "Sent CursorBuddy a wave command.";
+  if (intent.action === "say") return `Sent CursorBuddy speech: ${intent.text || ""}`.trim();
+  if (intent.action === "open") return "Opened CursorBuddy's prompt.";
+  if (intent.action === "hush") return "Dismissed CursorBuddy's bubble.";
+  if (intent.action === "choose") return "Sent CursorBuddy options.";
+  return "Sent CursorBuddy control command.";
+}
+
+async function runCursorBuddyControlJob(config, job, intent, started) {
+  const model = "cursorbuddy-control";
+  const permissionMode = "native";
+  const permissionFlags = [];
+  const sendDelta = (content = "") => {
+    send(job.ws, {
+      action: "agent_job_delta",
+      jobId: job.id,
+      content,
+      elapsedMs: Date.now() - started,
+      model,
+      permissionMode,
+      permissionFlags,
+    });
+  };
+
+  sendDelta("");
+  let response = "";
+  let error = "";
+  try {
+    await postCursorBuddyControlCommand(config, intent);
+    response = cursorBuddyControlResultText(intent);
+    sendDelta(response);
+  } catch (err) {
+    error = String(err?.message || err);
+    response = `CursorBuddy control failed: ${error}`;
+    sendDelta(response);
+  }
+
+  send(job.ws, {
+    action: "agent_job_result",
+    jobId: job.id,
+    response,
+    error,
+    elapsedMs: Date.now() - started,
+    model,
+    permissionMode,
+    permissionFlags,
+  });
+  log(`Finished native CursorBuddy ${intent.action} job ${job.id} in ${Math.round((Date.now() - started) / 1000)}s`);
+}
+
 async function runAgentJob(config, job, { signal }) {
   const started = Date.now();
   log(`Starting job ${job.id}`);
+  const cursorBuddyIntent = parseCursorBuddyControlIntent(job.prompt);
+  if (cursorBuddyIntent && config.cursorBuddyBridge !== false) {
+    await runCursorBuddyControlJob(config, job, cursorBuddyIntent, started);
+    if (config.once) {
+      log("One-shot CursorBuddy control job complete; exiting.");
+      setTimeout(() => process.exit(0), 150);
+    }
+    return;
+  }
   const command = buildAgentCommand(config, job);
   const prompt = await buildPrompt(config, job);
   let fullContent = "";
@@ -630,13 +760,9 @@ function cursorBuddyControlInstructions(config) {
   return [
     "CursorBuddy surface control:",
     `- Visible browser/desktop/avatar surfaces poll ${base}/cursorbuddy/control for commands.`,
-    `- If the user asks you to make the avatar wave, speak, open its prompt, hide its bubble, or otherwise control the visible buddy, call this local endpoint immediately from the shell.`,
-    `- Examples:`,
-    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"wave","text":"Hi, Jason."}'`,
-    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"say","text":"I am connected to Agensis."}'`,
-    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"open","text":"What should we do next?"}'`,
+    `- Clear one-shot requests to make the visible buddy wave, speak, open its prompt, or hide its bubble are handled by this daemon before the coding CLI starts.`,
     `- Supported actions: wave, say, hush, open, choose.`,
-    `- After sending the control command, report briefly that it was sent; do not explain the implementation unless asked.`,
+    `- If a visible buddy action is part of a larger coding task, mention the desired action in your final response.`,
   ].join("\n");
 }
 
@@ -1029,3 +1155,9 @@ function slugHandle(value) {
 function log(message) {
   process.stderr.write(`[agensis] ${message}\n`);
 }
+
+export const __test = {
+  cursorBuddyControlInstructions,
+  parseCursorBuddyControlIntent,
+  runAgentJob,
+};
