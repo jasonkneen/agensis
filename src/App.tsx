@@ -1004,6 +1004,26 @@ function AppContent() {
     openWindow('users', { title: 'Users', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  // CursorBuddy links unauthenticated users here with
+  // ?source=cursorbuddy&referrer=cursorbuddy&intent=connect. Once login
+  // completes, take them straight to the live agent/connection surface.
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const source = (params.get('source') || '').toLowerCase();
+    const referrer = (params.get('referrer') || '').toLowerCase();
+    const intent = (params.get('intent') || '').toLowerCase();
+    if (source !== 'cursorbuddy' && referrer !== 'cursorbuddy') return;
+    if (intent && !['connect', 'login', 'setup'].includes(intent)) return;
+
+    handleOpenAgents();
+    params.delete('source');
+    params.delete('referrer');
+    params.delete('intent');
+    const qs = params.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
+  }, [user, handleOpenAgents]);
+
   // Quick "copy invite link" used by the presence popup: mints an editor invite
   // for the active workspace and copies the shareable URL.
   const handleCopyInviteLink = useCallback(async (): Promise<string | null> => {
