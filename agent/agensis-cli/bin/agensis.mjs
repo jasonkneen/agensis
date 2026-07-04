@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { AGENSIS_CLI_VERSION, runAgensisDaemon } from "../src/agensis.mjs";
+import {
+  daemonProfileName,
+  daemonProfileSetupMessage,
+  hasCompleteDaemonConnection,
+  hasDaemonConnectionMaterial,
+  mergeDaemonProfile,
+  readDaemonProfile,
+  writeDaemonProfile,
+} from "../src/connectProfiles.mjs";
 import { claimCursorBuddyConnectionKey } from "../src/cursorbuddyConnect.mjs";
 
 function parseArgs(argv) {
@@ -62,6 +71,7 @@ function usage() {
 Usage:
   agensis --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
   agensis connect --url <workspace-url> --token <token> --workspace <id> --agent <id> [options]
+  agensis connect [--profile <name>]
   agensis buddy connect --key <cbk_...> [--url <agensis-url>] [options]
 
 Required:
@@ -85,9 +95,31 @@ Options:
   --once                  Run one queued job then exit
   --lan                   Opt in to the agent-mesh LAN listener for direct
                           daemon-to-daemon job handoff (default: off)
+  --profile <name>        Save/reuse a local daemon profile, default: default
   --version               Print the CLI version
   --help                  Show this help
 `;
+}
+
+async function daemonArgsForConnect(args) {
+  const profile = daemonProfileName(args.profile || "default");
+  if (!hasDaemonConnectionMaterial(args)) {
+    const cached = await readDaemonProfile(profile);
+    if (!cached) throw new Error(daemonProfileSetupMessage(profile));
+    return mergeDaemonProfile(cached, args);
+  }
+
+  if (!hasCompleteDaemonConnection(args)) {
+    return args;
+  }
+
+  return {
+    ...args,
+    onRegistered: async (config) => {
+      await writeDaemonProfile(profile, config);
+      process.stdout.write(`[agensis] Saved daemon profile "${profile}". Restart with: agensis connect${profile === "default" ? "" : ` --profile ${profile}`}\n`);
+    },
+  };
 }
 
 async function main() {
@@ -113,9 +145,10 @@ async function main() {
   if (args.command !== "connect") {
     throw new Error(`Unknown command "${args.command}". Use "agensis --url ...", "agensis connect --url ...", or "agensis buddy connect --key ...".`);
   }
-  args.exitOnOnce = true;
-  await runAgensisDaemon(args);
-  if (args.once) {
+  const daemonArgs = await daemonArgsForConnect(args);
+  daemonArgs.exitOnOnce = true;
+  await runAgensisDaemon(daemonArgs);
+  if (daemonArgs.once) {
     process.exit(0);
   }
 }

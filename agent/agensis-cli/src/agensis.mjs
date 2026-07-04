@@ -257,6 +257,11 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (message.type === "agent_registered") {
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
+        if (config.onRegistered) {
+          void Promise.resolve(config.onRegistered(config, message)).catch((error) => {
+            log(`Profile save failed: ${error?.message || error}`);
+          });
+        }
         void writeAgentMirror(config, message.agent).catch(() => {});
         // Seed heartbeat.md (what to do on each beat) if it doesn't exist yet; never
         // clobbers an existing file, so human/agent edits persist across restarts.
@@ -415,6 +420,7 @@ function normalizeConfig(raw) {
     maxConcurrency: Math.max(1, Number(raw.maxConcurrency || process.env.AGENSIS_MAX_CONCURRENCY || DEFAULT_MAX_CONCURRENCY) || DEFAULT_MAX_CONCURRENCY),
     once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
+    onRegistered: typeof raw.onRegistered === "function" ? raw.onRegistered : null,
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
     // Default OFF — a daemon never opens a network listener unless asked to.
     lanListener: Boolean(raw.lanListener || raw.lan || process.env.AGENSIS_LAN === "1"),
