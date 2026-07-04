@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Menu } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
@@ -112,6 +112,13 @@ const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
+
+// In the Electron desktop shell the window uses a hidden-inset title bar, so the
+// native macOS traffic lights overlay the app content. Reserve a small clear
+// strip at the top so the sidebar WORKSPACE header sits below them. Web builds
+// (no window.electronAPI) get zero inset — layout is byte-identical there.
+const IS_ELECTRON = typeof window !== 'undefined' && Boolean((window as unknown as { electronAPI?: unknown }).electronAPI);
+const ELECTRON_TITLEBAR_INSET = IS_ELECTRON ? 28 : 0;
 
 function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'chat') return <MessageSquare className="size-4" />;
@@ -1405,7 +1412,7 @@ function AppContent() {
 
   return (
     <TooltipProvider>
-    <div className="relative flex h-screen overflow-hidden bg-background" style={{ gap: WORKSPACE_CHROME_GAP, padding: WORKSPACE_CHROME_GAP }}>
+    <div className="relative flex h-screen overflow-hidden bg-background" style={{ gap: WORKSPACE_CHROME_GAP, padding: WORKSPACE_CHROME_GAP, paddingTop: WORKSPACE_CHROME_GAP + ELECTRON_TITLEBAR_INSET }}>
       <img
         src={workspaceBackdropImage}
         alt=""
