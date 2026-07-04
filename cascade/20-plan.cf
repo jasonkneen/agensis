@@ -153,23 +153,122 @@ PLAN P10<-F14 op=diff at=agent/agensis-cli/src/agensis.mjs:80-268#"url.searchPar
          action: "agent_register",
 >>>
 PLAN P11<-F4 op=diff at=shared/backend-core.mjs:25-45#"export const ALLOWED_TABLES = new Set([" why=single-source-security-core-dedup ref=server/index.cjs:21-72,server/index.cjs:566-615,server/index.cjs:1004-1032,netlify/functions/backend.mjs:66-109,netlify/functions/backend.mjs:404-422 test="node --experimental-test-module-mocks --test tests/netlify-parity.test.cjs" order=3 fill=S
-# STRUCTURAL (human): three security cores have already diverged — ALLOWED_TABLES
-# {server 24 (incl agent_jobs,agent_registrations,agent_memory_files,memory_file_comments,thread_items)
-# vs shared 19 vs netlify 18}, JSON_COLUMNS {server agent_connections has 'capabilities',
-# netlify lacks it → capability writes not cast ::jsonb}, buildWhereClause {server+P4 have
-# 'not', shared has none}, and the yolo-escalation split (P5). netlify already imports the
-# ESM shared core; the drift is server's hand-kept CJS copies + each runtime's local
-# buildWhereClause/ALLOWED_TABLES. Plan:
-#  1. Move ALLOWED_TABLES, VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE, buildWhereClause,
-#     quoteIdent/normalizeColumns/bindDbParam into shared/backend-core.mjs (superset).
-#  2. netlify: import those from shared, delete its local copies (lines 66-109,404-422).
-#  3. server (CJS): load the ESM core once at startup via `await import(...)` (already
-#     imports enforceDbOperationAccess this way per the notes) and delete its duplicated
-#     table/role/whereclause blocks (21-72,566-615,1004-1032). The CJS/ESM split noted at
-#     server/index.cjs:1143-1150 is the blocker to weigh — dynamic import resolves it.
-# Land P1/P2/P4/P5 first as point fixes; this dedup makes future drift structurally
-# impossible. Effort: Medium. Guard with tests/netlify-parity.test.cjs (extend to assert
-# identical ALLOWED_TABLES/JSON_COLUMNS across all three exports).
+# SUPERSEDED by P11b..P11g (ESC E1 / RES R1 respec=cjs-core-conversion-not-startup-dynamic-import).
+# Original plan step 3 (server dynamic-import of the ESM core at startup) is invalid:
+# server/index.cjs is CJS with no top-level await and its consumers (electron/main.cjs:3,
+# npm test) require it synchronously. See cascade/esc/E1.cf for the full resolution.
+PLAN P11b<-F4c op=move at=shared/backend-core.mjs->shared/backend-core.cjs#"import crypto from 'node:crypto';" why=core-esm-to-cjs-single-static-module ref=shared/backend-core.mjs:18,shared/backend-core.mjs:25,netlify/functions/backend.mjs:7-16,electron/main.cjs:3,tests/backend-rbac.test.cjs:27 test="node -e \"const c=require('./shared/backend-core.cjs'); for(const k of ['verifyAuthToken','enforceDbOperationAccess','assertWorkspaceRole','ALLOWED_TABLES']) if(!(k in c)) throw new Error('missing '+k)\"" order=3 fill=S
+# F4c: git mv shared/backend-core.mjs -> shared/backend-core.cjs, mechanical ESM->CJS:
+#  - `import crypto from 'node:crypto'` -> `const crypto = require('node:crypto')`.
+#  - strip `export` from every top-level const / function / async function.
+#  - append ONE static literal `module.exports = { <every previously-exported name> }`
+#    (verifyAuthToken, enforceDbOperationAccess, assertWorkspaceRole, ALLOWED_TABLES,
+#    WORKSPACE_SCOPED_TABLES, WORKSPACE_ROLE_CAPABILITIES, DB_TABLE_ACCESS,
+#    createTokenVersionCache, appendWorkspaceAccessClause, logMessageActivityIdempotent,
+#    createRateLimiter, evaluatePasswordServerSide, findFilterValue,
+#    resolveOperationWorkspace, userCanAccessWorkspace, getWorkspaceRole,
+#    roleHasWorkspaceCapability, assertUpdateKeepsTenancy, httpError, unauthorized,
+#    forbidden, badRequest, PASSWORD_MIN_LENGTH, PASSWORD_MIN_CLASSES) PLUS the two
+#    added by P11c (VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE). Literal object keys keep
+#    ESM named-import interop working (F4d / cjs-module-lexer). No behavior change.
+PLAN P11c<-F4 op=replace at=shared/backend-core.cjs:25-45#"const ALLOWED_TABLES = new Set([" why=widen-core-to-server-superset ref=server/index.cjs:21-45,server/index.cjs:47-62,server/index.cjs:64-72,netlify/functions/backend.mjs:69-112 test="node -e \"const c=require('./shared/backend-core.cjs'); if(!c.ALLOWED_TABLES.has('thread_items')||!c.JSON_COLUMNS_BY_TABLE.agent_connections.has('capabilities')||!c.VERSIONED_TABLES.has('agent_memory_files')) process.exit(1)\"" order=4 fill=-
+<<<P11c
+const ALLOWED_TABLES = new Set([
+  'app_users',
+  'workspaces',
+  'documents',
+  'chat_sessions',
+  'messages',
+  'memory_facts',
+  'uploaded_files',
+  'workspace_members',
+  'canvas_groups',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'task_comments',
+  'document_versions',
+  'workspace_agents',
+  'agent_webhooks',
+  'agent_connections',
+  'agent_jobs',
+  'agent_registrations',
+  'activity_events',
+  'agent_memory_files',
+  'memory_file_comments',
+  'thread_items',
+]);
+
+// F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
+// destructure these from here so a table/column can never be exposed on one backend
+// but not the other again (netlify was 18 tables, missing agent_connections.capabilities
+// -> capability writes not cast ::jsonb). VERSIONED_TABLES + JSON_COLUMNS_BY_TABLE are
+// new core exports — add both to module.exports (P11b).
+const VERSIONED_TABLES = new Set([
+  'workspaces',
+  'documents',
+  'chat_sessions',
+  'memory_facts',
+  'uploaded_files',
+  'canvas_groups',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'task_comments',
+  'workspace_agents',
+  'agent_webhooks',
+  'agent_memory_files',
+  'memory_file_comments',
+]);
+
+const JSON_COLUMNS_BY_TABLE = {
+  chat_sessions: new Set(['participants']),
+  canvas_objects: new Set(['points']),
+  workspace_agents: new Set(['tools', 'skills']),
+  agent_connections: new Set(['metadata', 'capabilities']),
+  agent_jobs: new Set(['metadata']),
+  activity_events: new Set(['metadata']),
+  messages: new Set(['reactions']),
+};
+>>>
+PLAN P11d<-F4d op=diff at=netlify/functions/backend.mjs:7-112#"} from '../../shared/backend-core.mjs';" why=netlify-consume-shared-allow-sets ref=netlify/functions/backend.mjs:7-16,netlify/functions/backend.mjs:69-112 test="node --input-type=module -e \"import('./netlify/functions/backend.mjs').then(m=>{if(typeof m.default!=='function')process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})\"" order=5 fill=S
+# F4d: netlify already imports named security fns from the core; now also source the
+# allow-sets from it. Edits to netlify/functions/backend.mjs:
+#  1. Import specifier :16 '../../shared/backend-core.mjs' -> '../../shared/backend-core.cjs'.
+#  2. Add ALLOWED_TABLES, VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE to the named-import
+#     list (7-16). ESM named imports resolve from the CJS core because module.exports is
+#     one static literal (F4d / cjs-module-lexer).
+#  3. DELETE local const ALLOWED_TABLES (69-88), VERSIONED_TABLES (90-103),
+#     JSON_COLUMNS_BY_TABLE (105-112). Call-site names unchanged. Netlify thereby gains
+#     the 5 missing tables + agent_connections.capabilities ::jsonb cast.
+PLAN P11e<-F4a op=diff at=server/index.cjs:13-72#"= require('./skills.cjs');" why=server-require-shared-allow-sets-sync ref=server/index.cjs:13,server/index.cjs:21-72,electron/main.cjs:3 test="bash -c \"node --check server/index.cjs && node -e 'const c=require(\\\"./shared/backend-core.cjs\\\"); if(!c.VERSIONED_TABLES) process.exit(1)'\"" order=5 fill=S
+# F4a/F4b: leave server's OWN divergent security FUNCTIONS (enforceDbOperationAccess :566,
+# resolveOperationWorkspace, buildWhereClause :1005, WORKSPACE_SCOPED_TABLES :347,
+# DB_TABLE_ACCESS :370) — different signatures, out of scope; dedup only the DATA.
+# Edits to server/index.cjs:
+#  1. After the skills.cjs require (:13) add exactly:
+#     const { ALLOWED_TABLES, VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE } = require('../shared/backend-core.cjs');
+#     SYNCHRONOUS require (F4b: CJS has no top-level await; electron/main.cjs:3 and npm
+#     test consume server exports synchronously) — NOT dynamic import (the E1 blocker).
+#  2. DELETE local const ALLOWED_TABLES/VERSIONED_TABLES/JSON_COLUMNS_BY_TABLE at 21-72.
+#     Names unchanged, so every call site keeps working.
+PLAN P11f<-F4e op=replace at=package.json:92-97#"    \"files\": [" why=package-shared-for-electron-require ref=package.json:92-97,electron/main.cjs:3 test="bash -c 'grep -q \"shared/\\*\\*/\\*\" package.json && test -f shared/backend-core.cjs'" order=5 fill=-
+<<<P11f
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "package.json"
+    ],
+>>>
+PLAN P11g<-F4c op=replace at=tests/netlify-parity.test.cjs:65,tests/backend-rbac.test.cjs:27,tests/activity-idempotency.test.cjs:23#"'../shared/backend-core.mjs'" why=retarget-test-import-to-cjs ref=tests/netlify-parity.test.cjs:44-65,tests/backend-rbac.test.cjs:27,tests/activity-idempotency.test.cjs:23 test="node --experimental-test-module-mocks --test tests/netlify-parity.test.cjs tests/backend-rbac.test.cjs tests/activity-idempotency.test.cjs" order=6 fill=S
+# Q1 RESOLVED: in all three files change the dynamic-import specifier
+# '../shared/backend-core.mjs' -> '../shared/backend-core.cjs' (netlify-parity:65,
+# backend-rbac:27, activity-idempotency:23). The mock.module at netlify-parity:44 hooks
+# '@netlify/database' ONLY — it does NOT target the core, so no mock change is needed.
+# `await import()` of a .cjs still yields named exports (cjs-module-lexer). Full-suite
+# run is the F4d interop guard (backend.mjs -> core.cjs and direct core.cjs import).
 PLAN P12<-F3 op=replace at=server/index.cjs:4636-4640#"function gitRootOf(workspace) {" why=allowlist-host-project-roots ref=server/index.cjs:3395-3416,server/index.cjs:4579-4605,server/index.cjs:4690-4797,server/index.cjs:634-637 test="node --experimental-test-module-mocks --test tests/git-stage-symlink.test.cjs" order=3 fill=S
 # SECURITY (human): git_root/local_path are user-writable workspace columns (set via the
 # generic /backend/db/workspaces update, which needs only 'manage'), and gitRootOf +
@@ -231,4 +330,4 @@ PLAN P16<-F11 op=replace at=fly.toml:24-37#"# AGENSIS_UPLOAD_ROOT = \"/data/uplo
 #    / the upload+content routes read/write via the bucket. Preferred for the shared backend.
 # This is infra + (for option 2) a storage-adapter change in server/index.cjs; needs the
 # owner's deploy decision. Effort: Quick (volume) / Medium (object storage).
-DONE stage=O plan=16 tok~=3050
+DONE stage=O plan=21 tok~=3550

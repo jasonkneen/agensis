@@ -13,7 +13,10 @@ import {
   createRateLimiter,
   evaluatePasswordServerSide,
   createTokenVersionCache,
-} from '../../shared/backend-core.mjs';
+  ALLOWED_TABLES,
+  VERSIONED_TABLES,
+  JSON_COLUMNS_BY_TABLE,
+} from '../../shared/backend-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -43,6 +46,9 @@ const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // Per-IP FAILED-attempt limiter (L3): bounds credential-stuffing across emails.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
+// top of the 'manage' capability gate below (mirrors server/index.cjs).
+const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 function clientIpFromRequest(req) {
   // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -62,51 +68,6 @@ function rateLimitBlock(limiter, key) {
     { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
   );
 }
-
-const ALLOWED_TABLES = new Set([
-  'app_users',
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'messages',
-  'memory_facts',
-  'uploaded_files',
-  'workspace_members',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'document_versions',
-  'workspace_agents',
-  'agent_webhooks',
-  'agent_connections',
-  'activity_events',
-]);
-
-const VERSIONED_TABLES = new Set([
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'memory_facts',
-  'uploaded_files',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'workspace_agents',
-  'agent_webhooks',
-]);
-
-const JSON_COLUMNS_BY_TABLE = {
-  chat_sessions: new Set(['participants']),
-  canvas_objects: new Set(['points']),
-  workspace_agents: new Set(['tools', 'skills']),
-  agent_connections: new Set(['metadata']),
-  agent_jobs: new Set(['metadata']),
-  activity_events: new Set(['metadata']),
-};
 
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
 const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
@@ -329,7 +290,17 @@ function jsonErrorWithData(status, error, data = null) {
 }
 
 function getAuthSecret() {
-  return process.env.AUTH_SECRET || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL || 'netlify-preview-auth-secret';
+  const secret = process.env.AUTH_SECRET;
+  if (secret) return secret;
+  // F2: NEVER fall back to the DB URL or a hardcoded constant — either makes the
+  // HMAC session secret guessable/forgeable. Fail closed in production; only the
+  // dev/preview sandbox may use a fixed placeholder.
+  if (process.env.NODE_ENV === 'production') {
+    const err = new Error('Server auth is not configured (set AUTH_SECRET)');
+    err.status = 500;
+    throw err;
+  }
+  return 'netlify-preview-auth-secret';
 }
 
 function issueToken(userId, tokenVersion) {
@@ -410,9 +381,21 @@ function buildWhereClause(filters = [], params = []) {
   for (const filter of filters) {
     if (!filter || typeof filter !== 'object') continue;
     const operator = filter.operator || 'eq';
-    if (operator !== 'eq') throw new Error(`Unsupported filter operator: ${operator}`);
-    params.push(filter.value ?? null);
-    clauses.push(`${quoteIdent(filter.column)} = $${params.length}`);
+    if (operator === 'eq') {
+      params.push(filter.value ?? null);
+      clauses.push(`${quoteIdent(filter.column)} = $${params.length}`);
+      continue;
+    }
+    // F5: mirror server/index.cjs — the only supported `not` is `.not(col,'is',null)`
+    // → IS NOT NULL (sub-threads query). Anything else is rejected, not silently run.
+    if (operator === 'not') {
+      if (filter.subOperator !== 'is' || filter.value !== null) {
+        throw new Error(`Unsupported not filter: ${filter.subOperator} ${filter.value}`);
+      }
+      clauses.push(`${quoteIdent(filter.column)} IS NOT NULL`);
+      continue;
+    }
+    throw new Error(`Unsupported filter operator: ${operator}`);
   }
 
   return {
@@ -753,14 +736,17 @@ async function handleCreateAgentWebhook(req, userId) {
     const agentRows = await query('select id from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
     if (!agentRows[0]) return jsonError(404, new Error('Agent not found in this workspace'));
   }
+  // F10: store only the hash (mirrors server/index.cjs) — same agent_webhooks
+  // table/trigger route, so both writers must hash or the trigger's dual-path
+  // lookup would never match a netlify-created row.
   const token = crypto.randomBytes(32).toString('base64url');
   const rows = await query(
     `insert into agent_webhooks (workspace_id, agent_id, name, token)
      values ($1, $2, $3, $4)
      returning *`,
-    [workspaceId, agentId || null, name, token],
+    [workspaceId, agentId || null, name, hashAgentToken(token)],
   );
-  return json({ data: rows[0], error: null });
+  return json({ data: { ...rows[0], token }, error: null });
 }
 
 async function handleAgentConnectionCommand(req, agentId, userId) {
@@ -1354,8 +1340,16 @@ async function route(req) {
     return handleSignOut(await requireUserId(req));
   }
   if (req.method === 'POST' && pathname === '/backend/rpc/lookup_user_by_email') {
-    await requireUserId(req);
+    // F9: same fix as server/index.cjs — rate limit + require 'manage' on the
+    // workspace the caller is inviting into (this RPC is only meaningfully
+    // used by the "invite existing user" flow, src/hooks/useSharing.ts).
+    const userId = await requireUserId(req);
+    const blocked = rateLimitBlock(emailLookupRateLimiter, userId);
+    if (blocked) return blocked;
     const body = await readBody(req);
+    const workspaceId = String(body?.workspace_id || '').trim();
+    if (!workspaceId) return jsonError(400, new Error('workspace_id is required'));
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const lookupEmail = String(body?.lookup_email || '').trim().toLowerCase();
     const rows = await query('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
     return json({ data: rows, error: null });

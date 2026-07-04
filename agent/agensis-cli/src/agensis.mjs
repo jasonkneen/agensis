@@ -79,6 +79,9 @@ export async function runAgensisDaemon(rawConfig = {}) {
 
     ws.on("open", () => {
       log(`Connected. Registering @${config.handle || "agent"} from ${config.cwd}`);
+      // F14: authenticate via a first frame so the aga_ token never rides the WS
+      // URL query (proxy/access logs). Server path (2) verifies agent tokens here.
+      send(ws, { type: "auth", token: config.token });
       send(ws, {
         action: "agent_register",
         workspaceId: config.workspace,
@@ -265,7 +268,6 @@ function socketUrl(baseUrl, token, config = {}) {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/backend/ws";
   url.search = "";
-  url.searchParams.set("agentToken", token);
   if (config.workspace) url.searchParams.set("workspaceId", config.workspace);
   if (config.agent) url.searchParams.set("agentId", config.agent);
   return url.toString();

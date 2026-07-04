@@ -67,8 +67,9 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
   const inviteByEmail = useCallback(async (email: string): Promise<{ error: string | null }> => {
     if (!workspaceId || !currentUserId) return { error: 'Not ready' };
 
+    // F9: the RPC now requires 'manage' on the target workspace (enumeration guard).
     const { data: users, error: lookupErr } = await backendClient
-      .rpc<Array<{ id: string }>>('lookup_user_by_email', { lookup_email: email });
+      .rpc<Array<{ id: string }>>('lookup_user_by_email', { lookup_email: email, workspace_id: workspaceId });
 
     if (lookupErr || !users || users.length === 0) {
       return { error: 'No user found with that email address. They need to sign up first.' };

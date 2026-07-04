@@ -24,7 +24,7 @@ const { pathToFileURL } = require('node:url');
 
 let core;
 test.before(async () => {
-  core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.mjs')).href);
+  core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.cjs')).href);
 });
 
 function eq(column, value) {

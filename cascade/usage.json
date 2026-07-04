@@ -1,0 +1,175 @@
+{
+  "task": "Full code review \u2014 whole codebase, architecture-level.",
+  "ts": "2026-07-04T00:00:00Z",
+  "baseline_model": "claude-opus-4-8",
+  "assumptions": {
+    "snowball": 2.3,
+    "echo": 1.6
+  },
+  "stages": [
+    {
+      "stage": "F",
+      "model": "claude-fable-5",
+      "input_tokens": null,
+      "output_tokens": null,
+      "total_tokens": 289993,
+      "out_reported": 1400,
+      "duration_ms": 594051,
+      "counters": {
+        "find": 14,
+        "open": 1
+      }
+    },
+    {
+      "stage": "O",
+      "model": "claude-opus-4-8",
+      "input_tokens": null,
+      "output_tokens": null,
+      "total_tokens": 147971,
+      "out_reported": 3050,
+      "duration_ms": 600956,
+      "counters": {
+        "plan": 16
+      }
+    },
+    {
+      "stage": "S",
+      "model": "claude-sonnet-5",
+      "input_tokens": null,
+      "output_tokens": null,
+      "total_tokens": 170395,
+      "out_reported": 700,
+      "duration_ms": 1013701,
+      "counters": {
+        "ok": 14,
+        "adapt": 0,
+        "blk": 2,
+        "deleg": 0,
+        "esc": 0
+      }
+    },
+    {
+      "stage": "S",
+      "model": "claude-sonnet-5",
+      "input_tokens": null,
+      "output_tokens": null,
+      "total_tokens": 83671,
+      "out_reported": 400,
+      "duration_ms": 176576,
+      "counters": {
+        "ok": 6,
+        "adapt": 0,
+        "blk": 0,
+        "deleg": 0,
+        "esc": 0
+      }
+    }
+  ],
+  "escalations": [
+    {
+      "id": "E1",
+      "from": "S",
+      "why": "spec-conflict",
+      "model": "claude-fable-5",
+      "total_tokens": 37179,
+      "out_reported": 560,
+      "duration_ms": 141362
+    },
+    {
+      "id": "E1-replan",
+      "from": "F",
+      "why": "spec-conflict",
+      "model": "claude-opus-4-8",
+      "total_tokens": 102106,
+      "out_reported": 1500,
+      "duration_ms": 550830
+    }
+  ],
+  "computed": {
+    "priced_at": "2026-07-04",
+    "rates": {
+      "claude-fable-5": [
+        10.0,
+        50.0
+      ],
+      "claude-opus-4-8": [
+        5.0,
+        25.0
+      ],
+      "claude-sonnet-5": [
+        2.0,
+        10.0
+      ],
+      "claude-haiku-4-5": [
+        1.0,
+        5.0
+      ]
+    },
+    "per_entry": [
+      {
+        "label": "F",
+        "model": "claude-fable-5",
+        "input_tokens": 288593,
+        "output_tokens": 1400,
+        "split": "derived",
+        "cost_usd": 2.9559
+      },
+      {
+        "label": "O",
+        "model": "claude-opus-4-8",
+        "input_tokens": 144921,
+        "output_tokens": 3050,
+        "split": "derived",
+        "cost_usd": 0.8009
+      },
+      {
+        "label": "S",
+        "model": "claude-sonnet-5",
+        "input_tokens": 169695,
+        "output_tokens": 700,
+        "split": "derived",
+        "cost_usd": 0.3464
+      },
+      {
+        "label": "S",
+        "model": "claude-sonnet-5",
+        "input_tokens": 83271,
+        "output_tokens": 400,
+        "split": "derived",
+        "cost_usd": 0.1705
+      },
+      {
+        "label": "ESC E1",
+        "model": "claude-fable-5",
+        "input_tokens": 36619,
+        "output_tokens": 560,
+        "split": "derived",
+        "cost_usd": 0.3942
+      },
+      {
+        "label": "ESC E1-replan",
+        "model": "claude-opus-4-8",
+        "input_tokens": 100606,
+        "output_tokens": 1500,
+        "split": "derived",
+        "cost_usd": 0.5405
+      }
+    ],
+    "totals": {
+      "input_tokens": 823705,
+      "output_tokens": 7610,
+      "cost_usd": 5.2084
+    },
+    "baseline": {
+      "model": "claude-opus-4-8",
+      "floor_usd": 4.3088,
+      "modeled_usd": 9.777,
+      "savings_floor_x": 0.83,
+      "savings_modeled_x": 1.88,
+      "assumptions": {
+        "snowball": 2.3,
+        "echo": 1.6
+      }
+    }
+  }
+}

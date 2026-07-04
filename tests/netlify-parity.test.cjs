@@ -62,7 +62,7 @@ test.before(async () => {
   });
   const backend = await import(pathToFileURL(path.resolve(__dirname, '../netlify/functions/backend.mjs')).href);
   handler = backend.default;
-  core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.mjs')).href);
+  core = await import(pathToFileURL(path.resolve(__dirname, '../shared/backend-core.cjs')).href);
 });
 
 function makeRequest(method, pathname, { token } = {}) {

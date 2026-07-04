@@ -40,7 +40,7 @@ test.afterEach(() => resetTestState());
 // --- invite-token auth (the ONE link) --------------------------------------
 
 test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
-  use([{ match: /from workspace_invites where token in \(\$1, \$2\) and status in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
+  use([{ match: /from workspace_invites where token in \(\$1, \$2\) and status = 'pending'/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
   assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
 });
 

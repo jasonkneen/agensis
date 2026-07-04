@@ -19,6 +19,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+
+// F3 (P12): git/project-file routes now refuse to touch a root outside an
+// explicit host allowlist by default. This suite exercises real git ops
+// against scratch repos under os.tmpdir(), so opt in for this process the
+// same way a local daemon would.
+process.env.AGENSIS_ALLOW_PROJECT_FS = 'true';
+process.env.AGENSIS_PROJECT_ROOTS = os.tmpdir();
+
 const { createApp, __test } = require('../server/index.cjs');
 
 const WORKSPACE_ID = 'ws-1';
@@ -231,6 +239,26 @@ test('GET /backend/workspaces/:id/git/diff still reads a normal untracked file i
       assert.equal(body.data.content, 'hello from inside root\n');
     });
   } finally {
+    cleanupScratchRepo(scratch);
+  }
+});
+
+test('F3: git/status returns the empty payload (never touches disk) when the host opt-in is off', async () => {
+  const scratch = setupScratchRepo();
+  const savedAllow = process.env.AGENSIS_ALLOW_PROJECT_FS;
+  try {
+    installDb({ root: scratch.root });
+    const token = await __test.issueToken(USER_ID, '1');
+    process.env.AGENSIS_ALLOW_PROJECT_FS = 'false';
+
+    await withServer(async (baseUrl) => {
+      const response = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/status`);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body.data, { root: '', files: [], branch: '' });
+    });
+  } finally {
+    process.env.AGENSIS_ALLOW_PROJECT_FS = savedAllow;
     cleanupScratchRepo(scratch);
   }
 });

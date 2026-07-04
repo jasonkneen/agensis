@@ -1,5 +1,5 @@
 // ============================================================================
-// shared/backend-core.mjs
+// shared/backend-core.cjs
 // ----------------------------------------------------------------------------
 // Dependency-light security core shared by BOTH backends:
 //   - server/index.cjs        (hardened Express reference; deduped onto this later)
@@ -15,14 +15,14 @@
 // both reduce to this shape, so the same core drives either backend.
 // ============================================================================
 
-import crypto from 'node:crypto';
+const crypto = require('node:crypto');
 
 // ----------------------------------------------------------------------------
 // Allow-sets and role/capability tables — lifted VERBATIM from server/index.cjs.
 // Do not invent: these are the security contract.
 // ----------------------------------------------------------------------------
 
-export const ALLOWED_TABLES = new Set([
+const ALLOWED_TABLES = new Set([
   'app_users',
   'workspaces',
   'documents',
@@ -41,19 +41,55 @@ export const ALLOWED_TABLES = new Set([
   'agent_webhooks',
   'agent_connections',
   'agent_jobs',
+  'agent_registrations',
   'activity_events',
+  'agent_memory_files',
+  'memory_file_comments',
+  'thread_items',
 ]);
+
+// F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
+// destructure these from here so a table/column can never be exposed on one backend
+// but not the other again (netlify was 18 tables, missing agent_connections.capabilities
+// -> capability writes not cast ::jsonb). VERSIONED_TABLES + JSON_COLUMNS_BY_TABLE are
+// new core exports, added to module.exports (P11b).
+const VERSIONED_TABLES = new Set([
+  'workspaces',
+  'documents',
+  'chat_sessions',
+  'memory_facts',
+  'uploaded_files',
+  'canvas_groups',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'task_comments',
+  'workspace_agents',
+  'agent_webhooks',
+  'agent_memory_files',
+  'memory_file_comments',
+]);
+
+const JSON_COLUMNS_BY_TABLE = {
+  chat_sessions: new Set(['participants']),
+  canvas_objects: new Set(['points']),
+  workspace_agents: new Set(['tools', 'skills']),
+  agent_connections: new Set(['metadata', 'capabilities']),
+  agent_jobs: new Set(['metadata']),
+  activity_events: new Set(['metadata']),
+  messages: new Set(['reactions']),
+};
 
 // Tables whose rows are scoped to a workspace and therefore subject to
 // membership/role checks. Maps table -> how to find its workspace id.
-export const WORKSPACE_SCOPED_TABLES = new Set([
+const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
   'agent_connections', 'agent_jobs', 'activity_events', 'workspace_members',
 ]);
 
-export const WORKSPACE_ROLE_CAPABILITIES = {
+const WORKSPACE_ROLE_CAPABILITIES = {
   owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
   admin: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
   editor: new Set(['read', 'write', 'comment', 'run_agents']),
@@ -68,7 +104,7 @@ const DEFAULT_TABLE_ACCESS = {
   delete: 'write',
 };
 
-export const DB_TABLE_ACCESS = {
+const DB_TABLE_ACCESS = {
   documents: DEFAULT_TABLE_ACCESS,
   chat_sessions: DEFAULT_TABLE_ACCESS,
   messages: DEFAULT_TABLE_ACCESS,
@@ -101,14 +137,14 @@ export const DB_TABLE_ACCESS = {
 // the existing `{ data: null, error }` JSON shape with the right HTTP code.
 // ----------------------------------------------------------------------------
 
-export function httpError(status, message) {
+function httpError(status, message) {
   const err = new Error(message);
   err.status = status;
   return err;
 }
-export function unauthorized(message = 'Authentication required') { return httpError(401, message); }
-export function forbidden(message) { return httpError(403, message); }
-export function badRequest(message) { return httpError(400, message); }
+function unauthorized(message = 'Authentication required') { return httpError(401, message); }
+function forbidden(message) { return httpError(403, message); }
+function badRequest(message) { return httpError(400, message); }
 
 // ----------------------------------------------------------------------------
 // AUTH: verify a signed session token. Mirrors server/index.cjs verifyToken /
@@ -130,7 +166,7 @@ export function badRequest(message) { return httpError(400, message); }
 // authenticated request — an uncached per-request DB read is not acceptable).
 // ----------------------------------------------------------------------------
 
-export async function verifyAuthToken(authHeader, secret, getTokenVersion) {
+async function verifyAuthToken(authHeader, secret, getTokenVersion) {
   const header = String(authHeader || '');
   const token = header.startsWith('Bearer ') ? header.slice(7) : header;
   if (!token || typeof token !== 'string') return null;
@@ -164,7 +200,7 @@ export async function verifyAuthToken(authHeader, secret, getTokenVersion) {
 // below): a multi-instance deploy only bounds staleness to `ttlMs` on OTHER
 // instances; the instance that performs a sign-out/password-change bump should
 // update its own cache entry immediately (see netlify/functions/backend.mjs).
-export function createTokenVersionCache({ ttlMs = 10_000 } = {}) {
+function createTokenVersionCache({ ttlMs = 10_000 } = {}) {
   const cache = new Map(); // userId -> { version, expiresAt }
   return {
     async get(userId, db) {
@@ -202,7 +238,7 @@ function quoteIdent(value) {
 // Workspace resolution + membership / role checks.
 // ----------------------------------------------------------------------------
 
-export function findFilterValue(filters, column) {
+function findFilterValue(filters, column) {
   if (!Array.isArray(filters)) return undefined;
   const f = filters.find((x) => x && x.column === column && x.operator === 'eq');
   return f ? f.value : undefined;
@@ -217,7 +253,7 @@ function operationRows(values) {
 // when the table/filter doesn't carry workspace_id directly. Returns
 // { workspaceId } when determinable, or { unscoped: true } when access can't be
 // constrained to a single workspace (caller decides how strict to be).
-export async function resolveOperationWorkspace(table, { values, filters }, db) {
+async function resolveOperationWorkspace(table, { values, filters }, db) {
   // Insert: workspace id (or a parent that has one) comes from the row values.
   if (values) {
     if (values.workspace_id) return { workspaceId: values.workspace_id };
@@ -254,7 +290,7 @@ export async function resolveOperationWorkspace(table, { values, filters }, db) 
 }
 
 // True if the user owns the workspace or is a member of it.
-export async function userCanAccessWorkspace(userId, workspaceId, db) {
+async function userCanAccessWorkspace(userId, workspaceId, db) {
   if (!userId || !workspaceId) return false;
   const rows = await db(
     `select 1 from workspaces where id = $1 and user_id = $2
@@ -266,7 +302,7 @@ export async function userCanAccessWorkspace(userId, workspaceId, db) {
   return rows.length > 0;
 }
 
-export async function getWorkspaceRole(userId, workspaceId, db) {
+async function getWorkspaceRole(userId, workspaceId, db) {
   if (!userId || !workspaceId) return null;
   const ownerRows = await db('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
   if (ownerRows.length > 0) return 'owner';
@@ -274,7 +310,7 @@ export async function getWorkspaceRole(userId, workspaceId, db) {
   return memberRows[0]?.role || null;
 }
 
-export function roleHasWorkspaceCapability(role, capability) {
+function roleHasWorkspaceCapability(role, capability) {
   return Boolean(WORKSPACE_ROLE_CAPABILITIES[role]?.has(capability));
 }
 
@@ -288,7 +324,7 @@ function capabilityForDbOperation(table, action) {
 // manage); `minRole`/`mode` are accepted as aliases for ergonomics, interpreted
 // as the same capability strings (matches server's capability-based model — it
 // does NOT rank roles, it checks capability membership).
-export async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, mode, db }) {
+async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, mode, db }) {
   const need = capability || mode || minRole;
   const role = await getWorkspaceRole(userId, workspaceId, db);
   if (!role) throw forbidden('You do not have access to this workspace');
@@ -322,7 +358,7 @@ const UPDATE_PARENT_REF_LOOKUPS = {
 // source workspace alone is not enough — the SET clause could carry
 // workspace_id or a cross-tenant parent reference. `sourceWorkspaceId` is the
 // row's current workspace (already resolved + authorized by the caller).
-export async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }) {
+async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) return;
   const src = String(sourceWorkspaceId);
   if (values.workspace_id != null && String(values.workspace_id) !== src) {
@@ -353,7 +389,7 @@ export async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }
 // per-table logic, so it applies to every table including app_users/workspaces.
 // ----------------------------------------------------------------------------
 
-export async function enforceDbOperationAccess({ userId, table, op, filters, payload, db }) {
+async function enforceDbOperationAccess({ userId, table, op, filters, payload, db }) {
   if (!userId) throw unauthorized();
   if (typeof db !== 'function') throw new Error('enforceDbOperationAccess requires a db function');
 
@@ -410,6 +446,10 @@ export async function enforceDbOperationAccess({ userId, table, op, filters, pay
     const resolved = await resolveOperationWorkspace(table, { values: row }, db);
     if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
     await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+    // H1-insert (F7 review): a child INSERT may carry a cross-tenant parent ref
+    // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
+    // reuse the UPDATE tenancy guard so the parent must live in this workspace.
+    await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values: row, db });
   }
 
   if (operationRows(values).length === 0) {
@@ -421,7 +461,7 @@ export async function enforceDbOperationAccess({ userId, table, op, filters, pay
 
 // Constrain a SELECT on `workspaces` to rows the user owns or is a member of.
 // Pure string/param builder — appended onto buildWhereClause output by callers.
-export function appendWorkspaceAccessClause(where, userId) {
+function appendWorkspaceAccessClause(where, userId) {
   const params = where.params || [];
   params.push(userId);
   const ownerParam = `$${params.length}`;
@@ -456,7 +496,7 @@ export function appendWorkspaceAccessClause(where, userId) {
 
 const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function logMessageActivityIdempotent(rows, { db }) {
+async function logMessageActivityIdempotent(rows, { db }) {
   if (typeof db !== 'function') return;
   for (const message of rows || []) {
     if (!message || typeof message !== 'object') continue;
@@ -503,7 +543,7 @@ export async function logMessageActivityIdempotent(rows, { db }) {
 // instance. Good enough as a scaffold; a shared store is a later concern.
 // ----------------------------------------------------------------------------
 
-export function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
+function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
   const hits = new Map(); // key -> { count, resetAt }
   function check(key) {
     const now = Date.now();
@@ -537,10 +577,10 @@ export function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
 // comment above `createRateLimiter` there). Keep both in sync if this changes.
 // ----------------------------------------------------------------------------
 
-export const PASSWORD_MIN_LENGTH = 10;
-export const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
+const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
 
-export function evaluatePasswordServerSide(password) {
+function evaluatePasswordServerSide(password) {
   const value = String(password || '');
   const classesMet =
     (/[a-z]/.test(value) ? 1 : 0) +
@@ -556,3 +596,32 @@ export function evaluatePasswordServerSide(password) {
       : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
   return { valid, classesMet, longEnough, message };
 }
+
+module.exports = {
+  verifyAuthToken,
+  enforceDbOperationAccess,
+  assertWorkspaceRole,
+  ALLOWED_TABLES,
+  VERSIONED_TABLES,
+  JSON_COLUMNS_BY_TABLE,
+  WORKSPACE_SCOPED_TABLES,
+  WORKSPACE_ROLE_CAPABILITIES,
+  DB_TABLE_ACCESS,
+  createTokenVersionCache,
+  appendWorkspaceAccessClause,
+  logMessageActivityIdempotent,
+  createRateLimiter,
+  evaluatePasswordServerSide,
+  findFilterValue,
+  resolveOperationWorkspace,
+  userCanAccessWorkspace,
+  getWorkspaceRole,
+  roleHasWorkspaceCapability,
+  assertUpdateKeepsTenancy,
+  httpError,
+  unauthorized,
+  forbidden,
+  badRequest,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_MIN_CLASSES,
+};

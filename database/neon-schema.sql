@@ -103,6 +103,39 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_parent_id uuid REFERENCES messages(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_messages_thread_parent_id ON messages(thread_parent_id);
 
+-- F6 (2026-07 review): these columns (agent-attributed sends, pin/react, soft
+-- delete) were added via runtime ALTER ... IF NOT EXISTS in server/index.cjs
+-- but were missing here, so a fresh `npm run migrate` DB never got them.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
+CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+
+-- F6 (2026-07 review): thread_items existed ONLY in the runtime DDL
+-- (ensureRuntimeSchema, server/index.cjs) — a fresh migrate DB never got it,
+-- breaking the thread widget rail (create_thread_item / update_thread_item).
+CREATE TABLE IF NOT EXISTS thread_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL DEFAULT 'todo' CHECK (kind IN ('todo', 'plan', 'blocker')),
+  content text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'open',
+  order_index double precision NOT NULL DEFAULT 0,
+  message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+  response text DEFAULT '',
+  created_by uuid,
+  created_by_agent text DEFAULT '',
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_thread_items_session ON thread_items(session_id, kind, order_index);
+CREATE INDEX IF NOT EXISTS idx_thread_items_workspace ON thread_items(workspace_id);
+
 CREATE TABLE IF NOT EXISTS memory_facts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -307,6 +340,11 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
 
+-- F10 (2026-07 review): `token` holds hashAgentToken(plaintext) for rows created
+-- after the hardening fix (server/index.cjs POST /backend/agent-webhooks) — the
+-- plaintext is only ever returned once, at creation. Legacy rows may still hold
+-- plaintext; the trigger route's dual-path lookup (inviteTokenLookupParams)
+-- matches either during the transition. No column/type change needed.
 CREATE TABLE IF NOT EXISTS agent_webhooks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -322,6 +360,22 @@ CREATE TABLE IF NOT EXISTS agent_webhooks (
 
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
+
+-- F6 (2026-07 review): agent_registrations existed ONLY in the runtime DDL —
+-- a fresh migrate DB never got it, breaking MCP register_agent/approval flows.
+CREATE TABLE IF NOT EXISTS agent_registrations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  requested_handle text DEFAULT '',
+  requested_name text DEFAULT '',
+  client_label text DEFAULT '',
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  decided_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
 
 CREATE TABLE IF NOT EXISTS document_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

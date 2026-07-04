@@ -531,7 +531,7 @@ function buildTools() {
          typeof args?.description === 'string' ? args.description : '',
          status, priority,
          typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
-         String(identity.agentId)]);
+         identity.agentId ? String(identity.agentId) : null]);
       deps.notifyDbSubscribers('tasks', 'INSERT', rows);
       return { task: rows[0] };
     },
@@ -606,6 +606,9 @@ function buildTools() {
     },
     async run(args, { db, identity, deps }) {
       const sessionId = requireString(args, 'session_id');
+      if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+        throw new ToolError('This invite is read-only and cannot create thread items');
+      }
       const content = requireString(args, 'content');
       const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : 'todo';
       await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
@@ -618,7 +621,7 @@ function buildTools() {
          values ($1, $2, $3, $4, 'open', $5, $6, $7) returning *`,
         [identity.workspaceId, sessionId, kind, content, nextOrder,
          typeof args?.message_id === 'string' && args.message_id.trim() ? args.message_id.trim() : null,
-         String(identity.agentId)]);
+         identity.agentId ? String(identity.agentId) : null]);
       deps.notifyDbSubscribers('thread_items', 'INSERT', rows);
       return { item: rows[0] };
     },
@@ -803,6 +806,10 @@ function buildTools() {
   // connected (non-agent) client may only work as an agent it has had approved.
   async function resolveActingAgentId(identity, deps, asHandle) {
     if (identity.kind === 'agent') return identity.agentId;
+    // F8: an invite bearer may only drive an agent when its role grants run_agents.
+    if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'run_agents')) {
+      throw new ToolError('This invite is read-only and cannot act as an agent');
+    }
     const handle = (typeof asHandle === 'string' && asHandle.trim()) ? asHandle.trim() : null;
     if (!handle) throw new ToolError('Pass `as: "<agent handle>"` to choose which agent to work as (e.g. as: "q").');
     const agent = await deps.resolveWorkspaceAgentByHandle(identity.workspaceId, handle);
@@ -973,7 +980,7 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId) {
   const rows = await db.unsafe(
     `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
      values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
-    [channelId, content, threadParentId || null, String(identity.agentId), identity.name]);
+    [channelId, content, threadParentId || null, identity.agentId ? String(identity.agentId) : null, identity.name]);
   deps.notifyDbSubscribers('messages', 'INSERT', rows);
   await db.unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => {});
   return rows[0];

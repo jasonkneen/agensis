@@ -231,7 +231,7 @@ test('generic DB policy lets viewers read workspace rows but blocks mutations', 
 });
 
 test('commenters can write comments but not edit documents', async () => {
-  installDb({ roles: { 'ws-1:user-commenter': 'commenter' } });
+  installDb({ roles: { 'ws-1:user-commenter': 'commenter' }, rowWorkspaces: { documents: { 'doc-1': 'ws-1' } } });
 
   await __test.enforceDbOperationAccess('user-commenter', 'document_comments', 'insert', {
     values: { workspace_id: 'ws-1', document_id: 'doc-1', content: 'Looks good' },

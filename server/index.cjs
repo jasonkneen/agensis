@@ -11,6 +11,7 @@ const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
+const { ALLOWED_TABLES, VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE } = require('../shared/backend-core.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -18,58 +19,6 @@ const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
 const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
 const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
 const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
-const ALLOWED_TABLES = new Set([
-  'app_users',
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'messages',
-  'memory_facts',
-  'uploaded_files',
-  'workspace_members',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'document_versions',
-  'workspace_agents',
-  'agent_webhooks',
-  'agent_connections',
-  'agent_jobs',
-  'agent_registrations',
-  'activity_events',
-  'agent_memory_files',
-  'memory_file_comments',
-  'thread_items',
-]);
-
-const VERSIONED_TABLES = new Set([
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'memory_facts',
-  'uploaded_files',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'workspace_agents',
-  'agent_webhooks',
-  'agent_memory_files',
-  'memory_file_comments',
-]);
-
-const JSON_COLUMNS_BY_TABLE = {
-  chat_sessions: new Set(['participants']),
-  canvas_objects: new Set(['points']),
-  workspace_agents: new Set(['tools', 'skills']),
-  agent_connections: new Set(['metadata', 'capabilities']),
-  agent_jobs: new Set(['metadata']),
-  activity_events: new Set(['metadata']),
-  messages: new Set(['reactions']),
-};
 
 let envLoaded = false;
 let db;
@@ -605,6 +554,7 @@ async function enforceDbOperationAccess(userId, table, action, payload) {
     const resolved = await resolveOperationWorkspace(table, { values: row });
     if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
     await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
+    await assertUpdateKeepsTenancy(resolved.workspaceId, row);
   }
 
   if (operationRows(payload.values).length === 0) {
@@ -1118,6 +1068,9 @@ const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // many different emails from one host, which the per-email limiter can't catch.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
+// top of the 'manage' capability gate below.
+const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
 function rateLimitBlocked(res, limiter, key) {
@@ -1411,10 +1364,10 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   const token = createAgentConnectToken();
   const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
   const resolvedModel = resolveAnthropicModel(model || agent.model);
-  // Remote daemons run on the user's own machine and need full access to do real
-  // work, so the connect command defaults to yolo unless a safer mode is requested.
-  let resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode || agent.permission_mode);
-  if (resolvedPermissionMode === 'default') resolvedPermissionMode = 'yolo';
+  // F7: do NOT silently escalate. An unspecified mode stays 'default' (least
+  // privilege), matching the Netlify connect path (normalizeAgentPermissionMode).
+  // A caller wanting full host access must pass permission_mode: 'yolo' explicitly.
+  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode || agent.permission_mode);
   const updateRows = await getDb().unsafe(
     `update workspace_agents
      set handle = $2,
@@ -1499,8 +1452,11 @@ async function verifyInviteToken(token) {
   const rows = await getDb().unsafe(
     // Dual-path (L4): new invites store the token hash; legacy invites store the
     // plaintext. Match either so both keep working during the transition.
+    // F8 (P7): only a still-pending invite may authenticate as an MCP bearer — once
+    // accepted (single-use consume in the /invites/:token/accept route) the link dies
+    // as a live 14-day credential; the human keeps access via their own session token.
     `select id, workspace_id, email, role from workspace_invites
-      where token in ($1, $2) and status in ('pending', 'accepted')
+      where token in ($1, $2) and status = 'pending'
         and (expires_at is null or expires_at > now())
       limit 1`,
     inviteTokenLookupParams(token),
@@ -2494,12 +2450,12 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const sessionRows = await getDb().unsafe(
-        'select id, workspace_id, participants, conversation_mode from chat_sessions where id = $1 limit 1',
+        'select id, workspace_id, participants, conversation_mode, max_agent_turns from chat_sessions where id = $1 limit 1',
         [sessionId],
       );
       const session = sessionRows[0];
       if (!session || String(session.workspace_id) !== String(workspaceId)) return;
-      const maxTurns = 10;
+      const maxTurns = Number(session.max_agent_turns) > 0 ? Number(session.max_agent_turns) : 10;
       const conversationMode = String(session.conversation_mode || 'mention');
       const directTarget = directAgentParticipantFromSession(session);
 
@@ -3368,10 +3324,49 @@ const PROJECT_FILE_IGNORE_DIRS = new Set([
   '.turbo',
 ]);
 
+// F3 (2026-07 review): git_root/local_path are user-writable workspace columns
+// (set via the generic /backend/db/workspaces update, gated only on 'manage'),
+// and feed straight into fs reads + `git -C <root>` on THIS host. Without an
+// allowlist, a workspace admin could point either column at any directory the
+// process can read/commit. AGENSIS_PROJECT_ROOTS is a colon-separated list of
+// absolute prefixes this host is willing to touch; AGENSIS_ALLOW_PROJECT_FS is
+// the opt-in switch (default OFF — e.g. the shared fly.dev backend leaves both
+// unset so project/git routes always return their empty payload instead of
+// touching disk). A per-user local daemon opts in by setting both.
+function projectFsAllowed() {
+  return String(process.env.AGENSIS_ALLOW_PROJECT_FS || '').trim() === 'true';
+}
+
+function allowedProjectRootPrefixes() {
+  return String(process.env.AGENSIS_PROJECT_ROOTS || '')
+    .split(':')
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .map(entry => path.resolve(entry));
+}
+
+// Realpath-contained within one of the allowlisted prefixes (mirrors the
+// resolveWithinRoot symlink-escape check below, but against a set of roots
+// instead of one path's relative traversal).
+function isWithinAllowedProjectRoot(resolvedPath) {
+  if (!projectFsAllowed()) return false;
+  const prefixes = allowedProjectRootPrefixes();
+  if (prefixes.length === 0) return false;
+  let real;
+  try { real = fs.realpathSync(resolvedPath); } catch { real = resolvedPath; }
+  return prefixes.some((prefix) => {
+    let realPrefix;
+    try { realPrefix = fs.realpathSync(prefix); } catch { realPrefix = prefix; }
+    const withSep = realPrefix.endsWith(path.sep) ? realPrefix : `${realPrefix}${path.sep}`;
+    return real === realPrefix || real.startsWith(withSep);
+  });
+}
+
 function workspaceProjectRoot(workspace) {
   const candidate = String(workspace?.git_root || workspace?.local_path || '').trim();
   if (!candidate) return '';
   const resolved = path.resolve(candidate);
+  if (!isWithinAllowedProjectRoot(resolved)) return '';
   try {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
     return resolved;
@@ -4636,7 +4631,12 @@ function createApp() {
   function gitRootOf(workspace) {
     if (!workspace) return null;
     const root = String(workspace.git_root || workspace.local_path || '').trim();
-    return root ? path.resolve(root) : null;
+    if (!root) return null;
+    const resolved = path.resolve(root);
+    // F3: never touch a root outside the host's opt-in allowlist (see
+    // isWithinAllowedProjectRoot above workspaceProjectRoot).
+    if (!isWithinAllowedProjectRoot(resolved)) return null;
+    return resolved;
   }
 
   function resolveWithinRoot(root, relativePath) {
@@ -4917,15 +4917,18 @@ function createApp() {
         );
         if (!agentRows[0]) return jsonError(res, 404, new Error('Agent not found in this workspace'));
       }
+      // F10: store only the hash — the trigger route below does a dual-path lookup
+      // (inviteTokenLookupParams) so legacy plaintext rows keep working during the
+      // transition. The plaintext is returned ONCE here, on creation.
       const token = crypto.randomBytes(32).toString('base64url');
       const rows = await getDb().unsafe(
         `insert into agent_webhooks (workspace_id, agent_id, name, token)
          values ($1, $2, $3, $4)
          returning *`,
-        [workspaceId, agentId || null, String(name).trim(), token],
+        [workspaceId, agentId || null, String(name).trim(), hashAgentToken(token)],
       );
       notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
-      res.json({ data: rows[0], error: null });
+      res.json({ data: { ...rows[0], token }, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -5164,9 +5167,9 @@ function createApp() {
                 a.permission_mode
          from agent_webhooks w
          left join workspace_agents a on a.id = w.agent_id
-         where w.token = $1 and w.enabled = true
+         where w.token in ($1, $2) and w.enabled = true
          limit 1`,
-        [token],
+        inviteTokenLookupParams(token),
       );
       const webhook = rows[0];
       if (!webhook) return jsonError(res, 404, new Error('Webhook not found'));
@@ -5296,13 +5299,22 @@ function createApp() {
     }
   });
 
+  // F9: any authed user could otherwise map an arbitrary email -> user id (an
+  // enumeration oracle). This RPC is only meaningfully used while inviting, so
+  // gate it behind a rate limit AND require 'manage' on the workspace the
+  // caller is inviting into (the "invite existing user" flow already knows
+  // its workspace id — see src/hooks/useSharing.ts's inviteByEmail).
   app.post('/backend/rpc/lookup_user_by_email', requireAuth, async (req, res) => {
     try {
+      if (rateLimitBlocked(res, emailLookupRateLimiter, req.userId)) return;
+      const workspaceId = String(req.body?.workspace_id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspace_id is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const lookupEmail = String(req.body?.lookup_email || '').trim().toLowerCase();
       const rows = await getDb().unsafe('select id, email from app_users where email = $1 limit 1', [lookupEmail]);
       res.json({ data: rows, error: null });
     } catch (error) {
-      jsonError(res, 500, error);
+      jsonError(res, error.status || 500, error);
     }
   });
 
