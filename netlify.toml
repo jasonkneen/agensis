@@ -1,0 +1,16 @@
+# Headers only — build/publish settings stay in the Netlify UI (no [build]
+# section here so we don't override them).
+#
+# The update flow reads /version.json and /release-notes.json to detect a new
+# deploy. They must never be served stale, so tell the CDN + browser not to
+# cache them. (The client also fetches with `cache: 'no-store'`; this is the
+# belt-and-braces edge/proxy layer.)
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/release-notes.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

@@ -64,7 +64,7 @@ import { Spinner } from './components/ui/spinner';
 import { TooltipProvider } from './components/ui/tooltip';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
-import { useDeployNotification } from './hooks/useDeployNotification';
+import { AppUpdateManager } from './components/AppUpdateManager';
 import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
@@ -541,9 +541,8 @@ export default function App() {
 
 function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
-  // Offer a "reload" toast when Netlify publishes a new frontend (server broadcasts
-  // deploy_published over the realtime socket).
-  useDeployNotification();
+  // The update surface (deploy toast + "what's new" dialog + version check +
+  // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -1799,6 +1798,7 @@ function AppContent() {
       </AlertDialog>
     </div>
     <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
+    <AppUpdateManager />
     <Toaster />
     </TooltipProvider>
   );

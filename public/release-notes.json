@@ -1,0 +1,35 @@
+[
+  {
+    "version": "2026.07.04",
+    "date": "2026-07-04",
+    "title": "“What’s new” update notifications",
+    "summary": "agensis now tells you when a new version is ready, shows you what changed in plain English, and reloads cleanly — no more stale tabs.",
+    "highlights": [
+      "A friendly pop-up appears the moment a new version publishes",
+      "Click “What’s new” to see a short, jargon-free summary of the changes",
+      "“Reload now” fully refreshes the app so you’re never stuck on an old copy",
+      "Reopening the installed app checks for updates automatically"
+    ]
+  },
+  {
+    "version": "mermaid",
+    "date": "2026-07-03",
+    "title": "Diagrams render right in chat",
+    "summary": "Paste a diagram into any chat and it draws as a real picture instead of showing raw code.",
+    "highlights": [
+      "Flowcharts, sequence diagrams and more render inline",
+      "Diagrams match your current theme, light or dark"
+    ]
+  },
+  {
+    "version": "slash-commands",
+    "date": "2026-07-03",
+    "title": "Type “/” for commands and skills",
+    "summary": "A quick command menu opens when you type “/” in the message box — run built-in actions or hand a skill to an agent.",
+    "highlights": [
+      "Built-in actions like clearing or splitting a chat run instantly",
+      "Your workspace’s skills and commands show up with fuzzy search",
+      "Related commands are grouped under the skill they belong to"
+    ]
+  }
+]
