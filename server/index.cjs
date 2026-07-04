@@ -297,7 +297,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'agent_connections', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
+  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
   'agent_memory_files', 'memory_file_comments', 'thread_items',
 ]);
 
@@ -328,6 +328,7 @@ const DB_TABLE_ACCESS = {
   document_versions: DEFAULT_TABLE_ACCESS,
   workspace_agents: DEFAULT_TABLE_ACCESS,
   agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
   activity_events: DEFAULT_TABLE_ACCESS,
   document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
@@ -662,6 +663,26 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status);
+
+    CREATE TABLE IF NOT EXISTS cursorbuddy_connection_keys (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      key_hash text NOT NULL UNIQUE,
+      name text NOT NULL DEFAULT 'CursorBuddy runtime',
+      surface text NOT NULL DEFAULT 'machine',
+      scope text NOT NULL DEFAULT 'machine',
+      domain text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'claimed', 'expired', 'revoked')),
+      metadata jsonb DEFAULT '{}'::jsonb,
+      expires_at timestamptz NOT NULL DEFAULT now() + interval '15 minutes',
+      claimed_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_workspace ON cursorbuddy_connection_keys(workspace_id, status);
+    CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_hash ON cursorbuddy_connection_keys(key_hash);
 
     CREATE TABLE IF NOT EXISTS agent_jobs (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1203,6 +1224,128 @@ function inviteTokenLookupParams(token) {
 
 function createAgentConnectToken() {
   return `aga_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+function createCursorBuddyConnectionKey(surface = 'machine') {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(18);
+  let suffix = '';
+  for (const byte of bytes) suffix += alphabet[byte % alphabet.length];
+  const normalizedSurface = String(surface || 'machine')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32) || 'machine';
+  return `cbk_${normalizedSurface}_${suffix}`;
+}
+
+function normalizeCursorBuddySurface(value) {
+  const surface = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (['website_avatar', 'browser_extension', 'extension', 'local_cli', 'cli', 'desktop_app', 'desktop', 'machine', 'embedded_site', 'embedded'].includes(surface)) {
+    if (surface === 'extension') return 'browser_extension';
+    if (surface === 'cli') return 'local_cli';
+    if (surface === 'desktop') return 'desktop_app';
+    if (surface === 'embedded') return 'embedded_site';
+    return surface;
+  }
+  return 'machine';
+}
+
+function normalizeCursorBuddyScope(value) {
+  const scope = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (['machine', 'global', 'domain', 'embedded', 'workspace'].includes(scope)) return scope;
+  return 'machine';
+}
+
+function normalizeCursorBuddyDomain(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/[^a-z0-9._-]+/g, '')
+    .slice(0, 255);
+}
+
+function publicWorkspace(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    local_path: row.local_path || '',
+    project_kind: row.project_kind || '',
+    git_root: row.git_root || '',
+    git_remote: row.git_remote || '',
+    role: row.role || 'viewer',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function publicCursorBuddyConnectionKey(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    agent_id: row.agent_id,
+    created_by: row.created_by,
+    name: row.name,
+    surface: row.surface,
+    scope: row.scope,
+    domain: row.domain,
+    status: row.status,
+    metadata: parseJsonObject(row.metadata),
+    expires_at: row.expires_at,
+    claimed_at: row.claimed_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
+  if (connectionKey?.agent_id) {
+    const rows = await getDb().unsafe(
+      'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+      [connectionKey.agent_id, connectionKey.workspace_id],
+    );
+    if (rows[0]) return rows[0];
+  }
+
+  const surface = normalizeCursorBuddySurface(connectionKey?.surface || claim.surface);
+  const scope = normalizeCursorBuddyScope(connectionKey?.scope || claim.scope);
+  const label = String(connectionKey?.name || claim.name || 'CursorBuddy runtime').trim().slice(0, 80) || 'CursorBuddy runtime';
+  const handleBase = scope === 'domain' && connectionKey?.domain
+    ? `cursorbuddy-${connectionKey.domain.replace(/[^a-z0-9]+/g, '-')}`
+    : `cursorbuddy-${surface.replace(/_/g, '-')}`;
+  const metadata = {
+    runtime: 'cursorbuddy',
+    surface,
+    scope,
+    domain: connectionKey?.domain || '',
+    host: String(claim.host || '').trim().slice(0, 160),
+    cwd: String(claim.cwd || '').trim().slice(0, 500),
+  };
+  const rows = await getDb().unsafe(
+    `insert into workspace_agents
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+     values
+       ($1, $2, $3, $4, $5, 'auto', 'daemon', $6, 'AI', '#ffe04a', true, $7, $8::jsonb, $9::jsonb)
+     returning *`,
+    [
+      connectionKey.workspace_id,
+      label,
+      slugHandle(handleBase),
+      `CursorBuddy ${surface.replace(/_/g, ' ')} runtime connected through Agensis.`,
+      'You are CursorBuddy, a local-machine agent connected through Agensis. Route browser, desktop, and embedded-site context through the hub, use local source paths when authorized, and keep all actions logged.',
+      normalizeAgentPermissionMode(claim.permissionMode || claim.permission_mode || 'default'),
+      connectionKey.created_by || null,
+      JSON.stringify([{ type: 'runtime', name: 'cursorbuddy', metadata }]),
+      JSON.stringify(['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh']),
+    ],
+  );
+  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
+  return rows[0];
 }
 
 function normalizeBaseUrl(value) {
@@ -5062,6 +5205,167 @@ function createApp() {
     }
   });
 
+  app.get('/backend/workspaces', requireAuth, async (req, res) => {
+    try {
+      const rows = await getDb().unsafe(
+        `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+                w.created_at, w.updated_at,
+                case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
+         from workspaces w
+         left join workspace_members wm on wm.workspace_id = w.id and wm.user_id = $1
+         where w.user_id = $1 or wm.user_id = $1
+         order by w.updated_at desc nulls last, w.created_at desc nulls last, w.name asc`,
+        [req.userId],
+      );
+      res.json({ data: rows.map(publicWorkspace), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/cursorbuddy/connection-keys', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.query.workspaceId || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const rows = await getDb().unsafe(
+        `select *
+         from cursorbuddy_connection_keys
+         where workspace_id = $1
+         order by created_at desc
+         limit 100`,
+        [workspaceId],
+      );
+      res.json({ data: rows.map(publicCursorBuddyConnectionKey), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/cursorbuddy/connection-keys', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+
+      const agentId = String(req.body?.agentId || req.body?.agent_id || '').trim() || null;
+      if (agentId) {
+        const agentRows = await getDb().unsafe(
+          'select id from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+          [agentId, workspaceId],
+        );
+        if (!agentRows[0]) return jsonError(res, 404, new Error('Agent not found in this workspace'));
+      }
+
+      const surface = normalizeCursorBuddySurface(req.body?.surface);
+      const scope = normalizeCursorBuddyScope(req.body?.scope);
+      const domain = normalizeCursorBuddyDomain(req.body?.domain);
+      const name = String(req.body?.name || 'CursorBuddy runtime').trim().slice(0, 80) || 'CursorBuddy runtime';
+      const metadata = {
+        requestedBy: req.userId,
+        setup: 'cursorbuddy',
+        runtimeKind: String(req.body?.runtimeKind || '').trim().slice(0, 80),
+      };
+      const key = createCursorBuddyConnectionKey(surface);
+      const rows = await getDb().unsafe(
+        `insert into cursorbuddy_connection_keys
+           (workspace_id, agent_id, created_by, key_hash, name, surface, scope, domain, metadata)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+         returning *`,
+        [workspaceId, agentId, req.userId, hashAgentToken(key), name, surface, scope, domain, JSON.stringify(metadata)],
+      );
+      notifyDbSubscribers('cursorbuddy_connection_keys', 'INSERT', rows.map(publicCursorBuddyConnectionKey));
+      res.json({
+        data: {
+          ...publicCursorBuddyConnectionKey(rows[0]),
+          key,
+          command: `agensis buddy connect --key ${shellQuote(key)}`,
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/cursorbuddy/connection-keys/claim', async (req, res) => {
+    try {
+      const key = String(req.body?.key || '').trim();
+      if (!/^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/.test(key)) return jsonError(res, 400, new Error('A valid CursorBuddy connection key is required'));
+      const rows = await getDb().unsafe(
+        'select * from cursorbuddy_connection_keys where key_hash = $1 limit 1',
+        [hashAgentToken(key)],
+      );
+      const record = rows[0];
+      if (!record) return jsonError(res, 404, new Error('CursorBuddy connection key not found'));
+      if (record.status === 'claimed') return jsonError(res, 409, new Error('CursorBuddy connection key has already been claimed'));
+      if (record.status === 'revoked') return jsonError(res, 410, new Error('CursorBuddy connection key was revoked'));
+      if (record.status === 'expired' || (record.expires_at && new Date(record.expires_at) < new Date())) {
+        await getDb().unsafe(
+          `update cursorbuddy_connection_keys
+           set status = 'expired', updated_at = now()
+           where id = $1 and status = 'created'`,
+          [record.id],
+        );
+        return jsonError(res, 410, new Error('CursorBuddy connection key has expired'));
+      }
+
+      const claim = {
+        host: req.body?.host,
+        cwd: req.body?.cwd,
+        name: req.body?.name,
+        surface: req.body?.surface,
+        scope: req.body?.scope,
+        permissionMode: req.body?.permissionMode || req.body?.permission_mode,
+      };
+      const agent = await ensureCursorBuddyAgentForKey(record, claim);
+      const baseUrl = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+        || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
+        || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
+      const payload = await buildAgentConnectionCommand({
+        agentId: agent.id,
+        workspaceId: record.workspace_id,
+        handle: agent.handle || agent.name,
+        model: req.body?.model || agent.model,
+        permissionMode: claim.permissionMode || agent.permission_mode,
+        baseUrl,
+      });
+      const metadata = {
+        ...parseJsonObject(record.metadata),
+        claimedBy: {
+          host: String(req.body?.host || '').trim().slice(0, 160),
+          cwd: String(req.body?.cwd || '').trim().slice(0, 500),
+          runtimeKind: String(req.body?.runtimeKind || 'machine').trim().slice(0, 80),
+          version: String(req.body?.version || '').trim().slice(0, 80),
+        },
+      };
+      const updateRows = await getDb().unsafe(
+        `update cursorbuddy_connection_keys
+         set status = 'claimed',
+             agent_id = $2,
+             claimed_at = now(),
+             metadata = $3::jsonb,
+             updated_at = now()
+         where id = $1
+         returning *`,
+        [record.id, agent.id, JSON.stringify(metadata)],
+      );
+      notifyDbSubscribers('cursorbuddy_connection_keys', 'UPDATE', updateRows.map(publicCursorBuddyConnectionKey));
+      res.json({
+        data: {
+          ...payload,
+          workspaceId: record.workspace_id,
+          agentId: agent.id,
+          connectionKey: publicCursorBuddyConnectionKey(updateRows[0]),
+          command: payload.command,
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.get('/backend/agents/connections', requireAuth, async (req, res) => {
     try {
       const workspaceId = String(req.query.workspaceId || '').trim();
@@ -6091,6 +6395,12 @@ module.exports = {
     verifyUserAuthMcpToken,
     verifyMcpToken,
     createWorkspaceMcpToken,
+    createCursorBuddyConnectionKey,
+    normalizeCursorBuddySurface,
+    normalizeCursorBuddyScope,
+    publicCursorBuddyConnectionKey,
+    publicWorkspace,
+    ensureCursorBuddyAgentForKey,
     runAgentTurn,
     hasActiveBurstJob,
     capabilitiesShapeValid,

@@ -377,6 +377,45 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
 
+CREATE TABLE IF NOT EXISTS agent_connections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT 'Agent',
+  handle text NOT NULL DEFAULT '',
+  host text DEFAULT '',
+  cwd text DEFAULT '',
+  status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
+  metadata jsonb DEFAULT '{}'::jsonb,
+  capabilities jsonb DEFAULT '{}'::jsonb,
+  connected_at timestamptz DEFAULT now(),
+  last_seen_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status);
+
+CREATE TABLE IF NOT EXISTS cursorbuddy_connection_keys (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  key_hash text NOT NULL UNIQUE,
+  name text NOT NULL DEFAULT 'CursorBuddy runtime',
+  surface text NOT NULL DEFAULT 'machine',
+  scope text NOT NULL DEFAULT 'machine',
+  domain text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'claimed', 'expired', 'revoked')),
+  metadata jsonb DEFAULT '{}'::jsonb,
+  expires_at timestamptz NOT NULL DEFAULT now() + interval '15 minutes',
+  claimed_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_workspace ON cursorbuddy_connection_keys(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_hash ON cursorbuddy_connection_keys(key_hash);
+
 CREATE TABLE IF NOT EXISTS document_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

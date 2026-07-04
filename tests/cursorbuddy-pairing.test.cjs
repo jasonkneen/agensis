@@ -1,0 +1,208 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const { createApp, __test } = require('../server/index.cjs');
+
+function makeDb() {
+  const keys = [];
+  const agents = [];
+  const calls = [];
+  return {
+    calls,
+    async unsafe(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      calls.push({ sql, normalized, params });
+      if (
+        normalized.startsWith('alter table') ||
+        normalized.startsWith('create table') ||
+        normalized.startsWith('create index') ||
+        normalized.startsWith('do $$')
+      ) return [];
+      if (normalized.startsWith('select value from app_settings')) {
+        return params[0] === 'AUTH_SECRET' ? [{ value: 'cursorbuddy-test-secret' }] : [];
+      }
+      if (normalized.startsWith('select token_version from app_users')) return [{ token_version: '1' }];
+      if (normalized.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) {
+        return params[0] === 'ws-1' && params[1] === 'user-1' ? [{ '?column?': 1 }] : [];
+      }
+      if (normalized.startsWith('select role from workspace_members')) return [];
+      if (normalized.includes('from workspaces w left join workspace_members')) {
+        return [{
+          id: 'ws-1',
+          name: 'CursorBuddy Workspace',
+          description: '',
+          local_path: '/Users/jkneen/Documents/GitHub/3Dpet',
+          project_kind: 'web',
+          git_root: '/Users/jkneen/Documents/GitHub/3Dpet',
+          git_remote: 'git@example.com:cursorbuddy.git',
+          role: 'owner',
+          created_at: null,
+          updated_at: null,
+        }];
+      }
+      if (normalized.startsWith('insert into cursorbuddy_connection_keys')) {
+        const [workspaceId, agentId, createdBy, keyHash, name, surface, scope, domain, metadata] = params;
+        const row = {
+          id: `key-${keys.length + 1}`,
+          workspace_id: workspaceId,
+          agent_id: agentId,
+          created_by: createdBy,
+          key_hash: keyHash,
+          name,
+          surface,
+          scope,
+          domain,
+          status: 'created',
+          metadata,
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+          claimed_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        keys.push(row);
+        return [row];
+      }
+      if (normalized.startsWith('select * from cursorbuddy_connection_keys where key_hash')) {
+        return keys.filter((row) => row.key_hash === params[0]);
+      }
+      if (normalized.startsWith('select * from workspace_agents where id = $1 and workspace_id')) {
+        return agents.filter((row) => row.id === params[0] && row.workspace_id === params[1]);
+      }
+      if (normalized.startsWith('insert into workspace_agents')) {
+        const [workspaceId, name, handle, description, systemPrompt, permissionMode] = params;
+        const row = {
+          id: `agent-${agents.length + 1}`,
+          workspace_id: workspaceId,
+          name,
+          handle,
+          description,
+          system_prompt: systemPrompt,
+          model: 'auto',
+          permission_mode: permissionMode,
+          run_mode: 'daemon',
+          enabled: true,
+        };
+        agents.push(row);
+        return [row];
+      }
+      if (normalized.startsWith('select * from workspace_agents where id = $1 limit 1')) {
+        return agents.filter((row) => row.id === params[0]);
+      }
+      if (normalized.startsWith('update workspace_agents set handle = $2')) {
+        const [id, handle, connectTokenHash, model, permissionMode] = params;
+        const row = agents.find((agent) => agent.id === id);
+        if (!row) return [];
+        Object.assign(row, {
+          handle,
+          connect_token_hash: connectTokenHash,
+          model,
+          permission_mode: permissionMode,
+          run_mode: 'daemon',
+        });
+        return [row];
+      }
+      if (normalized.startsWith('update cursorbuddy_connection_keys set status =')) {
+        const [id, agentId, metadata] = params;
+        const row = keys.find((key) => key.id === id);
+        if (!row) return [];
+        Object.assign(row, {
+          status: 'claimed',
+          agent_id: agentId,
+          metadata,
+          claimed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        return [row];
+      }
+      if (normalized.startsWith('select * from cursorbuddy_connection_keys where workspace_id')) {
+        return keys.filter((row) => row.workspace_id === params[0]);
+      }
+      return [];
+    },
+  };
+}
+
+async function withServer(fn) {
+  const app = createApp();
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    return await fn(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+}
+
+test.beforeEach(() => __test.resetTestState());
+test.afterEach(() => __test.resetTestState());
+
+test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and claim returns daemon payload', async () => {
+  const db = makeDb();
+  __test.setTestDb(db);
+  const token = await __test.issueToken('user-1', '1');
+
+  await withServer(async (baseUrl) => {
+    const workspaceResponse = await fetch(`${baseUrl}/backend/workspaces`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(workspaceResponse.status, 200);
+    const workspaceBody = await workspaceResponse.json();
+    assert.equal(workspaceBody.data[0].id, 'ws-1');
+    assert.equal(workspaceBody.data[0].role, 'owner');
+
+    const createResponse = await fetch(`${baseUrl}/backend/cursorbuddy/connection-keys`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        name: 'MacBook primary runtime',
+        surface: 'Local CLI',
+        scope: 'machine',
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const createBody = await createResponse.json();
+    assert.match(createBody.data.key, /^cbk_local_cli_[A-Z2-9]{18}$/);
+    assert.match(createBody.data.command, /agensis buddy connect --key cbk_local_cli_/);
+    assert.equal(createBody.data.key_hash, undefined, 'plaintext hash must not be returned');
+
+    const claimResponse = await fetch(`${baseUrl}/backend/cursorbuddy/connection-keys/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        key: createBody.data.key,
+        baseUrl,
+        host: 'OzBook',
+        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        runtimeKind: 'agensis-cli',
+        permissionMode: 'accept_edits',
+      }),
+    });
+    assert.equal(claimResponse.status, 200);
+    const claimBody = await claimResponse.json();
+    assert.equal(claimBody.data.workspaceId, 'ws-1');
+    assert.equal(claimBody.data.agentId, 'agent-1');
+    assert.match(claimBody.data.token, /^aga_/);
+    assert.match(claimBody.data.command, /agensis connect --url/);
+    assert.equal(claimBody.data.connectionKey.status, 'claimed');
+  });
+
+  assert.ok(db.calls.some((call) => call.normalized.includes('insert into workspace_agents')), 'claim creates a daemon workspace agent');
+  assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
+});
+
+test('CursorBuddy pairing helpers keep key shape and surface normalization stable', () => {
+  assert.match(__test.createCursorBuddyConnectionKey('Browser Extension'), /^cbk_browser_extension_[A-Z2-9]{18}$/);
+  assert.equal(__test.normalizeCursorBuddySurface('extension'), 'browser_extension');
+  assert.equal(__test.normalizeCursorBuddySurface('Desktop app'), 'desktop_app');
+  assert.equal(__test.normalizeCursorBuddyScope('Domain'), 'domain');
+  const publicKey = __test.publicCursorBuddyConnectionKey({
+    id: 'k',
+    workspace_id: 'ws',
+    key_hash: 'secret',
+    metadata: '{"ok":true}',
+  });
+  assert.equal(publicKey.key_hash, undefined);
+  assert.deepEqual(publicKey.metadata, { ok: true });
+});
