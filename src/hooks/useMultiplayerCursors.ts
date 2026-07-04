@@ -37,19 +37,38 @@ export function useMultiplayerCursors(
   const cleanupTimerRef = useRef<number | null>(null);
   const displayName = useMemo(() => userEmail?.split('@')[0] || 'Anonymous', [userEmail]);
   const color = useMemo(() => userId ? pickColor(userId) : '#3b82f6', [userId]);
+  const pendingRef = useRef<Map<string, CursorPresence>>(new Map());
+  const rafRef = useRef<number | null>(null);
+  const hasPeersRef = useRef(false);
+
+  const flushPending = useCallback(() => {
+    rafRef.current = null;
+    const pending = pendingRef.current;
+    if (pending.size === 0) return;
+    pendingRef.current = new Map();
+    setCursors(prev => {
+      const next = prev.filter(item => !pending.has(item.id));
+      pending.forEach(cursor => next.push(cursor));
+      hasPeersRef.current = next.length > 0;
+      return next;
+    });
+  }, []);
 
   const upsertCursor = useCallback((cursor: CursorPresence) => {
     if (!userId || cursor.id === userId) return;
-    setCursors(prev => {
-      const next = prev.filter(item => item.id !== cursor.id);
-      next.push(cursor);
-      return next;
-    });
-  }, [userId]);
+    hasPeersRef.current = true;
+    pendingRef.current.set(cursor.id, cursor);
+    if (rafRef.current === null) rafRef.current = requestAnimationFrame(flushPending);
+  }, [userId, flushPending]);
 
   const pruneStaleCursors = useCallback(() => {
     const cutoff = Date.now() - 5000;
-    setCursors(prev => prev.filter(cursor => cursor.lastSeen >= cutoff));
+    setCursors(prev => {
+      const next = prev.filter(cursor => cursor.lastSeen >= cutoff);
+      if (next.length === prev.length) return prev;
+      hasPeersRef.current = next.length > 0;
+      return next;
+    });
   }, []);
 
   const sendCursor = useCallback((x: number, y: number) => {
@@ -73,9 +92,10 @@ export function useMultiplayerCursors(
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!canvasRef.current || !userId) return;
+    if (!hasPeersRef.current) return;
 
     const now = Date.now();
-    if (now - throttleRef.current < 32) return;
+    if (now - throttleRef.current < 80) return;
     throttleRef.current = now;
 
     const rect = canvasRef.current.getBoundingClientRect();
@@ -125,6 +145,8 @@ export function useMultiplayerCursors(
       window.removeEventListener('beforeunload', handleLeave);
       handleLeave();
       if (cleanupTimerRef.current) window.clearInterval(cleanupTimerRef.current);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
       channel.unsubscribe();
       channelRef.current = null;
     };

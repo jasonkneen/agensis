@@ -79,6 +79,7 @@ export function useItemPresence(
   const typingRef = useRef<Record<string, boolean>>({});
   const windowsRef = useRef<FloatingWindow[]>(windows);
   const heartbeatRef = useRef<number | null>(null);
+  const knownRemoteIdsRef = useRef<Set<string>>(new Set());
   const displayName = userEmail?.split('@')[0] || 'Anonymous';
   const color = userId ? pickColor(userId) : '#3b82f6';
 
@@ -151,11 +152,16 @@ export function useItemPresence(
   const pruneStaleUsers = useCallback(() => {
     const cutoff = Date.now() - 7000;
     setRemotePresence(prev => {
+      let changed = false;
       const next = { ...prev };
       for (const [id, state] of Object.entries(next)) {
-        if (state.lastSeen < cutoff) delete next[id];
+        if (state.lastSeen < cutoff) {
+          delete next[id];
+          knownRemoteIdsRef.current.delete(id);
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : prev;
     });
   }, []);
 
@@ -179,6 +185,8 @@ export function useItemPresence(
       .on('broadcast', { event: 'presence_snapshot' }, ({ payload }: BroadcastPayload<PresenceSnapshotPayload>) => {
         const snapshot = payload;
         if (!snapshot.userId || snapshot.userId === userId) return;
+        const isNewPeer = !knownRemoteIdsRef.current.has(snapshot.userId);
+        if (isNewPeer) knownRemoteIdsRef.current.add(snapshot.userId);
         setRemotePresence(prev => ({
           ...prev,
           [snapshot.userId]: {
@@ -191,10 +199,12 @@ export function useItemPresence(
             lastSeen: snapshot.lastSeen || Date.now(),
           },
         }));
+        if (isNewPeer) sendSnapshot();
       })
       .on('broadcast', { event: 'presence_leave' }, ({ payload }: BroadcastPayload<{ userId?: string }>) => {
         const leavingId = payload.userId;
         if (!leavingId) return;
+        knownRemoteIdsRef.current.delete(leavingId);
         setRemotePresence(prev => {
           const next = { ...prev };
           delete next[leavingId];
@@ -215,18 +225,11 @@ export function useItemPresence(
       });
     };
 
-    heartbeatRef.current = window.setInterval(() => {
-      sendSnapshot();
-      pruneStaleUsers();
-    }, 2000);
-
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       handleBeforeUnload();
-      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
       channel.unsubscribe();
       channelRef.current = null;
     };
@@ -236,6 +239,22 @@ export function useItemPresence(
     if (!workspaceId || !userId) return;
     sendSnapshot();
   }, [workspaceId, userId, windows, activeLayerId, sendSnapshot]);
+
+  const hasRemotePeers = Object.keys(remotePresence).length > 0;
+
+  useEffect(() => {
+    if (!workspaceId || !userId) return;
+
+    heartbeatRef.current = window.setInterval(() => {
+      sendSnapshot();
+      pruneStaleUsers();
+    }, hasRemotePeers ? 2000 : 10000);
+
+    return () => {
+      if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    };
+  }, [workspaceId, userId, hasRemotePeers, sendSnapshot, pruneStaleUsers]);
 
   const { documentPresence, chatPresence, remotePresenceUsers, sharedWindows } = useMemo(() => {
     const documents: Record<string, ItemPresenceUser[]> = {};

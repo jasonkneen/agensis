@@ -1,10 +1,10 @@
-import bg1 from '../../images/download-21.jpg';
-import bg2 from '../../images/download-22.jpg';
-import bg3 from '../../images/download-24.jpg';
-import bg4 from '../../images/download-25.jpg';
-import bg5 from '../../images/download-26.jpg';
-import bg6 from '../../images/download-27.jpg';
-import bg7 from '../../images/download-28.jpg';
+import bg1 from '../../images/download-21.webp';
+import bg2 from '../../images/download-22.webp';
+import bg3 from '../../images/download-24.webp';
+import bg4 from '../../images/download-25.webp';
+import bg5 from '../../images/download-26.webp';
+import bg6 from '../../images/download-27.webp';
+import bg7 from '../../images/download-28.webp';
 
 export const WORKSPACE_BACKGROUNDS = [
   { id: 'green-fields', label: 'Green Fields', src: bg1 },

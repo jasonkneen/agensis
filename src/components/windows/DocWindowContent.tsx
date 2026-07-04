@@ -297,7 +297,7 @@ const TOOLBAR: Array<{ action?: FormatAction; icon?: React.ReactNode; label?: st
   { custom: 'generative-ui', icon: <PanelsTopLeft />, label: 'Generative UI' },
 ];
 
-export function DocWindowContent({
+export const DocWindowContent = React.memo(function DocWindowContent({
   document: doc,
   workspaceId,
   userId,
@@ -768,4 +768,4 @@ export function DocWindowContent({
       </div>
     </div>
   );
-}
+});

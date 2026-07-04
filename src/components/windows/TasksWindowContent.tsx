@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   CheckCircle2,
@@ -110,7 +110,7 @@ const TASK_COMMENT_AVATAR_COLORS = [
 
 type AssignmentFilter = 'all' | 'mine' | 'others';
 
-export function TasksWindowContent({
+export const TasksWindowContent = memo(function TasksWindowContent({
   tasks,
   members,
   agents,
@@ -333,7 +333,7 @@ export function TasksWindowContent({
       </ScrollArea>
     </div>
   );
-}
+});
 
 function TaskRow({
   task,

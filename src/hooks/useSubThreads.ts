@@ -270,6 +270,8 @@ export function useSubThreads(workspaceId: string | null) {
       };
       setSubThreadMessages(prev => [...prev, placeholder]);
 
+      let flushHandle: number | null = null;
+
       try {
         const controller = new AbortController();
         streamAbortRef.current = controller;
@@ -302,6 +304,13 @@ export function useSubThreads(workspaceId: string | null) {
         // Use the shared parser: the /backend/ai-chat stream frames are
         // { delta: { text } } (not choices[].delta.content), so the old shape
         // yielded blank replies and persisted an empty message (M13).
+        const flushStreamContent = () => {
+          flushHandle = null;
+          const snapshot = fullContent;
+          setSubThreadMessages(prev => prev.map(m =>
+            m.id === assistantMsgId ? { ...m, content: snapshot } : m));
+        };
+
         const consume = (data: string) => {
           if (data === '[DONE]') return;
           try {
@@ -309,8 +318,7 @@ export function useSubThreads(workspaceId: string | null) {
             if (error) { streamError = error; return; }
             if (text) {
               fullContent += text;
-              setSubThreadMessages(prev => prev.map(m =>
-                m.id === assistantMsgId ? { ...m, content: fullContent } : m));
+              if (flushHandle === null) flushHandle = requestAnimationFrame(flushStreamContent);
             }
           } catch { /* ignore malformed frame */ }
         };
@@ -326,6 +334,8 @@ export function useSubThreads(workspaceId: string | null) {
         // Flush any trailing partial line left in the buffer.
         for (const line of extractSseDataLines(buffer, true).data) consume(line);
 
+        if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
+
         const finalContent = finalAssistantStreamContent(fullContent, streamError);
         setSubThreadMessages(prev => prev.map(m =>
           m.id === assistantMsgId ? { ...m, content: finalContent } : m));
@@ -336,6 +346,7 @@ export function useSubThreads(workspaceId: string | null) {
           content: finalContent,
         });
       } catch (error) {
+        if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
         if (error instanceof DOMException && error.name === 'AbortError') return;
       } finally {
         setSubThreadStreaming(false);

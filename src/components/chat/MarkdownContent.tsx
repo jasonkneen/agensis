@@ -18,19 +18,21 @@ interface MarkdownContentProps {
   onMentionClick?: (mention: string) => void;
 }
 
-export function MarkdownContent({ content, compact = false, streaming = false, onMentionClick }: MarkdownContentProps) {
+export const MarkdownContent = React.memo(function MarkdownContent({ content, compact = false, streaming = false, onMentionClick }: MarkdownContentProps) {
   // Only resolve frontmatter once the message has settled — mid-stream content
   // may still be growing the `---` block itself and would flicker as it parses.
-  const frontmatter = streaming ? null : parseFrontmatter(content);
-  const bodyContent = frontmatter ? frontmatter.body : content;
-  const blocks = parseBlocks(streaming ? closeOpenMarkers(bodyContent) : bodyContent);
+  const { frontmatter, blocks } = React.useMemo(() => {
+    const fm = streaming ? null : parseFrontmatter(content);
+    const body = fm ? fm.body : content;
+    return { frontmatter: fm, blocks: parseBlocks(streaming ? closeOpenMarkers(body) : body) };
+  }, [content, streaming]);
   return (
     <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
       {frontmatter && <FrontmatterHeader meta={frontmatter.meta} />}
       {blocks.map((block, index) => renderBlock(block, index, onMentionClick, streaming))}
     </div>
   );
-}
+});
 
 type FrontmatterValue = string | Record<string, string>;
 

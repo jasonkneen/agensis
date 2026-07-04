@@ -795,26 +795,34 @@ function AppContent() {
   const workspaceBackdropImage = viewedLayer.background_image || activeWorkspace?.background_image || canvasGridBackground;
   const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42));
   const workspaceBackdropOverlayOpacity = Math.max(0, 1 - workspaceBackdropOpacity);
-  const visibleCanvasObjects = canvasObjects.filter(
-    obj => (obj.layer_id || 'base') === viewedLayerId,
+  const visibleCanvasObjects = useMemo(
+    () => canvasObjects.filter(obj => (obj.layer_id || 'base') === viewedLayerId),
+    [canvasObjects, viewedLayerId],
   );
-  const visibleGroupIds = new Set(visibleCanvasObjects.map(obj => obj.group_id).filter(Boolean));
-  const visibleCanvasGroups = canvasGroups.filter(group => visibleGroupIds.has(group.id));
-  const exactWorkspaceWindows = focusedRemotePresence
-    ? focusedRemotePresence.windows.map(win => ({
-        ...win,
-        id: `remote:${focusedRemotePresence.userId}:${win.id}`,
-        ownerUserId: focusedRemotePresence.userId,
-      }))
-    : windows;
-  const activeWindows = exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
-  const dockWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
-  const focusedDockWindow = dockWindows
-    .filter(win => !win.minimized)
-    .reduce<FloatingWindow | null>((topWindow, win) => (
-      !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
-    ), null);
-  const dockEntries = groupDockWindows(dockWindows);
+  const visibleCanvasGroups = useMemo(() => {
+    const visibleGroupIds = new Set(visibleCanvasObjects.map(obj => obj.group_id).filter(Boolean));
+    return canvasGroups.filter(group => visibleGroupIds.has(group.id));
+  }, [visibleCanvasObjects, canvasGroups]);
+  const activeWindows = useMemo(() => {
+    const exactWorkspaceWindows = focusedRemotePresence
+      ? focusedRemotePresence.windows.map(win => ({
+          ...win,
+          id: `remote:${focusedRemotePresence.userId}:${win.id}`,
+          ownerUserId: focusedRemotePresence.userId,
+        }))
+      : windows;
+    return exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
+  }, [focusedRemotePresence, windows, viewedLayerId]);
+  const { dockWindows, focusedDockWindow, dockEntries } = useMemo(() => {
+    const dockWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
+    const focusedDockWindow = dockWindows
+      .filter(win => !win.minimized)
+      .reduce<FloatingWindow | null>((topWindow, win) => (
+        !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
+      ), null);
+    const dockEntries = groupDockWindows(dockWindows);
+    return { dockWindows, focusedDockWindow, dockEntries };
+  }, [windows, activeLayerId]);
   // macOS-style dock bounce: a chat window's icon bounces once when its agent
   // starts working (idle → busy). Derived purely from the realtime connection
   // status already in scope — no extra subscriptions.
@@ -1397,6 +1405,59 @@ function AppContent() {
     });
   }, [layers, baseLayerId, deleteObjectsInLayer, deleteLayer]);
 
+  const handleOpenMobileMenu = useCallback(() => setMobileDrawerOpen(true), []);
+  const handleToggleWorkspaceCtx = useCallback(() => setUseWorkspaceCtx(v => !v), []);
+  const handleCreateSubThreadFromScene = useCallback(async (messageId: string, agent: WorkspaceAgent, messageContent?: string) => {
+    const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
+    const otherAgents = agents
+      .filter(a => a.enabled !== false && a.id !== agent.id)
+      .map(a => ({
+        id: a.id,
+        name: a.name,
+        handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
+      }));
+    await createSubThread(messageId, slug, agent.id, agent.name, {
+      contextMessage: messageContent,
+      additionalAgents: otherAgents,
+    });
+    // Background task — don't open the sub-thread panel; let it run autonomously.
+    // The user can view it from the Threads panel.
+  }, [agents, createSubThread]);
+  const handleDeleteDocumentFromScene = useCallback(async (id: string) => {
+    const doc = documents.find(d => d.id === id);
+    await deleteDocument(id);
+    if (doc) {
+      logEvent({
+        event_type: 'document_deleted',
+        entity_type: 'document',
+        entity_id: id,
+        title: `Document deleted: ${doc.title}`,
+      });
+    }
+  }, [documents, deleteDocument, logEvent]);
+  const handleAddFactFromScene = useCallback((fact: string, category: string) => {
+    addFact(fact, category);
+    logEvent({
+      event_type: 'memory_added',
+      entity_type: 'memory',
+      title: `Memory added: ${fact.slice(0, 60)}${fact.length > 60 ? '...' : ''}`,
+      metadata: { category },
+    });
+  }, [addFact, logEvent]);
+  const handleCommentCreatedFromScene = useCallback((docTitle?: string) => logEvent({
+    event_type: 'comment_created',
+    entity_type: 'document',
+    title: docTitle ? `New comment on ${docTitle}` : 'New document comment',
+  }), [logEvent]);
+
+  const handleCloseMobileDrawer = useCallback(() => setMobileDrawerOpen(false), []);
+  const handleOpenCommandPalette = useCallback(() => setCommandPaletteOpen(true), []);
+  const handleSidebarUploadFile = useCallback(() => {}, []);
+  const handleOpenTemplates = useCallback(() => setTemplatePickerOpen(true), []);
+  const handleOpenSettingsFromSidebar = useCallback(() => openLayerSettings(activeLayerId), [openLayerSettings, activeLayerId]);
+  const handleSidebarAgentProfile = useCallback((agent: { id: string; agentId: string | null; handle: string | null; name: string }) => {
+    handleOpenAgentProfile(agent.agentId || agent.id || agent.handle || agent.name);
+  }, [handleOpenAgentProfile]);
 
   if (authLoading) {
     return (
@@ -1436,12 +1497,12 @@ function AppContent() {
         activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
         overlay={isMobile}
         collapsed={isMobile ? false : sidebarCollapsed}
-        onToggleCollapse={isMobile ? () => setMobileDrawerOpen(false) : handleToggleSidebar}
-        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
+        onOpenCommandPalette={handleOpenCommandPalette}
         onOpenWorkspaceGrid={handleOpenCanvasGrid}
         onNewChat={handleNewChat}
         onNewDocument={handleNewDocument}
-        onUploadFile={() => {}}
+        onUploadFile={handleSidebarUploadFile}
         onCreateWorkspace={handleCreateWorkspace}
         onDocumentOpen={handleDocumentOpen}
         onDocumentUpdate={saveDocument}
@@ -1458,8 +1519,8 @@ function AppContent() {
         onOpenAgents={handleOpenAgents}
         onOpenUsers={handleOpenUsers}
         onAgentMessage={handleAgentDirectMessage}
-        onAgentProfile={(agent) => handleOpenAgentProfile(agent.agentId || agent.id || agent.handle || agent.name)}
-        onOpenTemplates={() => setTemplatePickerOpen(true)}
+        onAgentProfile={handleSidebarAgentProfile}
+        onOpenTemplates={handleOpenTemplates}
         openTaskCount={openTasks.length}
         recents={recents}
         sessions={sessions}
@@ -1474,7 +1535,7 @@ function AppContent() {
         userEmail={user.email || ''}
         userId={user.id}
         onSignOut={signOut}
-        onOpenSettings={() => openLayerSettings(activeLayerId)}
+        onOpenSettings={handleOpenSettingsFromSidebar}
       />
       </div>
       {isMobile && mobileDrawerOpen && (
@@ -1546,7 +1607,7 @@ function AppContent() {
                 canvasGroups={visibleCanvasGroups}
                 windows={activeWindows}
                 isMobile={isMobile}
-                onOpenMobileMenu={() => setMobileDrawerOpen(true)}
+                onOpenMobileMenu={handleOpenMobileMenu}
                 tasks={tasks}
                 members={members}
                 activityEvents={activityEvents}
@@ -1584,26 +1645,11 @@ function AppContent() {
                 subThreadStreaming={subThreadStreaming}
                 onOpenSubThread={openSubThread}
                 onCloseSubThread={closeSubThread}
-                onCreateSubThread={async (messageId, agent, messageContent?: string) => {
-                  const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-                  const otherAgents = agents
-                    .filter(a => a.enabled !== false && a.id !== agent.id)
-                    .map(a => ({
-                      id: a.id,
-                      name: a.name,
-                      handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
-                    }));
-                  await createSubThread(messageId, slug, agent.id, agent.name, {
-                    contextMessage: messageContent,
-                    additionalAgents: otherAgents,
-                  });
-                  // Background task — don't open the sub-thread panel; let it run autonomously.
-                  // The user can view it from the Threads panel.
-                }}
+                onCreateSubThread={handleCreateSubThreadFromScene}
                 onSendSubThreadMessage={sendSubThreadMessage}
                 onSplitThread={handleSplitThread}
                 useWorkspaceCtx={useWorkspaceCtx}
-                onToggleWorkspaceCtx={() => setUseWorkspaceCtx(v => !v)}
+                onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
                 onHomeSendMessage={handleHomeSendMessage}
                 onNewDocument={handleNewDocument}
                 onCloseWindow={handleCloseWindow}
@@ -1613,40 +1659,17 @@ function AppContent() {
                 onShareWindow={handleShareWindow}
                 onSendMessage={wrappedSendMessage}
                 onSetActiveSession={setActiveSession}
-                onDeleteDocument={async (id) => {
-                  const doc = documents.find(d => d.id === id);
-                  await deleteDocument(id);
-                  if (doc) {
-                    logEvent({
-                      event_type: 'document_deleted',
-                      entity_type: 'document',
-                      entity_id: id,
-                      title: `Document deleted: ${doc.title}`,
-                    });
-                  }
-                }}
+                onDeleteDocument={handleDeleteDocumentFromScene}
                 onAutoSaveDocument={autoSave}
                 onToggleFavorite={toggleFavorite}
-                onAddFact={(fact, category) => {
-                  addFact(fact, category);
-                  logEvent({
-                    event_type: 'memory_added',
-                    entity_type: 'memory',
-                    title: `Memory added: ${fact.slice(0, 60)}${fact.length > 60 ? '...' : ''}`,
-                    metadata: { category },
-                  });
-                }}
+                onAddFact={handleAddFactFromScene}
                 onUpdateFact={updateFact}
                 onDeleteFact={deleteFact}
                 onCreateTask={handleCreateTask}
                 onUpdateTask={handleUpdateTask}
                 onToggleTaskStatus={handleToggleTaskStatus}
                 onDeleteTask={handleDeleteTask}
-                onCommentCreated={(docTitle) => logEvent({
-                  event_type: 'comment_created',
-                  entity_type: 'document',
-                  title: docTitle ? `New comment on ${docTitle}` : 'New document comment',
-                })}
+                onCommentCreated={handleCommentCreatedFromScene}
                 onRequestConfirm={setConfirmAction}
               />
             </div>
@@ -2026,6 +2049,21 @@ function CanvasLayerScene({
     ? nonMinimizedWindows.filter(win => win.id === mobileActiveWindowId)
     : nonMinimizedWindows;
 
+  const adjacencyByWindowId = useMemo(
+    () => new Map(windows.map(w => [w.id, computeAdjacentEdges(w, windows)])),
+    [windows],
+  );
+
+  // Identical for every chat window — build once instead of per-window in the map.
+  const contextControlsElement = useMemo(() => (
+    <KnowledgeContextControl
+      counts={contextCounts}
+      enabled={useWorkspaceCtx}
+      title={contextCountsTitle}
+      onToggle={onToggleWorkspaceCtx}
+    />
+  ), [contextCounts, useWorkspaceCtx, contextCountsTitle, onToggleWorkspaceCtx]);
+
   return (
     <>
       <HomeCanvas
@@ -2044,7 +2082,7 @@ function CanvasLayerScene({
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
-        const adjacentEdges = computeAdjacentEdges(win, windows);
+        const adjacentEdges = adjacencyByWindowId.get(win.id);
 
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
@@ -2086,14 +2124,7 @@ function CanvasLayerScene({
                     onUploadFiles={onUploadFiles}
                     onCreateTask={onCreateTask}
                     systemCapabilities={systemCapabilities}
-                    contextControls={(
-                      <KnowledgeContextControl
-                        counts={contextCounts}
-                        enabled={useWorkspaceCtx}
-                        title={contextCountsTitle}
-                        onToggle={onToggleWorkspaceCtx}
-                      />
-                    )}
+                    contextControls={contextControlsElement}
                     onSetActiveSession={onSetActiveSession}
                     onSendMessage={onSendMessage}
                     onOpenThread={onOpenThread}
@@ -2122,14 +2153,7 @@ function CanvasLayerScene({
                   onUploadFiles={onUploadFiles}
                   onCreateTask={onCreateTask}
                   systemCapabilities={systemCapabilities}
-                  contextControls={(
-                    <KnowledgeContextControl
-                      counts={contextCounts}
-                      enabled={useWorkspaceCtx}
-                      title={contextCountsTitle}
-                      onToggle={onToggleWorkspaceCtx}
-                    />
-                  )}
+                  contextControls={contextControlsElement}
                   onSendMessage={(content, model, mf, docs) => {
                     if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
                     onSendMessage(content, model, mf, docs, null, winSession || null);

@@ -199,7 +199,7 @@ interface SidebarProps {
   onOpenSettings: () => void;
 }
 
-export function Sidebar({
+export const Sidebar = React.memo(function Sidebar({
   workspace,
   activeLayerName,
   collapsed,
@@ -756,7 +756,7 @@ export function Sidebar({
     {agentStatusFeed && <AgentStatusFeedOverlay anchorRef={sidebarRef} feed={agentStatusFeed} />}
     </>
   );
-}
+});
 
 function normalizeSectionName(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';

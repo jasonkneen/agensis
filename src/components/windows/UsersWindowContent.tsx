@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   Check,
   Crown,
@@ -48,7 +48,7 @@ interface UsersWindowContentProps {
   onChangeMemberRole: (memberId: string, role: 'editor' | 'viewer') => Promise<void>;
 }
 
-export function UsersWindowContent({
+export const UsersWindowContent = memo(function UsersWindowContent({
   workspaceName,
   currentUserId,
   currentUserEmail,
@@ -294,7 +294,7 @@ export function UsersWindowContent({
       </div>
     </div>
   );
-}
+});
 
 function roleBadgeVariant(role: string): 'default' | 'secondary' | 'outline' {
   if (role === 'owner') return 'default';

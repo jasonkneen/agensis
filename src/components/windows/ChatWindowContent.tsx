@@ -219,7 +219,7 @@ type ParticipantCandidate = ChannelParticipant & {
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
 
-export function ChatWindowContent({
+export const ChatWindowContent = React.memo(function ChatWindowContent({
   messages,
   topLevelMessages,
   threadMessages = [],
@@ -1957,7 +1957,7 @@ export function ChatWindowContent({
       </Dialog>
     </div>
   );
-}
+});
 
 function MessageAvatar({ avatar, initials, isAgent }: { avatar?: string; initials: string; isAgent: boolean }) {
   if (avatar && isPetSpritesheetAvatar(avatar)) {

@@ -97,7 +97,7 @@ function groupByDay(events: ActivityEvent[]): Array<{ label: string; items: Acti
   return Object.entries(groups).map(([label, items]) => ({ label, items }));
 }
 
-export function ActivityWindowContent({ events, loading }: ActivityWindowContentProps) {
+export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading }: ActivityWindowContentProps) {
   if (loading && events.length === 0) {
     return (
       <Empty className="h-full border-0">
@@ -152,4 +152,4 @@ export function ActivityWindowContent({ events, loading }: ActivityWindowContent
       </div>
     </ScrollArea>
   );
-}
+});

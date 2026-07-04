@@ -38,6 +38,18 @@ export default defineConfig({
   // Use relative asset URLs so the same bundle works when served from a web
   // root and when loaded from disk inside the Electron desktop wrapper.
   base: './',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
+            if (/node_modules\/(radix-ui|@radix-ui|cmdk|sonner|vaul|lucide-react)\//.test(id)) return 'vendor-ui';
+          }
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -102,11 +114,31 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // Never precache the version manifest or release notes — they must be
         // fetched fresh so the update check reflects the true latest deploy.
-        globIgnores: ['**/version.json', '**/release-notes.json'],
+        globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],
         runtimeCaching: [
+          {
+            // Hashed lazy chunks (mermaid, diagrams, etc.) — cache on first use only.
+            urlPattern: /\/assets\/.*\.(?:js|css)$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'lazy-chunks',
+              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Agent avatar images — not part of the app shell, cache on first use.
+            urlPattern: /\/agent-avatars\/.*\.(?:png|webp)$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'agent-avatars',
+              expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',

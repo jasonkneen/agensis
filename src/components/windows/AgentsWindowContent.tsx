@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   Bot,
   Brain,
@@ -115,7 +115,7 @@ const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon
   { value: 'icon:monitor', label: 'Monitor', icon: Monitor },
 ];
 
-export function AgentsWindowContent({
+export const AgentsWindowContent = memo(function AgentsWindowContent({
   agents,
   webhooks,
   connections = [],
@@ -500,7 +500,7 @@ export function AgentsWindowContent({
       </div>
     </div>
   );
-}
+});
 
 function AgentForm({
   name,

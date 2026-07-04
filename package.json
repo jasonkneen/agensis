@@ -27,6 +27,12 @@
   "dependencies": {
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource/archivo-black": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/press-start-2p": "^5.2.7",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@fontsource/space-mono": "^5.2.9",
     "@netlify/database": "^1.1.0",
     "@netlify/identity": "^1.2.0",
     "@shadcn/react": "^0.1.0",

@@ -388,6 +388,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
     };
     setMessages(prev => [...prev, placeholderMsg]);
 
+    let flushHandle: number | null = null;
+
     try {
       const agentContext = agent ? {
         name: agent.name,
@@ -448,6 +450,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       let streamError = '';
       let streamBuffer = '';
 
+      const flushStreamContent = () => {
+        flushHandle = null;
+        const snapshot = fullContent;
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: snapshot } : m));
+      };
+
       const consumeStreamData = (data: string) => {
         if (data === '[DONE]') return;
         try {
@@ -458,7 +466,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
           }
           if (text) {
             fullContent += text;
-            setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: fullContent } : m));
+            if (flushHandle === null) flushHandle = requestAnimationFrame(flushStreamContent);
           }
         } catch {
           // Ignore malformed stream chunks and keep consuming the stream.
@@ -483,6 +491,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
         }
       }
 
+      if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
+
       const finalContent = finalAssistantStreamContent(fullContent, streamError);
       setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: finalContent } : m));
 
@@ -498,6 +508,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
       if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
       await backendClient.from('messages').insert(assistantInsert);
     } catch (error) {
+      if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
       // Unmount aborted the stream — the component is gone, skip all state writes.
       if (error instanceof DOMException && error.name === 'AbortError') return;
       const errMsg = errorMessage(error || 'Something went wrong. Please try again.');
