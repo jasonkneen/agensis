@@ -1563,6 +1563,12 @@ function allowLoopbackAgentDevFallback(req, token) {
 
 function publicAgentConnection(row) {
   if (!row) return row;
+  const capabilities = parseJsonObject(row.capabilities);
+  // Direct-reach (LAN ip/port) is daemon-only — NEVER publish it to browsers. It rides
+  // agent_connections.capabilities.reach (agent-mesh F2) and reaches peer daemons only
+  // via the hub peer_list channel (F7). Every browser-facing row (INSERT/UPDATE/DELETE
+  // notify + REST) funnels through here, so strip it once, here.
+  if (capabilities && typeof capabilities === 'object') delete capabilities.reach;
   return {
     id: row.id,
     workspace_id: row.workspace_id,
@@ -1573,7 +1579,7 @@ function publicAgentConnection(row) {
     cwd: row.cwd,
     status: row.status,
     metadata: parseJsonObject(row.metadata),
-    capabilities: parseJsonObject(row.capabilities),
+    capabilities,
     connected_at: row.connected_at,
     last_seen_at: row.last_seen_at,
     updated_at: row.updated_at,
@@ -2751,6 +2757,9 @@ async function registerAgentConnection(ws, message) {
 // The "format we need" gate: stored capabilities must have the three array fields and a
 // string|null memoryRoot. A row that fails this (never synced, or malformed) is treated
 // as drifted so the heartbeat nudges a fresh snapshot to self-heal it.
+// `reach` (agent-mesh F2) is INTENTIONALLY excluded from this required-fields check —
+// older daemons, and reach-disabled ones, omit it. Requiring it would make
+// capabilitiesDriftNudges nudge agent_capabilities_refresh every beat forever.
 function capabilitiesShapeValid(caps) {
   return Boolean(caps)
     && Array.isArray(caps.skills)
@@ -2859,6 +2868,109 @@ async function handleAgentMemorySync(ws, message) {
   if (pruned.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', pruned);
 }
 
+// Sanitizes a daemon-reported reach advert before it's stored. Caps addrs to 4 and
+// truncates host so a misbehaving daemon can't grow the capabilities row unbounded.
+function reachFromMessage(raw) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  return {
+    transport: 'ws',
+    listening: raw.listening === true,
+    addrs: Array.isArray(raw.addrs)
+      ? raw.addrs.slice(0, 4).map((a) => ({
+          host: String(a?.host || '').slice(0, 63),
+          port: Number(a?.port) || 0,
+          scope: a?.scope === 'lan' ? 'lan' : 'other',
+        }))
+      : [],
+    auth: 'hub-pairwise',
+  };
+}
+
+// Whether a stored capabilities.reach block is usable as a direct-handoff target.
+function reachIsDirect(caps) {
+  const reach = caps && caps.reach;
+  return Boolean(reach && reach.listening === true && Array.isArray(reach.addrs) && reach.addrs.length > 0);
+}
+
+// --- agent-mesh pairwise peer auth (F5). Peers can't verify each other's aga_ tokens
+// directly (only the hub holds connect_token_hash). The hub is the trust root: it mints
+// a short-lived, single-use ticket for a requested handoff and pushes the matching grant
+// to the callee, so two daemons can open a direct channel with NO new crypto beyond the
+// hub's existing token machinery (mirrors createAgentConnectToken's aga_ prefix pattern).
+//
+// Wire (new WS actions, alongside agent_capabilities_sync):
+//   Daemon A -> hub:   { action:'peer_ticket_request', targetAgentId }
+//   Hub -> Daemon A:   { type:'peer_ticket', ticket, exp, peer:{ agentId, addrs } }
+//   Hub -> Daemon B:   { type:'peer_ticket_grant', ticket, exp, fromAgentId }
+//   Daemon A -> B (FIRST frame on B's LAN listener): { type:'peer_auth', ticket, fromAgentId }
+//   Daemon B validates the presented ticket against the grant it holds — hub-verified
+//   indirectly, so B needs no server secret of its own.
+const pendingPeerTickets = new Map(); // ticket -> { from, to, exp }
+const PEER_TICKET_TTL_MS = 60_000;
+function mintPeerTicket() {
+  return `agp_${crypto.randomBytes(24).toString('base64url')}`;
+}
+function pruneExpiredPeerTickets() {
+  const now = Date.now();
+  for (const [ticket, entry] of pendingPeerTickets) {
+    if (now > entry.exp) pendingPeerTickets.delete(ticket);
+  }
+}
+
+async function handlePeerTicketRequest(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+  const targetAgentId = String(message.targetAgentId || '');
+  if (!targetAgentId) throw badRequest('targetAgentId is required');
+  const targetEntry = findConnectedAgent(ws.workspaceId, targetAgentId, '');
+  if (!targetEntry) throw badRequest('Target agent is not connected');
+  const rows = await getDb().unsafe(
+    'select capabilities from agent_connections where id = $1',
+    [targetEntry.connectionId],
+  );
+  const targetCaps = parseJsonObject(rows[0]?.capabilities);
+  if (!reachIsDirect(targetCaps)) throw badRequest('Target agent is not direct-reachable');
+
+  pruneExpiredPeerTickets();
+  const ticket = mintPeerTicket();
+  const exp = Date.now() + PEER_TICKET_TTL_MS;
+  pendingPeerTickets.set(ticket, { from: ws.agentId, to: targetAgentId, exp });
+  sendWs(targetEntry.ws, { type: 'peer_ticket_grant', ticket, exp, fromAgentId: ws.agentId });
+  sendWs(ws, { type: 'peer_ticket', ticket, exp, peer: { agentId: targetAgentId, addrs: targetCaps.reach.addrs } });
+}
+
+// --- F7 hub-mediated discovery. Primary path; mDNS/LAN-broadcast deferred since the hub
+// already stores each daemon's host and holds the live workspace-scoped connectedAgents
+// map. New WS action:
+//   Daemon -> hub:   { action:'peer_list_request' }
+//   Hub -> daemon:   { type:'peer_list', peers:[{ agentId, handle, name, reach }] }
+// `reach` here is the FULL block (LAN host/port) — this is a daemon-only channel and
+// deliberately bypasses publicAgentConnection (which strips reach on the browser path).
+async function handlePeerListRequest(ws) {
+  const auth = ws.agentAuth;
+  if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+  const candidates = [...connectedAgents.values()].filter(
+    (entry) => entry.workspaceId === ws.workspaceId && entry.agentId !== ws.agentId && entry.ws?.readyState === 1,
+  );
+  if (!candidates.length) {
+    sendWs(ws, { type: 'peer_list', peers: [] });
+    return;
+  }
+  const rows = await getDb().unsafe(
+    'select id, agent_id, name, handle, capabilities from agent_connections where id = any($1::uuid[])',
+    [candidates.map((entry) => entry.connectionId)],
+  );
+  const byConnectionId = new Map(rows.map((row) => [row.id, row]));
+  const peers = [];
+  for (const entry of candidates) {
+    const row = byConnectionId.get(entry.connectionId);
+    const caps = parseJsonObject(row?.capabilities);
+    if (!reachIsDirect(caps)) continue;
+    peers.push({ agentId: entry.agentId, handle: row?.handle || entry.handle, name: row?.name || entry.name, reach: caps.reach });
+  }
+  sendWs(ws, { type: 'peer_list', peers });
+}
+
 async function handleAgentCapabilitiesSync(ws, message) {
   const auth = ws.agentAuth;
   if (!auth) throw forbidden('Agent token is required');
@@ -2874,6 +2986,14 @@ async function handleAgentCapabilitiesSync(ws, message) {
     clis: Array.isArray(message.clis) ? message.clis : [],
     mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
     memoryRoot: typeof message.memoryRoot === 'string' ? message.memoryRoot : null,
+    // Direct-reachability advert (agent-mesh F2). Rides the SAME drift channel as the
+    // rest of capabilities; the daemon folds JSON.stringify(reach) into its
+    // capabilitiesHash so a reach change re-pushes via the existing
+    // agent_capabilities_refresh nudge — no new sync channel. Optional: older daemons
+    // omit it, stays undefined, capabilitiesShapeValid ignores it. Redacted from
+    // browsers by publicAgentConnection; the FULL block (LAN host/port) reaches peer
+    // daemons only via the hub peer_list_request/peer_list channel (F7).
+    reach: reachFromMessage(message.reach),
     // Daemon-owned drift hashes. Stored as the reference the heartbeat drift-check
     // compares against; the server never recomputes these (avoids a cross-runtime
     // canonicalization contract). Advances only when a real snapshot lands here.
@@ -4325,6 +4445,14 @@ function attachRealtime(server) {
         }
         if (message.action === 'agent_capabilities_sync') {
           await handleAgentCapabilitiesSync(ws, message);
+          return;
+        }
+        if (message.action === 'peer_ticket_request') {
+          await handlePeerTicketRequest(ws, message);
+          return;
+        }
+        if (message.action === 'peer_list_request') {
+          await handlePeerListRequest(ws);
           return;
         }
       } catch (error) {
@@ -5892,7 +6020,7 @@ function startBackendServer(port = DEFAULT_PORT) {
     console.log(`[backend] listening on http://${host}:${port}`);
   });
   void reconcileAgentConnectionsAtStartup();
-  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void pruneOfflineConnections(); }, 30_000);
+  const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); }, 30_000);
   if (jobReaper.unref) jobReaper.unref();
   server.on('close', () => {
     wss.close();
@@ -5967,6 +6095,10 @@ module.exports = {
     hasActiveBurstJob,
     capabilitiesShapeValid,
     capabilitiesDriftNudges,
+    reachFromMessage,
+    reachIsDirect,
+    publicAgentConnection,
+    mintPeerTicket,
     mergeSlashCommands,
     finalizeStuckJob,
     claimMcpJob,

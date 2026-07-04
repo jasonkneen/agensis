@@ -2941,6 +2941,10 @@ function AgentProfileSidePanel({
           {agent?.instructions && agent.instructions !== agent.system_prompt && (
             <AgentProfileTextSection title="Instructions" value={agent.instructions} tall />
           )}
+          {/* Agent-mesh invariant (F8): this list binds to hub-written agent_connections rows
+              and is unaffected by whether a message to this agent went direct (daemon-to-daemon
+              handoff) or hub-relayed — reach is server-redacted (publicAgentConnection) so it
+              never reaches this component. */}
           {matchingConnections.length > 1 && (
             <AgentProfileSection title="Other connections">
               <div className="space-y-1.5">

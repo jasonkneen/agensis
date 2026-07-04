@@ -29,6 +29,10 @@ function parseArgs(argv) {
       args.once = true;
       continue;
     }
+    if (key === "lan") {
+      args.lanListener = true;
+      continue;
+    }
     if (key === "yolo" || key === "noSandbox") {
       args.permissionMode = "yolo";
       continue;
@@ -71,6 +75,8 @@ Options:
   --timeout-ms <ms>       Kill a job after this time, default: 1800000
   --heartbeat-ms <ms>     Local terminal heartbeat interval, default: 15000
   --once                  Run one queued job then exit
+  --lan                   Opt in to the agent-mesh LAN listener for direct
+                          daemon-to-daemon job handoff (default: off)
   --version               Print the CLI version
   --help                  Show this help
 `;

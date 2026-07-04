@@ -40,11 +40,140 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let queue = null;
   let lastSocketErrorCode = '';
 
+  // --- Agent-mesh (F1/F5/F6/F7): opt-in LAN listener + peer ticket/list plumbing for
+  // direct daemon-to-daemon job handoff. Every human<->agent turn stays hub-relayed
+  // (unchanged above); this is scoped to daemon-initiated agent-to-agent collaboration
+  // only. Local (closure) state, not module-level, since it needs `queue` and the live
+  // hub `ws` to run a handed-off job and report its result back to the hub.
+  let lanServer = null;
+  let lanReach = { transport: "ws", listening: false, addrs: [], auth: "hub-pairwise" };
+  const peerGrants = new Map(); // ticket -> { fromAgentId, exp } — grants WE were given, as callee
+  const peerTicketWaiters = new Map(); // targetAgentId -> [{ resolve, reject }]
+  let peerListWaiters = [];
+  const currentReach = () => lanReach;
+
+  const startLanListener = () => {
+    if (lanServer || !config.lanListener) return;
+    lanServer = new WebSocket.Server({ port: 0 });
+    lanServer.on("listening", () => {
+      const { port } = lanServer.address();
+      lanReach = { transport: "ws", listening: true, addrs: lanAddrs(port), auth: "hub-pairwise" };
+      log(`Agent-mesh LAN listener on port ${port}`);
+      void pushCapabilitiesSnapshot(ws, config, currentReach());
+    });
+    lanServer.on("connection", (socket) => {
+      let authed = false;
+      const authTimer = setTimeout(() => {
+        if (!authed) { try { socket.close(1008, "peer auth required"); } catch { /* already closing */ } }
+      }, 5000);
+      socket.once("message", (raw) => {
+        clearTimeout(authTimer);
+        const frame = parseMessage(raw);
+        const grant = frame?.type === "peer_auth" ? peerGrants.get(frame.ticket) : null;
+        if (!grant || grant.fromAgentId !== frame.fromAgentId || Date.now() > grant.exp) {
+          try { socket.close(1008, "invalid ticket"); } catch { /* already closing */ }
+          return;
+        }
+        peerGrants.delete(frame.ticket); // single-use
+        authed = true;
+        socket.on("message", (raw2) => {
+          const peerMessage = parseMessage(raw2);
+          if (peerMessage?.type === "agent_job" && peerMessage.job?.id) {
+            const result = queue.enqueue({ ...peerMessage.job, key: peerMessage.job.id, lane: laneKeyForJob(peerMessage.job), ws });
+            if (result.accepted) log(`Queued peer-handoff job ${peerMessage.job.id} from ${frame.fromAgentId}`);
+          }
+        });
+      });
+    });
+    lanServer.on("error", (error) => log(`LAN listener error: ${error?.message || error}`));
+  };
+
+  const stopLanListener = () => {
+    if (lanServer) {
+      try { lanServer.close(); } catch { /* already closing */ }
+      lanServer = null;
+    }
+    lanReach = { transport: "ws", listening: false, addrs: [], auth: "hub-pairwise" };
+  };
+
+  // Ask the hub for a single-use ticket to reach `targetAgentId` directly.
+  const requestPeerTicket = (targetAgentId) => new Promise((resolve, reject) => {
+    if (!send(ws, { action: "peer_ticket_request", targetAgentId })) {
+      reject(new Error("hub socket not open"));
+      return;
+    }
+    const list = peerTicketWaiters.get(targetAgentId) || [];
+    list.push({ resolve, reject });
+    peerTicketWaiters.set(targetAgentId, list);
+    setTimeout(() => {
+      const pending = peerTicketWaiters.get(targetAgentId) || [];
+      const idx = pending.findIndex((w) => w.resolve === resolve);
+      if (idx >= 0) {
+        pending.splice(idx, 1);
+        reject(new Error("peer ticket request timed out"));
+      }
+    }, 10_000);
+  });
+
+  // Ask the hub for live, direct-reachable peers in this workspace.
+  const requestPeerList = () => new Promise((resolve, reject) => {
+    if (!send(ws, { action: "peer_list_request" })) {
+      reject(new Error("hub socket not open"));
+      return;
+    }
+    peerListWaiters.push(resolve);
+    setTimeout(() => {
+      const idx = peerListWaiters.indexOf(resolve);
+      if (idx >= 0) {
+        peerListWaiters.splice(idx, 1);
+        resolve([]); // never hang a caller — treat a stalled reply as "no direct peers"
+      }
+    }, 10_000);
+  });
+
+  // Hand a job off directly to a peer daemon (agent-to-agent collaboration only — a
+  // human<->agent turn is never routed this way, see the hub dispatch above). Returns
+  // true if the job was handed off over the peer's LAN listener; false means the caller
+  // should fall back to the existing hub relay (no reach, listening:false, ticket
+  // rejected, network unreachable, etc.) — whichever path carries the work, the
+  // executing daemon still reports back over the hub via agent_job_result.
+  // NOTE: the hub's handleAgentJobResult looks up an existing agent_jobs row by
+  // (jobId, agentId, workspaceId) before finalizing — a caller of this function is
+  // responsible for having the hub create that row (its normal source-of-truth path)
+  // before jobPayload.id is handed to the peer, otherwise the peer's eventual
+  // agent_job_result is safely dropped ("Agent job not found") rather than recorded.
+  const handoffJobToPeer = async (targetAgentId, jobPayload) => {
+    let peerSocket = null;
+    try {
+      const peers = await requestPeerList();
+      const peer = peers.find((p) => p.agentId === targetAgentId && p.reach?.listening && p.reach.addrs?.length);
+      if (!peer) return false;
+      const grant = await requestPeerTicket(targetAgentId);
+      const addr = grant.peer?.addrs?.[0] || peer.reach.addrs[0];
+      if (!addr?.host || !addr?.port) return false;
+      peerSocket = new WebSocket(`ws://${addr.host}:${addr.port}`);
+      await new Promise((resolve, reject) => {
+        peerSocket.once("open", resolve);
+        peerSocket.once("error", reject);
+        setTimeout(() => reject(new Error("peer connect timed out")), 5000);
+      });
+      send(peerSocket, { type: "peer_auth", ticket: grant.ticket, fromAgentId: config.agent });
+      send(peerSocket, { type: "agent_job", job: jobPayload });
+      return true;
+    } catch (error) {
+      log(`Peer handoff to ${targetAgentId} failed, falling back to hub relay: ${error?.message || error}`);
+      return false;
+    } finally {
+      try { peerSocket?.close(); } catch { /* already closing */ }
+    }
+  };
+
   const stop = () => {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (fileHeartbeatTimer) clearInterval(fileHeartbeatTimer);
+    stopLanListener();
     // Leave the last-known ts in place, but mark the daemon stopped so a watchdog reading
     // heartbeat.json sees an intentional shutdown rather than inferring death from a stale
     // timestamp. Sync so it lands before any process.exit races us.
@@ -109,7 +238,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
         // Also fold in the agent-owned status.json (its self-declared status/note) so a
         // running agent can update how it appears without any extra transport.
         void Promise.all([
-          computeCapabilities(config).catch(() => null),
+          computeCapabilities(config, currentReach()).catch(() => null),
           readAgentStatus(config).catch(() => null),
         ]).then(([caps, agentStatus]) => {
           send(ws, {
@@ -133,7 +262,10 @@ export async function runAgensisDaemon(rawConfig = {}) {
         // clobbers an existing file, so human/agent edits persist across restarts.
         void ensureHeartbeatMd(config).catch(() => {});
         void pushMemorySnapshot(ws, config);
-        void pushCapabilitiesSnapshot(ws, config);
+        // The listener persists across reconnects (only the ws reconnects), so this is
+        // idempotent — a no-op once it's already running.
+        startLanListener();
+        void pushCapabilitiesSnapshot(ws, config, currentReach());
         return;
       }
       if (message.type === "agent_config") {
@@ -147,11 +279,41 @@ export async function runAgensisDaemon(rawConfig = {}) {
         // Re-push capabilities too so the server's stored memoryHash advances to match
         // the freshly-synced palace; otherwise the heartbeat drift-check would keep
         // nudging a memory refresh every beat.
-        void pushCapabilitiesSnapshot(ws, config);
+        void pushCapabilitiesSnapshot(ws, config, currentReach());
         return;
       }
       if (message.type === "agent_capabilities_refresh") {
-        void pushCapabilitiesSnapshot(ws, config);
+        void pushCapabilitiesSnapshot(ws, config, currentReach());
+        return;
+      }
+      // --- Agent-mesh (F5/F6/F7) wire, mirrored from the hub's peer_ticket_request /
+      // peer_list_request handlers in server/index.cjs ---
+      if (message.type === "peer_ticket") {
+        // Response to OUR requestPeerTicket() call — resolve the oldest waiter for
+        // this target (requests are FIFO per target, matching hub single-use tickets).
+        const targetAgentId = message.peer?.agentId;
+        const waiters = peerTicketWaiters.get(targetAgentId) || [];
+        const waiter = waiters.shift();
+        if (waiters.length) peerTicketWaiters.set(targetAgentId, waiters);
+        else peerTicketWaiters.delete(targetAgentId);
+        if (waiter) waiter.resolve(message);
+        return;
+      }
+      if (message.type === "peer_ticket_grant") {
+        // The hub pushed us a grant because some peer A wants to reach us directly —
+        // hold it until A's socket presents the matching ticket as its first frame.
+        peerGrants.set(message.ticket, { fromAgentId: message.fromAgentId, exp: message.exp });
+        return;
+      }
+      if (message.type === "peer_list") {
+        const resolve = peerListWaiters.shift();
+        if (resolve) resolve(Array.isArray(message.peers) ? message.peers : []);
+        return;
+      }
+      if (message.type === "agent_reach_disable") {
+        // Hub-side kill switch (F6) — overrides our own --lan opt-in.
+        stopLanListener();
+        void pushCapabilitiesSnapshot(ws, config, currentReach());
         return;
       }
       if (message.type === "error") {
@@ -253,6 +415,9 @@ function normalizeConfig(raw) {
     maxConcurrency: Math.max(1, Number(raw.maxConcurrency || process.env.AGENSIS_MAX_CONCURRENCY || DEFAULT_MAX_CONCURRENCY) || DEFAULT_MAX_CONCURRENCY),
     once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
+    // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
+    // Default OFF — a daemon never opens a network listener unless asked to.
+    lanListener: Boolean(raw.lanListener || raw.lan || process.env.AGENSIS_LAN === "1"),
   };
   const missing = [];
   if (!config.url) missing.push("--url");
@@ -633,7 +798,9 @@ function sha1Short(str) {
 // never has to recompute a canonical form — it just compares the heartbeat hash against
 // the last value it stored on a snapshot. `capabilitiesHash` covers skills/CLIs/MCP;
 // `memoryHash` covers the palace file list (stat-only, no content reads).
-async function computeCapabilities(config) {
+// Reach is passed in (not detected here) since it reflects live LAN-listener state
+// owned by runAgensisDaemon's closure, not something derivable from disk/cwd.
+async function computeCapabilities(config, reach = null) {
   const skills = detectSkillNames({ cwd: config.cwd });
   const commands = detectCommandEntries({ cwd: config.cwd });
   const clis = detectClis();
@@ -641,18 +808,21 @@ async function computeCapabilities(config) {
   const memoryRoot = deriveMemoryRoot({ cwd: config.cwd, memoryDir: config.memoryDir }) || null;
   // Arrays are already sorted/stable at detection, so this canonical form is stable.
   // `commands` is included so the drift-check re-pushes when the user's slash
-  // commands change.
-  const capabilitiesHash = sha1Short(JSON.stringify({ skills, commands, clis, mcpServers, memoryRoot }));
+  // commands change. `reach` (agent-mesh F2/F6) is folded in too, so a listener
+  // opening/closing or an address changing re-pushes via the SAME drift nudge —
+  // no second sync channel.
+  const capabilitiesHash = sha1Short(JSON.stringify({ skills, commands, clis, mcpServers, memoryRoot, reach: reach || null }));
   const memoryHash = sha1Short(await memoryFingerprint(memoryRoot));
-  return { skills, commands, clis, mcpServers, memoryRoot, capabilitiesHash, memoryHash };
+  return { skills, commands, clis, mcpServers, memoryRoot, reach: reach || null, capabilitiesHash, memoryHash };
 }
 
 // Push a snapshot of this agent's runtime capabilities (skills, CLIs, MCP servers,
-// memory root) to the server, carrying the daemon-owned hashes so the server can store
-// them as the reference the heartbeat drift-check compares against. Fire-and-forget.
-async function pushCapabilitiesSnapshot(ws, config) {
+// memory root, direct-reach) to the server, carrying the daemon-owned hashes so the
+// server can store them as the reference the heartbeat drift-check compares against.
+// Fire-and-forget.
+async function pushCapabilitiesSnapshot(ws, config, reach = null) {
   try {
-    const caps = await computeCapabilities(config);
+    const caps = await computeCapabilities(config, reach);
     send(ws, {
       action: "agent_capabilities_sync",
       workspaceId: config.workspace,
@@ -662,6 +832,7 @@ async function pushCapabilitiesSnapshot(ws, config) {
       clis: caps.clis,
       mcpServers: caps.mcpServers,
       memoryRoot: caps.memoryRoot,
+      reach: caps.reach || undefined,
       hash: caps.capabilitiesHash,
       memoryHash: caps.memoryHash,
     });
@@ -669,6 +840,22 @@ async function pushCapabilitiesSnapshot(ws, config) {
   } catch (error) {
     log(`Capabilities sync skipped: ${error?.message || error}`);
   }
+}
+
+// Direct-reachable LAN IPv4 addresses for the given bound port, capped to 4 (mirrors
+// the server-side cap in reachFromMessage). Excludes internal/loopback interfaces —
+// those aren't reachable from another machine on the LAN.
+function lanAddrs(port) {
+  const nets = os.networkInterfaces();
+  const addrs = [];
+  for (const entries of Object.values(nets)) {
+    for (const entry of entries || []) {
+      if (entry.family === "IPv4" && !entry.internal) {
+        addrs.push({ host: entry.address, port, scope: "lan" });
+      }
+    }
+  }
+  return addrs.slice(0, 4);
 }
 
 // Push a read-only snapshot of this agent's file-memory palace to the server so the
