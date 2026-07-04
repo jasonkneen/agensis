@@ -4,6 +4,22 @@ import process from "node:process";
 import { runCli } from "./cli.mjs";
 
 const DEFAULT_PORT = 8787;
+const CONTROL_QUEUE_LIMIT = 100;
+const CONTROL_ACTIONS = new Set(["say", "wave", "hush", "open", "choose"]);
+const FAST_CHAT_PATTERNS = [
+  {
+    re: /^(hi|hello|hey|yo|sup)\b/i,
+    text: "Hi. I am connected to your local Agensis runtime.",
+  },
+  {
+    re: /\b(are you connected|connected|working|online|there)\b/i,
+    text: "Yes. The local Agensis runtime is connected and I can receive page context.",
+  },
+  {
+    re: /\b(tell me )?(a )?joke\b/i,
+    text: "Why did the cursor refuse to get lost? It always had a pointer.",
+  },
+];
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -13,6 +29,22 @@ function json(res, status, body) {
     "access-control-allow-headers": "content-type, authorization",
   });
   res.end(JSON.stringify(body));
+}
+
+function sseStart(res) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store, no-transform",
+    connection: "keep-alive",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, authorization",
+    "x-accel-buffering": "no",
+  });
+}
+
+function sseSend(res, data) {
+  res.write(`data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`);
 }
 
 function readBody(req) {
@@ -108,16 +140,152 @@ function parseCliText(raw) {
   return text;
 }
 
-function buildLocalCommand(config, prompt, requestedModel) {
+function lastUserMessage(payload) {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (String(message?.role || "user") !== "user") continue;
+    const content = String(message?.content || "").trim();
+    if (content) return content;
+  }
+  return "";
+}
+
+function fastLocalReply(payload, context) {
+  const text = lastUserMessage(payload);
+  if (!text || text.length > 120) return "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  for (const pattern of FAST_CHAT_PATTERNS) {
+    if (pattern.re.test(normalized)) return pattern.text;
+  }
+  if (/^(what site|where am i|what page)\b/i.test(normalized) && context?.url) {
+    const title = context.title ? `${context.title} at ` : "";
+    return `You are on ${title}${context.url}.`;
+  }
+  return "";
+}
+
+function modelLooksLikeCommand(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/\s/.test(text)) return true;
+  if (text.startsWith("-")) return true;
+  return /^(claude|codex|node|npm|bun|python|python3|sh|bash|zsh)(?:$|\.)/.test(text);
+}
+
+function requestedModelForLocalBridge(requestedModel, fallbackModel) {
+  const model = String(requestedModel || "").trim();
+  if (!model || modelLooksLikeCommand(model)) return fallbackModel;
+  return model;
+}
+
+function buildLocalCommand(config, prompt, requestedModel, options = {}) {
   const { cmd, args } = splitCommand(config.codingCmd || "claude -p");
   const nextArgs = [...args];
-  const model = requestedModel || config.model;
+  const model = requestedModelForLocalBridge(requestedModel, config.model);
+  let stdin = "";
+  let streamJson = false;
   if (isClaudeCommand(cmd)) {
     if (model && !hasFlag(nextArgs, "--model")) nextArgs.push("--model", model);
-    if (!hasFlag(nextArgs, "--output-format")) nextArgs.push("--output-format", "json");
+    const wantsStream = options.stream === true;
+    if (wantsStream && !hasFlag(nextArgs, "--output-format")) {
+      nextArgs.push("--output-format", "stream-json", "--include-partial-messages");
+      if (!hasFlag(nextArgs, "--verbose")) nextArgs.push("--verbose");
+      streamJson = true;
+    } else {
+      if (!hasFlag(nextArgs, "--output-format")) nextArgs.push("--output-format", "json");
+      streamJson = nextArgs.some((arg) => String(arg).includes("stream-json"));
+    }
+    stdin = prompt;
+  } else {
+    nextArgs.push(prompt);
   }
-  nextArgs.push(prompt);
-  return { cmd, args: nextArgs, model };
+  return { cmd, args: nextArgs, model, stdin, streamJson };
+}
+
+function createStreamJsonParser(onDelta = () => {}) {
+  let buffer = "";
+  let streamed = "";
+  let sawDelta = false;
+  let assistantText = "";
+  let finalResult = null;
+
+  const emit = (text) => {
+    if (!text) return;
+    onDelta(text);
+  };
+
+  const handleEvent = (evt) => {
+    if (!evt || typeof evt !== "object") return;
+    const delta = (evt.event && evt.event.delta) || evt.delta;
+    if (delta && delta.type === "text_delta" && typeof delta.text === "string") {
+      sawDelta = true;
+      streamed += delta.text;
+      emit(delta.text);
+      return;
+    }
+    if (evt.type === "result" && typeof evt.result === "string") {
+      finalResult = evt.result;
+      return;
+    }
+    if (evt.type === "assistant" && evt.message && Array.isArray(evt.message.content)) {
+      const text = evt.message.content
+        .filter((block) => block && block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("");
+      if (text) assistantText += text;
+    }
+  };
+
+  const parseLine = (line) => {
+    const trimmed = String(line).trim();
+    if (!trimmed) return;
+    try {
+      handleEvent(JSON.parse(trimmed));
+    } catch {
+      /* ignore non-JSON CLI noise */
+    }
+  };
+
+  return {
+    feed(chunk) {
+      buffer += String(chunk || "");
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        parseLine(buffer.slice(0, idx));
+        buffer = buffer.slice(idx + 1);
+      }
+    },
+    end() {
+      if (buffer) {
+        parseLine(buffer);
+        buffer = "";
+      }
+    },
+    get live() {
+      return sawDelta ? streamed : assistantText;
+    },
+    get result() {
+      if (finalResult != null) return finalResult;
+      return sawDelta ? streamed : assistantText;
+    },
+  };
+}
+
+function completionChunk(id, model, content, finishReason = null) {
+  return {
+    id,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: content ? { content } : {},
+        finish_reason: finishReason,
+      },
+    ],
+  };
 }
 
 function endpointOrigin(port) {
@@ -128,6 +296,9 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
   const port = Number(options.port ?? config.cursorBuddyPort ?? process.env.AGENSIS_CURSORBUDDY_PORT ?? DEFAULT_PORT);
   const bootedAt = new Date().toISOString();
   const events = [];
+  const controlQueue = [];
+  const controlClients = new Set();
+  let nextControlId = 1;
   let activeContext = null;
   let actualPort = port;
 
@@ -151,7 +322,49 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     updatedAt: new Date().toISOString(),
   });
 
+  function sanitizeControlCommand(payload = {}) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const action = String(payload.action || payload.type || "").trim().toLowerCase();
+    if (!CONTROL_ACTIONS.has(action)) return null;
+    const command = {
+      id: nextControlId++,
+      ts: new Date().toISOString(),
+      action,
+      text: String(payload.text || payload.say || payload.message || "").slice(0, 1200),
+      label: String(payload.label || "").slice(0, 80),
+      value: String(payload.value || payload.prompt || "").slice(0, 1200),
+      holdMs: Number.isFinite(payload.holdMs) ? Math.max(0, Math.min(60000, payload.holdMs)) : undefined,
+      source: String(payload.source || "agensis-daemon").slice(0, 80),
+    };
+    if (payload.options && Array.isArray(payload.options)) {
+      command.options = payload.options
+        .map((option) => ({
+          label: String(option?.label || "").slice(0, 80),
+          value: String(option?.value || option?.task || "").slice(0, 1200),
+        }))
+        .filter((option) => option.label)
+        .slice(0, 6);
+    }
+    return command;
+  }
+
+  function enqueueControlCommand(command) {
+    controlQueue.push(command);
+    while (controlQueue.length > CONTROL_QUEUE_LIMIT) controlQueue.shift();
+    record("control", { id: command.id, action: command.action, chars: command.text.length });
+    for (const client of [...controlClients]) {
+      try {
+        sseSend(client, { type: "command", command });
+      } catch {
+        controlClients.delete(client);
+      }
+    }
+    return command;
+  }
+
   async function complete(payload) {
+    const fast = fastLocalReply(payload, activeContext);
+    if (fast) return { content: fast, model: "cursorbuddy-local-fast", fast: true };
     const prompt = messagesToPrompt(payload?.messages, activeContext);
     const command = buildLocalCommand(config, prompt, payload?.model);
     const result = await runCli({
@@ -161,11 +374,71 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
       timeoutMs: Math.min(Number(config.timeoutMs || 1800000), 5 * 60 * 1000),
       heartbeatMs: config.heartbeatMs,
       label: "cursorbuddy local chat",
+      input: command.stdin,
     });
     if (result.error || result.status !== 0) {
       throw new Error(result.error?.message || String(result.stderr || "").trim() || `Command exited with status ${result.status}`);
     }
     return { content: parseCliText(result.stdout || result.stderr), model: command.model };
+  }
+
+  async function streamComplete(payload, res) {
+    const id = `agensis-cursorbuddy-${Date.now()}`;
+    const fast = fastLocalReply(payload, activeContext);
+    if (fast) {
+      const model = "cursorbuddy-local-fast";
+      sseSend(res, completionChunk(id, model, fast));
+      sseSend(res, completionChunk(id, model, "", "stop"));
+      sseSend(res, "[DONE]");
+      record("chat_fast", { chars: fast.length });
+      return { content: fast, model, fast: true };
+    }
+
+    const prompt = messagesToPrompt(payload?.messages, activeContext);
+    const command = buildLocalCommand(config, prompt, payload?.model, { stream: true });
+    let content = "";
+    const sendText = (text) => {
+      if (!text) return;
+      content += text;
+      sseSend(res, completionChunk(id, command.model || config.model, text));
+    };
+    const parser = command.streamJson ? createStreamJsonParser(sendText) : null;
+    const result = await runCli({
+      cmd: command.cmd,
+      args: command.args,
+      cwd: config.cwd,
+      timeoutMs: Math.min(Number(config.timeoutMs || 1800000), 5 * 60 * 1000),
+      heartbeatMs: config.heartbeatMs,
+      label: "cursorbuddy local chat",
+      input: command.stdin,
+      onData: (chunk) => {
+        if (parser) {
+          parser.feed(chunk);
+        } else {
+          const text = String(chunk || "");
+          content += text;
+          sseSend(res, completionChunk(id, command.model || config.model, text));
+        }
+      },
+    });
+    if (parser) {
+      parser.end();
+      const final = parser.result || "";
+      if (!content && final) sendText(final);
+      else content = final || content;
+    }
+    if (result.error || result.status !== 0) {
+      const message = result.error?.message || String(result.stderr || "").trim() || `Command exited with status ${result.status}`;
+      throw new Error(message);
+    }
+    const parsed = parser ? content : parseCliText(content || result.stdout || result.stderr);
+    if (!parser && parsed && parsed !== content) {
+      sseSend(res, completionChunk(id, command.model || config.model, parsed));
+      content = parsed;
+    }
+    sseSend(res, completionChunk(id, command.model || config.model, "", "stop"));
+    sseSend(res, "[DONE]");
+    return { content: content || parsed, model: command.model };
   }
 
   const server = http.createServer(async (req, res) => {
@@ -196,6 +469,8 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
           chat: `${origin}/v1/chat/completions`,
           edit: `${origin}/cursorbuddy/edit`,
           context: `${origin}/cursorbuddy/context`,
+          control: `${origin}/cursorbuddy/control`,
+          controlStream: `${origin}/cursorbuddy/control/stream`,
           logs: `${origin}/cursorbuddy/logs`,
         },
       });
@@ -209,6 +484,54 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
 
     if (req.method === "GET" && url.pathname === "/cursorbuddy/context") {
       json(res, 200, { ok: true, context: activeContext });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/cursorbuddy/control") {
+      const after = Number(url.searchParams.get("after") || 0);
+      const commands = controlQueue.filter((command) => command.id > after);
+      json(res, 200, { ok: true, commands, latestId: controlQueue.at(-1)?.id || 0 });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/cursorbuddy/control/stream") {
+      const after = Number(url.searchParams.get("after") || 0);
+      sseStart(res);
+      controlClients.add(res);
+      sseSend(res, { type: "ready", latestId: controlQueue.at(-1)?.id || 0 });
+      for (const command of controlQueue.filter((item) => item.id > after)) {
+        sseSend(res, { type: "command", command });
+      }
+      const ping = setInterval(() => {
+        try {
+          sseSend(res, { type: "ping", ts: new Date().toISOString() });
+        } catch {
+          controlClients.delete(res);
+          clearInterval(ping);
+        }
+      }, 15000);
+      if (ping.unref) ping.unref();
+      req.on("close", () => {
+        controlClients.delete(res);
+        clearInterval(ping);
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/cursorbuddy/control") {
+      try {
+        const payload = JSON.parse((await readBody(req)) || "{}");
+        const command = sanitizeControlCommand(payload);
+        if (!command) {
+          json(res, 400, { ok: false, error: "unsupported CursorBuddy control command" });
+          return;
+        }
+        const queued = enqueueControlCommand(command);
+        json(res, 200, { ok: true, command: queued });
+      } catch (error) {
+        record("control_error", { error: String(error?.message || error) });
+        json(res, 400, { ok: false, error: String(error?.message || error) });
+      }
       return;
     }
 
@@ -260,8 +583,15 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
       try {
         const payload = JSON.parse((await readBody(req)) || "{}");
         record("chat_request", { messages: Array.isArray(payload.messages) ? payload.messages.length : 0, model: payload.model || config.model });
+        if (payload.stream === true) {
+          sseStart(res);
+          const result = await streamComplete(payload, res);
+          record("chat_done", { chars: result.content.length, stream: true, fast: result.fast === true });
+          res.end();
+          return;
+        }
         const result = await complete(payload);
-        record("chat_done", { chars: result.content.length });
+        record("chat_done", { chars: result.content.length, fast: result.fast === true });
         json(res, 200, {
           id: `agensis-cursorbuddy-${Date.now()}`,
           object: "chat.completion",

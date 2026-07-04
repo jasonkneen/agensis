@@ -597,6 +597,7 @@ async function buildPrompt(config, job) {
   const heartbeatSection = heartbeatMd
     ? `Heartbeat (recurring instructions — edit at ${heartbeatMdPath(config)}):\n${heartbeatMd}`
     : "";
+  const cursorBuddyControl = cursorBuddyControlInstructions(config);
   const sections = [
     "You are running as a local agensis workspace agent daemon.",
     `Workspace: ${job.workspaceId || config.workspace}`,
@@ -612,12 +613,30 @@ async function buildPrompt(config, job) {
     skills ? `Enabled skills:\n${skills}` : "",
     'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
     `Status file: you can report your own working status by overwriting the JSON file at ${statusFilePath(config)} with e.g. {"status":"working","note":"short summary of what you're doing"}. Your daemon reads it on its next heartbeat (~${Math.round((config.heartbeatMs || 15000) / 1000)}s) and surfaces it on your agent card. Optional and best-effort — overwrite the whole file, keep note under ~200 chars, and there's no need to clear it.`,
+    cursorBuddyControl,
     heartbeatSection,
     "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),
   ];
   return sections.filter(Boolean).join("\n\n");
+}
+
+function cursorBuddyControlInstructions(config) {
+  if (config.cursorBuddyBridge === false) return "";
+  const port = Number(config.cursorBuddyPort || 8787);
+  const base = `http://127.0.0.1:${port}`;
+  return [
+    "CursorBuddy surface control:",
+    `- Visible browser/desktop/avatar surfaces poll ${base}/cursorbuddy/control for commands.`,
+    `- If the user asks you to make the avatar wave, speak, open its prompt, hide its bubble, or otherwise control the visible buddy, call this local endpoint immediately from the shell.`,
+    `- Examples:`,
+    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"wave","text":"Hi, Jason."}'`,
+    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"say","text":"I am connected to Agensis."}'`,
+    `  curl -s -X POST ${base}/cursorbuddy/control -H 'content-type: application/json' --data '{"action":"open","text":"What should we do next?"}'`,
+    `- Supported actions: wave, say, hush, open, choose.`,
+    `- After sending the control command, report briefly that it was sent; do not explain the implementation unless asked.`,
+  ].join("\n");
 }
 
 function buildAgentCommand(config, job) {

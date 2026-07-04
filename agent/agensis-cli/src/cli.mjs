@@ -56,6 +56,7 @@ const MAX_CAPTURE_BYTES = 50 * 1024 * 1024;
  * @property {number} [timeoutMs] - kill the child after this long (0 = no timeout)
  * @property {string} [label] - verb shown in the heartbeat ("coding"/"thinking")
  * @property {number} [heartbeatMs] - heartbeat interval (0 = no heartbeat)
+ * @property {string} [input] - optional stdin written to the child process
  * @property {() => number} [now] - clock, injectable for tests
  * @property {{ log: (m: string) => void }} [log] - logger, injectable for tests
  * @property {AbortSignal} [signal] - abort to cancel the run (kills the child's
@@ -82,6 +83,7 @@ export function runCli(opts) {
     timeoutMs = 0,
     label = "working",
     heartbeatMs = 15000,
+    input = "",
     now = Date.now,
     log = console,
     signal,
@@ -102,6 +104,12 @@ export function runCli(opts) {
     } catch (error) {
       resolve({ status: null, stdout: "", stderr: "", error });
       return;
+    }
+
+    if (input) {
+      child.stdin?.end(String(input));
+    } else {
+      child.stdin?.end();
     }
 
     let stdout = "";
