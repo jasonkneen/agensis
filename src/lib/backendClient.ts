@@ -1,10 +1,12 @@
+const HOSTED_AGENSIS_BACKEND_BASE = 'https://agensis-backend.fly.dev';
+
 const BACKEND_BASE = (() => {
   const explicit = normalizeBackendBase(import.meta.env.VITE_BACKEND_BASE_URL);
   if (explicit) return explicit;
   if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
     return 'http://127.0.0.1:3142';
   }
-  return '';
+  return hostedAgensisBackendBase();
 })();
 
 const AUTH_STORAGE_KEY = 'agensis_local_session';
@@ -148,6 +150,15 @@ function isLoopbackBackendBase(base: string) {
   } catch {
     return /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::|\/|$)/i.test(base);
   }
+}
+
+function hostedAgensisBackendBase() {
+  if (typeof window === 'undefined') return '';
+  const host = window.location.hostname.toLowerCase();
+  if (host === 'agensis.io' || host === 'www.agensis.io' || host.endsWith('.netlify.app')) {
+    return HOSTED_AGENSIS_BACKEND_BASE;
+  }
+  return '';
 }
 
 function backendUrl(path: string) {
