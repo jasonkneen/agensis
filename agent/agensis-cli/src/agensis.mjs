@@ -439,6 +439,7 @@ function normalizeConfig(raw) {
     onRegistered: typeof raw.onRegistered === "function" ? raw.onRegistered : null,
     cursorBuddyBridge: raw.cursorBuddyBridge !== false && process.env.AGENSIS_CURSORBUDDY_BRIDGE !== "0",
     cursorBuddyPort: Number(raw.cursorBuddyPort || process.env.AGENSIS_CURSORBUDDY_PORT || 8787),
+    cursorBuddyModel: String(raw.cursorBuddyModel || process.env.AGENSIS_CURSORBUDDY_MODEL || "haiku-4.5").trim(),
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
     // Default OFF — a daemon never opens a network listener unless asked to.
     lanListener: Boolean(raw.lanListener || raw.lan || process.env.AGENSIS_LAN === "1"),

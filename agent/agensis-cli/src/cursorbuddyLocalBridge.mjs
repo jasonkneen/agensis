@@ -4,6 +4,7 @@ import process from "node:process";
 import { runCli } from "./cli.mjs";
 
 const DEFAULT_PORT = 8787;
+const DEFAULT_CURSORBUDDY_CONVERSATION_MODEL = "claude-haiku-4-5";
 const CONTROL_QUEUE_LIMIT = 100;
 const CONTROL_ACTIONS = new Set(["say", "wave", "hush", "open", "choose"]);
 const FAST_CHAT_PATTERNS = [
@@ -179,10 +180,25 @@ function requestedModelForLocalBridge(requestedModel, fallbackModel) {
   return model;
 }
 
+function normalizeCursorBuddyModel(value) {
+  const model = String(value || "").trim();
+  if (!model) return DEFAULT_CURSORBUDDY_CONVERSATION_MODEL;
+  if (model === "haiku-4.5" || model === "claude-haiku-4.5") return DEFAULT_CURSORBUDDY_CONVERSATION_MODEL;
+  return model;
+}
+
+function cursorBuddyConversationModel(config = {}) {
+  return normalizeCursorBuddyModel(
+    config.cursorBuddyModel ||
+    process.env.AGENSIS_CURSORBUDDY_MODEL ||
+    DEFAULT_CURSORBUDDY_CONVERSATION_MODEL,
+  );
+}
+
 function buildLocalCommand(config, prompt, requestedModel, options = {}) {
   const { cmd, args } = splitCommand(config.codingCmd || "claude -p");
   const nextArgs = [...args];
-  const model = requestedModelForLocalBridge(requestedModel, config.model);
+  const model = normalizeCursorBuddyModel(requestedModelForLocalBridge(requestedModel, cursorBuddyConversationModel(config)));
   let stdin = "";
   let streamJson = false;
   if (isClaudeCommand(cmd)) {
@@ -458,7 +474,8 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
         ok: true,
         runtime: "agensis-cli",
         backend: config.codingCmd,
-        model: config.model,
+        model: cursorBuddyConversationModel(config),
+        daemonModel: config.model,
         port: actualPort,
         host: os.hostname(),
         pid: process.pid,
