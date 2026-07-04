@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Menu } from 'lucide-react';
+import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
+import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
+import { pickActiveWindowId } from './lib/mobileWindows';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { DocWindowContent } from './components/windows/DocWindowContent';
 import { TasksWindowContent } from './components/windows/TasksWindowContent';
@@ -69,7 +72,7 @@ import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
-import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -545,6 +548,10 @@ function AppContent() {
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [showTour, setShowTour] = useState(false);
+  const isMobile = useIsMobile();
+  // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
+  // instead of an inline rail, so the workspace canvas gets the full screen width.
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem(SIDEBAR_KEY);
     // No saved preference yet → collapse by default on phone-width viewports,
@@ -895,6 +902,15 @@ function AppContent() {
       return next;
     });
   }, []);
+
+  // The topmost (focused) window drives the phone's single-window view. When it
+  // changes — a sidebar tap opened or focused a window — dismiss the drawer so
+  // the freshly-opened window is revealed. Same value → useState bails, so this
+  // is a no-op on unrelated re-renders.
+  const topWindowId = useMemo(() => pickActiveWindowId(windows), [windows]);
+  useEffect(() => {
+    setMobileDrawerOpen(false);
+  }, [topWindowId]);
 
   const handleNewChat = useCallback(async () => {
     const session = await createSession();
@@ -1397,11 +1413,23 @@ function AppContent() {
         style={{ opacity: workspaceBackdropOpacity }}
       />
       <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
+      <div
+        className={cn(
+          isMobile
+            ? cn(
+                'fixed inset-y-0 left-0 z-[12000] flex transition-transform duration-200 ease-out',
+                mobileDrawerOpen ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
+              )
+            : 'contents',
+        )}
+        style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
+      >
       <Sidebar
         workspace={activeWorkspace}
         activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={handleToggleSidebar}
+        overlay={isMobile}
+        collapsed={isMobile ? false : sidebarCollapsed}
+        onToggleCollapse={isMobile ? () => setMobileDrawerOpen(false) : handleToggleSidebar}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         onOpenWorkspaceGrid={handleOpenCanvasGrid}
         onNewChat={handleNewChat}
@@ -1441,6 +1469,14 @@ function AppContent() {
         onSignOut={signOut}
         onOpenSettings={() => openLayerSettings(activeLayerId)}
       />
+      </div>
+      {isMobile && mobileDrawerOpen && (
+        <div
+          className="fixed inset-0 z-[11999] bg-black/50 backdrop-blur-sm"
+          onClick={() => setMobileDrawerOpen(false)}
+          aria-hidden
+        />
+      )}
 
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <NetworkStatusBar
@@ -1459,7 +1495,7 @@ function AppContent() {
           >
             <div
               className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
-              style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET }}
+              style={{ bottom: isMobile ? WORKSPACE_BOTTOM_RESERVE + 12 : WORKSPACE_DOCK_BOTTOM_OFFSET }}
             >
               <NotificationsBell workspaceId={activeWorkspaceId || null} />
               <WorkspacePresenceAvatars
@@ -1502,6 +1538,8 @@ function AppContent() {
                 canvasObjects={visibleCanvasObjects}
                 canvasGroups={visibleCanvasGroups}
                 windows={activeWindows}
+                isMobile={isMobile}
+                onOpenMobileMenu={() => setMobileDrawerOpen(true)}
                 tasks={tasks}
                 members={members}
                 activityEvents={activityEvents}
@@ -1882,6 +1920,8 @@ function CanvasLayerScene({
   onDeleteTask,
   onCommentCreated,
   onRequestConfirm,
+  isMobile,
+  onOpenMobileMenu,
 }: {
   documents: Document[];
   facts: MemoryFact[];
@@ -1897,6 +1937,8 @@ function CanvasLayerScene({
   canvasObjects: CanvasObject[];
   canvasGroups: CanvasGroup[];
   windows: FloatingWindow[];
+  isMobile: boolean;
+  onOpenMobileMenu: () => void;
   tasks: Task[];
   members: WorkspaceMember[];
   activityEvents: ActivityEvent[];
@@ -1968,6 +2010,15 @@ function CanvasLayerScene({
 }) {
   const { selectedWindowIds } = useWindowManager();
 
+  // On a phone the canvas shows exactly one window — the focused one (highest
+  // zIndex, the same signal a click uses to raise a window). Everything else is
+  // reachable through the bottom switcher bar instead of the free-floating layout.
+  const nonMinimizedWindows = windows.filter(win => !win.minimized);
+  const mobileActiveWindowId = pickActiveWindowId(windows);
+  const renderedWindows = isMobile && mobileActiveWindowId
+    ? nonMinimizedWindows.filter(win => win.id === mobileActiveWindowId)
+    : nonMinimizedWindows;
+
   return (
     <>
       <HomeCanvas
@@ -1982,7 +2033,7 @@ function CanvasLayerScene({
 
       <CanvasSelectionLayer />
 
-      {windows.filter(win => !win.minimized).map(win => {
+      {renderedWindows.map(win => {
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
@@ -1996,6 +2047,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2121,6 +2173,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2166,6 +2219,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2199,6 +2253,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2236,6 +2291,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2262,6 +2318,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2295,6 +2352,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2318,6 +2376,16 @@ function CanvasLayerScene({
 
         return null;
       })}
+
+      {isMobile && (
+        <MobileWindowSwitcher
+          windows={nonMinimizedWindows}
+          activeWindowId={mobileActiveWindowId}
+          onFocus={onFocusWindow}
+          onClose={onCloseWindow}
+          onOpenMenu={onOpenMobileMenu}
+        />
+      )}
     </>
   );
 }

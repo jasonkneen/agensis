@@ -155,6 +155,9 @@ interface SidebarProps {
   workspace: Workspace | null;
   activeLayerName?: string;
   collapsed: boolean;
+  // Phone drawer mode: the sidebar floats as an off-canvas overlay, so it must
+  // NOT inset the workspace viewport — the canvas keeps the full screen width.
+  overlay?: boolean;
   onToggleCollapse: () => void;
   onOpenCommandPalette: () => void;
   onOpenWorkspaceGrid?: () => void;
@@ -200,6 +203,7 @@ export function Sidebar({
   workspace,
   activeLayerName,
   collapsed,
+  overlay = false,
   onToggleCollapse,
   onOpenCommandPalette,
   onOpenWorkspaceGrid,
@@ -337,13 +341,15 @@ export function Sidebar({
   const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
   const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
-    const sidebarFrameWidth = isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width;
-    const left = sidebarFrameWidth + WORKSPACE_CHROME_GAP * 2;
+    // Overlay (phone drawer): the sidebar floats above the canvas, so the
+    // viewport's left inset is just the chrome gap — never the sidebar width.
+    const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width);
+    const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP * 2;
     document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
     document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
     document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
     document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
-  }, [collapsed]);
+  }, [collapsed, overlay]);
 
   React.useEffect(() => {
     setWorkspaceViewportLeft(sidebarWidth);

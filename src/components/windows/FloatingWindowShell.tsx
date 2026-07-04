@@ -283,6 +283,10 @@ interface FloatingWindowShellProps {
   children: React.ReactNode;
   isSelected?: boolean;
   adjacentEdges?: Set<'left' | 'right' | 'top' | 'bottom'>;
+  // Phone layout mode: the window fills the viewport, drag/resize are disabled,
+  // and only the active window is mounted (see CanvasLayerScene). The switcher
+  // bar handles moving between windows instead of the free-floating canvas.
+  isMobile?: boolean;
 }
 
 export function FloatingWindowShell({
@@ -300,6 +304,7 @@ export function FloatingWindowShell({
   children,
   isSelected = false,
   adjacentEdges,
+  isMobile = false,
 }: FloatingWindowShellProps) {
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
@@ -308,11 +313,15 @@ export function FloatingWindowShell({
   const [isResizing, setIsResizing] = useState(false);
   const [snapPreview, setSnapPreview] = useState<WindowBounds | null>(null);
   const isMaximized = Boolean(win.maximized);
+  // On phones the window always fills the viewport (edge-to-edge, one at a time),
+  // so it renders with the same geometry as a maximized window regardless of the
+  // stored floating bounds — and never runs the bounds-sync/ResizeObserver path.
+  const fullViewport = isMaximized || isMobile;
 
   useEffect(() => {
     const syncBounds = () => {
       const shell = shellRef.current;
-      if (!shell || isMaximized || isDragging || isResizing) return;
+      if (!shell || fullViewport || isDragging || isResizing) return;
       syncShellBounds(shell, getCurrentWindowBounds(shell, win));
     };
 
@@ -326,10 +335,10 @@ export function FloatingWindowShell({
     const observer = new ResizeObserver(syncBounds);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [win, isMaximized, isDragging, isResizing]);
+  }, [win, fullViewport, isDragging, isResizing]);
 
   const handleDragStart = useCallback((e: React.PointerEvent) => {
-    if (!canControl) return;
+    if (!canControl || isMobile) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
@@ -445,10 +454,10 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win, onFocus, onUpdate, canControl, isMaximized]);
+  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile]);
 
   const handleResizeStart = useCallback((e: React.PointerEvent) => {
-    if (!canControl || isMaximized) return;
+    if (!canControl || isMaximized || isMobile) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
@@ -516,7 +525,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized]);
+  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
@@ -551,8 +560,8 @@ export function FloatingWindowShell({
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
   const displayBounds = getCurrentWindowBounds(shellRef.current, win);
-  const isFullView = isMaximized || isFullWindowBounds(displayBounds, shellRef.current);
-  const shellStyle: React.CSSProperties = isMaximized
+  const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current);
+  const shellStyle: React.CSSProperties = fullViewport
     ? {
         position: 'absolute',
         left: MAXIMIZED_EDGE_INSET,
@@ -642,7 +651,7 @@ export function FloatingWindowShell({
           onPointerDown={handleDragStart}
           className={cn(
             'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
-            canControl ? 'cursor-grab' : 'cursor-default',
+            canControl && !isMobile ? 'cursor-grab' : 'cursor-default',
           )}
         >
         {titleIcon && (
@@ -748,16 +757,18 @@ export function FloatingWindowShell({
             <Minus />
           </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            onClick={handleMaximize}
-            disabled={!canControl}
-            aria-label={isMaximized ? 'Restore' : 'Maximize'}
-          >
-            {isMaximized ? <Minimize2 /> : <Maximize2 />}
-          </Button>
+          {!isMobile && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-xs"
+              onClick={handleMaximize}
+              disabled={!canControl}
+              aria-label={isMaximized ? 'Restore' : 'Maximize'}
+            >
+              {isMaximized ? <Minimize2 /> : <Maximize2 />}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -784,7 +795,7 @@ export function FloatingWindowShell({
         </div>
         </div>
 
-        {!isMaximized && (
+        {!fullViewport && (
           <div
             data-window-resize-handle
             onPointerDown={handleResizeStart}
