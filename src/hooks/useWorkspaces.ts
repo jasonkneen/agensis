@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert } from '../lib/offlineBackend';
 import type { Workspace } from '../types';
 
@@ -13,11 +13,12 @@ export function useWorkspaces(userId: string | undefined) {
       return;
     }
     const data = await cachedFetch<Workspace[]>('workspaces', async () => {
-      const { data } = await backendClient
-        .from('workspaces')
-        .select('*')
-        .order('created_at', { ascending: true });
-      return data;
+      const response = await fetch(apiUrl('/backend/workspaces'), {
+        headers: apiAuthHeaders(),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message || `Workspaces HTTP ${response.status}`);
+      return payload?.data ?? [];
     });
     if (data) setWorkspaces(data);
     setLoading(false);

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { WorkspaceAgent } from '../types';
@@ -41,12 +41,12 @@ export function useAgents(workspaceId: string | null, userId?: string) {
     }
     setLoading(true);
     const data = await cachedFetch<WorkspaceAgent[]>(`agents_${workspaceId}`, async () => {
-      const { data } = await backendClient
-        .from('workspace_agents')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: true });
-      return data;
+      const response = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/agents`), {
+        headers: apiAuthHeaders(),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message || `Agents HTTP ${response.status}`);
+      return payload?.data ?? [];
     });
     if (data) setAgents(data);
     setLoading(false);
