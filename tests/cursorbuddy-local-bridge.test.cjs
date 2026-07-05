@@ -62,7 +62,7 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'say hello' }] }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'explain this page' }] }),
     });
     assert.equal(chatResponse.status, 200);
     const chat = await chatResponse.json();
@@ -103,6 +103,49 @@ test('CursorBuddy local bridge answers trivial avatar chat without spawning the 
     const chat = await chatResponse.json();
     assert.equal(chat.model, 'cursorbuddy-local-fast');
     assert.match(chat.choices[0].message.content, /cursor/);
+  } finally {
+    await bridge.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('CursorBuddy local bridge turns avatar commands into queued control actions', async () => {
+  const { startCursorBuddyLocalBridge } = await loadModule();
+  const dir = await tempDir();
+  const scriptPath = path.join(dir, 'fake-cli.mjs');
+  await fs.writeFile(scriptPath, "throw new Error('CLI should not be called for avatar control');\n");
+
+  const bridge = await startCursorBuddyLocalBridge({
+    url: 'https://agensis.io',
+    token: 'aga_test',
+    workspace: 'ws-1',
+    agent: 'agent-1',
+    handle: 'mac',
+    name: 'mac',
+    cwd: dir,
+    codingCmd: `${process.execPath} ${scriptPath}`,
+    model: 'test-model',
+    timeoutMs: 5000,
+    heartbeatMs: 1000,
+  }, { port: 0 });
+
+  try {
+    const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'Can you make him wave?' }] }),
+    });
+    assert.equal(chatResponse.status, 200);
+    const chat = await chatResponse.json();
+    assert.equal(chat.model, 'cursorbuddy-local-control');
+    assert.equal(chat.choices[0].message.content, 'Waving now.');
+
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    assert.equal(pollResponse.status, 200);
+    const poll = await pollResponse.json();
+    assert.equal(poll.commands.length, 1);
+    assert.equal(poll.commands[0].action, 'wave');
+    assert.equal(poll.commands[0].text, 'Hi. How can I help?');
   } finally {
     await bridge.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -206,6 +249,9 @@ test('CursorBuddy local bridge does not treat daemon commands as model ids', asy
   assert.match(source, /model === "haiku-4\.5"/);
   assert.match(source, /function cursorBuddyConversationModel\(config = \{\}\)/);
   assert.match(source, /function fastLocalReply\(payload, context\)/);
+  assert.match(source, /function fastAvatarControl\(payload\)/);
+  assert.match(source, /function fastBridgeResult\(payload\)/);
+  assert.match(source, /record\("chat_control"/);
   assert.match(source, /function createStreamJsonParser\(onDelta = \(\) => \{\}\)/);
   assert.match(source, /payload\.stream === true/);
 });

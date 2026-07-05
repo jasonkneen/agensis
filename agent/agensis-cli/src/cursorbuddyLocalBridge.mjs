@@ -166,6 +166,30 @@ function fastLocalReply(payload, context) {
   return "";
 }
 
+function fastAvatarControl(payload) {
+  const text = lastUserMessage(payload).replace(/\s+/g, " ").trim();
+  if (!text || text.length > 180) return null;
+  if (/\b(wave|wave hello|say hi|say hello|make (him|the buddy|cursorbuddy) wave)\b/i.test(text)) {
+    return {
+      content: "Waving now.",
+      command: { action: "wave", text: "Hi. How can I help?", source: "chat" },
+    };
+  }
+  if (/^(stop|cancel|dismiss|close|hide|hush|be quiet)\b/i.test(text)) {
+    return {
+      content: "Closed.",
+      command: { action: "hush", source: "chat" },
+    };
+  }
+  if (/\b(open|show)\b.*\b(options|chat|bubble|prompt)\b/i.test(text)) {
+    return {
+      content: "Opening options.",
+      command: { action: "open", text: "What should I help with?", source: "chat" },
+    };
+  }
+  return null;
+}
+
 function modelLooksLikeCommand(value) {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -378,9 +402,24 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     return command;
   }
 
-  async function complete(payload) {
+  function fastBridgeResult(payload) {
+    const control = fastAvatarControl(payload);
+    if (control) {
+      const command = sanitizeControlCommand(control.command);
+      if (command) {
+        enqueueControlCommand(command);
+        record("chat_control", { id: command.id, action: command.action });
+      }
+      return { content: control.content, model: "cursorbuddy-local-control", fast: true };
+    }
     const fast = fastLocalReply(payload, activeContext);
     if (fast) return { content: fast, model: "cursorbuddy-local-fast", fast: true };
+    return null;
+  }
+
+  async function complete(payload) {
+    const fast = fastBridgeResult(payload);
+    if (fast) return fast;
     const prompt = messagesToPrompt(payload?.messages, activeContext);
     const command = buildLocalCommand(config, prompt, payload?.model);
     const result = await runCli({
@@ -400,14 +439,14 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
 
   async function streamComplete(payload, res) {
     const id = `agensis-cursorbuddy-${Date.now()}`;
-    const fast = fastLocalReply(payload, activeContext);
+    const fast = fastBridgeResult(payload);
     if (fast) {
-      const model = "cursorbuddy-local-fast";
-      sseSend(res, completionChunk(id, model, fast));
+      const model = fast.model || "cursorbuddy-local-fast";
+      sseSend(res, completionChunk(id, model, fast.content));
       sseSend(res, completionChunk(id, model, "", "stop"));
       sseSend(res, "[DONE]");
-      record("chat_fast", { chars: fast.length });
-      return { content: fast, model, fast: true };
+      record("chat_fast", { chars: fast.content.length, model });
+      return { content: fast.content, model, fast: true };
     }
 
     const prompt = messagesToPrompt(payload?.messages, activeContext);
