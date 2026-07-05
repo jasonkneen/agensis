@@ -116,7 +116,8 @@ Options:
 
 async function daemonArgsForConnect(args) {
   const hasExplicitProfile = args.profile !== undefined;
-  const profile = daemonProfileName(args.profile || (hasCompleteDaemonConnection(args) && args.handle ? args.handle : "default"));
+  const profileHint = args.handle || args.name;
+  const profile = daemonProfileName(args.profile || (hasCompleteDaemonConnection(args) && profileHint ? profileHint : "default"));
   if (!hasDaemonConnectionMaterial(args)) {
     const cached = await readDaemonProfile(profile);
     if (!cached) throw new Error(daemonProfileSetupMessage(profile));

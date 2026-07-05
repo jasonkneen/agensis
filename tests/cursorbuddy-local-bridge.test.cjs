@@ -267,6 +267,85 @@ test('CursorBuddy local bridge queues avatar control commands', async () => {
   }
 });
 
+test('CursorBuddy local bridge claims account connection keys for the local site', async () => {
+  const { startCursorBuddyLocalBridge } = await loadModule();
+  const dir = await tempDir();
+  const scriptPath = path.join(dir, 'fake-cli.mjs');
+  await fs.writeFile(scriptPath, "process.stdout.write(JSON.stringify({ result: 'ok' }));\n");
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({
+      data: {
+        workspaceId: 'ws-claimed',
+        agentId: 'agent-claimed',
+        handle: 'cursorbuddy',
+        command: 'agensis connect --profile cursorbuddy --url https://agensis.io --token aga_claimed',
+        agent: {
+          id: 'agent-claimed',
+          workspace_id: 'ws-claimed',
+          handle: 'cursorbuddy',
+          name: 'CursorBuddy Extension',
+        },
+      },
+      error: null,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const bridge = await startCursorBuddyLocalBridge({
+    url: 'https://agensis.io',
+    token: 'aga_test',
+    workspace: 'ws-1',
+    agent: 'agent-1',
+    handle: 'mac',
+    name: 'mac',
+    cwd: dir,
+    codingCmd: `${process.execPath} ${scriptPath}`,
+    model: 'test-model',
+    timeoutMs: 5000,
+    heartbeatMs: 1000,
+  }, { port: 0, fetchImpl });
+
+  try {
+    const connectResponse = await fetch(`${bridge.url}/cursorbuddy/connect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        key: 'cbk_website_avatar_ABCDEFGHJKLMNPQRST',
+        agensisUrl: 'https://agensis.io',
+        workspaceId: 'ws-claimed',
+        surface: 'browser_extension',
+        name: 'CursorBuddy Extension',
+      }),
+    });
+    assert.equal(connectResponse.status, 200);
+    const connect = await connectResponse.json();
+    assert.equal(connect.ok, true);
+    assert.equal(connect.connection.mode, 'agensis-claimed');
+    assert.equal(connect.connection.agentId, 'agent-claimed');
+    assert.equal(connect.connection.workspaceId, 'ws-claimed');
+    assert.equal(connect.connection.handle, 'cursorbuddy');
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://agensis.io/backend/cursorbuddy/connection-keys/claim');
+    const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.key, 'cbk_website_avatar_ABCDEFGHJKLMNPQRST');
+    assert.equal(body.runtimeKind, 'agensis-cli-local-bridge');
+    assert.equal(body.surface, 'browser_extension');
+
+    const healthResponse = await fetch(`${bridge.url}/cursorbuddy/health`);
+    const health = await healthResponse.json();
+    assert.equal(health.connection.mode, 'agensis-claimed');
+    assert.equal(health.connection.agentId, 'agent-claimed');
+  } finally {
+    await bridge.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('CursorBuddy local bridge does not treat daemon commands as model ids', async () => {
   const source = await fs.readFile(path.join(repoRoot, 'agent/agensis-cli/src/cursorbuddyLocalBridge.mjs'), 'utf8');
 

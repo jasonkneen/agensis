@@ -30,7 +30,7 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-[min(92vw,58rem)] sm:max-w-[58rem]">
         <DialogHeader>
           <div className="flex items-center gap-2">
             {available ? (
@@ -47,7 +47,7 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
           </DialogDescription>
         </DialogHeader>
 
-        <div className="-mx-1 max-h-[52vh] overflow-y-auto px-1">
+        <div className="-mx-1 max-h-[62vh] overflow-y-auto px-1 pr-3">
           {notes.length === 0 ? (
             <p className="py-2 text-sm text-muted-foreground">
               Release notes aren’t available right now.
@@ -55,7 +55,7 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
           ) : (
             <ol className="flex flex-col gap-4">
               {notes.map((note, i) => (
-                <li key={`${note.version}-${i}`} className="flex flex-col gap-1.5">
+                <li key={`${note.version}-${i}`} className="flex flex-col gap-1.5 rounded-md p-2 transition-colors hover:bg-muted/45 focus-within:bg-muted/45">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{note.title}</span>
                     {i === 0 && available && (
@@ -64,13 +64,13 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
                       </Badge>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground">{note.summary}</p>
+                  <p className="text-sm text-foreground/85">{note.summary}</p>
                   {note.highlights && note.highlights.length > 0 && (
                     <ul className="mt-0.5 flex flex-col gap-1 pl-4">
                       {note.highlights.map((h, j) => (
                         <li
                           key={j}
-                          className="list-disc text-sm text-muted-foreground marker:text-primary/60"
+                          className="list-disc text-sm text-foreground/80 marker:text-primary/70"
                         >
                           {h}
                         </li>

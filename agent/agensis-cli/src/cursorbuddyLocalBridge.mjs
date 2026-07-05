@@ -5,6 +5,7 @@ import { runCli } from "./cli.mjs";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_CURSORBUDDY_CONVERSATION_MODEL = "claude-haiku-4-5";
+const CURSORBUDDY_KEY_RE = /^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/;
 const CONTROL_QUEUE_LIMIT = 100;
 const CONTROL_ACTIONS = new Set(["say", "wave", "hush", "open", "choose"]);
 const FAST_CHAT_PATTERNS = [
@@ -376,15 +377,66 @@ function endpointOrigin(port) {
   return `http://127.0.0.1:${port}`;
 }
 
+function normalizeBackendBaseUrl(config = {}, payload = {}) {
+  return String(payload.agensisUrl || payload.baseUrl || config.url || process.env.AGENSIS_URL || "https://agensis.io")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function publicKeyId(key) {
+  return String(key || "").slice(0, 18);
+}
+
+function claimErrorMessage(response, body) {
+  return body?.error?.message || body?.message || `CursorBuddy key claim failed with HTTP ${response.status}`;
+}
+
+async function claimCursorBuddyConnection(config, payload = {}, fetchImpl = globalThis.fetch) {
+  const key = String(payload.key || "").trim();
+  if (!CURSORBUDDY_KEY_RE.test(key)) {
+    throw new Error("Connection key format is invalid. Create a fresh CursorBuddy key first.");
+  }
+  if (typeof fetchImpl !== "function") {
+    throw new Error("This Node.js runtime does not provide fetch; use a current Node.js release.");
+  }
+  const baseUrl = normalizeBackendBaseUrl(config, payload);
+  const response = await fetchImpl(`${baseUrl}/backend/cursorbuddy/connection-keys/claim`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      key,
+      baseUrl,
+      host: os.hostname(),
+      cwd: payload.cwd || config.cwd || process.cwd(),
+      name: payload.name || config.name || config.handle || "CursorBuddy runtime",
+      surface: payload.surface || "browser_extension",
+      scope: payload.scope || "machine",
+      runtimeKind: payload.runtimeKind || "agensis-cli-local-bridge",
+      version: payload.version || config.version || process.env.npm_package_version || "",
+      permissionMode: payload.permissionMode || config.permissionMode,
+      model: payload.model || config.model,
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(claimErrorMessage(response, body));
+  return {
+    key,
+    baseUrl,
+    data: body?.data || body,
+  };
+}
+
 export async function startCursorBuddyLocalBridge(config, options = {}) {
   const port = Number(options.port ?? config.cursorBuddyPort ?? process.env.AGENSIS_CURSORBUDDY_PORT ?? DEFAULT_PORT);
   const bootedAt = new Date().toISOString();
   const events = [];
   const controlQueue = [];
   const controlClients = new Set();
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
   let nextControlId = 1;
   let activeContext = null;
   let actualPort = port;
+  let claimedConnection = null;
 
   const record = (event, detail = {}) => {
     const entry = { ts: new Date().toISOString(), event, detail };
@@ -394,7 +446,7 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     return entry;
   };
 
-  const connection = () => ({
+  const connection = () => claimedConnection || ({
     connected: true,
     mode: "agensis-cli",
     agentId: config.agent,
@@ -670,6 +722,39 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
         json(res, 200, { ok: true, context: activeContext });
       } catch (error) {
         record("context_error", { error: String(error?.message || error) });
+        json(res, 400, { ok: false, error: String(error?.message || error) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/cursorbuddy/connect") {
+      try {
+        const payload = JSON.parse((await readBody(req)) || "{}");
+        const claim = await claimCursorBuddyConnection(config, payload, fetchImpl);
+        const data = claim.data || {};
+        claimedConnection = {
+          connected: true,
+          mode: "agensis-claimed",
+          keyId: publicKeyId(claim.key),
+          agentId: String(data.agentId || data.agent?.id || config.agent || ""),
+          workspaceId: String(data.workspaceId || data.workspace_id || data.agent?.workspace_id || config.workspace || ""),
+          agensisUrl: claim.baseUrl,
+          handle: String(data.handle || data.agent?.handle || config.handle || ""),
+          name: String(data.agent?.name || payload.name || config.name || "CursorBuddy runtime"),
+          cwd: String(payload.cwd || config.cwd || process.cwd()),
+          surface: String(payload.surface || "browser_extension"),
+          command: String(data.command || data.localCommand || ""),
+          updatedAt: new Date().toISOString(),
+        };
+        record("connect", {
+          mode: claimedConnection.mode,
+          keyId: claimedConnection.keyId,
+          agentId: claimedConnection.agentId,
+          workspaceId: claimedConnection.workspaceId,
+        });
+        json(res, 200, { ok: true, connection: claimedConnection, claim: data });
+      } catch (error) {
+        record("connect_error", { error: String(error?.message || error) });
         json(res, 400, { ok: false, error: String(error?.message || error) });
       }
       return;

@@ -54,7 +54,9 @@ export function AppUpdateManager() {
     } catch {
       /* no SW / dev / Electron — fall through */
     }
-    window.location.reload();
+    const url = new URL(window.location.href);
+    url.searchParams.set('agensisUpdate', BUILD_ID || String(Date.now()));
+    window.location.replace(url.href);
   }, [updateServiceWorker]);
 
   const showAvailableToast = useCallback(() => {
