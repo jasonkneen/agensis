@@ -383,12 +383,12 @@
   --neo-shadow-ink: #6b6258;
   /* Softened border ink for dark. Full --neo-ink (near-white) outlines on
      near-black read as harsh glare — brutal wants confident borders, not a
-     white cage. Mixing 64% ink with the theme's own paper lands a warm mid-tone
-     (~6:1 on the canvas) that keeps the borders structural and present but drops
-     the glare. Text stays on full --neo-ink. Nudge the 64% up for crisper /
-     down for softer. Derives per-theme automatically (uses --neo-ink +
-     --background, both set per theme by expand()). */
-  --neo-edge: color-mix(in srgb, var(--neo-ink) 64%, var(--background));
+     white cage. Mixing 48% ink with the theme's own paper lands a warm mid-tone
+     (~4:1 on the canvas) that keeps the borders structural and present but drops
+     the glare (64% still read as a bright cage in practice). Text stays on full
+     --neo-ink. Nudge the 48% up for crisper / down for softer. Derives per-theme
+     automatically (uses --neo-ink + --background, both set per theme by expand()). */
+  --neo-edge: color-mix(in srgb, var(--neo-ink) 48%, var(--background));
 
   --canvas-base: #141414;
   --canvas-elevated: #1e1e1e;
