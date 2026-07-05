@@ -4248,6 +4248,26 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   return sections.join('\n');
 }
 
+function normalizeAiChatMessages(messages) {
+  const out = [];
+  const system = [];
+  if (!Array.isArray(messages)) return { messages: out, systemPrompt: '' };
+  for (const message of messages) {
+    const role = String(message?.role || '').trim().toLowerCase();
+    const content = typeof message?.content === 'string' ? message.content : '';
+    if (!content) continue;
+    if (role === 'system') {
+      system.push(content);
+      continue;
+    }
+    out.push({
+      role: role === 'assistant' ? 'assistant' : 'user',
+      content,
+    });
+  }
+  return { messages: out, systemPrompt: system.join('\n\n') };
+}
+
 function sendWs(ws, message) {
   if (ws.readyState !== 1) return;
   // Drop instead of unbounded-buffering when a slow client backs up, and never let
@@ -6588,6 +6608,13 @@ function createApp() {
       const apiKey = await getAnthropicApiKey(workspaceId);
       if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
       const resolvedModel = resolveAnthropicModel(model);
+      const chat = normalizeAiChatMessages(messages);
+      const resolvedAgentContext = chat.systemPrompt
+        ? {
+          ...(agentContext && typeof agentContext === 'object' ? agentContext : {}),
+          systemPrompt: [agentContext?.systemPrompt, chat.systemPrompt].filter(Boolean).join('\n\n'),
+        }
+        : agentContext;
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -6601,8 +6628,8 @@ function createApp() {
           model: resolvedModel,
           max_tokens: 4096,
           stream: true,
-          messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-          system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+          messages: chat.messages,
+          system: buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext),
         }),
       });
 
@@ -6776,5 +6803,7 @@ module.exports = {
     ensureMentionedParticipants,
     parseAgentMentions,
     verifyNetlifyDeploySignature,
+    buildSystemPrompt,
+    normalizeAiChatMessages,
   },
 };

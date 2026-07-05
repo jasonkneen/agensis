@@ -547,6 +547,30 @@ test('ai-chat requires workspace id and run_agents capability before using AI ke
   });
 });
 
+test('ai-chat normalizes OpenAI-style system messages before provider dispatch', () => {
+  const chat = __test.normalizeAiChatMessages([
+    { role: 'system', content: 'Use CursorBuddy page context.' },
+    { role: 'user', content: 'Help me here.' },
+    { role: 'assistant', content: 'Sure.' },
+    { role: 'tool', content: 'ignored role becomes user text' },
+  ]);
+
+  assert.deepEqual(chat.messages, [
+    { role: 'user', content: 'Help me here.' },
+    { role: 'assistant', content: 'Sure.' },
+    { role: 'user', content: 'ignored role becomes user text' },
+  ]);
+  assert.equal(chat.systemPrompt, 'Use CursorBuddy page context.');
+  assert.equal(chat.messages.some((message) => message.role === 'system'), false);
+
+  const system = __test.buildSystemPrompt('', '', null, {
+    name: 'CursorBuddy Provider',
+    systemPrompt: chat.systemPrompt,
+  });
+  assert.match(system, /CursorBuddy Provider/);
+  assert.match(system, /Use CursorBuddy page context\./);
+});
+
 // ----------------------------------------------------------------------------
 // Plan 004 — server-side auth hardening (password policy + rate limiting).
 // ----------------------------------------------------------------------------

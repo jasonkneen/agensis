@@ -416,7 +416,7 @@ function buildOrderClause(orderBy) {
   return ` ORDER BY ${quoteIdent(orderBy.column)} ${direction}`;
 }
 
-function buildSystemPrompt(memory, documents, workspaceContext) {
+function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   const sections = [
     'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
     '',
@@ -427,6 +427,13 @@ function buildSystemPrompt(memory, documents, workspaceContext) {
     '- If you do not know something from the provided context, say so rather than inventing.',
     '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
   ];
+
+  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
+    const agentBlocks = [];
+    if (agentContext.name) agentBlocks.push(`Agent name: ${agentContext.name}`);
+    if (agentContext.systemPrompt) agentBlocks.push(agentContext.systemPrompt);
+    if (agentBlocks.length > 0) sections.push('', '<agent_context>', agentBlocks.join('\n\n'), '</agent_context>');
+  }
 
   if (workspaceContext) {
     const wsBlocks = [];
@@ -448,6 +455,26 @@ function buildSystemPrompt(memory, documents, workspaceContext) {
   if (memory) sections.push('', '<user_memory>', 'Persistent facts the user has saved. Use this to personalize responses.', memory, '</user_memory>');
   if (documents) sections.push('', '<linked_documents>', 'The user has explicitly linked these documents for this message. Treat them as high-priority context.', documents, '</linked_documents>');
   return sections.join('\n');
+}
+
+function normalizeAiChatMessages(messages) {
+  const out = [];
+  const system = [];
+  if (!Array.isArray(messages)) return { messages: out, systemPrompt: '' };
+  for (const message of messages) {
+    const role = String(message?.role || '').trim().toLowerCase();
+    const content = typeof message?.content === 'string' ? message.content : '';
+    if (!content) continue;
+    if (role === 'system') {
+      system.push(content);
+      continue;
+    }
+    out.push({
+      role: role === 'assistant' ? 'assistant' : 'user',
+      content,
+    });
+  }
+  return { messages: out, systemPrompt: system.join('\n\n') };
 }
 
 async function query(text, params = []) {
@@ -1716,7 +1743,7 @@ async function handleDb(pathname, req, userId) {
 }
 
 async function handleAiChat(req, userId) {
-  const { messages, model, memory, documents, workspaceContext, workspaceId } = await readBody(req);
+  const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = await readBody(req);
   // A valid token is required (enforced by the router). workspaceId is mandatory
   // and the user must be allowed to run agents there — otherwise any signed-up
   // user could omit workspaceId to skip authorization and stream completions on
@@ -1734,6 +1761,13 @@ async function handleAiChat(req, userId) {
         : model === 'claude-haiku-4-5'
           ? 'claude-haiku-4-5'
           : 'claude-opus-4-5';
+  const chat = normalizeAiChatMessages(messages);
+  const resolvedAgentContext = chat.systemPrompt
+    ? {
+      ...(agentContext && typeof agentContext === 'object' ? agentContext : {}),
+      systemPrompt: [agentContext?.systemPrompt, chat.systemPrompt].filter(Boolean).join('\n\n'),
+    }
+    : agentContext;
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -1747,8 +1781,8 @@ async function handleAiChat(req, userId) {
       model: resolvedModel,
       max_tokens: 4096,
       stream: true,
-      messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-      system: buildSystemPrompt(memory, documents, workspaceContext),
+      messages: chat.messages,
+      system: buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext),
     }),
   });
 
