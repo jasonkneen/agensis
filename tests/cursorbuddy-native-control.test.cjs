@@ -34,6 +34,23 @@ test('daemon recognizes simple CursorBuddy control requests without invoking she
   });
 });
 
+test('daemon recognizes wrapped CursorBuddy control requests from Agensis jobs', async () => {
+  const { parseCursorBuddyControlIntent } = await loadTestApi();
+  const wrapped = [
+    'Conversation context follows.',
+    'Previous assistant text mentioned command routing and local runtime setup.',
+    'Diagnostic notes: '.repeat(40),
+    'Latest user message: Can you make him wave?',
+    'Return a useful response to the user.',
+  ].join(' ');
+
+  assert.deepEqual(parseCursorBuddyControlIntent(wrapped), {
+    action: 'wave',
+    text: '',
+    source: 'agensis-native-control',
+  });
+});
+
 test('daemon does not mistake discussion about control for a control command', async () => {
   const { parseCursorBuddyControlIntent } = await loadTestApi();
 

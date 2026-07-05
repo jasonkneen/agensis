@@ -525,9 +525,26 @@ function extractCursorBuddySpeech(text) {
   return "";
 }
 
-function parseCursorBuddyControlIntent(message) {
+function compactCursorBuddyControlText(message) {
   const text = String(message || "").replace(/\s+/g, " ").trim();
-  if (!text || text.length > 500) return null;
+  if (!text) return "";
+  if (text.length <= 500) return text;
+  const patterns = [
+    /\b(?:can you\s+)?(?:make|have|tell)\s+(?:the\s+)?(?:cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\s+(?:wave|waves|waving|say|speak)\b.{0,160}/i,
+    /\b(?:cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\b.{0,120}\b(?:wave|waves|waving|say|speak|open|show|hide|hush|close|dismiss|clear)\b.{0,160}/i,
+    /\b(?:wave|open|show|hide|hush|close|dismiss|clear)\b.{0,120}\b(?:cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy|bubble|prompt|dialog|panel|options|menu)\b/i,
+    /\b(?:say|speak)\s+[`"'“”‘’]?.{1,180}/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[0]) return match[0].trim();
+  }
+  return "";
+}
+
+function parseCursorBuddyControlIntent(message) {
+  const text = compactCursorBuddyControlText(message);
+  if (!text) return null;
   const directCommand = /^(wave|say|speak|open|show|hide|hush|close|dismiss)\b/i.test(text);
   const mentionsBuddy = CURSOR_BUDDY_CONTROL_SUBJECT_RE.test(text);
   if (!directCommand && !mentionsBuddy) return null;
