@@ -1355,6 +1355,99 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
   return rows[0];
 }
 
+function cursorBuddyProviderAgentMetadata(body = {}, userId = '') {
+  const requestMetadata = parseJsonObject(body?.metadata);
+  const page = parseJsonObject(body?.page || requestMetadata.page);
+  const client = parseJsonObject(body?.client || requestMetadata.client);
+  const manifest = parseJsonObject(body?.manifest || requestMetadata.manifest);
+  const runtime = parseJsonObject(requestMetadata.runtime);
+  const surface = normalizeCursorBuddySurface(body?.surface || runtime.surface || requestMetadata.surface);
+  const scope = normalizeCursorBuddyScope(body?.scope || requestMetadata.scope);
+  const domain = normalizeCursorBuddyDomain(body?.domain || page.hostname || requestMetadata.domain);
+  const websiteSource = String(body?.websiteSource || requestMetadata.websiteSource || page.url || '').trim().slice(0, 2048);
+  return {
+    surface,
+    scope,
+    domain,
+    metadata: {
+      ...requestMetadata,
+      requestedBy: userId,
+      setup: 'cursorbuddy-provider',
+      provider: 'cursorbuddy',
+      mode: 'built_in_provider',
+      runtimeKind: String(body?.runtimeKind || requestMetadata.runtimeKind || 'cursorbuddy-provider').trim().slice(0, 80),
+      websiteSource,
+      page,
+      client,
+      manifest,
+    },
+  };
+}
+
+async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
+  const { surface, scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
+  const resolvedScope = scope === 'domain' && domain ? 'domain' : 'workspace';
+  metadata.providerScope = resolvedScope;
+  const label = resolvedScope === 'domain'
+    ? `CursorBuddy Provider ${domain}`
+    : 'CursorBuddy Provider Workspace';
+  const handle = slugHandle(resolvedScope === 'domain'
+    ? `cursorbuddy-provider-${domain.replace(/[^a-z0-9]+/g, '-')}`
+    : 'cursorbuddy-provider-workspace');
+  const existingRows = await getDb().unsafe(
+    'select * from workspace_agents where workspace_id = $1 and handle = $2 limit 1',
+    [workspaceId, handle],
+  );
+  if (existingRows[0]) {
+    const rows = await getDb().unsafe(
+      `update workspace_agents
+       set name = coalesce(nullif(name, ''), $2),
+           description = $3,
+           system_prompt = $4,
+           model = 'auto',
+           run_mode = 'builtin',
+           permission_mode = 'default',
+           enabled = true,
+           tools = $5::jsonb,
+           skills = $6::jsonb,
+           updated_at = now(),
+           version = coalesce(version, 0) + 1
+       where id = $1
+       returning *`,
+      [
+        existingRows[0].id,
+        label,
+        'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
+        'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
+        JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+        JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
+      ],
+    );
+    notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+    return rows[0];
+  }
+
+  const rows = await getDb().unsafe(
+    `insert into workspace_agents
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+     values
+       ($1, $2, $3, $4, $5, 'auto', 'builtin', 'default', 'CB', '#6fd6e8', true, $6, $7::jsonb, $8::jsonb)
+     returning *`,
+    [
+      workspaceId,
+      label,
+      handle,
+      'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
+      'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
+      userId || null,
+      JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+      JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
+    ],
+  );
+  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
+  return rows[0];
+}
+
 async function resolveSetupWorkspace(userId, requestedWorkspaceId = '') {
   const requested = String(requestedWorkspaceId || '').trim();
   if (requested) {
@@ -5299,6 +5392,24 @@ function createApp() {
     }
   });
 
+  app.get('/backend/workspaces/:id/agents', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const rows = await getDb().unsafe(
+        `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+         from workspace_agents
+         where workspace_id = $1
+         order by created_at asc, name asc`,
+        [workspaceId],
+      );
+      res.json({ data: rows.map(agentRuntimePayload), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   app.post('/backend/agensis/setup/connect', requireAuth, async (req, res) => {
     try {
       const workspaceId = await resolveSetupWorkspace(req.userId, req.body?.workspaceId || req.body?.workspace_id);
@@ -5393,7 +5504,9 @@ function createApp() {
       const scope = normalizeCursorBuddyScope(req.body?.scope);
       const domain = normalizeCursorBuddyDomain(req.body?.domain);
       const name = String(req.body?.name || 'CursorBuddy runtime').trim().slice(0, 80) || 'CursorBuddy runtime';
+      const requestMetadata = parseJsonObject(req.body?.metadata);
       const metadata = {
+        ...requestMetadata,
         requestedBy: req.userId,
         setup: 'cursorbuddy',
         runtimeKind: String(req.body?.runtimeKind || '').trim().slice(0, 80),
@@ -5412,6 +5525,33 @@ function createApp() {
           ...publicCursorBuddyConnectionKey(rows[0]),
           key,
           command: `agensis buddy connect --key ${shellQuote(key)}`,
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/cursorbuddy/provider-agent', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const agent = await ensureCursorBuddyProviderAgent({
+        workspaceId,
+        userId: req.userId,
+        body: req.body || {},
+      });
+      res.json({
+        data: {
+          workspaceId,
+          workspace_id: workspaceId,
+          agentId: agent.id,
+          agent_id: agent.id,
+          provider: 'cursorbuddy',
+          mode: 'built_in_provider',
+          agent: agentRuntimePayload(agent),
         },
         error: null,
       });
@@ -5469,6 +5609,13 @@ function createApp() {
           cwd: String(req.body?.cwd || '').trim().slice(0, 500),
           runtimeKind: String(req.body?.runtimeKind || 'machine').trim().slice(0, 80),
           version: String(req.body?.version || '').trim().slice(0, 80),
+        },
+        cursorBuddy: {
+          websiteSource: String(req.body?.websiteSource || '').trim().slice(0, 2048),
+          page: parseJsonObject(req.body?.page),
+          client: parseJsonObject(req.body?.client),
+          manifest: parseJsonObject(req.body?.manifest),
+          metadata: parseJsonObject(req.body?.metadata),
         },
       };
       const updateRows = await getDb().unsafe(

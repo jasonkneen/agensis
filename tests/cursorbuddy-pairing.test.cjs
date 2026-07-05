@@ -9,6 +9,7 @@ function makeDb() {
   const calls = [];
   return {
     calls,
+    agents,
     async unsafe(sql, params = []) {
       const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       calls.push({ sql, normalized, params });
@@ -74,8 +75,16 @@ function makeDb() {
       if (normalized.startsWith('select * from workspace_agents where workspace_id = $1 and handle = $2')) {
         return agents.filter((row) => row.workspace_id === params[0] && row.handle === params[1]);
       }
+      if (normalized.startsWith('select id, workspace_id, name') && normalized.includes('from workspace_agents')) {
+        return agents.filter((row) => row.workspace_id === params[0]);
+      }
       if (normalized.startsWith('insert into workspace_agents')) {
-        const [workspaceId, name, handle, description, systemPrompt, permissionMode] = params;
+        const [workspaceId, name, handle, description, systemPrompt] = params;
+        const runMode = normalized.includes("'builtin'") ? 'builtin' : 'daemon';
+        const permissionMode = runMode === 'builtin' ? 'default' : params[5];
+        const createdBy = runMode === 'builtin' ? params[5] : params[6];
+        const tools = runMode === 'builtin' ? params[6] : params[7];
+        const skills = runMode === 'builtin' ? params[7] : params[8];
         const row = {
           id: `agent-${agents.length + 1}`,
           workspace_id: workspaceId,
@@ -85,7 +94,10 @@ function makeDb() {
           system_prompt: systemPrompt,
           model: 'auto',
           permission_mode: permissionMode,
-          run_mode: 'daemon',
+          created_by: createdBy,
+          tools,
+          skills,
+          run_mode: runMode,
           enabled: true,
         };
         agents.push(row);
@@ -227,6 +239,75 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
     'claim creates one reusable CursorBuddy workspace agent per surface',
   );
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
+});
+
+test('CursorBuddy Provider registration creates a reusable built-in workspace agent', async () => {
+  const db = makeDb();
+  __test.setTestDb(db);
+  const token = await __test.issueToken('user-1', '1');
+
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/backend/cursorbuddy/provider-agent`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        name: 'CursorBuddy Provider localhost',
+        surface: 'browser_extension',
+        scope: 'domain',
+        domain: 'example.test',
+        websiteSource: 'https://example.test/form',
+        metadata: {
+          websiteSource: 'https://example.test/form',
+          page: { url: 'https://example.test/form', hostname: 'example.test', title: 'Form' },
+          client: { browser: 'Chrome on macOS', userAgent: 'test-agent' },
+          runtime: { surface: 'extension', instanceId: 'cb-ext-test' },
+          manifest: { name: 'CursorBuddy', version: '0.1.11' },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.data.workspaceId, 'ws-1');
+    assert.equal(body.data.agentId, 'agent-1');
+    assert.equal(body.data.mode, 'built_in_provider');
+    assert.equal(body.data.provider, 'cursorbuddy');
+    assert.equal(body.data.agent.run_mode, 'builtin');
+    assert.equal(body.data.agent.handle, 'cursorbuddy-provider-example-test');
+
+    const secondResponse = await fetch(`${baseUrl}/backend/cursorbuddy/provider-agent`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        surface: 'browser_extension',
+        scope: 'domain',
+        domain: 'example.test',
+      }),
+    });
+    assert.equal(secondResponse.status, 200);
+    const secondBody = await secondResponse.json();
+    assert.equal(secondBody.data.agentId, 'agent-1', 'same provider handle reuses the built-in agent');
+
+    const listResponse = await fetch(`${baseUrl}/backend/workspaces/ws-1/agents`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(listResponse.status, 200);
+    const listBody = await listResponse.json();
+    assert.equal(listBody.data.length, 1);
+    assert.equal(listBody.data[0].run_mode, 'builtin');
+    assert.equal(listBody.data[0].handle, 'cursorbuddy-provider-example-test');
+  });
+
+  assert.equal(db.agents.length, 1);
+  assert.equal(db.agents[0].run_mode, 'builtin');
+  assert.equal(db.agents[0].permission_mode, 'default');
+  const tools = JSON.parse(db.agents[0].tools);
+  assert.equal(tools[0].type, 'provider');
+  assert.equal(tools[0].name, 'cursorbuddy');
+  assert.equal(tools[0].metadata.mode, 'built_in_provider');
+  assert.equal(tools[0].metadata.websiteSource, 'https://example.test/form');
+  assert.ok(db.calls.some((call) => call.normalized.includes('select * from workspace_agents where workspace_id = $1 and handle = $2')), 'provider setup looks for an existing built-in agent');
 });
 
 test('Agensis CLI setup creates or reuses a primary daemon agent and returns daemon args', async () => {

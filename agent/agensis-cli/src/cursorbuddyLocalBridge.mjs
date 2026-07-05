@@ -345,6 +345,39 @@ function publicKeyId(key) {
   return String(key || "").slice(0, 18);
 }
 
+function objectPayload(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function connectContextFromPayload(payload = {}, connection = {}, config = {}) {
+  const metadata = objectPayload(payload.metadata) || {};
+  const page = objectPayload(payload.page) || objectPayload(metadata.page) || {};
+  const client = objectPayload(payload.client) || objectPayload(metadata.client) || {};
+  const runtime = objectPayload(metadata.runtime) || {};
+  const manifest = objectPayload(payload.manifest) || objectPayload(metadata.manifest) || null;
+  const url = String(payload.url || page.url || metadata.websiteSource || payload.websiteSource || "").slice(0, 2048);
+  return {
+    url,
+    title: String(payload.title || page.title || "").slice(0, 300),
+    surface: String(payload.surface || runtime.surface || connection.surface || "").slice(0, 80),
+    instanceId: String(payload.instanceId || runtime.instanceId || "").slice(0, 140),
+    workspaceId: String(connection.workspaceId || payload.workspaceId || config.workspace || "").slice(0, 120),
+    agentId: String(connection.agentId || payload.agentId || config.agent || "").slice(0, 120),
+    runtime: {
+      ...runtime,
+      local: true,
+      connected: true,
+      connection,
+    },
+    page,
+    client,
+    project: objectPayload(payload.project) || objectPayload(metadata.project) || null,
+    manifest,
+    selection: objectPayload(payload.selection) || null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function claimErrorMessage(response, body) {
   return body?.error?.message || body?.message || `CursorBuddy key claim failed with HTTP ${response.status}`;
 }
@@ -373,6 +406,11 @@ async function claimCursorBuddyConnection(config, payload = {}, fetchImpl = glob
       version: payload.version || config.version || process.env.npm_package_version || "",
       permissionMode: payload.permissionMode || config.permissionMode,
       model: payload.model || config.model,
+      metadata: objectPayload(payload.metadata) || null,
+      websiteSource: payload.websiteSource || payload.metadata?.websiteSource || "",
+      page: objectPayload(payload.page) || objectPayload(payload.metadata?.page) || null,
+      client: objectPayload(payload.client) || objectPayload(payload.metadata?.client) || null,
+      manifest: objectPayload(payload.manifest) || objectPayload(payload.metadata?.manifest) || null,
     }),
   });
   const body = await response.json().catch(() => ({}));
@@ -729,11 +767,13 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
           command: String(data.command || data.localCommand || ""),
           updatedAt: new Date().toISOString(),
         };
+        activeContext = connectContextFromPayload(payload, claimedConnection, config);
         record("connect", {
           mode: claimedConnection.mode,
           keyId: claimedConnection.keyId,
           agentId: claimedConnection.agentId,
           workspaceId: claimedConnection.workspaceId,
+          url: activeContext.url,
         });
         json(res, 200, { ok: true, connection: claimedConnection, claim: data });
       } catch (error) {

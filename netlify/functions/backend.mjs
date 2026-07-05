@@ -552,6 +552,17 @@ function parseJsonObject(value) {
   }
 }
 
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function publicAgentConnection(row) {
   if (!row) return row;
   return {
@@ -583,6 +594,25 @@ function publicWorkspace(row) {
     role: row.role || 'viewer',
     created_at: row.created_at,
     updated_at: row.updated_at,
+  };
+}
+
+function publicWorkspaceAgent(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id,
+    name: row.name,
+    avatar: row.avatar || 'AI',
+    handle: row.handle || slugHandle(row.name),
+    description: row.description || '',
+    system_prompt: row.system_prompt || '',
+    tools: parseJsonArray(row.tools),
+    skills: parseJsonArray(row.skills),
+    model: row.model || 'auto',
+    run_mode: row.run_mode === 'daemon' ? 'daemon' : 'builtin',
+    permission_mode: normalizeAgentPermissionMode(row.permission_mode),
+    enabled: row.enabled !== false,
   };
 }
 
@@ -710,6 +740,20 @@ async function handleWorkspaces(userId) {
   return json({ data: rows.map(publicWorkspace), error: null });
 }
 
+async function handleWorkspaceAgents(workspaceId, userId) {
+  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+  await ensureAgentRuntimeTables();
+  const rows = await query(
+    `select id, workspace_id, name, avatar, description, system_prompt, tools, skills, model, handle, run_mode, permission_mode, version, enabled
+     from workspace_agents
+     where workspace_id = $1
+     order by created_at asc, name asc`,
+    [workspaceId],
+  );
+  return json({ data: rows.map(publicWorkspaceAgent), error: null });
+}
+
 async function handleSystemCapabilities(req) {
   const url = new URL(req.url);
   const workspacePath = url.searchParams.get('workspacePath') || '';
@@ -783,7 +827,9 @@ async function handleCreateCursorBuddyConnectionKey(req, userId) {
   const scope = normalizeCursorBuddyScope(body?.scope);
   const domain = normalizeCursorBuddyDomain(body?.domain);
   const name = String(body?.name || 'CursorBuddy runtime').trim().slice(0, 80) || 'CursorBuddy runtime';
+  const requestMetadata = parseJsonObject(body?.metadata);
   const metadata = {
+    ...requestMetadata,
     requestedBy: userId,
     setup: 'cursorbuddy',
     runtimeKind: String(body?.runtimeKind || '').trim().slice(0, 80),
@@ -846,6 +892,98 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
       connectionKey.created_by || null,
       JSON.stringify([{ type: 'runtime', name: 'cursorbuddy', metadata }]),
       JSON.stringify(['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh']),
+    ],
+  );
+  return rows[0];
+}
+
+function cursorBuddyProviderAgentMetadata(body = {}, userId = '') {
+  const requestMetadata = parseJsonObject(body?.metadata);
+  const page = parseJsonObject(body?.page || requestMetadata.page);
+  const client = parseJsonObject(body?.client || requestMetadata.client);
+  const manifest = parseJsonObject(body?.manifest || requestMetadata.manifest);
+  const runtime = parseJsonObject(requestMetadata.runtime);
+  const surface = normalizeCursorBuddySurface(body?.surface || runtime.surface || requestMetadata.surface);
+  const scope = normalizeCursorBuddyScope(body?.scope || requestMetadata.scope);
+  const domain = normalizeCursorBuddyDomain(body?.domain || page.hostname || requestMetadata.domain);
+  const websiteSource = String(body?.websiteSource || requestMetadata.websiteSource || page.url || '').trim().slice(0, 2048);
+  return {
+    surface,
+    scope,
+    domain,
+    metadata: {
+      ...requestMetadata,
+      requestedBy: userId,
+      setup: 'cursorbuddy-provider',
+      provider: 'cursorbuddy',
+      mode: 'built_in_provider',
+      runtimeKind: String(body?.runtimeKind || requestMetadata.runtimeKind || 'cursorbuddy-provider').trim().slice(0, 80),
+      websiteSource,
+      page,
+      client,
+      manifest,
+    },
+  };
+}
+
+async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
+  await ensureAgentRuntimeTables();
+  const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
+  const resolvedScope = scope === 'domain' && domain ? 'domain' : 'workspace';
+  metadata.providerScope = resolvedScope;
+  const label = resolvedScope === 'domain'
+    ? `CursorBuddy Provider ${domain}`
+    : 'CursorBuddy Provider Workspace';
+  const handle = slugHandle(resolvedScope === 'domain'
+    ? `cursorbuddy-provider-${domain.replace(/[^a-z0-9]+/g, '-')}`
+    : 'cursorbuddy-provider-workspace');
+  const existingRows = await query(
+    'select * from workspace_agents where workspace_id = $1 and handle = $2 limit 1',
+    [workspaceId, handle],
+  );
+  if (existingRows[0]) {
+    const rows = await query(
+      `update workspace_agents
+       set name = coalesce(nullif(name, ''), $2),
+           description = $3,
+           system_prompt = $4,
+           model = 'auto',
+           run_mode = 'builtin',
+           permission_mode = 'default',
+           enabled = true,
+           tools = $5::jsonb,
+           skills = $6::jsonb,
+           updated_at = now(),
+           version = coalesce(version, 0) + 1
+       where id = $1
+       returning *`,
+      [
+        existingRows[0].id,
+        label,
+        'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
+        'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
+        JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+        JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
+      ],
+    );
+    return rows[0];
+  }
+
+  const rows = await query(
+    `insert into workspace_agents
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+     values
+       ($1, $2, $3, $4, $5, 'auto', 'builtin', 'default', 'CB', '#6fd6e8', true, $6, $7::jsonb, $8::jsonb)
+     returning *`,
+    [
+      workspaceId,
+      label,
+      handle,
+      'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
+      'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
+      userId || null,
+      JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+      JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
     ],
   );
   return rows[0];
@@ -946,6 +1084,13 @@ async function handleClaimCursorBuddyConnectionKey(req) {
       cwd: String(body?.cwd || '').trim().slice(0, 500),
       runtimeKind: String(body?.runtimeKind || 'machine').trim().slice(0, 80),
       version: String(body?.version || '').trim().slice(0, 80),
+    },
+    cursorBuddy: {
+      websiteSource: String(body?.websiteSource || '').trim().slice(0, 2048),
+      page: parseJsonObject(body?.page),
+      client: parseJsonObject(body?.client),
+      manifest: parseJsonObject(body?.manifest),
+      metadata: parseJsonObject(body?.metadata),
     },
   };
   const updateRows = await query(
@@ -1662,11 +1807,35 @@ async function route(req) {
   if (req.method === 'GET' && pathname === '/backend/workspaces') {
     return handleWorkspaces(await requireUserId(req));
   }
+  const workspaceAgentsMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/agents$/);
+  if (req.method === 'GET' && workspaceAgentsMatch) {
+    return handleWorkspaceAgents(decodeURIComponent(workspaceAgentsMatch[1]), await requireUserId(req));
+  }
   if (req.method === 'GET' && pathname === '/backend/cursorbuddy/connection-keys') {
     return handleCursorBuddyConnectionKeys(req, await requireUserId(req));
   }
   if (req.method === 'POST' && pathname === '/backend/cursorbuddy/connection-keys') {
     return handleCreateCursorBuddyConnectionKey(req, await requireUserId(req));
+  }
+  if (req.method === 'POST' && pathname === '/backend/cursorbuddy/provider-agent') {
+    const userId = await requireUserId(req);
+    const body = await readBody(req);
+    const workspaceId = String(body?.workspaceId || body?.workspace_id || '').trim();
+    if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    const agent = await ensureCursorBuddyProviderAgent({ workspaceId, userId, body });
+    return json({
+      data: {
+        workspaceId,
+        workspace_id: workspaceId,
+        agentId: agent.id,
+        agent_id: agent.id,
+        provider: 'cursorbuddy',
+        mode: 'built_in_provider',
+        agent: publicWorkspaceAgent(agent),
+      },
+      error: null,
+    });
   }
   if (req.method === 'POST' && pathname === '/backend/cursorbuddy/connection-keys/claim') {
     return handleClaimCursorBuddyConnectionKey(req);

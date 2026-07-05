@@ -366,6 +366,13 @@ test('CursorBuddy local bridge claims account connection keys for the local site
         workspaceId: 'ws-claimed',
         surface: 'browser_extension',
         name: 'CursorBuddy Extension',
+        metadata: {
+          websiteSource: 'https://example.com/app',
+          page: { url: 'https://example.com/app', hostname: 'example.com', title: 'Example app' },
+          client: { userAgent: 'Chrome CursorBuddy Test', platform: 'macOS' },
+          runtime: { surface: 'extension', instanceId: 'cb-ext-test' },
+          manifest: { name: 'Example Buddy', version: '1' },
+        },
       }),
     });
     assert.equal(connectResponse.status, 200);
@@ -382,11 +389,16 @@ test('CursorBuddy local bridge claims account connection keys for the local site
     assert.equal(body.key, 'cbk_website_avatar_ABCDEFGHJKLMNPQRST');
     assert.equal(body.runtimeKind, 'agensis-cli-local-bridge');
     assert.equal(body.surface, 'browser_extension');
+    assert.equal(body.websiteSource, 'https://example.com/app');
+    assert.equal(body.metadata.page.hostname, 'example.com');
+    assert.equal(body.client.userAgent, 'Chrome CursorBuddy Test');
 
     const healthResponse = await fetch(`${bridge.url}/cursorbuddy/health`);
     const health = await healthResponse.json();
     assert.equal(health.connection.mode, 'agensis-claimed');
     assert.equal(health.connection.agentId, 'agent-claimed');
+    assert.equal(health.context.url, 'https://example.com/app');
+    assert.equal(health.context.client.userAgent, 'Chrome CursorBuddy Test');
   } finally {
     await bridge.close();
     await fs.rm(dir, { recursive: true, force: true });
