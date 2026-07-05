@@ -535,7 +535,6 @@ function laneKeyForJob(job) {
 const CURSOR_BUDDY_CONTROL_SUBJECT_RE = /\b(cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\b/i;
 const CURSOR_BUDDY_SAY_RE_LIST = [
   /\b(?:make|have|tell)\s+(?:the\s+)?(?:cursorbuddy|cursor buddy|avatar|buddy|pet|character|him|guy)\s+(?:say|speak)\s+(.+)$/i,
-  /\b(?:say|speak)\s+(.+)$/i,
 ];
 
 function cleanupCursorBuddySpeech(value) {
@@ -555,8 +554,24 @@ function extractCursorBuddySpeech(text) {
   return "";
 }
 
-function compactCursorBuddyControlText(message) {
+function extractLatestUserMessage(message) {
   const text = String(message || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const marker = /latest user message\s*:\s*/gi;
+  let match = null;
+  let found = null;
+  while ((match = marker.exec(text))) found = match;
+  if (!found) return "";
+  const rest = text.slice(found.index + found[0].length).trim();
+  const stop = rest.search(/\b(Return a useful response|Conversation context follows|Previous user|Previous assistant|Diagnostic notes|System prompt|Developer message)\b/i);
+  const latest = (stop >= 0 ? rest.slice(0, stop) : rest).trim();
+  return latest.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+}
+
+function compactCursorBuddyControlText(message) {
+  const raw = String(message || "").replace(/\s+/g, " ").trim();
+  const latest = extractLatestUserMessage(raw);
+  const text = latest || raw;
   if (!text) return "";
   if (text.length <= 500) return text;
   const patterns = [
@@ -575,7 +590,7 @@ function compactCursorBuddyControlText(message) {
 function parseCursorBuddyControlIntent(message) {
   const text = compactCursorBuddyControlText(message);
   if (!text) return null;
-  const directCommand = /^(wave|say|speak|open|show|hide|hush|close|dismiss)\b/i.test(text);
+  const directCommand = /^(open|show|hide|hush|close|dismiss)\b/i.test(text);
   const mentionsBuddy = CURSOR_BUDDY_CONTROL_SUBJECT_RE.test(text);
   if (!directCommand && !mentionsBuddy) return null;
 
@@ -588,11 +603,11 @@ function parseCursorBuddyControlIntent(message) {
   }
 
   const speech = extractCursorBuddySpeech(text);
-  if (speech && (mentionsBuddy || /^(say|speak)\b/i.test(text))) {
+  if (speech && mentionsBuddy) {
     return { action: "say", text: speech, source };
   }
 
-  if (/\b(wave|waves|waving)\b/i.test(text)) {
+  if (mentionsBuddy && /\b(wave|waves|waving)\b/i.test(text)) {
     return { action: "wave", text: speech, source };
   }
 

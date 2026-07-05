@@ -51,12 +51,37 @@ test('daemon recognizes wrapped CursorBuddy control requests from Agensis jobs',
   });
 });
 
+test('daemon only parses CursorBuddy control from the latest wrapped user message', async () => {
+  const { parseCursorBuddyControlIntent } = await loadTestApi();
+  const staleWaveThenTesting = [
+    'Conversation context follows.',
+    'Previous user: Can you make him wave?',
+    'Previous assistant: Sent CursorBuddy a wave command.',
+    'Latest user message: testing',
+    'Return a useful response to the user.',
+  ].join(' ');
+  const staleWaveThenRun = [
+    'Conversation context follows.',
+    'Previous user: Can you make him wave?',
+    'Previous assistant: Sent CursorBuddy a wave command.',
+    'Latest user message: can you run?',
+    'Return a useful response to the user.',
+  ].join(' ');
+
+  assert.equal(parseCursorBuddyControlIntent(staleWaveThenTesting), null);
+  assert.equal(parseCursorBuddyControlIntent(staleWaveThenRun), null);
+});
+
 test('daemon does not mistake discussion about control for a control command', async () => {
   const { parseCursorBuddyControlIntent } = await loadTestApi();
 
   assert.equal(parseCursorBuddyControlIntent("why can't it control the avatar?"), null);
   assert.equal(parseCursorBuddyControlIntent('review the avatar control architecture'), null);
   assert.equal(parseCursorBuddyControlIntent('tell me a joke'), null);
+  assert.equal(parseCursorBuddyControlIntent('testing'), null);
+  assert.equal(parseCursorBuddyControlIntent('can you run?'), null);
+  assert.equal(parseCursorBuddyControlIntent('wave'), null);
+  assert.equal(parseCursorBuddyControlIntent('say hello'), null);
 });
 
 test('CursorBuddy daemon instructions do not route avatar control through curl', async () => {
