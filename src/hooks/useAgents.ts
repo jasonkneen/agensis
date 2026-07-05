@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { WorkspaceAgent } from '../types';

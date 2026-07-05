@@ -740,6 +740,39 @@ async function handleWorkspaces(userId) {
   return json({ data: rows.map(publicWorkspace), error: null });
 }
 
+async function handleUpdateWorkspaceMember(workspaceId, memberId, req, userId) {
+  if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+  if (!memberId) return jsonError(400, new Error('member id is required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+  if (memberId === 'null' || memberId === 'undefined') return jsonError(404, new Error('Workspace member not found'));
+  const allowedRoles = ['admin', 'editor', 'commenter', 'viewer'];
+  const body = await readBody(req);
+  const role = String(body?.role || '').trim();
+  if (!allowedRoles.includes(role)) return jsonError(400, new Error('Invalid workspace member role'));
+  const rows = await query(
+    `update workspace_members set role = $3
+      where id = $1 and workspace_id = $2
+      returning *`,
+    [memberId, workspaceId, role],
+  );
+  if (!rows[0]) return jsonError(404, new Error('Workspace member not found'));
+  return json({ data: rows[0], error: null });
+}
+
+async function handleDeleteWorkspaceMember(workspaceId, memberId, userId) {
+  if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+  if (!memberId) return jsonError(400, new Error('member id is required'));
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+  if (memberId === 'null' || memberId === 'undefined') return json({ data: null, error: null });
+  const rows = await query(
+    `delete from workspace_members
+      where id = $1 and workspace_id = $2
+      returning *`,
+    [memberId, workspaceId],
+  );
+  return json({ data: rows[0] ?? null, error: null });
+}
+
 async function handleWorkspaceAgents(workspaceId, userId) {
   if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
   await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
@@ -926,6 +959,23 @@ function cursorBuddyProviderAgentMetadata(body = {}, userId = '') {
   };
 }
 
+function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
+  const existingTool = parseJsonArray(existingAgent?.tools).find(tool => (
+    tool && tool.type === 'provider' && tool.name === 'cursorbuddy'
+  ));
+  const previousMetadata = parseJsonObject(existingTool?.metadata);
+  const merged = { ...previousMetadata, ...nextMetadata };
+  if (!nextMetadata.websiteSource && previousMetadata.websiteSource) merged.websiteSource = previousMetadata.websiteSource;
+  for (const key of ['page', 'client', 'manifest']) {
+    const nextObject = parseJsonObject(nextMetadata[key]);
+    const previousObject = parseJsonObject(previousMetadata[key]);
+    if (Object.keys(nextObject).length === 0 && Object.keys(previousObject).length > 0) {
+      merged[key] = previousObject;
+    }
+  }
+  return merged;
+}
+
 async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
   await ensureAgentRuntimeTables();
   const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
@@ -942,6 +992,7 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
     [workspaceId, handle],
   );
   if (existingRows[0]) {
+    const mergedMetadata = mergeCursorBuddyProviderMetadata(existingRows[0], metadata);
     const rows = await query(
       `update workspace_agents
        set name = coalesce(nullif(name, ''), $2),
@@ -962,7 +1013,7 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
         label,
         'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
         'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
-        JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+        JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata: mergedMetadata }]),
         JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
       ],
     );
@@ -1806,6 +1857,22 @@ async function route(req) {
   }
   if (req.method === 'GET' && pathname === '/backend/workspaces') {
     return handleWorkspaces(await requireUserId(req));
+  }
+  const workspaceMemberMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/members\/([^/]+)$/);
+  if (req.method === 'PATCH' && workspaceMemberMatch) {
+    return handleUpdateWorkspaceMember(
+      decodeURIComponent(workspaceMemberMatch[1]),
+      decodeURIComponent(workspaceMemberMatch[2]),
+      req,
+      await requireUserId(req),
+    );
+  }
+  if (req.method === 'DELETE' && workspaceMemberMatch) {
+    return handleDeleteWorkspaceMember(
+      decodeURIComponent(workspaceMemberMatch[1]),
+      decodeURIComponent(workspaceMemberMatch[2]),
+      await requireUserId(req),
+    );
   }
   const workspaceAgentsMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/agents$/);
   if (req.method === 'GET' && workspaceAgentsMatch) {

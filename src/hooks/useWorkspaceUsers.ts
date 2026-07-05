@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 
 export type InviteRole = 'admin' | 'editor' | 'commenter' | 'viewer';
 export type MemberRole = 'owner' | InviteRole;
@@ -76,14 +76,25 @@ export function useWorkspaceUsers(workspaceId: string | null) {
   }, [workspaceId]);
 
   const removeMember = useCallback(async (memberId: string) => {
-    await backendClient.from('workspace_members').delete().eq('id', memberId);
+    if (!workspaceId) return;
+    const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`), {
+      method: 'DELETE',
+      headers: apiAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to remove workspace member');
     setMembers(prev => prev.filter(m => m.id !== memberId));
-  }, []);
+  }, [workspaceId]);
 
-  const changeMemberRole = useCallback(async (memberId: string, role: 'editor' | 'viewer') => {
-    await backendClient.from('workspace_members').update({ role }).eq('id', memberId);
+  const changeMemberRole = useCallback(async (memberId: string, role: InviteRole) => {
+    if (!workspaceId) return;
+    const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+      body: JSON.stringify({ role }),
+    });
+    if (!res.ok) throw new Error('Failed to update workspace member role');
     setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role } : m));
-  }, []);
+  }, [workspaceId]);
 
   return { members, invites, loading, refresh, createInvite, revokeInvite, removeMember, changeMemberRole };
 }

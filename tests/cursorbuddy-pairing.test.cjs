@@ -106,6 +106,23 @@ function makeDb() {
       if (normalized.startsWith('select * from workspace_agents where id = $1 limit 1')) {
         return agents.filter((row) => row.id === params[0]);
       }
+      if (normalized.startsWith('update workspace_agents set name = coalesce')) {
+        const [id, label, description, systemPrompt, tools, skills] = params;
+        const row = agents.find((agent) => agent.id === id);
+        if (!row) return [];
+        Object.assign(row, {
+          name: row.name || label,
+          description,
+          system_prompt: systemPrompt,
+          model: 'auto',
+          run_mode: 'builtin',
+          permission_mode: 'default',
+          enabled: true,
+          tools,
+          skills,
+        });
+        return [row];
+      }
       if (normalized.startsWith('update workspace_agents set handle = $2')) {
         const [id, handle, connectTokenHash, model, permissionMode] = params;
         const row = agents.find((agent) => agent.id === id);
