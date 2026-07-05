@@ -47,6 +47,10 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
     assert.equal(health.connection.workspaceId, 'ws-1');
     assert.equal(health.model, 'claude-haiku-4-5');
     assert.equal(health.daemonModel, 'test-model');
+    assert.equal(health.chatStream, true);
+    assert.equal(health.capabilities.chatStream, true);
+    assert.equal(health.capabilities.nativeCursorBuddyControl, true);
+    assert.match(health.endpoints.chatStream, /\/v1\/chat\/completions$/);
     assert.match(health.endpoints.control, /\/cursorbuddy\/control$/);
     assert.match(health.endpoints.controlStream, /\/cursorbuddy\/control\/stream$/);
 
@@ -94,10 +98,11 @@ test('CursorBuddy local bridge answers trivial avatar chat without spawning the 
   }, { port: 0 });
 
   try {
+    const wrapped = `${'page context '.repeat(16)} user typed: tell me a joke`;
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'tell me a joke' }] }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: wrapped }] }),
     });
     assert.equal(chatResponse.status, 200);
     const chat = await chatResponse.json();
@@ -250,6 +255,8 @@ test('CursorBuddy local bridge does not treat daemon commands as model ids', asy
   assert.match(source, /function cursorBuddyConversationModel\(config = \{\}\)/);
   assert.match(source, /function fastLocalReply\(payload, context\)/);
   assert.match(source, /function fastAvatarControl\(payload\)/);
+  assert.match(source, /function compactFastIntentText\(payload/);
+  assert.match(source, /nativeCursorBuddyControl: true/);
   assert.match(source, /function fastBridgeResult\(payload\)/);
   assert.match(source, /record\("chat_control"/);
   assert.match(source, /function createStreamJsonParser\(onDelta = \(\) => \{\}\)/);

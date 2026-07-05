@@ -152,10 +152,29 @@ function lastUserMessage(payload) {
   return "";
 }
 
+function compactFastIntentText(payload, maxLength = 280) {
+  const raw = lastUserMessage(payload).replace(/\s+/g, " ").trim();
+  if (!raw) return "";
+  if (raw.length <= maxLength) return raw;
+  const intentPatterns = [
+    /\b(tell me (?:a )?joke)\b/i,
+    /\b(make (?:him|the buddy|cursorbuddy|avatar) wave|wave(?: hello)?|say hi|say hello)\b/i,
+    /\b(what site|which site|what page|where am i|where are you|current url)\b/i,
+    /\b(are you connected|connected|working|online|there)\b/i,
+    /\b(open|show|bring up|get back|display)\b.{0,80}\b(prompt|bubble|dialog|panel|options|menu)\b/i,
+    /\b(hide|hush|close|dismiss|clear|stop|cancel|be quiet)\b.{0,80}\b(bubble|prompt|dialog|panel|options|menu)?\b/i,
+    /^(hi|hello|hey|yo|sup)\b/i,
+  ];
+  for (const pattern of intentPatterns) {
+    const match = raw.match(pattern);
+    if (match?.[0]) return match[0].trim();
+  }
+  return raw.slice(-maxLength).trim();
+}
+
 function fastLocalReply(payload, context) {
-  const text = lastUserMessage(payload);
-  if (!text || text.length > 120) return "";
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = compactFastIntentText(payload);
+  if (!normalized) return "";
   for (const pattern of FAST_CHAT_PATTERNS) {
     if (pattern.re.test(normalized)) return pattern.text;
   }
@@ -167,8 +186,8 @@ function fastLocalReply(payload, context) {
 }
 
 function fastAvatarControl(payload) {
-  const text = lastUserMessage(payload).replace(/\s+/g, " ").trim();
-  if (!text || text.length > 180) return null;
+  const text = compactFastIntentText(payload);
+  if (!text) return null;
   if (/\b(wave|wave hello|say hi|say hello|make (him|the buddy|cursorbuddy) wave)\b/i.test(text)) {
     return {
       content: "Waving now.",
@@ -519,10 +538,21 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
         host: os.hostname(),
         pid: process.pid,
         bootedAt,
+        stream: true,
+        streaming: true,
+        supportsStreaming: true,
+        chatStream: true,
+        capabilities: {
+          chatStream: true,
+          controlStream: true,
+          fastAvatarReplies: true,
+          nativeCursorBuddyControl: true,
+        },
         connection: connection(),
         context: activeContext,
         endpoints: {
           chat: `${origin}/v1/chat/completions`,
+          chatStream: `${origin}/v1/chat/completions`,
           edit: `${origin}/cursorbuddy/edit`,
           context: `${origin}/cursorbuddy/context`,
           control: `${origin}/cursorbuddy/control`,
