@@ -115,6 +115,15 @@ test('daemon reuses an existing CursorBuddy bridge on port collisions', async ()
   assert.doesNotMatch(source, /EADDRINUSE[\s\S]{0,220}CursorBuddy local bridge unavailable/);
 });
 
+test('daemon stops the CursorBuddy bridge when Agensis rejects the agent connection', async () => {
+  const source = await require('node:fs/promises').readFile(path.join(repoRoot, 'agent/agensis-cli/src/agensis.mjs'), 'utf8');
+
+  assert.match(source, /const closeReason = String\(reason \|\| ""\)/);
+  assert.match(source, /code === 1008 && \/agent deactivated\|authentication failed\/i\.test\(closeReason\)/);
+  assert.match(source, /Stopping daemon because Agensis rejected this agent connection\./);
+  assert.match(source, /stop\(\);\n\s+return;\n\s+\}/);
+});
+
 test('daemon job runner queues CursorBuddy control before spawning the coding CLI', async () => {
   const [{ startCursorBuddyLocalBridge }, { __test }] = await Promise.all([
     import(pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/cursorbuddyLocalBridge.mjs')).href),

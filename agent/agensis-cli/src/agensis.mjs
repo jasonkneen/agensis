@@ -398,10 +398,16 @@ export async function runAgensisDaemon(rawConfig = {}) {
     ws.on("close", (code, reason) => {
       socketRegistered = false;
       registeredConnection = null;
-      log(`Socket closed (${code || "no-code"}${reason ? `: ${reason}` : ""})`);
+      const closeReason = String(reason || "");
+      log(`Socket closed (${code || "no-code"}${closeReason ? `: ${closeReason}` : ""})`);
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
+      }
+      if (code === 1008 && /agent deactivated|authentication failed/i.test(closeReason)) {
+        log("Stopping daemon because Agensis rejected this agent connection.");
+        stop();
+        return;
       }
       if (lastSocketErrorCode === "ECONNREFUSED" && isLocalBackendUrl(config.url)) {
         log("Local agent backend is not running on 127.0.0.1:3142.");
