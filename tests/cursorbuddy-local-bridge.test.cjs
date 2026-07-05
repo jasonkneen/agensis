@@ -50,6 +50,7 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
     assert.equal(health.chatStream, true);
     assert.equal(health.capabilities.chatStream, true);
     assert.equal(health.capabilities.nativeCursorBuddyControl, true);
+    assert.equal(health.latestControlId, 0);
     assert.match(health.endpoints.chatStream, /\/v1\/chat\/completions$/);
     assert.match(health.endpoints.control, /\/cursorbuddy\/control$/);
     assert.match(health.endpoints.controlStream, /\/cursorbuddy\/control\/stream$/);
@@ -109,29 +110,15 @@ test('CursorBuddy local bridge answers trivial avatar chat without spawning the 
     assert.equal(chat.model, 'cursorbuddy-local-fast');
     assert.match(chat.choices[0].message.content, /cursor/);
 
-    const contextResponse = await fetch(`${bridge.url}/cursorbuddy/context`, {
+    const siteResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        url: 'https://example.com/features',
-        title: 'Example Features',
-        surface: 'extension',
-        project: { name: 'Example Project', root: dir },
-      }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'what site am I on?' }] }),
     });
-    assert.equal(contextResponse.status, 200);
-
-    const guideResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: 'Guide me through this page. What should I do?' }] }),
-    });
-    assert.equal(guideResponse.status, 200);
-    const guide = await guideResponse.json();
-    assert.equal(guide.model, 'cursorbuddy-local-fast');
-    assert.match(guide.choices[0].message.content, /Example Features/);
-    assert.match(guide.choices[0].message.content, /Example Project/);
-    assert.match(guide.choices[0].message.content, /local Agensis runtime/);
+    assert.equal(siteResponse.status, 200);
+    const site = await siteResponse.json();
+    assert.equal(site.model, 'cursorbuddy-local-fast');
+    assert.match(site.choices[0].message.content, /surface has not published its page context/);
   } finally {
     await bridge.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -175,6 +162,23 @@ test('CursorBuddy local bridge turns avatar commands into queued control actions
     assert.equal(poll.commands.length, 1);
     assert.equal(poll.commands[0].action, 'wave');
     assert.equal(poll.commands[0].text, 'Hi. How can I help?');
+
+    const sayResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'say hello' }] }),
+    });
+    assert.equal(sayResponse.status, 200);
+    const say = await sayResponse.json();
+    assert.equal(say.model, 'cursorbuddy-local-control');
+    assert.equal(say.choices[0].message.content, 'Saying it now.');
+
+    const secondPollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=1`);
+    assert.equal(secondPollResponse.status, 200);
+    const secondPoll = await secondPollResponse.json();
+    assert.equal(secondPoll.commands.length, 1);
+    assert.equal(secondPoll.commands[0].action, 'say');
+    assert.equal(secondPoll.commands[0].text, 'hello');
   } finally {
     await bridge.close();
     await fs.rm(dir, { recursive: true, force: true });

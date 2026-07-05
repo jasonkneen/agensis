@@ -187,37 +187,24 @@ function fastLocalReply(payload, context) {
     }
     return "The local runtime is connected, but this surface has not published its page context yet. Reload the buddy or reopen the extension, then ask again.";
   }
-  if (/\b(show|guide|tour|walk|around|sections?|features?|important|highlight|what can i do|what should i do|help me)\b/i.test(normalized)) {
-    const title = String(context?.title || "").trim();
-    const url = String(context?.url || "").trim();
-    const site = title || url ? `You are on ${[title, url].filter(Boolean).join(" at ")}. ` : "";
-    const project = context?.project?.name || context?.project?.root
-      ? `I can use the linked project ${[context.project?.name, context.project?.root].filter(Boolean).join(" at ")}. `
-      : "";
-    return `${site}${project}I can answer questions about this page, open available buddy actions, or route a specific task through the local Agensis runtime.`;
-  }
   return "";
-}
-
-function genericFastAvatarReply(payload, context) {
-  const text = compactFastIntentText(payload, 180);
-  if (!text) return "";
-  if (/^[a-z;]{5,24}$/i.test(text) && !/\s/.test(text)) {
-    return "I did not catch that. Ask a page question, pick an action, or give me a specific task.";
-  }
-  const site = context?.title || context?.url
-    ? `I am connected${context.title ? ` on ${context.title}` : ""}${context.url ? ` at ${context.url}` : ""}.`
-    : "I am connected to the local Agensis runtime.";
-  return `${site} Ask a specific page question or use an available action.`;
 }
 
 function fastAvatarControl(payload) {
   const text = compactFastIntentText(payload);
   if (!text) return null;
-  if (/\b(wave|wave hello|say hi|say hello|make (him|the buddy|cursorbuddy) wave)\b/i.test(text)) {
+  if (/^(wave|wave hello)\b/i.test(text) || /\bmake (?:him|the buddy|cursorbuddy|avatar) wave\b/i.test(text)) {
     return {
       content: "Waving now.",
       command: { action: "wave", text: "Hi. How can I help?", source: "chat" },
+    };
+  }
+  const sayMatch = text.match(/^(?:say|speak)\s+(.{1,180})$/i)
+    || text.match(/\b(?:make|tell)\s+(?:him|the buddy|cursorbuddy|avatar)\s+(?:say|speak)\s+(.{1,180})$/i);
+  if (sayMatch?.[1]) {
+    return {
+      content: "Saying it now.",
+      command: { action: "say", text: sayMatch[1].trim(), source: "chat" },
     };
   }
   if (/^(stop|cancel|dismiss|close|hide|hush|be quiet)\b/i.test(text)) {
@@ -510,8 +497,6 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     }
     const fast = fastLocalReply(payload, activeContext);
     if (fast) return { content: fast, model: "cursorbuddy-local-fast", fast: true };
-    const generic = genericFastAvatarReply(payload, activeContext);
-    if (generic) return { content: generic, model: "cursorbuddy-local-fast", fast: true };
     return null;
   }
 
@@ -627,6 +612,7 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
           fastAvatarReplies: true,
           nativeCursorBuddyControl: true,
         },
+        latestControlId: controlQueue.at(-1)?.id || 0,
         connection: connection(),
         context: activeContext,
         endpoints: {
