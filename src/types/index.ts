@@ -360,6 +360,7 @@ export interface WorkspaceAgent {
   instructions?: string;
   tools?: string[];
   skills?: string[];
+  metadata?: Record<string, unknown> | null;
   handle?: string | null;
   model: string;
   run_mode?: 'builtin' | 'daemon';

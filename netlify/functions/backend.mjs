@@ -636,6 +636,7 @@ function publicWorkspaceAgent(row) {
     system_prompt: row.system_prompt || '',
     tools: parseJsonArray(row.tools),
     skills: parseJsonArray(row.skills),
+    metadata: parseJsonObject(row.metadata),
     model: row.model || 'auto',
     run_mode: row.run_mode === 'daemon' ? 'daemon' : 'builtin',
     permission_mode: normalizeAgentPermissionMode(row.permission_mode),
@@ -938,9 +939,9 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
   };
   const rows = await query(
     `insert into workspace_agents
-       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills, metadata)
      values
-       ($1, $2, $3, $4, $5, 'auto', 'daemon', $6, 'AI', '#ffe04a', true, $7, $8::jsonb, $9::jsonb)
+       ($1, $2, $3, $4, $5, 'auto', 'daemon', $6, 'AI', '#ffe04a', true, $7, $8::jsonb, $9::jsonb, $10::jsonb)
      returning *`,
     [
       connectionKey.workspace_id,
@@ -950,8 +951,9 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
       'You are CursorBuddy, a local-machine agent connected through Agensis. Route browser, desktop, and embedded-site context through the hub, use local source paths when authorized, and keep all actions logged.',
       normalizeAgentPermissionMode(claim.permissionMode || claim.permission_mode || 'default'),
       connectionKey.created_by || null,
-      JSON.stringify([{ type: 'runtime', name: 'cursorbuddy', metadata }]),
+      JSON.stringify(['cursorbuddy']),
       JSON.stringify(['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh']),
+      JSON.stringify({ cursorbuddyRuntime: metadata }),
     ],
   );
   return rows[0];
@@ -990,7 +992,11 @@ function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
   const existingTool = parseJsonArray(existingAgent?.tools).find(tool => (
     tool && tool.type === 'provider' && tool.name === 'cursorbuddy'
   ));
-  const previousMetadata = parseJsonObject(existingTool?.metadata);
+  const existingAgentMetadata = parseJsonObject(existingAgent?.metadata);
+  const previousMetadata = {
+    ...parseJsonObject(existingTool?.metadata),
+    ...parseJsonObject(existingAgentMetadata.cursorbuddyProvider),
+  };
   const merged = { ...previousMetadata, ...nextMetadata };
   if (!nextMetadata.websiteSource && previousMetadata.websiteSource) merged.websiteSource = previousMetadata.websiteSource;
   for (const key of ['page', 'client', 'manifest']) {
@@ -1035,6 +1041,7 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
            enabled = true,
            tools = $5::jsonb,
            skills = $6::jsonb,
+           metadata = $7::jsonb,
            updated_at = now(),
            version = coalesce(version, 0) + 1
        where id = $1
@@ -1044,8 +1051,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
         label,
         'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
         'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
-        JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata: mergedMetadata }]),
+        JSON.stringify(['cursorbuddy']),
         JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
+        JSON.stringify({ ...parseJsonObject(existingRows[0].metadata), cursorbuddyProvider: mergedMetadata }),
       ],
     );
     return rows[0];
@@ -1053,9 +1061,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
 
   const rows = await query(
     `insert into workspace_agents
-       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills)
+       (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, created_by, tools, skills, metadata)
      values
-       ($1, $2, $3, $4, $5, 'auto', 'builtin', 'default', 'CB', '#6fd6e8', true, $6, $7::jsonb, $8::jsonb)
+       ($1, $2, $3, $4, $5, 'auto', 'builtin', 'default', 'CB', '#6fd6e8', true, $6, $7::jsonb, $8::jsonb, $9::jsonb)
      returning *`,
     [
       workspaceId,
@@ -1064,8 +1072,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
       'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
       'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
       userId || null,
-      JSON.stringify([{ type: 'provider', name: 'cursorbuddy', metadata }]),
+      JSON.stringify(['cursorbuddy']),
       JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
+      JSON.stringify({ cursorbuddyProvider: metadata }),
     ],
   );
   return rows[0];
@@ -1215,6 +1224,7 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
@@ -1930,7 +1940,10 @@ async function route(req) {
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const agent = await ensureCursorBuddyProviderAgent({ workspaceId, userId, body });
     const providerTool = parseJsonArray(agent.tools).find(tool => tool?.type === 'provider' && tool?.name === 'cursorbuddy');
-    const providerMetadata = parseJsonObject(providerTool?.metadata);
+    const providerMetadata = {
+      ...parseJsonObject(providerTool?.metadata),
+      ...parseJsonObject(parseJsonObject(agent.metadata).cursorbuddyProvider),
+    };
     return json({
       data: {
         workspaceId,

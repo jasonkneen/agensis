@@ -1056,17 +1056,17 @@ function AgentRow({
         ) : (
           <ItemDescription>No description</ItemDescription>
         )}
-        <div className="min-w-0 flex flex-wrap gap-1">
-          <Badge variant="outline">@{agent.handle || agentHandle(agent.name)}</Badge>
+        <div className="agent-token-row min-w-0 flex flex-wrap gap-1">
+          <Badge variant="outline" className="agent-token-chip">@{agent.handle || agentHandle(agent.name)}</Badge>
           <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
           </Badge>
-          <Badge variant="outline">{displayModel(agent.model)}</Badge>
+          <Badge variant="outline" className="agent-token-chip">{displayModel(agent.model)}</Badge>
           <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
           {!agentActive && <Badge variant="secondary">deactivated</Badge>}
           {toolBadges.length > 0
-            ? toolBadges.map(tool => <Badge key={tool} variant="outline">{tool}</Badge>)
-            : <Badge variant="secondary">None</Badge>}
+            ? toolBadges.map(tool => <Badge key={tool} variant="outline" className="agent-token-chip">{tool}</Badge>)
+            : <Badge variant="secondary" className="agent-token-chip">None</Badge>}
         </div>
         {activeConnections.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
@@ -1893,8 +1893,8 @@ function AgentDetailTokenSection({ title, items, empty }: { title: string; items
   return (
     <AgentDetailSection title={title}>
       {items.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
-          {items.map(item => <Badge key={item} variant="outline" className="max-w-full truncate" title={item}>{item}</Badge>)}
+        <div className="agent-token-row flex flex-wrap gap-1.5">
+          {items.map(item => <Badge key={item} variant="outline" className="agent-token-chip" title={item}>{item}</Badge>)}
         </div>
       ) : (
         <div className="text-sm text-muted-foreground">{empty}</div>
@@ -1976,6 +1976,14 @@ function splitList(value: string) {
 function normalizeList(value: unknown): string[] {
   const out: string[] = [];
 
+  const objectToken = (input: Record<string, unknown>) => {
+    for (const key of ['label', 'name', 'id', 'type']) {
+      const token = input[key];
+      if (typeof token === 'string' && token.trim()) return token.trim();
+    }
+    return '';
+  };
+
   const visit = (input: unknown, depth: number) => {
     if (input == null) return;
     if (Array.isArray(input)) {
@@ -1983,7 +1991,8 @@ function normalizeList(value: unknown): string[] {
       return;
     }
     if (typeof input === 'object') {
-      Object.values(input).forEach(item => visit(item, depth));
+      const token = objectToken(input as Record<string, unknown>);
+      if (token) visit(token, depth);
       return;
     }
 

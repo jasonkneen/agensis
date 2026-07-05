@@ -2980,14 +2980,31 @@ function AgentProfileSidePanel({
 }
 
 function normalizeStringList(value: unknown): string[] {
+  const out: string[] = [];
+  const add = (item: unknown) => {
+    const text = String(item || '').trim();
+    if (text) out.push(text);
+  };
+  const objectToken = (input: Record<string, unknown>) => {
+    for (const key of ['label', 'name', 'id', 'type']) {
+      const token = input[key];
+      if (typeof token === 'string' && token.trim()) return token.trim();
+    }
+    return '';
+  };
   if (Array.isArray(value)) {
-    return value.map(item => String(item || '').trim()).filter(Boolean);
+    value.forEach(item => {
+      if (item && typeof item === 'object' && !Array.isArray(item)) add(objectToken(item as Record<string, unknown>));
+      else add(item);
+    });
+    return Array.from(new Set(out));
   }
   if (typeof value === 'string') {
     return value.split(',').map(item => item.trim()).filter(Boolean);
   }
   if (value && typeof value === 'object') {
-    return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
+    add(objectToken(value as Record<string, unknown>));
+    return Array.from(new Set(out));
   }
   return [];
 }
@@ -3017,9 +3034,9 @@ function AgentProfileChipSection({ title, empty, items }: { title: string; empty
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
       <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
       {items.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="agent-token-row flex flex-wrap gap-1.5">
           {items.map(item => (
-            <Badge key={item} variant="secondary" className="max-w-full truncate" title={item}>
+            <Badge key={item} variant="secondary" className="agent-token-chip" title={item}>
               {item}
             </Badge>
           ))}

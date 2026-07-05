@@ -36,6 +36,32 @@ function uniqueList(values: unknown[]) {
   return Array.from(new Set(values.map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean)));
 }
 
+function normalizeAgentTokens(value: unknown): string[] {
+  const out: string[] = [];
+  const add = (item: unknown) => {
+    const text = String(item || '').trim();
+    if (text) out.push(text);
+  };
+  const objectToken = (input: Record<string, unknown>) => {
+    for (const key of ['label', 'name', 'id', 'type']) {
+      const token = input[key];
+      if (typeof token === 'string' && token.trim()) return token.trim();
+    }
+    return '';
+  };
+  if (Array.isArray(value)) {
+    value.forEach(item => {
+      if (item && typeof item === 'object' && !Array.isArray(item)) add(objectToken(item as Record<string, unknown>));
+      else add(item);
+    });
+  } else if (typeof value === 'string') {
+    value.split(',').forEach(add);
+  } else if (value && typeof value === 'object') {
+    add(objectToken(value as Record<string, unknown>));
+  }
+  return uniqueList(out);
+}
+
 function formatVersion(version?: string | null) {
   return version ? ` (${version})` : '';
 }
@@ -89,14 +115,14 @@ export function useWorkspaceContext(sources: WorkspaceContextSources) {
           const details = [
             agent.description ? truncate(agent.description, 180) : null,
             agent.model ? `model: ${agent.model}` : null,
-            Array.isArray(agent.tools) && agent.tools.length ? `tools: ${agent.tools.join(', ')}` : null,
-            Array.isArray(agent.skills) && agent.skills.length ? `skills: ${agent.skills.join(', ')}` : null,
+            normalizeAgentTokens(agent.tools).length ? `tools: ${normalizeAgentTokens(agent.tools).join(', ')}` : null,
+            normalizeAgentTokens(agent.skills).length ? `skills: ${normalizeAgentTokens(agent.skills).join(', ')}` : null,
           ].filter(Boolean);
           return `- ${agent.name}${details.length ? ` - ${details.join('; ')}` : ''}`;
         }).join('\n')
       : null;
 
-    const agentSkillNames = uniqueList(agents.flatMap(agent => Array.isArray(agent.skills) ? agent.skills : []));
+    const agentSkillNames = uniqueList(agents.flatMap(agent => normalizeAgentTokens(agent.skills)));
     const detectedSkillLibraries = capabilities?.skills
       .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
       .map(skill => `- ${skill.label}: ${skill.count} entries at ${skill.path}`) || [];
@@ -110,7 +136,7 @@ export function useWorkspaceContext(sources: WorkspaceContextSources) {
       .map(skill => `- ${skill.label}: ${skill.count} commands at ${skill.path}`) || [];
     const commandContext = [...availableClis, ...commandLibraries].join('\n') || null;
 
-    const agentToolNames = uniqueList(agents.flatMap(agent => agent.tools || []));
+    const agentToolNames = uniqueList(agents.flatMap(agent => normalizeAgentTokens(agent.tools)));
     const availablePackages = capabilities?.packages
       .filter(pkg => pkg.available)
       .map(pkg => `- ${pkg.name}${formatVersion(pkg.version)}${pkg.path ? ` at ${pkg.path}` : ''}`) || [];

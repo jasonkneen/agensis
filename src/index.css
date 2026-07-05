@@ -1958,6 +1958,18 @@
   background: color-mix(in srgb, var(--agent-accent, var(--primary)) 10%, var(--card)) !important;
 }
 
+.agent-token-row {
+  overflow: hidden;
+}
+
+.agent-token-chip {
+  max-width: min(100%, 20rem);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-detail-avatar,
 .agent-profile-avatar {
   border: 0 !important;

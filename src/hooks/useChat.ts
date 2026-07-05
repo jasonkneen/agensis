@@ -780,9 +780,30 @@ function directAgentParticipantRecord(session: ChatSession | null | undefined): 
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+  const out: string[] = [];
+  const add = (item: unknown) => {
+    const text = String(item || '').trim();
+    if (text) out.push(text);
+  };
+  const objectToken = (input: Record<string, unknown>) => {
+    for (const key of ['label', 'name', 'id', 'type']) {
+      const token = input[key];
+      if (typeof token === 'string' && token.trim()) return token.trim();
+    }
+    return '';
+  };
+  if (Array.isArray(value)) {
+    value.forEach(item => {
+      if (item && typeof item === 'object' && !Array.isArray(item)) add(objectToken(item as Record<string, unknown>));
+      else add(item);
+    });
+    return Array.from(new Set(out));
+  }
   if (typeof value === 'string') return value.split(',').map(item => item.trim()).filter(Boolean);
-  if (value && typeof value === 'object') return Object.values(value).map(item => String(item || '').trim()).filter(Boolean);
+  if (value && typeof value === 'object') {
+    add(objectToken(value as Record<string, unknown>));
+    return Array.from(new Set(out));
+  }
   return [];
 }
 

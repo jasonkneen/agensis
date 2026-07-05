@@ -85,6 +85,7 @@ function makeDb() {
         const createdBy = runMode === 'builtin' ? params[5] : params[6];
         const tools = runMode === 'builtin' ? params[6] : params[7];
         const skills = runMode === 'builtin' ? params[7] : params[8];
+        const metadata = runMode === 'builtin' ? params[8] : params[9];
         const row = {
           id: `agent-${agents.length + 1}`,
           workspace_id: workspaceId,
@@ -97,6 +98,7 @@ function makeDb() {
           created_by: createdBy,
           tools,
           skills,
+          metadata,
           run_mode: runMode,
           enabled: true,
         };
@@ -107,7 +109,7 @@ function makeDb() {
         return agents.filter((row) => row.id === params[0]);
       }
       if (normalized.startsWith('update workspace_agents set name = coalesce')) {
-        const [id, label, description, systemPrompt, tools, skills] = params;
+        const [id, label, description, systemPrompt, tools, skills, metadata] = params;
         const row = agents.find((agent) => agent.id === id);
         if (!row) return [];
         Object.assign(row, {
@@ -120,6 +122,7 @@ function makeDb() {
           enabled: true,
           tools,
           skills,
+          metadata,
         });
         return [row];
       }
@@ -256,6 +259,8 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
     'claim creates one reusable CursorBuddy workspace agent per surface',
   );
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
+  assert.deepEqual(JSON.parse(db.agents[0].tools), ['cursorbuddy']);
+  assert.equal(JSON.parse(db.agents[0].metadata).cursorbuddyRuntime.cwd, '/Users/jkneen/Documents/GitHub/3Dpet');
 });
 
 test('CursorBuddy Provider registration creates a reusable built-in workspace agent', async () => {
@@ -320,10 +325,11 @@ test('CursorBuddy Provider registration creates a reusable built-in workspace ag
   assert.equal(db.agents[0].run_mode, 'builtin');
   assert.equal(db.agents[0].permission_mode, 'default');
   const tools = JSON.parse(db.agents[0].tools);
-  assert.equal(tools[0].type, 'provider');
-  assert.equal(tools[0].name, 'cursorbuddy');
-  assert.equal(tools[0].metadata.mode, 'built_in_provider');
-  assert.equal(tools[0].metadata.websiteSource, 'https://example.test/form');
+  assert.deepEqual(tools, ['cursorbuddy']);
+  assert.equal(tools.some((tool) => /https?:|example\.test|userAgent|websiteSource|intent|referrer/i.test(tool)), false);
+  const metadata = JSON.parse(db.agents[0].metadata).cursorbuddyProvider;
+  assert.equal(metadata.mode, 'built_in_provider');
+  assert.equal(metadata.websiteSource, 'https://example.test/form');
   assert.ok(db.calls.some((call) => call.normalized.includes('select * from workspace_agents where workspace_id = $1 and handle = $2')), 'provider setup looks for an existing built-in agent');
 });
 
