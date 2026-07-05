@@ -378,9 +378,10 @@
 
 :root[data-ui-theme="neo"][data-theme="dark"] {
   --neo-ink: #f4efe4;
-  /* Recessive warm taupe — visible on #141414/#1e1e1e, but quieter than the
-     bright border so the offset reads as a shadow, not a white echo. */
-  --neo-shadow-ink: #6b6258;
+  /* Recessive warm taupe at 30% alpha (70% transparent) — visible on
+     #141414/#1e1e1e, but quiet enough that the offset reads as a soft
+     structural ghost, not a second border. Tune the 30% for more/less. */
+  --neo-shadow-ink: color-mix(in srgb, #6b6258 30%, transparent);
   /* Softened border ink for dark. Full --neo-ink (near-white) outlines on
      near-black read as harsh glare — brutal wants confident borders, not a
      white cage. Mixing 48% ink with the theme's own paper lands a warm mid-tone

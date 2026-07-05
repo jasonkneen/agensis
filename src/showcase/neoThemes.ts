@@ -326,7 +326,12 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   // A flat translucent black was tried here and reverted — composited
   // over the near-black canvas most dark themes use, it reads as ~1.1:1
   // contrast (invisible) instead of a hard shadow.
-  const shadow = seed.shadow ?? (dark ? mix(ink, 34, `${paper} 66%`) : ink);
+  // On top of that base tone, dark shadows render at 30% alpha (70% transparent)
+  // so the offset reads as a soft structural ghost rather than a second border —
+  // this works where flat translucent *black* didn't, because the base tone is
+  // an ink-tinted light neutral that stays visible over near-black at low alpha.
+  const shadowTone = seed.shadow ?? (dark ? mix(ink, 34, `${paper} 66%`) : ink);
+  const shadow = dark ? mix(shadowTone, 30, 'transparent') : shadowTone;
   const dot = seed.dot ?? mix(ink, dark ? 15 : 13, 'transparent');
   const success = seed.success ?? (dark ? '#00e08a' : '#00c875');
   const warning = seed.warning ?? (dark ? '#ffd166' : '#f5d95f');
