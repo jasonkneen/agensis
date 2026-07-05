@@ -979,14 +979,18 @@ function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
 async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
   await ensureAgentRuntimeTables();
   const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
-  const resolvedScope = scope === 'domain' && domain ? 'domain' : 'workspace';
+  const resolvedScope = scope === 'domain' && domain ? 'domain' : scope === 'global' ? 'global' : 'workspace';
   metadata.providerScope = resolvedScope;
   const label = resolvedScope === 'domain'
     ? `CursorBuddy Provider ${domain}`
-    : 'CursorBuddy Provider Workspace';
+    : resolvedScope === 'global'
+      ? 'CursorBuddy Provider Global'
+      : 'CursorBuddy Provider Workspace';
   const handle = slugHandle(resolvedScope === 'domain'
     ? `cursorbuddy-provider-${domain.replace(/[^a-z0-9]+/g, '-')}`
-    : 'cursorbuddy-provider-workspace');
+    : resolvedScope === 'global'
+      ? 'cursorbuddy-provider-global'
+      : 'cursorbuddy-provider-workspace');
   const existingRows = await query(
     'select * from workspace_agents where workspace_id = $1 and handle = $2 limit 1',
     [workspaceId, handle],
@@ -1891,6 +1895,8 @@ async function route(req) {
     if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const agent = await ensureCursorBuddyProviderAgent({ workspaceId, userId, body });
+    const providerTool = parseJsonArray(agent.tools).find(tool => tool?.type === 'provider' && tool?.name === 'cursorbuddy');
+    const providerMetadata = parseJsonObject(providerTool?.metadata);
     return json({
       data: {
         workspaceId,
@@ -1899,6 +1905,8 @@ async function route(req) {
         agent_id: agent.id,
         provider: 'cursorbuddy',
         mode: 'built_in_provider',
+        providerScope: providerMetadata.providerScope || '',
+        domain: providerMetadata.domain || '',
         agent: publicWorkspaceAgent(agent),
       },
       error: null,
