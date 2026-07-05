@@ -27,7 +27,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
-export const AGENSIS_CLI_VERSION = "0.1.16";
+export const AGENSIS_CLI_VERSION = "0.1.17";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
@@ -432,6 +432,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
 }
 
 function normalizeConfig(raw) {
+  const cursorBuddyBridge = normalizeCursorBuddyBridgeFlag(raw.cursorBuddyBridge);
   const config = {
     url: String(raw.url || raw.baseUrl || process.env.AGENSIS_URL || "").trim(),
     token: String(raw.token || process.env.AGENSIS_TOKEN || "").trim(),
@@ -449,7 +450,8 @@ function normalizeConfig(raw) {
     once: Boolean(raw.once || process.env.AGENSIS_ONCE === "1"),
     exitOnOnce: Boolean(raw.exitOnOnce),
     onRegistered: typeof raw.onRegistered === "function" ? raw.onRegistered : null,
-    cursorBuddyBridge: raw.cursorBuddyBridge !== false && process.env.AGENSIS_CURSORBUDDY_BRIDGE !== "0",
+    primaryDaemon: Boolean(raw.primaryDaemon || process.env.AGENSIS_PRIMARY_DAEMON === "1"),
+    cursorBuddyBridge,
     cursorBuddyPort: Number(raw.cursorBuddyPort || process.env.AGENSIS_CURSORBUDDY_PORT || 8787),
     cursorBuddyModel: String(raw.cursorBuddyModel || process.env.AGENSIS_CURSORBUDDY_MODEL || "haiku-4.5").trim(),
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
@@ -463,6 +465,16 @@ function normalizeConfig(raw) {
   if (!config.agent) missing.push("--agent");
   if (missing.length) throw new Error(`Missing required option(s): ${missing.join(", ")}`);
   return config;
+}
+
+function normalizeCursorBuddyBridgeFlag(value) {
+  const env = process.env.AGENSIS_CURSORBUDDY_BRIDGE;
+  if (env !== undefined && env !== "") {
+    return !/^(0|false|off|no)$/i.test(String(env).trim());
+  }
+  if (value === undefined || value === null || value === "") return false;
+  if (typeof value === "boolean") return value;
+  return !/^(0|false|off|no)$/i.test(String(value).trim());
 }
 
 function socketUrl(baseUrl, token, config = {}) {

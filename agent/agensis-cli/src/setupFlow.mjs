@@ -112,7 +112,11 @@ export async function runSetupFlow(args = {}) {
           json(res, 403, { ok: false, error: "Setup state did not match" });
           return;
         }
-        const daemonArgs = validateDaemonArgs(payload);
+        const daemonArgs = {
+          ...validateDaemonArgs(payload),
+          primaryDaemon: true,
+          cursorBuddyBridge: args.cursorBuddyBridge !== false,
+        };
         await writeDaemonProfile(profile, daemonArgs);
         clearTimeout(timeout);
         json(res, 200, { ok: true, profile });

@@ -49,6 +49,10 @@ function parseArgs(argv) {
       args.lanListener = true;
       continue;
     }
+    if (key === "cursorbuddyBridge") {
+      args.cursorBuddyBridge = true;
+      continue;
+    }
     if (key === "noCursorbuddyBridge") {
       args.cursorBuddyBridge = false;
       continue;
@@ -99,6 +103,7 @@ Options:
   --timeout-ms <ms>       Kill a job after this time, default: 1800000
   --heartbeat-ms <ms>     Local terminal heartbeat interval, default: 15000
   --cursorbuddy-port <n>  Local CursorBuddy discovery/chat port, default: 8787
+  --cursorbuddy-bridge    Enable local CursorBuddy discovery/chat bridge
   --no-cursorbuddy-bridge Disable local CursorBuddy discovery/chat bridge
   --once                  Run one queued job then exit
   --lan                   Opt in to the agent-mesh LAN listener for direct
@@ -110,7 +115,8 @@ Options:
 }
 
 async function daemonArgsForConnect(args) {
-  const profile = daemonProfileName(args.profile || "default");
+  const hasExplicitProfile = args.profile !== undefined;
+  const profile = daemonProfileName(args.profile || (hasCompleteDaemonConnection(args) && args.handle ? args.handle : "default"));
   if (!hasDaemonConnectionMaterial(args)) {
     const cached = await readDaemonProfile(profile);
     if (!cached) throw new Error(daemonProfileSetupMessage(profile));
@@ -123,9 +129,11 @@ async function daemonArgsForConnect(args) {
 
   return {
     ...args,
+    cursorBuddyBridge: args.cursorBuddyBridge === true,
     onRegistered: async (config) => {
       await writeDaemonProfile(profile, config);
-      process.stdout.write(`[agensis] Saved daemon profile "${profile}". Restart with: agensis connect${profile === "default" ? "" : ` --profile ${profile}`}\n`);
+      const restart = hasExplicitProfile || profile !== "default" ? `agensis connect --profile ${profile}` : "agensis connect";
+      process.stdout.write(`[agensis] Saved daemon profile "${profile}". Restart with: ${restart}\n`);
     },
   };
 }
@@ -145,6 +153,7 @@ async function main() {
       throw new Error(`Unknown buddy command "${args.subcommand || ""}". Use "agensis buddy connect --key <cbk_...>".`);
     }
     const daemonArgs = await claimCursorBuddyConnectionKey(args);
+    daemonArgs.cursorBuddyBridge = args.cursorBuddyBridge === true;
     daemonArgs.exitOnOnce = true;
     await runAgensisDaemon(daemonArgs);
     if (daemonArgs.once) process.exit(0);

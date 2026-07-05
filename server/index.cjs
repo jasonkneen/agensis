@@ -1525,17 +1525,19 @@ function mergeLocalCodexPets(openPetsPayload) {
   };
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode }) {
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, profile = null }) {
   const resolvedModel = resolveAnthropicModel(model);
   const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
   const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
   const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
+  const profileName = profile === false ? '' : slugHandle(profile || handle || displayName || 'agent');
   if (resolvedPermissionMode === 'yolo') {
     commandPermissionArgs.push('--no-sandbox');
   }
   const portableCommand = [
     'agensis',
     'connect',
+    ...(profileName ? ['--profile', shellQuote(profileName)] : []),
     '--url',
     shellQuote(baseUrl),
     '--token',
@@ -1562,7 +1564,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 // must be restarted with the new one) and flips run_mode to 'daemon' so a connected
 // daemon takes over from the builtin server runner. Authorization is the caller's
 // responsibility (HTTP route enforces manage role; MCP scopes by workspace token).
-async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null } = {}) {
+async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null } = {}) {
   const id = String(agentId || '').trim();
   if (!id) throw new Error('agentId is required');
   const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
@@ -1603,6 +1605,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
     name: updateRows[0]?.name || agent.name,
     model: resolvedModel,
     permissionMode: resolvedPermissionMode,
+    profile: profile === null ? resolvedHandle : profile,
   });
   return {
     agent: updateRows[0],
@@ -5313,6 +5316,7 @@ function createApp() {
         model: req.body?.model || agent.model,
         permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
         baseUrl,
+        profile: false,
       });
       const daemonArgs = {
         command: 'connect',

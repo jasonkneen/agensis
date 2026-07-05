@@ -20,6 +20,7 @@ const PROFILE_KEYS = [
   "heartbeatMs",
   "maxConcurrency",
   "lanListener",
+  "primaryDaemon",
   "cursorBuddyBridge",
   "cursorBuddyPort",
 ];
@@ -116,6 +117,9 @@ export async function writeDaemonProfile(name = DEFAULT_PROFILE, config = {}, op
 
 export function mergeDaemonProfile(profile, args = {}) {
   const merged = { ...profile, ...pickedDaemonArgs(args), command: "connect" };
+  if (args.cursorBuddyBridge === undefined && !merged.primaryDaemon) {
+    merged.cursorBuddyBridge = false;
+  }
   if (args.once !== undefined) merged.once = args.once;
   if (args.exitOnOnce !== undefined) merged.exitOnOnce = args.exitOnOnce;
   return merged;

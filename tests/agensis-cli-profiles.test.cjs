@@ -81,6 +81,55 @@ test('daemon profile merge lets one-off flags override the cached profile', asyn
   assert.equal(merged.once, true);
 });
 
+test('daemon profile merge disables CursorBuddy bridge for non-primary saved agents', async () => {
+  const { mergeDaemonProfile } = await loadModule();
+  const merged = mergeDaemonProfile({
+    url: 'http://localhost:61447',
+    token: 'aga_secret_token',
+    workspace: 'ws-1',
+    agent: 'coder-agent',
+    handle: 'coder',
+    name: 'Coder',
+    cursorBuddyBridge: true,
+  }, {});
+
+  assert.equal(merged.cursorBuddyBridge, false);
+});
+
+test('daemon profile merge preserves CursorBuddy bridge for the primary daemon', async () => {
+  const { mergeDaemonProfile } = await loadModule();
+  const merged = mergeDaemonProfile({
+    url: 'http://localhost:61447',
+    token: 'aga_secret_token',
+    workspace: 'ws-1',
+    agent: 'main-agent',
+    handle: 'ozbook-m3-4-local',
+    name: 'OzBook-M3-4.local',
+    primaryDaemon: true,
+    cursorBuddyBridge: true,
+  }, {});
+
+  assert.equal(merged.primaryDaemon, true);
+  assert.equal(merged.cursorBuddyBridge, true);
+});
+
+test('explicit CursorBuddy bridge flag can opt a non-primary daemon back in', async () => {
+  const { mergeDaemonProfile } = await loadModule();
+  const merged = mergeDaemonProfile({
+    url: 'http://localhost:61447',
+    token: 'aga_secret_token',
+    workspace: 'ws-1',
+    agent: 'coder-agent',
+    handle: 'coder',
+    name: 'Coder',
+    cursorBuddyBridge: false,
+  }, {
+    cursorBuddyBridge: true,
+  });
+
+  assert.equal(merged.cursorBuddyBridge, true);
+});
+
 test('bare connect setup message points users at Agensis setup first', async () => {
   const { daemonProfileSetupMessage } = await loadModule();
   const message = daemonProfileSetupMessage('default');
