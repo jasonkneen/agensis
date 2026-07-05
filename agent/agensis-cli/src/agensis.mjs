@@ -272,7 +272,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
           send(ws, {
             action: "agent_heartbeat",
             ...(caps ? { capabilitiesHash: caps.capabilitiesHash, memoryHash: caps.memoryHash } : {}),
-            metadata: heartbeatMetadata(config, queue, agentStatus),
+            metadata: heartbeatMetadata(config, queue, agentStatus, cursorBuddyBridge?.getContext?.()),
           });
         });
       }, config.heartbeatMs);
@@ -757,7 +757,6 @@ async function buildPrompt(config, job) {
   const heartbeatSection = heartbeatMd
     ? `Heartbeat (recurring instructions — edit at ${heartbeatMdPath(config)}):\n${heartbeatMd}`
     : "";
-  const cursorBuddyControl = cursorBuddyControlInstructions(config);
   const sections = [
     "You are running as a local agensis workspace agent daemon.",
     `Workspace: ${job.workspaceId || config.workspace}`,
@@ -773,8 +772,8 @@ async function buildPrompt(config, job) {
     skills ? `Enabled skills:\n${skills}` : "",
     'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
     `Status file: you can report your own working status by overwriting the JSON file at ${statusFilePath(config)} with e.g. {"status":"working","note":"short summary of what you're doing"}. Your daemon reads it on its next heartbeat (~${Math.round((config.heartbeatMs || 15000) / 1000)}s) and surfaces it on your agent card. Optional and best-effort — overwrite the whole file, keep note under ~200 chars, and there's no need to clear it.`,
-    cursorBuddyControl,
     heartbeatSection,
+    "Identity boundary: answer as the workspace agent named above. Do not adopt the identity of any browser, desktop, avatar, pet, widget, or UI surface.",
     "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),
@@ -943,7 +942,7 @@ function permissionFlagsForMode(permissionMode) {
 // Build the heartbeat metadata sent to the server, folding in the agent's self-declared
 // status (from status.json) when present. The server merges this object into the stored
 // connection row, so agentStatus/agentNote surface on the agent card for free.
-function heartbeatMetadata(config, queue, agentStatus) {
+function heartbeatMetadata(config, queue, agentStatus, cursorBuddyContext = null) {
   const metadata = {
     busy: queue.active() > 0,
     queueSize: queue.size(),
@@ -951,11 +950,64 @@ function heartbeatMetadata(config, queue, agentStatus) {
     model: config.model,
     permissionMode: config.permissionMode,
     permissionFlags: permissionFlagsForMode(config.permissionMode),
+    daemon: {
+      runtime: "agensis-cli",
+      version: AGENSIS_CLI_VERSION,
+      pid: process.pid,
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      host: os.hostname(),
+      cwd: config.cwd,
+    },
   };
+  if (cursorBuddyContext && typeof cursorBuddyContext === "object") {
+    metadata.cursorBuddy = sanitizeCursorBuddyContextForHeartbeat(cursorBuddyContext);
+  }
   if (agentStatus?.status) metadata.agentStatus = agentStatus.status;
   if (agentStatus?.note) metadata.agentNote = agentStatus.note;
   if (agentStatus?.status || agentStatus?.note) metadata.agentStatusAt = new Date().toISOString();
   return metadata;
+}
+
+function sanitizeCursorBuddyContextForHeartbeat(context = {}) {
+  const client = context.client && typeof context.client === "object" ? context.client : {};
+  const page = context.page && typeof context.page === "object" ? context.page : {};
+  const runtime = context.runtime && typeof context.runtime === "object" ? context.runtime : {};
+  const manifest = context.manifest && typeof context.manifest === "object" ? context.manifest : {};
+  const project = context.project && typeof context.project === "object" ? context.project : {};
+  return {
+    surface: String(context.surface || "").slice(0, 80),
+    instanceId: String(context.instanceId || "").slice(0, 140),
+    url: String(context.url || "").slice(0, 2048),
+    title: String(context.title || "").slice(0, 300),
+    origin: String(page.origin || "").slice(0, 300),
+    hostname: String(page.hostname || "").slice(0, 200),
+    pathname: String(page.pathname || "").slice(0, 500),
+    visibilityState: String(page.visibilityState || "").slice(0, 40),
+    focused: page.focused === true,
+    userAgent: String(client.userAgent || "").slice(0, 500),
+    platform: String(client.platform || "").slice(0, 120),
+    language: String(client.language || "").slice(0, 80),
+    viewport: client.viewport && typeof client.viewport === "object" ? {
+      width: Number(client.viewport.width) || 0,
+      height: Number(client.viewport.height) || 0,
+      devicePixelRatio: Number(client.viewport.devicePixelRatio) || 0,
+    } : null,
+    runtimeMarker: String(runtime.marker || "").slice(0, 120),
+    extensionMarker: String(runtime.extensionMarker || "").slice(0, 120),
+    manifest: {
+      name: String(manifest.name || "").slice(0, 120),
+      version: String(manifest.version || "").slice(0, 80),
+      source: String(manifest.source || "").slice(0, 500),
+    },
+    project: {
+      name: String(project.name || "").slice(0, 120),
+      root: String(project.root || "").slice(0, 500),
+      agent: String(project.agent || "").slice(0, 80),
+    },
+    updatedAt: String(context.updatedAt || "").slice(0, 80),
+  };
 }
 
 function applyAgentConfig(config, agent) {

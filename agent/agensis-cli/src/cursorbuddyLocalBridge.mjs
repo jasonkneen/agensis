@@ -179,9 +179,12 @@ function fastLocalReply(payload, context) {
   for (const pattern of FAST_CHAT_PATTERNS) {
     if (pattern.re.test(normalized)) return pattern.text;
   }
-  if (/^(what site|where am i|what page)\b/i.test(normalized) && context?.url) {
-    const title = context.title ? `${context.title} at ` : "";
-    return `You are on ${title}${context.url}.`;
+  if (/^(what site|where am i|what page|which site|where are you|current url)\b/i.test(normalized)) {
+    if (context?.url) {
+      const title = context.title ? `${context.title} at ` : "";
+      return `You are on ${title}${context.url}.`;
+    }
+    return "The local runtime is connected, but this surface has not published its page context yet. Reload the buddy or reopen the extension, then ask again.";
   }
   if (/\b(show|guide|tour|walk|around|sections?|features?|important|highlight|what can i do|what should i do|help me)\b/i.test(normalized)) {
     const title = String(context?.title || "").trim();
@@ -193,6 +196,18 @@ function fastLocalReply(payload, context) {
     return `${site}${project}I can answer questions about this page, open available buddy actions, or route a specific task through the local Agensis runtime.`;
   }
   return "";
+}
+
+function genericFastAvatarReply(payload, context) {
+  const text = compactFastIntentText(payload, 180);
+  if (!text) return "";
+  if (/^[a-z;]{5,24}$/i.test(text) && !/\s/.test(text)) {
+    return "I did not catch that. Ask a page question, pick an action, or give me a specific task.";
+  }
+  const site = context?.title || context?.url
+    ? `I am connected${context.title ? ` on ${context.title}` : ""}${context.url ? ` at ${context.url}` : ""}.`
+    : "I am connected to the local Agensis runtime.";
+  return `${site} Ask a specific page question or use an available action.`;
 }
 
 function fastAvatarControl(payload) {
@@ -443,6 +458,8 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     }
     const fast = fastLocalReply(payload, activeContext);
     if (fast) return { content: fast, model: "cursorbuddy-local-fast", fast: true };
+    const generic = genericFastAvatarReply(payload, activeContext);
+    if (generic) return { content: generic, model: "cursorbuddy-local-fast", fast: true };
     return null;
   }
 
@@ -638,14 +655,18 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
           url: String(payload.url || "").slice(0, 2048),
           title: String(payload.title || "").slice(0, 300),
           surface: String(payload.surface || "").slice(0, 80),
+          instanceId: String(payload.instanceId || "").slice(0, 140),
           workspaceId: String(payload.workspaceId || config.workspace || "").slice(0, 120),
           agentId: String(payload.agentId || config.agent || "").slice(0, 120),
+          runtime: payload.runtime && typeof payload.runtime === "object" ? payload.runtime : null,
+          page: payload.page && typeof payload.page === "object" ? payload.page : null,
+          client: payload.client && typeof payload.client === "object" ? payload.client : null,
           project: payload.project && typeof payload.project === "object" ? payload.project : null,
           manifest: payload.manifest && typeof payload.manifest === "object" ? payload.manifest : null,
           selection: payload.selection && typeof payload.selection === "object" ? payload.selection : null,
           updatedAt: new Date().toISOString(),
         };
-        record("context", { url: activeContext.url, surface: activeContext.surface });
+        record("context", { url: activeContext.url, surface: activeContext.surface, instanceId: activeContext.instanceId });
         json(res, 200, { ok: true, context: activeContext });
       } catch (error) {
         record("context_error", { error: String(error?.message || error) });
@@ -721,6 +742,9 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     url: endpointOrigin(actualPort),
     close() {
       return new Promise((resolve) => server.close(() => resolve()));
+    },
+    getContext() {
+      return activeContext;
     },
   };
 }
