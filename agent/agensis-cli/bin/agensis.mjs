@@ -154,7 +154,8 @@ async function main() {
       throw new Error(`Unknown buddy command "${args.subcommand || ""}". Use "agensis buddy connect --key <cbk_...>".`);
     }
     const daemonArgs = await claimCursorBuddyConnectionKey(args);
-    daemonArgs.cursorBuddyBridge = args.cursorBuddyBridge === true;
+    daemonArgs.cursorBuddyBridge = args.cursorBuddyBridge !== false;
+    daemonArgs.cursorBuddyRuntime = true;
     daemonArgs.exitOnOnce = true;
     await runAgensisDaemon(daemonArgs);
     if (daemonArgs.once) process.exit(0);

@@ -50,6 +50,7 @@ function normalizeDaemonArgs(args, data, baseUrl, cwd) {
     model: data.model || args.model,
     permissionMode: data.permissionMode || data.permission_mode || args.permissionMode,
     cwd: args.cwd || cwd,
+    cursorBuddyRuntime: true,
   };
 }
 
@@ -113,6 +114,7 @@ function mergeCachedDaemonArgs(cached, args, cwd) {
     if (args[key] !== undefined) merged[key] = args[key];
   }
   if (!merged.cwd) merged.cwd = cwd;
+  merged.cursorBuddyRuntime = true;
   return merged;
 }
 

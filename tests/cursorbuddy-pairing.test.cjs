@@ -190,11 +190,42 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
     assert.equal(claimBody.data.workspaceId, 'ws-1');
     assert.equal(claimBody.data.agentId, 'agent-1');
     assert.match(claimBody.data.token, /^aga_/);
-    assert.match(claimBody.data.command, /agensis connect --url/);
+    assert.match(claimBody.data.command, /agensis connect .*--url/);
     assert.equal(claimBody.data.connectionKey.status, 'claimed');
+
+    const secondCreateResponse = await fetch(`${baseUrl}/backend/cursorbuddy/connection-keys`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        name: 'MacBook primary runtime',
+        surface: 'Local CLI',
+        scope: 'machine',
+      }),
+    });
+    assert.equal(secondCreateResponse.status, 200);
+    const secondCreateBody = await secondCreateResponse.json();
+    const secondClaimResponse = await fetch(`${baseUrl}/backend/cursorbuddy/connection-keys/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        key: secondCreateBody.data.key,
+        baseUrl,
+        host: 'OzBook',
+        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        runtimeKind: 'agensis-cli',
+      }),
+    });
+    assert.equal(secondClaimResponse.status, 200);
+    const secondClaimBody = await secondClaimResponse.json();
+    assert.equal(secondClaimBody.data.agentId, 'agent-1', 'same CursorBuddy surface reuses the same workspace agent');
   });
 
-  assert.ok(db.calls.some((call) => call.normalized.includes('insert into workspace_agents')), 'claim creates a daemon workspace agent');
+  assert.equal(
+    db.calls.filter((call) => call.normalized.includes('insert into workspace_agents')).length,
+    1,
+    'claim creates one reusable CursorBuddy workspace agent per surface',
+  );
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
 });
 

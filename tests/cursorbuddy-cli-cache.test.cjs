@@ -75,6 +75,7 @@ test('CursorBuddy buddy connect caches a successful daemon claim locally', async
     assert.equal(daemonArgs.handle, 'cursorbuddy-website-avatar');
     assert.equal(daemonArgs.name, 'mac');
     assert.equal(daemonArgs.cwd, '/Users/jkneen/Documents/GitHub/3Dpet');
+    assert.equal(daemonArgs.cursorBuddyRuntime, true);
     assert.equal(daemonArgs.key, undefined);
 
     const cachePath = cursorBuddyKeyCachePath(connectionKey, { homedir: home });
@@ -82,6 +83,7 @@ test('CursorBuddy buddy connect caches a successful daemon claim locally', async
     assert.equal(stat.mode & 0o777, 0o600);
     const cached = JSON.parse(await fs.readFile(cachePath, 'utf8'));
     assert.equal(cached.daemonArgs.token, 'aga_claimed_token');
+    assert.equal(cached.daemonArgs.cursorBuddyRuntime, true);
     assert.equal(cached.daemonArgs.key, undefined);
   } finally {
     await fs.rm(home, { recursive: true, force: true });
@@ -127,6 +129,7 @@ test('CursorBuddy buddy connect restarts from cache when a key was already claim
     assert.equal(daemonArgs.cwd, '/Users/jkneen/Documents/GitHub/3Dpet');
     assert.equal(daemonArgs.model, 'claude-fable-5');
     assert.equal(daemonArgs.permissionMode, 'yolo');
+    assert.equal(daemonArgs.cursorBuddyRuntime, true);
   } finally {
     await fs.rm(home, { recursive: true, force: true });
   }

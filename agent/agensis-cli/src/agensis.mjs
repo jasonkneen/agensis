@@ -272,7 +272,12 @@ export async function runAgensisDaemon(rawConfig = {}) {
           send(ws, {
             action: "agent_heartbeat",
             ...(caps ? { capabilitiesHash: caps.capabilitiesHash, memoryHash: caps.memoryHash } : {}),
-            metadata: heartbeatMetadata(config, queue, agentStatus, cursorBuddyBridge?.getContext?.()),
+            metadata: heartbeatMetadata(
+              config,
+              queue,
+              agentStatus,
+              canHandleCursorBuddyControlJobs(config) ? cursorBuddyBridge?.getContext?.() : null,
+            ),
           });
         });
       }, config.heartbeatMs);
@@ -451,6 +456,7 @@ function normalizeConfig(raw) {
     exitOnOnce: Boolean(raw.exitOnOnce),
     onRegistered: typeof raw.onRegistered === "function" ? raw.onRegistered : null,
     primaryDaemon: Boolean(raw.primaryDaemon || process.env.AGENSIS_PRIMARY_DAEMON === "1"),
+    cursorBuddyRuntime: Boolean(raw.cursorBuddyRuntime || process.env.AGENSIS_CURSORBUDDY_RUNTIME === "1"),
     cursorBuddyBridge,
     cursorBuddyPort: Number(raw.cursorBuddyPort || process.env.AGENSIS_CURSORBUDDY_PORT || 8787),
     cursorBuddyModel: String(raw.cursorBuddyModel || process.env.AGENSIS_CURSORBUDDY_MODEL || "haiku-4.5").trim(),
@@ -622,6 +628,11 @@ function cursorBuddyControlResultText(intent) {
   return "Sent CursorBuddy control command.";
 }
 
+function canHandleCursorBuddyControlJobs(config = {}) {
+  if (config.cursorBuddyBridge === false) return false;
+  return Boolean(config.cursorBuddyRuntime || config.primaryDaemon);
+}
+
 async function runCursorBuddyControlJob(config, job, intent, started) {
   const model = "cursorbuddy-control";
   const permissionMode = "native";
@@ -668,7 +679,7 @@ async function runAgentJob(config, job, { signal }) {
   const started = Date.now();
   log(`Starting job ${job.id}`);
   const cursorBuddyIntent = parseCursorBuddyControlIntent(job.prompt);
-  if (cursorBuddyIntent && config.cursorBuddyBridge !== false) {
+  if (cursorBuddyIntent && canHandleCursorBuddyControlJobs(config)) {
     await runCursorBuddyControlJob(config, job, cursorBuddyIntent, started);
     if (config.once) {
       log("One-shot CursorBuddy control job complete; exiting.");
@@ -794,7 +805,7 @@ async function buildPrompt(config, job) {
 }
 
 function cursorBuddyControlInstructions(config) {
-  if (config.cursorBuddyBridge === false) return "";
+  if (!canHandleCursorBuddyControlJobs(config)) return "";
   const port = Number(config.cursorBuddyPort || 8787);
   const base = `http://127.0.0.1:${port}`;
   return [

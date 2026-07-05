@@ -1318,6 +1318,13 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
   const handleBase = scope === 'domain' && connectionKey?.domain
     ? `cursorbuddy-${connectionKey.domain.replace(/[^a-z0-9]+/g, '-')}`
     : `cursorbuddy-${surface.replace(/_/g, '-')}`;
+  const handle = slugHandle(handleBase);
+  const existingRows = await getDb().unsafe(
+    'select * from workspace_agents where workspace_id = $1 and handle = $2 limit 1',
+    [connectionKey.workspace_id, handle],
+  );
+  if (existingRows[0]) return existingRows[0];
+
   const metadata = {
     runtime: 'cursorbuddy',
     surface,
@@ -1335,7 +1342,7 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
     [
       connectionKey.workspace_id,
       label,
-      slugHandle(handleBase),
+      handle,
       `CursorBuddy ${surface.replace(/_/g, ' ')} runtime connected through Agensis.`,
       'You are CursorBuddy, a local-machine agent connected through Agensis. Route browser, desktop, and embedded-site context through the hub, use local source paths when authorized, and keep all actions logged.',
       normalizeAgentPermissionMode(claim.permissionMode || claim.permission_mode || 'default'),

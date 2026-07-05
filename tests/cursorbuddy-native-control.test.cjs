@@ -61,12 +61,24 @@ test('daemon does not mistake discussion about control for a control command', a
 
 test('CursorBuddy daemon instructions do not route avatar control through curl', async () => {
   const { cursorBuddyControlInstructions } = await loadTestApi();
-  const instructions = cursorBuddyControlInstructions({ cursorBuddyPort: 8787 });
+  const instructions = cursorBuddyControlInstructions({ cursorBuddyPort: 8787, cursorBuddyRuntime: true });
 
   assert.match(instructions, /handled by this daemon before the coding CLI starts/);
   assert.doesNotMatch(instructions, /\bcurl\b/);
   assert.doesNotMatch(instructions, /from the shell/);
   assert.doesNotMatch(instructions, /approval prompts/);
+});
+
+test('normal coding agents do not advertise CursorBuddy native control', async () => {
+  const { cursorBuddyControlInstructions } = await loadTestApi();
+  const instructions = cursorBuddyControlInstructions({
+    cursorBuddyBridge: true,
+    cursorBuddyRuntime: false,
+    primaryDaemon: false,
+    cursorBuddyPort: 8787,
+  });
+
+  assert.equal(instructions, '');
 });
 
 test('daemon reuses an existing CursorBuddy bridge on port collisions', async () => {
@@ -116,6 +128,7 @@ test('daemon job runner queues CursorBuddy control before spawning the coding CL
       timeoutMs: 5000,
       heartbeatMs: 1000,
       cursorBuddyBridge: true,
+      cursorBuddyRuntime: true,
       cursorBuddyPort: bridge.port,
       once: false,
     }, {
@@ -138,5 +151,68 @@ test('daemon job runner queues CursorBuddy control before spawning the coding CL
   } finally {
     await bridge.close();
     await require('node:fs/promises').rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('normal coding agent does not turn avatar requests into CursorBuddy controls', async () => {
+  const [{ startCursorBuddyLocalBridge }, { __test }] = await Promise.all([
+    import(pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/cursorbuddyLocalBridge.mjs')).href),
+    import(moduleUrl),
+  ]);
+  const fs = require('node:fs/promises');
+  const os = require('node:os');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agensis-coder-control-'));
+  const scriptPath = path.join(dir, 'fake-cli.mjs');
+  await fs.writeFile(scriptPath, "process.stdout.write('coder stayed coder');\n");
+  const bridge = await startCursorBuddyLocalBridge({
+    url: 'https://agensis.io',
+    token: 'aga_test',
+    workspace: 'ws-1',
+    agent: 'agent-1',
+    handle: 'coder',
+    name: 'Coder',
+    cwd: dir,
+    codingCmd: `${process.execPath} ${scriptPath}`,
+    model: 'test-model',
+    timeoutMs: 5000,
+    heartbeatMs: 1000,
+  }, { port: 0 });
+  const ws = {
+    readyState: 1,
+    sent: [],
+    send(data) {
+      this.sent.push(JSON.parse(data));
+    },
+  };
+
+  try {
+    await __test.runAgentJob({
+      cwd: dir,
+      codingCmd: `${process.execPath} ${scriptPath}`,
+      model: 'test-model',
+      permissionMode: 'default',
+      timeoutMs: 5000,
+      heartbeatMs: 1000,
+      cursorBuddyBridge: true,
+      cursorBuddyRuntime: false,
+      primaryDaemon: false,
+      cursorBuddyPort: bridge.port,
+      once: false,
+    }, {
+      id: 'job-2',
+      prompt: 'Can you make him wave?',
+      ws,
+    }, { signal: null });
+
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const poll = await pollResponse.json();
+    assert.equal(poll.commands.length, 0);
+
+    const result = ws.sent.find((message) => message.action === 'agent_job_result');
+    assert.equal(result?.model, 'test-model');
+    assert.equal(result?.response, 'coder stayed coder');
+  } finally {
+    await bridge.close();
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });
