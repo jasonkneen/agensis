@@ -20,13 +20,16 @@ const html = await assertFile('index.html');
 const css = await assertFile('styles.css');
 const app = await assertFile('app.js');
 const config = await assertFile('config.js');
+const oldAgentCopy = ['field', 'agents'].join(' ');
 
 const checks = [
   [html.includes('<title>CursorBuddy'), 'homepage title is missing'],
   [html.includes('id="signup"'), 'signup form is missing'],
   [html.includes('data-account-surface'), 'account surface contract is missing'],
+  [!html.includes(oldAgentCopy), 'homepage still contains old agent copy'],
   [css.includes('--cb-yellow'), 'neo-brutal token CSS is missing'],
   [app.includes('CursorBuddyAppConfig'), 'runtime config read is missing'],
+  [config.includes('"siteUrl": "https://cursorbuddy.app"'), 'generated config is missing production siteUrl'],
   [config.includes('backendBaseUrl'), 'generated config is missing backendBaseUrl'],
 ];
 

@@ -9,7 +9,8 @@ mounted as another route in the main Agensis app.
 - Package directory: `cursorbuddy`.
 - Build command: `npm run build`.
 - Publish directory: `dist`.
-- Production domain: attach the CursorBuddy custom domain to this Netlify site.
+- Production domain: attach `https://cursorbuddy.app` to this Netlify site.
+- Generated runtime config defaults `siteUrl` to `https://cursorbuddy.app`.
 
 The site proxies `/backend/*` to `https://agensis.io/backend/*` by default, so
 it can use Agensis auth, account, workspace, billing, and agent APIs without a

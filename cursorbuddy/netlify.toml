@@ -4,6 +4,8 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  CURSORBUDDY_SITE_URL = "https://cursorbuddy.app"
+  CURSORBUDDY_AGENSIS_HOME_URL = "https://agensis.io"
 
 [[redirects]]
   from = "/backend/*"
