@@ -161,6 +161,7 @@ function compactFastIntentText(payload, maxLength = 280) {
     /\b(make (?:him|the buddy|cursorbuddy|avatar) wave|wave(?: hello)?|say hi|say hello)\b/i,
     /\b(what site|which site|what page|where am i|where are you|current url)\b/i,
     /\b(are you connected|connected|working|online|there)\b/i,
+    /\b(show|guide|tour|walk|around|sections?|features?|important|highlight|what can i do|what should i do|help me)\b/i,
     /\b(open|show|bring up|get back|display)\b.{0,80}\b(prompt|bubble|dialog|panel|options|menu)\b/i,
     /\b(hide|hush|close|dismiss|clear|stop|cancel|be quiet)\b.{0,80}\b(bubble|prompt|dialog|panel|options|menu)?\b/i,
     /^(hi|hello|hey|yo|sup)\b/i,
@@ -181,6 +182,15 @@ function fastLocalReply(payload, context) {
   if (/^(what site|where am i|what page)\b/i.test(normalized) && context?.url) {
     const title = context.title ? `${context.title} at ` : "";
     return `You are on ${title}${context.url}.`;
+  }
+  if (/\b(show|guide|tour|walk|around|sections?|features?|important|highlight|what can i do|what should i do|help me)\b/i.test(normalized)) {
+    const title = String(context?.title || "").trim();
+    const url = String(context?.url || "").trim();
+    const site = title || url ? `You are on ${[title, url].filter(Boolean).join(" at ")}. ` : "";
+    const project = context?.project?.name || context?.project?.root
+      ? `I can use the linked project ${[context.project?.name, context.project?.root].filter(Boolean).join(" at ")}. `
+      : "";
+    return `${site}${project}I can answer questions about this page, open available buddy actions, or route a specific task through the local Agensis runtime.`;
   }
   return "";
 }

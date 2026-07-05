@@ -69,6 +69,15 @@ test('CursorBuddy daemon instructions do not route avatar control through curl',
   assert.doesNotMatch(instructions, /approval prompts/);
 });
 
+test('daemon reuses an existing CursorBuddy bridge on port collisions', async () => {
+  const source = await require('node:fs/promises').readFile(path.join(repoRoot, 'agent/agensis-cli/src/agensis.mjs'), 'utf8');
+
+  assert.match(source, /function isAddressInUseError\(error\)/);
+  assert.match(source, /function probeExistingCursorBuddyBridge\(port\)/);
+  assert.match(source, /CursorBuddy local bridge already running on http:\/\/127\.0\.0\.1:\$\{config\.cursorBuddyPort\}/);
+  assert.doesNotMatch(source, /EADDRINUSE[\s\S]{0,220}CursorBuddy local bridge unavailable/);
+});
+
 test('daemon job runner queues CursorBuddy control before spawning the coding CLI', async () => {
   const [{ startCursorBuddyLocalBridge }, { __test }] = await Promise.all([
     import(pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/cursorbuddyLocalBridge.mjs')).href),

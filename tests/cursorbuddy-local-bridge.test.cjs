@@ -108,6 +108,30 @@ test('CursorBuddy local bridge answers trivial avatar chat without spawning the 
     const chat = await chatResponse.json();
     assert.equal(chat.model, 'cursorbuddy-local-fast');
     assert.match(chat.choices[0].message.content, /cursor/);
+
+    const contextResponse = await fetch(`${bridge.url}/cursorbuddy/context`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        url: 'https://example.com/features',
+        title: 'Example Features',
+        surface: 'extension',
+        project: { name: 'Example Project', root: dir },
+      }),
+    });
+    assert.equal(contextResponse.status, 200);
+
+    const guideResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'Guide me through this page. What should I do?' }] }),
+    });
+    assert.equal(guideResponse.status, 200);
+    const guide = await guideResponse.json();
+    assert.equal(guide.model, 'cursorbuddy-local-fast');
+    assert.match(guide.choices[0].message.content, /Example Features/);
+    assert.match(guide.choices[0].message.content, /Example Project/);
+    assert.match(guide.choices[0].message.content, /local Agensis runtime/);
   } finally {
     await bridge.close();
     await fs.rm(dir, { recursive: true, force: true });

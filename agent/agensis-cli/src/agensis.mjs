@@ -203,13 +203,25 @@ export async function runAgensisDaemon(rawConfig = {}) {
   });
 
   if (config.cursorBuddyBridge) {
-    cursorBuddyBridge = await startCursorBuddyLocalBridge(config, {
-      port: config.cursorBuddyPort,
-      log,
-    }).catch((error) => {
-      log(`CursorBuddy local bridge unavailable: ${error?.message || error}`);
-      return null;
-    });
+    try {
+      cursorBuddyBridge = await startCursorBuddyLocalBridge(config, {
+        port: config.cursorBuddyPort,
+        log,
+      });
+    } catch (error) {
+      if (isAddressInUseError(error)) {
+        const existing = await probeExistingCursorBuddyBridge(config.cursorBuddyPort);
+        if (existing?.ok) {
+          const pid = existing.pid ? ` pid ${existing.pid}` : "";
+          log(`CursorBuddy local bridge already running on http://127.0.0.1:${config.cursorBuddyPort}${pid}`);
+        } else {
+          log(`CursorBuddy local bridge port ${config.cursorBuddyPort} is in use but did not answer health`);
+        }
+      } else {
+        log(`CursorBuddy local bridge unavailable: ${error?.message || error}`);
+      }
+      cursorBuddyBridge = null;
+    }
   }
 
   process.once("SIGINT", stop);
@@ -1169,12 +1181,36 @@ function slugHandle(value) {
     .slice(0, 64);
 }
 
+function isAddressInUseError(error) {
+  return error?.code === "EADDRINUSE" || /\bEADDRINUSE\b/.test(String(error?.message || error));
+}
+
+async function probeExistingCursorBuddyBridge(port) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 700);
+  try {
+    const response = await fetch(`http://127.0.0.1:${Number(port || 8787)}/cursorbuddy/health`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) return null;
+    return payload;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function log(message) {
   process.stderr.write(`[agensis] ${message}\n`);
 }
 
 export const __test = {
   cursorBuddyControlInstructions,
+  isAddressInUseError,
+  probeExistingCursorBuddyBridge,
   parseCursorBuddyControlIntent,
   runAgentJob,
 };
