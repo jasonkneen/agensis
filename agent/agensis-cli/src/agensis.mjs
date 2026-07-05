@@ -27,7 +27,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
-export const AGENSIS_CLI_VERSION = "0.1.17";
+export const AGENSIS_CLI_VERSION = "0.1.21";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
@@ -41,6 +41,8 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let queue = null;
   let lastSocketErrorCode = '';
   let cursorBuddyBridge = null;
+  let socketRegistered = false;
+  let registeredConnection = null;
 
   // --- Agent-mesh (F1/F5/F6/F7): opt-in LAN listener + peer ticket/list plumbing for
   // direct daemon-to-daemon job handoff. Every human<->agent turn stays hub-relayed
@@ -53,6 +55,17 @@ export async function runAgensisDaemon(rawConfig = {}) {
   const peerTicketWaiters = new Map(); // targetAgentId -> [{ resolve, reject }]
   let peerListWaiters = [];
   const currentReach = () => lanReach;
+  const cursorBuddyBridgeConnection = () => ({
+    connected: socketRegistered && Boolean(config.cursorBuddyRuntime),
+    mode: config.cursorBuddyRuntime ? "agensis-cli" : "agensis-cli-unclaimed",
+    agentId: registeredConnection?.agentId || registeredConnection?.agent_id || config.agent,
+    workspaceId: registeredConnection?.workspaceId || registeredConnection?.workspace_id || config.workspace,
+    agensisUrl: config.url,
+    handle: registeredConnection?.handle || config.handle,
+    name: registeredConnection?.name || config.name,
+    cwd: config.cwd,
+    updatedAt: new Date().toISOString(),
+  });
 
   const startLanListener = () => {
     if (lanServer || !config.lanListener) return;
@@ -207,6 +220,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
       cursorBuddyBridge = await startCursorBuddyLocalBridge(config, {
         port: config.cursorBuddyPort,
         log,
+        connectionProvider: cursorBuddyBridgeConnection,
       });
     } catch (error) {
       if (isAddressInUseError(error)) {
@@ -235,6 +249,8 @@ export async function runAgensisDaemon(rawConfig = {}) {
     ws = new WebSocket(url);
 
     ws.on("open", () => {
+      socketRegistered = false;
+      registeredConnection = null;
       log(`Connected. Registering @${config.handle || "agent"} from ${config.cwd}`);
       // F14: authenticate via a first frame so the aga_ token never rides the WS
       // URL query (proxy/access logs). Server path (2) verifies agent tokens here.
@@ -288,6 +304,8 @@ export async function runAgensisDaemon(rawConfig = {}) {
       const message = parseMessage(data);
       if (!message) return;
       if (message.type === "agent_registered") {
+        socketRegistered = true;
+        registeredConnection = message.connection || message.agent || null;
         applyAgentConfig(config, message.agent);
         log(`Registered as ${message.connection?.name || config.name} on ${message.connection?.host || os.hostname()}`);
         if (config.onRegistered) {
@@ -358,6 +376,13 @@ export async function runAgensisDaemon(rawConfig = {}) {
         log(`Server rejected request: ${message.message || "unknown error"}`);
         return;
       }
+      if (message.type === "agent_disabled") {
+        socketRegistered = false;
+        registeredConnection = null;
+        log(`Agent disabled by Agensis: ${message.reason || "deactivated"}`);
+        stop();
+        return;
+      }
       if (message.type === "agent_job" && message.job?.id) {
         const result = queue.enqueue({ ...message.job, key: message.job.id, lane: laneKeyForJob(message.job), ws });
         if (result.accepted) {
@@ -371,6 +396,8 @@ export async function runAgensisDaemon(rawConfig = {}) {
     });
 
     ws.on("close", (code, reason) => {
+      socketRegistered = false;
+      registeredConnection = null;
       log(`Socket closed (${code || "no-code"}${reason ? `: ${reason}` : ""})`);
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);

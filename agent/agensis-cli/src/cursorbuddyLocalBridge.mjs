@@ -8,20 +8,6 @@ const DEFAULT_CURSORBUDDY_CONVERSATION_MODEL = "claude-haiku-4-5";
 const CURSORBUDDY_KEY_RE = /^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/;
 const CONTROL_QUEUE_LIMIT = 100;
 const CONTROL_ACTIONS = new Set(["say", "wave", "hush", "open", "choose"]);
-const FAST_CHAT_PATTERNS = [
-  {
-    re: /^(hi|hello|hey|yo|sup)\b/i,
-    text: "Hi. I am connected to your local Agensis runtime.",
-  },
-  {
-    re: /\b(are you connected|connected|working|online|there)\b/i,
-    text: "Yes. The local Agensis runtime is connected and I can receive page context.",
-  },
-  {
-    re: /\b(tell me )?(a )?joke\b/i,
-    text: "Why did the cursor refuse to get lost? It always had a pointer.",
-  },
-];
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -174,26 +160,11 @@ function compactFastIntentText(payload, maxLength = 280) {
   return raw.slice(-maxLength).trim();
 }
 
-function fastLocalReply(payload, context) {
-  const normalized = compactFastIntentText(payload);
-  if (!normalized) return "";
-  for (const pattern of FAST_CHAT_PATTERNS) {
-    if (pattern.re.test(normalized)) return pattern.text;
-  }
-  if (/^(what site|where am i|what page|which site|where are you|current url)\b/i.test(normalized)) {
-    if (context?.url) {
-      const title = context.title ? `${context.title} at ` : "";
-      return `You are on ${title}${context.url}.`;
-    }
-    return "The local runtime is connected, but this surface has not published its page context yet. Reload the buddy or reopen the extension, then ask again.";
-  }
-  return "";
-}
-
 function fastAvatarControl(payload) {
   const text = compactFastIntentText(payload);
   if (!text) return null;
-  if (/^(wave|wave hello)\b/i.test(text) || /\bmake (?:him|the buddy|cursorbuddy|avatar) wave\b/i.test(text)) {
+  const namesAvatar = /\b(?:him|the buddy|cursorbuddy|cursor buddy|avatar|buddy|pet|character)\b/i.test(text);
+  if (namesAvatar && /\bwave(?: hello)?\b/i.test(text)) {
     return {
       content: "Waving now.",
       command: { action: "wave", text: "Hi. How can I help?", source: "chat" },
@@ -433,9 +404,9 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     return entry;
   };
 
-  const connection = () => claimedConnection || ({
-    connected: true,
-    mode: "agensis-cli",
+  const fallbackConnection = () => ({
+    connected: Boolean(config.cursorBuddyRuntime),
+    mode: config.cursorBuddyRuntime ? "agensis-cli" : "agensis-cli-unclaimed",
     agentId: config.agent,
     workspaceId: config.workspace,
     agensisUrl: config.url,
@@ -444,6 +415,34 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     cwd: config.cwd,
     updatedAt: new Date().toISOString(),
   });
+
+  const runtimeConnection = () => {
+    if (typeof options.connectionProvider !== "function") return null;
+    try {
+      const value = options.connectionProvider();
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      return {
+        ...fallbackConnection(),
+        ...value,
+        connected: value.connected === true,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const connection = () => {
+    const live = runtimeConnection();
+    if (live?.connected === false) return live;
+    if (claimedConnection) return {
+      ...fallbackConnection(),
+      ...(live || {}),
+      ...claimedConnection,
+      connected: true,
+      updatedAt: live?.updatedAt || claimedConnection.updatedAt,
+    };
+    return live || fallbackConnection();
+  };
 
   function sanitizeControlCommand(payload = {}) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
@@ -495,8 +494,6 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
       }
       return { content: control.content, model: "cursorbuddy-local-control", fast: true };
     }
-    const fast = fastLocalReply(payload, activeContext);
-    if (fast) return { content: fast, model: "cursorbuddy-local-fast", fast: true };
     return null;
   }
 
@@ -524,7 +521,7 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     const id = `agensis-cursorbuddy-${Date.now()}`;
     const fast = fastBridgeResult(payload);
     if (fast) {
-      const model = fast.model || "cursorbuddy-local-fast";
+      const model = fast.model || "cursorbuddy-local-control";
       sseSend(res, completionChunk(id, model, fast.content));
       sseSend(res, completionChunk(id, model, "", "stop"));
       sseSend(res, "[DONE]");
@@ -609,7 +606,7 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
         capabilities: {
           chatStream: true,
           controlStream: true,
-          fastAvatarReplies: true,
+          fastAvatarReplies: false,
           nativeCursorBuddyControl: true,
         },
         latestControlId: controlQueue.at(-1)?.id || 0,
@@ -770,7 +767,10 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
     if (req.method === "POST" && url.pathname.endsWith("/chat/completions")) {
       try {
         const payload = JSON.parse((await readBody(req)) || "{}");
-        record("chat_request", { messages: Array.isArray(payload.messages) ? payload.messages.length : 0, model: payload.model || config.model });
+        record("chat_request", {
+          messages: Array.isArray(payload.messages) ? payload.messages.length : 0,
+          model: requestedModelForLocalBridge(payload.model, cursorBuddyConversationModel(config)),
+        });
         if (payload.stream === true) {
           sseStart(res);
           const result = await streamComplete(payload, res);
