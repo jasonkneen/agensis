@@ -7,6 +7,7 @@ const src = path.join(root, 'src');
 const dist = path.join(root, 'dist');
 
 const config = {
+  siteUrl: process.env.CURSORBUDDY_SITE_URL || 'https://cursorbuddy.app',
   backendBaseUrl: process.env.CURSORBUDDY_BACKEND_BASE_URL || '',
   bundleBaseUrl: process.env.CURSORBUDDY_BUNDLE_BASE_URL || '',
   agensisHomeUrl: process.env.CURSORBUDDY_AGENSIS_HOME_URL || 'https://agensis.io',
