@@ -13,6 +13,26 @@ interface BroadcastCanvasDeletePayload {
   id: string;
 }
 
+// Canvas objects enter React state from four places: the initial fetch, the
+// realtime broadcast upsert, and the DB INSERT/UPDATE change feeds. Every one
+// of them must produce a well-formed object, because `points` is a JSONB column
+// and legacy/corrupt rows can return it as a JSON string or a non-array value.
+// A non-array `points` reaching PenStroke (`points.map(...)`) or the hit-testing
+// destructure throws "map is not a function" during render and — with no error
+// boundary above the canvas — blanks the entire app on load. Coerce here at the
+// single ingestion boundary so every downstream consumer sees a real array.
+export function normalizeCanvasObject(raw: CanvasObject): CanvasObject {
+  const next = { ...raw, layer_id: raw.layer_id || 'base' } as CanvasObject;
+  if (!Array.isArray(next.points)) {
+    let coerced: unknown = next.points;
+    if (typeof coerced === 'string') {
+      try { coerced = JSON.parse(coerced); } catch { coerced = null; }
+    }
+    next.points = Array.isArray(coerced) ? (coerced as CanvasObject['points']) : [];
+  }
+  return next;
+}
+
 export function useCanvasObjects(workspaceId: string | null, userId?: string, activeLayerId = 'base') {
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [groups, setGroups] = useState<CanvasGroup[]>([]);
@@ -38,10 +58,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         .order('created_at', { ascending: true }),
     ]);
     if (objRes.data) {
-      const normalized = (objRes.data as CanvasObject[]).map(obj => ({
-        ...obj,
-        layer_id: obj.layer_id || 'base',
-      }));
+      const normalized = (objRes.data as CanvasObject[]).map(normalizeCanvasObject);
       setObjects(normalized);
       const maxZ = normalized.reduce((m: number, o: { z_index: number }) => Math.max(m, o.z_index), 0);
       nextZRef.current = maxZ + 1;
@@ -81,7 +98,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         ({ payload }: BroadcastPayload<BroadcastCanvasObjectPayload>) => {
           const { senderId, object } = payload;
           if (senderId && userId && senderId === userId) return;
-          const normalized = { ...object, layer_id: object.layer_id || 'base' } as CanvasObject;
+          const normalized = normalizeCanvasObject(object);
           setObjects(prev => {
             const index = prev.findIndex(o => o.id === normalized.id);
             if (index === -1) return [...prev, normalized];
@@ -105,7 +122,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         { event: 'INSERT', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
         (payload: DbChangePayload<CanvasObject>) => {
           if (!payload.new) return;
-          const obj = { ...payload.new, layer_id: payload.new.layer_id || 'base' } as CanvasObject;
+          const obj = normalizeCanvasObject(payload.new);
           setObjects(prev => {
             if (prev.find(o => o.id === obj.id)) return prev;
             return [...prev, obj];
@@ -117,7 +134,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         { event: 'UPDATE', schema: 'public', table: 'canvas_objects', filter: `workspace_id=eq.${workspaceId}` },
         (payload: DbChangePayload<CanvasObject>) => {
           if (!payload.new) return;
-          const obj = { ...payload.new, layer_id: payload.new.layer_id || 'base' } as CanvasObject;
+          const obj = normalizeCanvasObject(payload.new);
           setObjects(prev => prev.map(o => o.id === obj.id ? { ...o, ...obj } : o));
         }
       )

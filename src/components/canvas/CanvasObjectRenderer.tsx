@@ -711,7 +711,7 @@ function PenStroke({
   selected: boolean;
   attachHighlight: boolean;
 }) {
-  const pts = obj.points || [];
+  const pts = Array.isArray(obj.points) ? obj.points : [];
   if (pts.length < 2) return null;
 
   const absPoints = pts.map(p => ({
