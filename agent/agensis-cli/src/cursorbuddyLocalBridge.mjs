@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import os from "node:os";
 import process from "node:process";
@@ -8,13 +9,60 @@ const DEFAULT_CURSORBUDDY_CONVERSATION_MODEL = "claude-haiku-4-5";
 const CURSORBUDDY_KEY_RE = /^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/;
 const CONTROL_QUEUE_LIMIT = 100;
 const CONTROL_ACTIONS = new Set(["say", "wave", "hush", "open", "choose"]);
+const BRIDGE_AUTH_HEADER = "x-agensis-bridge-secret";
+
+/** Generate a high-entropy per-session bridge secret. */
+export function createBridgeAuthSecret() {
+  return `cbs_${crypto.randomBytes(24).toString("base64url")}`;
+}
+
+/**
+ * Extract the presented bridge secret from a request.
+ * Accepts Authorization: Bearer <secret> or x-agensis-bridge-secret.
+ */
+export function extractBridgeAuthSecret(req) {
+  const headers = req?.headers || {};
+  const direct = String(headers[BRIDGE_AUTH_HEADER] || headers[BRIDGE_AUTH_HEADER.toLowerCase()] || "").trim();
+  if (direct) return direct;
+  const auth = String(headers.authorization || headers.Authorization || "").trim();
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+/** Constant-time comparison of presented secret to the session secret. */
+export function bridgeRequestAuthorized(req, expectedSecret) {
+  const expected = String(expectedSecret || "");
+  const presented = extractBridgeAuthSecret(req);
+  if (!expected || !presented) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function resolveBridgeAuthSecret(config = {}, options = {}) {
+  const fromOptions = String(options.authSecret || "").trim();
+  if (fromOptions) return fromOptions;
+  const fromConfig = String(config.cursorBuddyBridgeSecret || "").trim();
+  if (fromConfig) return fromConfig;
+  const fromEnv = String(process.env.AGENSIS_CURSORBUDDY_BRIDGE_SECRET || "").trim();
+  if (fromEnv) return fromEnv;
+  return createBridgeAuthSecret();
+}
+
+/** Paths that may be hit without the per-session secret (discovery only). */
+function isPublicBridgePath(method, pathname) {
+  if (method === "OPTIONS") return true;
+  if (method === "GET" && pathname === "/cursorbuddy/health") return true;
+  return false;
+}
 
 function json(res, status, body) {
   res.writeHead(status, {
     "content-type": "application/json",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, authorization",
+    "access-control-allow-headers": "content-type, authorization, x-agensis-bridge-secret",
   });
   res.end(JSON.stringify(body));
 }
@@ -26,7 +74,7 @@ function sseStart(res) {
     connection: "keep-alive",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, authorization",
+    "access-control-allow-headers": "content-type, authorization, x-agensis-bridge-secret",
     "x-accel-buffering": "no",
   });
 }
@@ -424,6 +472,7 @@ async function claimCursorBuddyConnection(config, payload = {}, fetchImpl = glob
 
 export async function startCursorBuddyLocalBridge(config, options = {}) {
   const port = Number(options.port ?? config.cursorBuddyPort ?? process.env.AGENSIS_CURSORBUDDY_PORT ?? DEFAULT_PORT);
+  const authSecret = resolveBridgeAuthSecret(config, options);
   const bootedAt = new Date().toISOString();
   const events = [];
   const controlQueue = [];
@@ -617,13 +666,20 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
   const server = http.createServer(async (req, res) => {
     res.setHeader("access-control-allow-origin", "*");
     res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-    res.setHeader("access-control-allow-headers", "content-type, authorization");
+    res.setHeader("access-control-allow-headers", "content-type, authorization, x-agensis-bridge-secret");
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
       return;
     }
     const url = new URL(req.url || "/", endpointOrigin(actualPort || DEFAULT_PORT));
+
+    // Per-session secret required for every mutating / privileged route.
+    // Health stays public so port discovery and "is the bridge up?" probes work.
+    if (!isPublicBridgePath(req.method, url.pathname) && !bridgeRequestAuthorized(req, authSecret)) {
+      json(res, 401, { ok: false, error: "Authentication required", code: "bridge_auth_required" });
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/cursorbuddy/health") {
       const origin = endpointOrigin(actualPort);
@@ -637,6 +693,8 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
         host: os.hostname(),
         pid: process.pid,
         bootedAt,
+        authRequired: true,
+        authHeader: BRIDGE_AUTH_HEADER,
         stream: true,
         streaming: true,
         supportsStreaming: true,
@@ -851,6 +909,9 @@ export async function startCursorBuddyLocalBridge(config, options = {}) {
   return {
     port: actualPort,
     url: endpointOrigin(actualPort),
+    /** Per-session secret required on mutating routes (Authorization Bearer or x-agensis-bridge-secret). */
+    secret: authSecret,
+    authHeader: BRIDGE_AUTH_HEADER,
     close() {
       return new Promise((resolve) => server.close(() => resolve()));
     },

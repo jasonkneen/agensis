@@ -219,9 +219,14 @@ export async function runAgensisDaemon(rawConfig = {}) {
     try {
       cursorBuddyBridge = await startCursorBuddyLocalBridge(config, {
         port: config.cursorBuddyPort,
+        authSecret: config.cursorBuddyBridgeSecret || undefined,
         log,
         connectionProvider: cursorBuddyBridgeConnection,
       });
+      // Keep the secret on config so native control POSTs can authenticate.
+      if (cursorBuddyBridge?.secret) {
+        config.cursorBuddyBridgeSecret = cursorBuddyBridge.secret;
+      }
     } catch (error) {
       if (isAddressInUseError(error)) {
         const existing = await probeExistingCursorBuddyBridge(config.cursorBuddyPort);
@@ -492,6 +497,7 @@ function normalizeConfig(raw) {
     cursorBuddyRuntime: Boolean(raw.cursorBuddyRuntime || process.env.AGENSIS_CURSORBUDDY_RUNTIME === "1"),
     cursorBuddyBridge,
     cursorBuddyPort: Number(raw.cursorBuddyPort || process.env.AGENSIS_CURSORBUDDY_PORT || 8787),
+    cursorBuddyBridgeSecret: String(raw.cursorBuddyBridgeSecret || process.env.AGENSIS_CURSORBUDDY_BRIDGE_SECRET || "").trim(),
     cursorBuddyModel: String(raw.cursorBuddyModel || process.env.AGENSIS_CURSORBUDDY_MODEL || "haiku-4.5").trim(),
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
     // Default OFF — a daemon never opens a network listener unless asked to.
@@ -650,9 +656,15 @@ function parseCursorBuddyControlIntent(message) {
 async function postCursorBuddyControlCommand(config, intent) {
   const port = Number(config.cursorBuddyPort || 8787);
   const url = `http://127.0.0.1:${port}/cursorbuddy/control`;
+  const secret = String(config.cursorBuddyBridgeSecret || process.env.AGENSIS_CURSORBUDDY_BRIDGE_SECRET || "").trim();
+  const headers = { "content-type": "application/json" };
+  if (secret) {
+    headers.authorization = `Bearer ${secret}`;
+    headers["x-agensis-bridge-secret"] = secret;
+  }
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(intent),
   });
   let body = null;

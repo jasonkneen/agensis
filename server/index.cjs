@@ -11,7 +11,14 @@ const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
-const { ALLOWED_TABLES, VERSIONED_TABLES, JSON_COLUMNS_BY_TABLE } = require('../shared/backend-core.cjs');
+const {
+  ALLOWED_TABLES,
+  VERSIONED_TABLES,
+  JSON_COLUMNS_BY_TABLE,
+  WORKSPACE_SCOPED_TABLES: SHARED_WORKSPACE_SCOPED_TABLES,
+  stripPrivilegedDbValues,
+  storagePathBelongsToWorkspace,
+} = require('../shared/backend-core.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -292,14 +299,9 @@ async function userCanAccessWorkspace(userId, workspaceId) {
 }
 
 // Tables whose rows are scoped to a workspace and therefore subject to
-// membership checks. Maps table -> how to find its workspace id.
-const WORKSPACE_SCOPED_TABLES = new Set([
-  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
-  'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
-  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations', 'activity_events', 'workspace_members',
-  'agent_memory_files', 'memory_file_comments', 'thread_items',
-]);
+// membership checks. Single-sourced from shared/backend-core.cjs so Netlify
+// and Fly cannot drift (parity test also locks the set).
+const WORKSPACE_SCOPED_TABLES = SHARED_WORKSPACE_SCOPED_TABLES;
 
 const WORKSPACE_ROLE_CAPABILITIES = {
   owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
@@ -1408,7 +1410,7 @@ function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
 }
 
 async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
-  const { surface, scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
+  const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
   const resolvedScope = scope === 'domain' && domain ? 'domain' : scope === 'global' ? 'global' : 'workspace';
   metadata.providerScope = resolvedScope;
   const label = resolvedScope === 'domain'
@@ -3683,6 +3685,23 @@ function resolveStoragePath(storagePath) {
   return fullPath;
 }
 
+/** Ensure a stored path both lives under the upload root and under the file's workspace. */
+function resolveStoragePathForWorkspace(workspaceId, storagePath) {
+  if (!storagePathBelongsToWorkspace(workspaceId, storagePath)) {
+    throw forbidden('Invalid file storage path for this workspace');
+  }
+  const fullPath = resolveStoragePath(storagePath);
+  // Post-resolve containment under <uploadRoot>/<workspaceId>/ (or exact dir).
+  // Catches any residual separator/encoding tricks that the string check missed.
+  const root = path.resolve(getUploadRoot());
+  const workspaceRoot = path.resolve(root, String(workspaceId));
+  const withSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
+  if (fullPath !== workspaceRoot && !fullPath.startsWith(withSep)) {
+    throw forbidden('Invalid file storage path for this workspace');
+  }
+  return fullPath;
+}
+
 // ============================================================
 // File upload content-type hardening (plan 002).
 //
@@ -3843,6 +3862,9 @@ function validFileSourceRoot(value) {
   const candidate = String(value || '').trim();
   if (!candidate) return '';
   const resolved = path.resolve(candidate);
+  // Same allowlist gate as workspaceProjectRoot — never list arbitrary host dirs
+  // just because a daemon reported them as cwd.
+  if (!isWithinAllowedProjectRoot(resolved)) return '';
   try {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
     return resolved;
@@ -4155,6 +4177,19 @@ async function detectCapabilities(workspacePath = '') {
 
 async function inspectProjectPath(inputPath) {
   const resolved = path.resolve(String(inputPath || ''));
+  // Multi-tenant hosts leave AGENSIS_ALLOW_PROJECT_FS unset — refuse host probes.
+  if (!projectFsAllowed() || !isWithinAllowedProjectRoot(resolved)) {
+    return {
+      path: resolved,
+      exists: false,
+      isDirectory: false,
+      gitRoot: '',
+      gitBranch: '',
+      gitRemote: '',
+      projectKind: '',
+      denied: true,
+    };
+  }
   const exists = fs.existsSync(resolved);
   const result = {
     path: resolved,
@@ -5026,7 +5061,12 @@ function createApp() {
       const file = rows[0];
       if (!file?.storage_path) return jsonError(res, 404, new Error('File content is not stored'));
       await enforceWorkspaceRole(req.userId, file.workspace_id, 'read');
-      const fullPath = resolveStoragePath(file.storage_path);
+      let fullPath;
+      try {
+        fullPath = resolveStoragePathForWorkspace(file.workspace_id, file.storage_path);
+      } catch (pathError) {
+        return jsonError(res, pathError.status || 403, pathError);
+      }
       if (!fs.existsSync(fullPath)) return jsonError(res, 404, new Error('File content is missing on disk'));
       // Never let the browser sniff/execute uploaded content as something
       // other than the Content-Type we explicitly set below.
@@ -6481,14 +6521,16 @@ function createApp() {
       const { table, values, returning = '*', single = false } = req.body || {};
       const tableSql = ensureTable(table);
       await enforceDbOperationAccess(req.userId, table, 'insert', { values });
-      const rows = (Array.isArray(values) ? values : [values]).map(row => (
-        table === 'workspaces' && row && typeof row === 'object'
-          ? { ...row, user_id: req.userId }
-          : row
-      ));
+      const rows = (Array.isArray(values) ? values : [values]).map(row => {
+        if (!row || typeof row !== 'object') return row;
+        let next = stripPrivilegedDbValues(table, row);
+        if (table === 'workspaces') next = { ...next, user_id: req.userId };
+        return next;
+      });
       if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
 
       const columns = Object.keys(rows[0]);
+      if (columns.length === 0) return jsonError(res, 400, new Error('Insert values are required'));
       const params = [];
       const valueSql = rows.map((row) => `(${columns.map((column) => {
         return bindDbParam(params, table, column, row[column]);
@@ -6533,13 +6575,21 @@ function createApp() {
       const tableSql = ensureTable(table);
       if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
       await enforceDbOperationAccess(req.userId, table, 'update', { filters, values });
+      const safeValues = stripPrivilegedDbValues(table, values);
+      const keys = Object.keys(safeValues);
+      if (keys.length === 0 && !(VERSIONED_TABLES.has(table) && values.version == null)) {
+        return jsonError(res, 400, new Error('No updatable fields provided'));
+      }
 
       const params = [];
-      const setParts = Object.keys(values).map((column) => {
-        return `${quoteIdent(column)} = ${bindDbParam(params, table, column, values[column])}`;
+      const setParts = keys.map((column) => {
+        return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
       });
       if (VERSIONED_TABLES.has(table) && values.version == null) {
         setParts.push('"version" = COALESCE("version", 0) + 1');
+      }
+      if (setParts.length === 0) {
+        return jsonError(res, 400, new Error('No updatable fields provided'));
       }
       const setClause = setParts.join(', ');
       const where = buildWhereClause(filters, params);
@@ -6591,7 +6641,12 @@ function createApp() {
     try {
       const body = req.body || {};
       const workspaceId = settingsWorkspaceIdFromRequest(req);
-      if (workspaceId) await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      // App-level (platform) secret writes are not available to ordinary users —
+      // only workspace-scoped secrets with manage capability.
+      if (!workspaceId) {
+        return jsonError(res, 403, new Error('App-level secret management is not available to users'));
+      }
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const updates = {};
       for (const key of MANAGED_SECRET_KEYS) {
         // Only apply keys that were explicitly provided. An empty string
@@ -6602,8 +6657,7 @@ function createApp() {
         return jsonError(res, 400, new Error('No managed keys provided'));
       }
       for (const [key, value] of Object.entries(updates)) {
-        if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
-        else await setSettingValue(key, value);
+        await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
       }
       const keys = await listManagedSecrets(workspaceId);
       res.json({ data: { keys }, error: null });
@@ -6774,6 +6828,14 @@ module.exports = {
     resetTestState,
     roleHasWorkspaceCapability,
     setTestDb,
+    stripPrivilegedDbValues,
+    storagePathBelongsToWorkspace,
+    resolveStoragePathForWorkspace,
+    inspectProjectPath,
+    validFileSourceRoot,
+    projectFsAllowed,
+    isWithinAllowedProjectRoot,
+    WORKSPACE_SCOPED_TABLES,
     verifyToken,
     // Token revocation cache — exposed so tests can assert the cache is real
     // (not a no-op) without hardcoding its TTL.

@@ -82,11 +82,14 @@ const JSON_COLUMNS_BY_TABLE = {
 
 // Tables whose rows are scoped to a workspace and therefore subject to
 // membership/role checks. Maps table -> how to find its workspace id.
+// MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
   'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
   'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
   'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'agent_connections', 'agent_jobs', 'activity_events', 'workspace_members',
+  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
+  'activity_events', 'workspace_members',
+  'agent_memory_files', 'memory_file_comments', 'thread_items',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -116,6 +119,7 @@ const DB_TABLE_ACCESS = {
   document_versions: DEFAULT_TABLE_ACCESS,
   workspace_agents: DEFAULT_TABLE_ACCESS,
   agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
   activity_events: DEFAULT_TABLE_ACCESS,
   document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
@@ -124,13 +128,70 @@ const DB_TABLE_ACCESS = {
   agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
   // Kept in sync with server/index.cjs DB_TABLE_ACCESS so a table added to this
   // runtime's ALLOWED_TABLES can't silently fall through to the default
-  // read/write mapping (L1, 2026-07 review). Harmless while these tables aren't
-  // in ALLOWED_TABLES here — consulted only once a table is actually exposed.
+  // read/write mapping (L1, 2026-07 review).
   agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
   memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
   thread_items: DEFAULT_TABLE_ACCESS,
 };
+
+// Columns that must never be set via generic /backend/db/* write by non-dedicated
+// routes (editors could otherwise approve MCP agents, rewrite storage paths, etc.).
+const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
+  workspace_agents: new Set([
+    'mcp_approved',
+    'connect_token_hash',
+    'connect_token',
+    'permission_mode',
+  ]),
+  uploaded_files: new Set([
+    'storage_path',
+    'content_sha256',
+    'type',
+  ]),
+};
+
+function stripPrivilegedDbValues(table, values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
+  const privileged = PRIVILEGED_DB_COLUMNS_BY_TABLE[table];
+  if (!privileged) return values;
+  const next = { ...values };
+  for (const key of privileged) {
+    if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
+  }
+  return next;
+}
+
+/**
+ * Storage path for a workspace-owned upload must live under that workspace's
+ * prefix after normalization. Rejects absolute paths and any `..` traversal
+ * (e.g. `ws-1/../ws-2/secret.txt` must NOT pass for workspace ws-1).
+ */
+function storagePathBelongsToWorkspace(workspaceId, storagePath) {
+  const ws = String(workspaceId || '').trim();
+  if (!ws || ws.includes('/') || ws.includes('\\') || ws === '.' || ws === '..') return false;
+
+  // Normalize separators; do not strip leading slashes yet so we can reject absolutes.
+  let sp = String(storagePath || '').replace(/\\/g, '/');
+  if (!sp || sp.startsWith('/') || /^[a-zA-Z]:/.test(sp)) return false;
+
+  // Explicitly reject any parent-directory segment before trusting normalize.
+  // path.posix.normalize("ws-1/../ws-2/x") => "ws-2/x" which would otherwise
+  // look "fine" for a different workspace check if we only prefix-matched
+  // the pre-normalized string (or worse, pass a broken prefix check).
+  const rawSegments = sp.split('/');
+  if (rawSegments.some((seg) => seg === '..')) return false;
+
+  // Collapse "." and empty segments; no ".." remains after the check above.
+  const normalized = rawSegments
+    .filter((seg) => seg && seg !== '.')
+    .join('/');
+  if (!normalized) return false;
+  // Belt-and-suspenders after join.
+  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) return false;
+
+  return normalized === ws || normalized.startsWith(`${ws}/`);
+}
 
 // ----------------------------------------------------------------------------
 // Error helpers — Errors carry a `.status` so framework adapters can map them to
@@ -607,6 +668,9 @@ module.exports = {
   WORKSPACE_SCOPED_TABLES,
   WORKSPACE_ROLE_CAPABILITIES,
   DB_TABLE_ACCESS,
+  PRIVILEGED_DB_COLUMNS_BY_TABLE,
+  stripPrivilegedDbValues,
+  storagePathBelongsToWorkspace,
   createTokenVersionCache,
   appendWorkspaceAccessClause,
   logMessageActivityIdempotent,

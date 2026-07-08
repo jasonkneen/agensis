@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.resolve(__dirname, '..');
+const BRIDGE_TEST_SECRET = 'cbs_test_secret_for_unit_tests_only_xx';
 const moduleUrl = pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/agensis.mjs')).href;
 
 async function loadTestApi() {
@@ -144,7 +145,7 @@ test('daemon job runner queues CursorBuddy control before spawning the coding CL
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, { port: 0, authSecret: BRIDGE_TEST_SECRET });
   const ws = {
     readyState: 1,
     sent: [],
@@ -164,6 +165,7 @@ test('daemon job runner queues CursorBuddy control before spawning the coding CL
       cursorBuddyBridge: true,
       cursorBuddyRuntime: true,
       cursorBuddyPort: bridge.port,
+      cursorBuddyBridgeSecret: BRIDGE_TEST_SECRET,
       once: false,
     }, {
       id: 'job-1',
@@ -171,7 +173,7 @@ test('daemon job runner queues CursorBuddy control before spawning the coding CL
       ws,
     }, { signal: null });
 
-    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`, { headers: { authorization: `Bearer ${BRIDGE_TEST_SECRET}`, 'x-agensis-bridge-secret': BRIDGE_TEST_SECRET } });
     const poll = await pollResponse.json();
     assert.equal(poll.commands.length, 1);
     assert.equal(poll.commands[0].action, 'wave');
@@ -210,7 +212,7 @@ test('normal coding agent does not turn avatar requests into CursorBuddy control
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, { port: 0, authSecret: BRIDGE_TEST_SECRET });
   const ws = {
     readyState: 1,
     sent: [],
@@ -231,6 +233,7 @@ test('normal coding agent does not turn avatar requests into CursorBuddy control
       cursorBuddyRuntime: false,
       primaryDaemon: false,
       cursorBuddyPort: bridge.port,
+      cursorBuddyBridgeSecret: BRIDGE_TEST_SECRET,
       once: false,
     }, {
       id: 'job-2',
@@ -238,7 +241,7 @@ test('normal coding agent does not turn avatar requests into CursorBuddy control
       ws,
     }, { signal: null });
 
-    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`, { headers: { authorization: `Bearer ${BRIDGE_TEST_SECRET}`, 'x-agensis-bridge-secret': BRIDGE_TEST_SECRET } });
     const poll = await pollResponse.json();
     assert.equal(poll.commands.length, 0);
 

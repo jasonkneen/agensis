@@ -362,3 +362,100 @@ test('a non-owner/editor (no workspace access) cannot upload', async () => {
     assert.equal(response.status, 403);
   });
 });
+
+test('serving content rejects storage_path that belongs to another workspace', async () => {
+  const fakeDb = installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+
+  // Plant a row that claims to be in ws-1 but points at another workspace's file.
+  const victimId = 'file-victim-1';
+  const victimPath = path.join('ws-2', `${victimId}-secret.txt`);
+  const fullVictimPath = path.join(process.env.AGENSIS_UPLOAD_ROOT, victimPath);
+  fs.mkdirSync(path.dirname(fullVictimPath), { recursive: true });
+  fs.writeFileSync(fullVictimPath, 'secret-bytes');
+  fakeDb.uploadedFiles.set(victimId, {
+    id: victimId,
+    workspace_id: 'ws-1',
+    name: 'secret.txt',
+    type: 'text/plain',
+    storage_path: victimPath,
+  });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor', '1');
+    const response = await authedFetch(baseUrl, token, `/backend/files/${victimId}/content`);
+    assert.equal(response.status, 403);
+  });
+
+  assert.equal(__test.storagePathBelongsToWorkspace('ws-1', victimPath), false);
+  assert.equal(__test.storagePathBelongsToWorkspace('ws-2', victimPath), true);
+});
+
+test('serving content rejects storage_path traversal that escapes the workspace prefix', async () => {
+  const fakeDb = installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+
+  // Real bytes live under ws-2; the row pretends to be ws-1 via `ws-1/../ws-2/...`.
+  const victimId = 'file-victim-traversal';
+  const realRelative = path.join('ws-2', `${victimId}-secret.txt`);
+  const fullVictimPath = path.join(process.env.AGENSIS_UPLOAD_ROOT, realRelative);
+  fs.mkdirSync(path.dirname(fullVictimPath), { recursive: true });
+  fs.writeFileSync(fullVictimPath, 'traversal-secret-bytes');
+
+  const traversalPath = `ws-1/../ws-2/${victimId}-secret.txt`;
+  assert.equal(__test.storagePathBelongsToWorkspace('ws-1', traversalPath), false);
+  assert.throws(
+    () => __test.resolveStoragePathForWorkspace('ws-1', traversalPath),
+    (err) => err && err.status === 403,
+  );
+
+  fakeDb.uploadedFiles.set(victimId, {
+    id: victimId,
+    workspace_id: 'ws-1',
+    name: 'secret.txt',
+    type: 'text/plain',
+    storage_path: traversalPath,
+  });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor', '1');
+    const response = await authedFetch(baseUrl, token, `/backend/files/${victimId}/content`);
+    assert.equal(response.status, 403);
+    // Must not leak the other workspace's bytes even when the file exists on disk.
+    const body = await response.text();
+    assert.equal(body.includes('traversal-secret-bytes'), false);
+  });
+});
+
+test('stripPrivilegedDbValues and inspect-path gate host FS without allowlist', async () => {
+  const stripped = __test.stripPrivilegedDbValues('workspace_agents', {
+    name: 'X',
+    mcp_approved: true,
+    permission_mode: 'yolo',
+  });
+  assert.equal(stripped.mcp_approved, undefined);
+  assert.equal(stripped.permission_mode, undefined);
+  assert.equal(stripped.name, 'X');
+
+  // Default (no AGENSIS_ALLOW_PROJECT_FS): inspect-path must not probe host FS.
+  const prevAllow = process.env.AGENSIS_ALLOW_PROJECT_FS;
+  const prevRoots = process.env.AGENSIS_PROJECT_ROOTS;
+  try {
+    delete process.env.AGENSIS_ALLOW_PROJECT_FS;
+    delete process.env.AGENSIS_PROJECT_ROOTS;
+    const denied = await __test.inspectProjectPath(process.cwd());
+    assert.equal(denied.denied, true);
+    assert.equal(denied.exists, false);
+    assert.equal(__test.projectFsAllowed(), false);
+    assert.equal(__test.validFileSourceRoot(process.cwd()), '');
+  } finally {
+    if (prevAllow !== undefined) process.env.AGENSIS_ALLOW_PROJECT_FS = prevAllow;
+    else delete process.env.AGENSIS_ALLOW_PROJECT_FS;
+    if (prevRoots !== undefined) process.env.AGENSIS_PROJECT_ROOTS = prevRoots;
+    else delete process.env.AGENSIS_PROJECT_ROOTS;
+  }
+});

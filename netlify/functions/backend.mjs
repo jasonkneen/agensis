@@ -16,6 +16,7 @@ import {
   ALLOWED_TABLES,
   VERSIONED_TABLES,
   JSON_COLUMNS_BY_TABLE,
+  stripPrivilegedDbValues,
 } from '../../shared/backend-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
@@ -513,15 +514,6 @@ async function getSettingValue(key) {
   await ensureSecretsTables();
   const rows = await query('select value from app_settings where key = $1 limit 1', [key]);
   return rows[0]?.value || '';
-}
-
-async function setSettingValue(key, value) {
-  await ensureSecretsTables();
-  await query(
-    `insert into app_settings (key, value, updated_at) values ($1, $2, now())
-     on conflict (key) do update set value = excluded.value, updated_at = now()`,
-    [key, value],
-  );
 }
 
 async function getWorkspaceSecretValue(workspaceId, key) {
@@ -1679,14 +1671,17 @@ async function handleDb(pathname, req, userId) {
     const tableSql = ensureTable(table);
     await enforceDbOperationAccess({ userId, table, op: 'insert', payload: { values }, db: query });
     // Force a workspace's owner to the authed user (never trust a client user_id).
-    const rows = (Array.isArray(values) ? values : [values]).map((row) => (
-      table === 'workspaces' && row && typeof row === 'object'
-        ? { ...row, user_id: userId }
-        : row
-    ));
+    // Strip privileged columns (storage_path, mcp_approved, …) from generic writes.
+    const rows = (Array.isArray(values) ? values : [values]).map((row) => {
+      if (!row || typeof row !== 'object') return row;
+      let next = stripPrivilegedDbValues(table, row);
+      if (table === 'workspaces') next = { ...next, user_id: userId };
+      return next;
+    });
     if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
 
     const columns = Object.keys(rows[0]);
+    if (columns.length === 0) return jsonError(400, new Error('Insert values are required'));
     const params = [];
     const valueSql = rows.map((row) => `(${columns.map((column) => {
       return bindDbParam(params, table, column, row[column]);
@@ -1716,13 +1711,18 @@ async function handleDb(pathname, req, userId) {
     const tableSql = ensureTable(table);
     if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
     await enforceDbOperationAccess({ userId, table, op: 'update', filters, payload: { values }, db: query });
+    const safeValues = stripPrivilegedDbValues(table, values);
+    const keys = Object.keys(safeValues);
 
     const params = [];
-    const setParts = Object.keys(values).map((column) => {
-      return `${quoteIdent(column)} = ${bindDbParam(params, table, column, values[column])}`;
+    const setParts = keys.map((column) => {
+      return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
     });
     if (VERSIONED_TABLES.has(table) && values.version == null) {
       setParts.push('"version" = COALESCE("version", 0) + 1');
+    }
+    if (setParts.length === 0) {
+      return jsonError(400, new Error('No updatable fields provided'));
     }
     const setClause = setParts.join(', ');
     const where = buildWhereClause(filters, params);
@@ -2027,7 +2027,11 @@ async function route(req) {
     const userId = await requireUserId(req);
     const body = await readBody(req);
     const workspaceId = String(body?.workspaceId || '').trim() || null;
-    if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    // App-level secret writes are not available to ordinary users (match Fly daemon).
+    if (!workspaceId) {
+      return jsonError(403, new Error('App-level secret management is not available to users'));
+    }
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
     const updates = {};
     for (const key of MANAGED_SECRET_KEYS) {
       if (typeof body?.[key] === 'string') updates[key] = body[key].trim();
@@ -2036,8 +2040,7 @@ async function route(req) {
       return jsonError(400, new Error('No managed keys provided'));
     }
     for (const [key, value] of Object.entries(updates)) {
-      if (workspaceId) await setWorkspaceSecretValue(workspaceId, key, value, userId);
-      else await setSettingValue(key, value);
+      await setWorkspaceSecretValue(workspaceId, key, value, userId);
     }
     const keys = await listManagedSecrets(workspaceId);
     return json({ data: { keys }, error: null });

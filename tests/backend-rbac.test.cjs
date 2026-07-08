@@ -67,6 +67,77 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {} } = {}) {
   return db;
 }
 
+test('shared WORKSPACE_SCOPED_TABLES covers every multi-tenant ALLOWED table the server scopes', async () => {
+  const server = require('../server/index.cjs');
+  const serverScoped = server.__test.WORKSPACE_SCOPED_TABLES;
+  const sharedScoped = core.WORKSPACE_SCOPED_TABLES;
+
+  // Server imports the shared set — they must be the same reference-equal Set
+  // or at least contain identical members.
+  const serverList = [...serverScoped].sort();
+  const sharedList = [...sharedScoped].sort();
+  assert.deepEqual(sharedList, serverList);
+
+  const required = [
+    'agent_memory_files',
+    'memory_file_comments',
+    'thread_items',
+    'agent_registrations',
+    'cursorbuddy_connection_keys',
+    'uploaded_files',
+    'workspace_agents',
+  ];
+  for (const table of required) {
+    assert.equal(sharedScoped.has(table), true, `missing scoped table: ${table}`);
+  }
+
+  // Every ALLOWED table that is multi-tenant (not app_users/workspaces/messages)
+  // must be workspace-scoped. messages is special-cased in enforceDbOperationAccess.
+  for (const table of core.ALLOWED_TABLES) {
+    if (table === 'app_users' || table === 'workspaces' || table === 'messages') continue;
+    assert.equal(
+      sharedScoped.has(table),
+      true,
+      `ALLOWED table ${table} is not in WORKSPACE_SCOPED_TABLES (Netlify tenancy hole)`,
+    );
+  }
+});
+
+test('stripPrivilegedDbValues removes mcp_approved and storage_path from generic writes', () => {
+  const agents = core.stripPrivilegedDbValues('workspace_agents', {
+    name: 'Coder',
+    mcp_approved: true,
+    permission_mode: 'yolo',
+    connect_token_hash: 'abc',
+  });
+  assert.equal(agents.name, 'Coder');
+  assert.equal(Object.prototype.hasOwnProperty.call(agents, 'mcp_approved'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(agents, 'permission_mode'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(agents, 'connect_token_hash'), false);
+
+  const files = core.stripPrivilegedDbValues('uploaded_files', {
+    name: 'x.png',
+    workspace_id: 'ws-1',
+    storage_path: 'ws-other/secret.png',
+    type: 'image/png',
+    content_sha256: 'deadbeef',
+  });
+  assert.equal(files.name, 'x.png');
+  assert.equal(files.workspace_id, 'ws-1');
+  assert.equal(Object.prototype.hasOwnProperty.call(files, 'storage_path'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(files, 'type'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(files, 'content_sha256'), false);
+
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', 'ws-1/id-file.png'), true);
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', 'ws-2/id-file.png'), false);
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', '../etc/passwd'), false);
+  // Traversal that starts with the victim workspace prefix but escapes it.
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', 'ws-1/../ws-2/secret.txt'), false);
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', 'ws-1/foo/../../ws-2/x'), false);
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', '/ws-1/file.png'), false);
+  assert.equal(core.storagePathBelongsToWorkspace('ws-1', 'ws-1/./nested/file.png'), true);
+});
+
 test('unauthenticated request (no userId) is rejected 401', async () => {
   const db = makeDb({ roles: { 'ws-1:user-1': 'editor' } });
   await assert.rejects(

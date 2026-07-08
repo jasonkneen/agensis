@@ -517,6 +517,38 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
   });
 });
 
+test('settings secrets POST rejects app-level writes for ordinary authenticated users', async () => {
+  const fakeDb = installDb({ authSecret: 'fixed-test-secret' });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-1', '1');
+
+    const noWorkspace = await authedFetch(baseUrl, token, '/backend/settings/secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ANTHROPIC_API_KEY: 'sk-evil-platform-key' }),
+    });
+    const noWorkspaceBody = await noWorkspace.json();
+    assert.equal(noWorkspace.status, 403);
+    assert.match(noWorkspaceBody.error.message, /App-level secret management/i);
+    assert.equal(
+      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      false,
+    );
+
+    const baseWorkspace = await authedFetch(baseUrl, token, '/backend/settings/secrets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'base', ANTHROPIC_API_KEY: '' }),
+    });
+    assert.equal(baseWorkspace.status, 403);
+    assert.equal(
+      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      false,
+    );
+  });
+});
+
 test('ai-chat requires workspace id and run_agents capability before using AI key', async () => {
   installDb({
     authSecret: 'fixed-test-secret',

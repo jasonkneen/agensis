@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.resolve(__dirname, '..');
 const moduleUrl = pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/cursorbuddyLocalBridge.mjs')).href;
+const BRIDGE_TEST_SECRET = 'cbs_test_secret_for_unit_tests_only_xx';
 
 async function loadModule() {
   return import(moduleUrl);
@@ -15,6 +16,95 @@ async function loadModule() {
 async function tempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'agensis-cursorbuddy-bridge-'));
 }
+
+function bridgeAuthHeaders(extra = {}) {
+  return {
+    authorization: `Bearer ${BRIDGE_TEST_SECRET}`,
+    'x-agensis-bridge-secret': BRIDGE_TEST_SECRET,
+    ...extra,
+  };
+}
+
+const bridgeStartOptions = { port: 0, authSecret: BRIDGE_TEST_SECRET };
+
+test('CursorBuddy local bridge rejects unauthenticated mutating routes and accepts valid secret', async () => {
+  const { startCursorBuddyLocalBridge, createBridgeAuthSecret, bridgeRequestAuthorized } = await loadModule();
+  assert.match(createBridgeAuthSecret(), /^cbs_/);
+  const dir = await tempDir();
+  const scriptPath = path.join(dir, 'fake-cli.mjs');
+  await fs.writeFile(scriptPath, "process.stdout.write(JSON.stringify({ result: 'authed reply' }));\n");
+
+  const bridge = await startCursorBuddyLocalBridge({
+    url: 'https://agensis.io',
+    token: 'aga_test',
+    workspace: 'ws-1',
+    agent: 'agent-1',
+    handle: 'mac',
+    name: 'mac',
+    cwd: dir,
+    codingCmd: `${process.execPath} ${scriptPath}`,
+    model: 'test-model',
+    timeoutMs: 5000,
+    heartbeatMs: 1000,
+  }, bridgeStartOptions);
+
+  try {
+    assert.equal(bridge.secret, BRIDGE_TEST_SECRET);
+    assert.equal(
+      bridgeRequestAuthorized({ headers: { authorization: `Bearer ${BRIDGE_TEST_SECRET}` } }, BRIDGE_TEST_SECRET),
+      true,
+    );
+    assert.equal(
+      bridgeRequestAuthorized({ headers: {} }, BRIDGE_TEST_SECRET),
+      false,
+    );
+
+    const health = await fetch(`${bridge.url}/cursorbuddy/health`);
+    assert.equal(health.status, 200);
+    const healthBody = await health.json();
+    assert.equal(healthBody.authRequired, true);
+
+    const unauthChat = await fetch(`${bridge.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(unauthChat.status, 401);
+
+    const unauthEdit = await fetch(`${bridge.url}/cursorbuddy/edit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: { selector: '#x' } }),
+    });
+    assert.equal(unauthEdit.status, 401);
+
+    const unauthControl = await fetch(`${bridge.url}/cursorbuddy/control`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'wave' }),
+    });
+    assert.equal(unauthControl.status, 401);
+
+    const authedChat = await fetch(`${bridge.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(authedChat.status, 200);
+    const chat = await authedChat.json();
+    assert.equal(chat.choices[0].message.content, 'authed reply');
+
+    const authedControl = await fetch(`${bridge.url}/cursorbuddy/control`, {
+      method: 'POST',
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ action: 'wave', text: 'Hi' }),
+    });
+    assert.equal(authedControl.status, 200);
+  } finally {
+    await bridge.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
 test('CursorBuddy local bridge exposes daemon health, context, and chat', async () => {
   const { startCursorBuddyLocalBridge } = await loadModule();
@@ -34,7 +124,7 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const healthResponse = await fetch(`${bridge.url}/cursorbuddy/health`);
@@ -59,7 +149,7 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
 
     const contextResponse = await fetch(`${bridge.url}/cursorbuddy/context`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ url: 'https://example.com/page', title: 'Example', surface: 'browser_extension' }),
     });
     assert.equal(contextResponse.status, 200);
@@ -68,7 +158,7 @@ test('CursorBuddy local bridge exposes daemon health, context, and chat', async 
 
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'explain this page' }] }),
     });
     assert.equal(chatResponse.status, 200);
@@ -98,13 +188,13 @@ test('CursorBuddy local bridge sends normal chat to the configured local command
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const wrapped = `${'page context '.repeat(16)} user typed: tell me a joke`;
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: wrapped }] }),
     });
     assert.equal(chatResponse.status, 200);
@@ -114,7 +204,7 @@ test('CursorBuddy local bridge sends normal chat to the configured local command
 
     const siteResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'what site am I on?' }] }),
     });
     assert.equal(siteResponse.status, 200);
@@ -145,12 +235,12 @@ test('CursorBuddy local bridge does not treat bare wave as an avatar control', a
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'wave' }] }),
     });
     assert.equal(chatResponse.status, 200);
@@ -158,7 +248,7 @@ test('CursorBuddy local bridge does not treat bare wave as an avatar control', a
     assert.equal(chat.model, 'claude-haiku-4-5');
     assert.equal(chat.choices[0].message.content, 'chat handled wave text');
 
-    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`, { headers: bridgeAuthHeaders() });
     assert.equal(pollResponse.status, 200);
     const poll = await pollResponse.json();
     assert.deepEqual(poll.commands, []);
@@ -186,12 +276,12 @@ test('CursorBuddy local bridge turns avatar commands into queued control actions
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'Can you make him wave?' }] }),
     });
     assert.equal(chatResponse.status, 200);
@@ -199,7 +289,7 @@ test('CursorBuddy local bridge turns avatar commands into queued control actions
     assert.equal(chat.model, 'cursorbuddy-local-control');
     assert.equal(chat.choices[0].message.content, 'Waving now.');
 
-    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`, { headers: bridgeAuthHeaders() });
     assert.equal(pollResponse.status, 200);
     const poll = await pollResponse.json();
     assert.equal(poll.commands.length, 1);
@@ -208,7 +298,7 @@ test('CursorBuddy local bridge turns avatar commands into queued control actions
 
     const sayResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ messages: [{ role: 'user', content: 'say hello' }] }),
     });
     assert.equal(sayResponse.status, 200);
@@ -216,7 +306,7 @@ test('CursorBuddy local bridge turns avatar commands into queued control actions
     assert.equal(say.model, 'cursorbuddy-local-control');
     assert.equal(say.choices[0].message.content, 'Saying it now.');
 
-    const secondPollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=1`);
+    const secondPollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=1`, { headers: bridgeAuthHeaders() });
     assert.equal(secondPollResponse.status, 200);
     const secondPoll = await secondPollResponse.json();
     assert.equal(secondPoll.commands.length, 1);
@@ -246,12 +336,12 @@ test('CursorBuddy local bridge streams OpenAI-compatible chat chunks', async () 
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const chatResponse = await fetch(`${bridge.url}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: 'stream this' }] }),
     });
     assert.equal(chatResponse.status, 200);
@@ -285,12 +375,12 @@ test('CursorBuddy local bridge queues avatar control commands', async () => {
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0 });
+  }, bridgeStartOptions);
 
   try {
     const controlResponse = await fetch(`${bridge.url}/cursorbuddy/control`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ action: 'wave', text: 'hello from agensis' }),
     });
     assert.equal(controlResponse.status, 200);
@@ -298,14 +388,14 @@ test('CursorBuddy local bridge queues avatar control commands', async () => {
     assert.equal(control.ok, true);
     assert.equal(control.command.action, 'wave');
 
-    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`);
+    const pollResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=0`, { headers: bridgeAuthHeaders() });
     assert.equal(pollResponse.status, 200);
     const poll = await pollResponse.json();
     assert.equal(poll.commands.length, 1);
     assert.equal(poll.commands[0].text, 'hello from agensis');
     assert.equal(poll.latestId, control.command.id);
 
-    const emptyResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=${control.command.id}`);
+    const emptyResponse = await fetch(`${bridge.url}/cursorbuddy/control?after=${control.command.id}`, { headers: bridgeAuthHeaders() });
     const empty = await emptyResponse.json();
     assert.deepEqual(empty.commands, []);
   } finally {
@@ -338,7 +428,7 @@ test('CursorBuddy local bridge claims account connection keys for the local site
       error: null,
     }), {
       status: 200,
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
     });
   };
 
@@ -354,12 +444,12 @@ test('CursorBuddy local bridge claims account connection keys for the local site
     model: 'test-model',
     timeoutMs: 5000,
     heartbeatMs: 1000,
-  }, { port: 0, fetchImpl });
+  }, { ...bridgeStartOptions, fetchImpl });
 
   try {
     const connectResponse = await fetch(`${bridge.url}/cursorbuddy/connect`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: bridgeAuthHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         key: 'cbk_website_avatar_ABCDEFGHJKLMNPQRST',
         agensisUrl: 'https://agensis.io',
