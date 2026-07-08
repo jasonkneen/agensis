@@ -77,6 +77,7 @@ import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
 import { useChat } from './hooks/useChat';
+import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
 import { useMemory } from './hooks/useMemory';
@@ -590,17 +591,23 @@ function AppContent() {
     }
   }, [wsLoading, workspaces, activeWorkspaceId]);
 
+  const { data: workspaceBootstrap } = useWorkspaceBootstrap(activeWorkspaceId || null);
+
   const {
     documents, recents,
     createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite
-  } = useDocuments(activeWorkspaceId);
+  } = useDocuments(activeWorkspaceId, (workspaceBootstrap?.documents as import('./types').Document[] | undefined) || null);
 
   const {
     sessions, activeSession, setActiveSession, messages, streaming,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
     createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
-  } = useChat(activeWorkspaceId, user?.email?.split('@')[0] || undefined);
+  } = useChat(
+    activeWorkspaceId,
+    user?.email?.split('@')[0] || undefined,
+    (workspaceBootstrap?.sessions as import('./types').ChatSession[] | undefined) || null,
+  );
 
   const {
     subThreadsByMessage,
@@ -614,7 +621,10 @@ function AppContent() {
   } = useSubThreads(activeWorkspaceId);
 
   const { facts, categories, addFact, updateFact, deleteFact } = useMemory(activeWorkspaceId);
-  const { files: uploadedFiles, uploadFiles } = useFiles(activeWorkspaceId);
+  const { files: uploadedFiles, uploadFiles } = useFiles(
+    activeWorkspaceId,
+    (workspaceBootstrap?.files as import('./types').UploadedFile[] | undefined) || null,
+  );
   const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
   const { mode: themeMode, setTheme } = useTheme();
 
@@ -674,10 +684,17 @@ function AppContent() {
     createAgent,
     updateAgent,
     deleteAgent,
-  } = useAgents(activeWorkspaceId || null, user?.id);
+  } = useAgents(
+    activeWorkspaceId || null,
+    user?.id,
+    (workspaceBootstrap?.agents as import('./types').WorkspaceAgent[] | undefined) || null,
+  );
   const {
     connections: agentConnections,
-  } = useAgentConnections(activeWorkspaceId || null);
+  } = useAgentConnections(
+    activeWorkspaceId || null,
+    (workspaceBootstrap?.connections as import('./types').AgentConnection[] | undefined) || null,
+  );
   const workspacePresenceUsers = useWorkspacePresence({
     user,
     cursors,
@@ -739,7 +756,11 @@ function AppContent() {
     updateTask,
     toggleTaskStatus,
     deleteTask,
-  } = useTasks(activeWorkspaceId || null, user?.id);
+  } = useTasks(
+    activeWorkspaceId || null,
+    user?.id,
+    (workspaceBootstrap?.tasks as import('./types').Task[] | undefined) || null,
+  );
 
   const { events: activityEvents, loading: activityLoading, logEvent } = useActivity(
     activeWorkspaceId || null,

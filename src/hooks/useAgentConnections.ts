@@ -27,11 +27,15 @@ function withEffectiveStatus(connection: AgentConnection, nowMs: number): AgentC
   return connection;
 }
 
-export function useAgentConnections(workspaceId: string | null) {
-  const [connections, setConnections] = useState<AgentConnection[]>([]);
+export function useAgentConnections(workspaceId: string | null, seed?: AgentConnection[] | null) {
+  const [connections, setConnections] = useState<AgentConnection[]>(() => seed || []);
   const [loading, setLoading] = useState(false);
   const [realtimeWorkspaceId, setRealtimeWorkspaceId] = useState<string | null>(null);
   const workspaceKey = normalizeWorkspaceId(workspaceId);
+
+  useEffect(() => {
+    if (seed) setConnections(seed);
+  }, [seed]);
 
   const fetchConnections = useCallback(async () => {
     if (!workspaceKey) {

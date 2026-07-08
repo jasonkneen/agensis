@@ -383,6 +383,20 @@ test('issued auth tokens verify against the persisted auth secret', async () => 
   assert.equal(await __test.verifyToken(`${token}tampered`), null);
 });
 
+test('auth tokens expire after TOKEN_TTL and reject legacy 2-segment payloads', async () => {
+  installDb({ authSecret: 'fixed-test-secret' });
+  const issuedAt = 1_700_000_000;
+  const token = await __test.issueToken('user-1', '1', { issuedAt });
+  assert.equal(await __test.verifyToken(token, { nowSec: issuedAt + 60 }), 'user-1');
+  const ttl = __test.getTokenTtlSec();
+  assert.equal(await __test.verifyToken(token, { nowSec: issuedAt + ttl + 1 }), null);
+
+  // Legacy pre-TTL format (userId.version.sig only) no longer verifies.
+  const legacyPayload = 'user-1.1';
+  const legacySig = require('crypto').createHmac('sha256', 'fixed-test-secret').update(legacyPayload).digest('base64url');
+  assert.equal(await __test.verifyToken(`${legacyPayload}.${legacySig}`), null);
+});
+
 test('AUTH_SECRET env var takes precedence over the DB-persisted secret', async () => {
   // DB carries one secret; env carries another. Env must win so a token signed
   // by the Netlify function (env) verifies on the Fly backend (env) even when a
@@ -397,7 +411,8 @@ test('AUTH_SECRET env var takes precedence over the DB-persisted secret', async 
     const token = await __test.issueToken('user-1', '1');
     assert.equal(await __test.verifyToken(token), 'user-1');
     // A token signed with the DB secret must NOT verify once env is authoritative.
-    const dbPayload = 'user-1.1';
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const dbPayload = `user-1.1.${issuedAt}`;
     const dbSig = require('crypto').createHmac('sha256', 'db-fallback-secret').update(dbPayload).digest('base64url');
     assert.equal(await __test.verifyToken(`${dbPayload}.${dbSig}`), null);
   } finally {
@@ -417,10 +432,12 @@ test('AGENSIS_AUTH_SECRET env var is preferred over AUTH_SECRET', async () => {
     __test.resetTestState();
     installDb({ authSecret: 'db-fallback-secret' });
 
-    const token = await __test.issueToken('user-1', '1');
-    const expectedSig = require('crypto').createHmac('sha256', 'agensis-pref').update('user-1.1').digest('base64url');
-    assert.equal(token, `user-1.1.${expectedSig}`);
-    assert.equal(await __test.verifyToken(token), 'user-1');
+    const issuedAt = 1_700_000_000;
+    const token = await __test.issueToken('user-1', '1', { issuedAt });
+    const payload = `user-1.1.${issuedAt}`;
+    const expectedSig = require('crypto').createHmac('sha256', 'agensis-pref').update(payload).digest('base64url');
+    assert.equal(token, `${payload}.${expectedSig}`);
+    assert.equal(await __test.verifyToken(token, { nowSec: issuedAt + 60 }), 'user-1');
   } finally {
     if (prevA === undefined) delete process.env.AGENSIS_AUTH_SECRET;
     else process.env.AGENSIS_AUTH_SECRET = prevA;

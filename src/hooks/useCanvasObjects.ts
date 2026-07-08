@@ -33,6 +33,24 @@ export function normalizeCanvasObject(raw: CanvasObject): CanvasObject {
   return next;
 }
 
+/**
+ * Prefer the fresher of two canvas object snapshots by `updated_at`.
+ * Missing timestamps on either side → accept incoming (safe default under
+ * out-of-order delivery only hurts when we can prove local is newer).
+ */
+export function preferFresherCanvasObject(
+  local: CanvasObject | undefined,
+  incoming: CanvasObject,
+): CanvasObject {
+  if (!local) return incoming;
+  const localTs = local.updated_at ? Date.parse(String(local.updated_at)) : NaN;
+  const incomingTs = incoming.updated_at ? Date.parse(String(incoming.updated_at)) : NaN;
+  if (Number.isFinite(localTs) && Number.isFinite(incomingTs) && incomingTs < localTs) {
+    return local;
+  }
+  return { ...local, ...incoming };
+}
+
 export function useCanvasObjects(workspaceId: string | null, userId?: string, activeLayerId = 'base') {
   const [objects, setObjects] = useState<CanvasObject[]>([]);
   const [groups, setGroups] = useState<CanvasGroup[]>([]);
@@ -135,7 +153,7 @@ export function useCanvasObjects(workspaceId: string | null, userId?: string, ac
         (payload: DbChangePayload<CanvasObject>) => {
           if (!payload.new) return;
           const obj = normalizeCanvasObject(payload.new);
-          setObjects(prev => prev.map(o => o.id === obj.id ? { ...o, ...obj } : o));
+          setObjects(prev => prev.map(o => (o.id === obj.id ? preferFresherCanvasObject(o, obj) : o)));
         }
       )
       .on(

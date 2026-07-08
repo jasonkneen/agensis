@@ -7,8 +7,11 @@ import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
-export function useChat(workspaceId: string | null, currentUserName?: string) {
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
+export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    if (!seedSessions?.length) return [];
+    return seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+  });
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -19,6 +22,15 @@ export function useChat(workspaceId: string | null, currentUserName?: string) {
   // disposed component never keeps the request alive or writes into dead state.
   const streamAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => streamAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!seedSessions) return;
+    const mainSessions = seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+    setSessions(mainSessions);
+    if (mainSessions.length > 0) {
+      setActiveSession(prev => prev ?? mainSessions[0]);
+    }
+  }, [seedSessions]);
 
   const fetchSessions = useCallback(async () => {
     if (!workspaceId) return;

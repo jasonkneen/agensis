@@ -72,3 +72,41 @@ test('rejects a non-string signature header', () => {
   assert.equal(verifyNetlifyDeploySignature(undefined, body, SECRET), false);
   assert.equal(verifyNetlifyDeploySignature(null, body, SECRET), false);
 });
+
+test('production rejects unsigned deploy webhooks when secret is unset (fail-closed)', async () => {
+  const http = require('node:http');
+  const { createApp, __test } = require('../server/index.cjs');
+  const prevEnv = process.env.NODE_ENV;
+  const prevSecret = process.env.NETLIFY_WEBHOOK_JWS_SECRET;
+  try {
+    process.env.NODE_ENV = 'production';
+    delete process.env.NETLIFY_WEBHOOK_JWS_SECRET;
+    __test.resetTestState();
+    // Minimal DB so ensureRuntimeSchema path doesn't hang if hit.
+    __test.setTestDb({
+      async unsafe() { return []; },
+    });
+
+    const app = createApp();
+    const server = http.createServer(app);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/backend/netlify-deploy-hook`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: 'ready', commit_ref: 'abc' }),
+      });
+      assert.equal(res.status, 503);
+      const body = await res.json();
+      assert.match(String(body.error || ''), /secret/i);
+    } finally {
+      await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+    if (prevSecret === undefined) delete process.env.NETLIFY_WEBHOOK_JWS_SECRET;
+    else process.env.NETLIFY_WEBHOOK_JWS_SECRET = prevSecret;
+    __test.resetTestState();
+  }
+});

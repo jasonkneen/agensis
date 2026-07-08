@@ -27,9 +27,10 @@ Then set the **same** secret on the backend so it can verify the signature:
 fly secrets set NETLIFY_WEBHOOK_JWS_SECRET='<the-secret-you-pasted>' --app agensis-backend
 ```
 
-> If `NETLIFY_WEBHOOK_JWS_SECRET` is **unset**, the endpoint still works but accepts
-> unsigned requests and logs a warning — fine for a quick test, not for production.
-> Set the secret to close that gap.
+> If `NETLIFY_WEBHOOK_JWS_SECRET` is **unset** in **production** (`NODE_ENV=production`),
+> the endpoint **rejects** with 503 (fail-closed) and does not broadcast. In non-production
+> it still accepts unsigned requests with a warning for local wiring — always set the
+> secret before going live.
 
 ## Notes / behaviour
 

@@ -6,6 +6,7 @@ import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
 import {
   verifyAuthToken,
+  issueAuthToken,
   enforceDbOperationAccess,
   assertWorkspaceRole,
   appendWorkspaceAccessClause,
@@ -310,10 +311,8 @@ function getAuthSecret() {
   return 'netlify-preview-auth-secret';
 }
 
-function issueToken(userId, tokenVersion) {
-  const payload = `${userId}.${tokenVersion}`;
-  const sig = crypto.createHmac('sha256', getAuthSecret()).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+function issueToken(userId, tokenVersion, options = {}) {
+  return issueAuthToken(userId, tokenVersion, getAuthSecret(), options);
 }
 
 // Resolve the authed user id from a request's Authorization header. Throws 401

@@ -208,16 +208,20 @@ function forbidden(message) { return httpError(403, message); }
 function badRequest(message) { return httpError(400, message); }
 
 // ----------------------------------------------------------------------------
-// AUTH: verify a signed session token. Mirrors server/index.cjs verifyToken /
-// requireAuth, but the signing secret is passed in (no DB/env coupling here).
+// AUTH: issue + verify a signed session token. The signing secret is passed in
+// (no DB/env coupling here).
 //
-//   token format: `${userId}.${tokenVersion}.${base64url(HMAC_SHA256(secret, `${userId}.${tokenVersion}`))}`
+//   token format:
+//     `${userId}.${tokenVersion}.${issuedAt}.${base64url(HMAC_SHA256(secret, payload))}`
+//
+//   where `issuedAt` is unix seconds at mint time. Tokens older than
+//   TOKEN_TTL_SEC (default 14d, override via AGENSIS_TOKEN_TTL_SEC) are rejected
+//   even if the signature and token_version still match.
 //
 // `token_version` (plan 005) is a per-user counter on app_users: a token embeds
 // the version that was current when it was issued, and is rejected once that
 // no longer matches the user's CURRENT version (bumped on sign-out / password
-// change) — this is what makes revocation possible at all; previously a token
-// was a pure function of userId + the (un-rotatable-per-user) global secret.
+// change) — this is what makes revocation possible at all.
 //
 // `getTokenVersion(userId) => Promise<string|null>` is REQUIRED once the token
 // signature checks out — verifyAuthToken deliberately does not fall back to
@@ -227,7 +231,29 @@ function badRequest(message) { return httpError(400, message); }
 // authenticated request — an uncached per-request DB read is not acceptable).
 // ----------------------------------------------------------------------------
 
-async function verifyAuthToken(authHeader, secret, getTokenVersion) {
+const DEFAULT_TOKEN_TTL_SEC = 14 * 24 * 60 * 60; // 14 days
+
+function getTokenTtlSec() {
+  const raw = Number(process.env.AGENSIS_TOKEN_TTL_SEC);
+  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+  return DEFAULT_TOKEN_TTL_SEC;
+}
+
+/**
+ * Mint a session token. `options.issuedAt` (unix seconds) is test-only so
+ * expiry can be exercised without sleeping.
+ */
+function issueAuthToken(userId, tokenVersion, secret, options = {}) {
+  if (!secret) throw new Error('issueAuthToken requires a signing secret');
+  const issuedAt = Number.isFinite(options.issuedAt)
+    ? Math.floor(options.issuedAt)
+    : Math.floor(Date.now() / 1000);
+  const payload = `${userId}.${tokenVersion}.${issuedAt}`;
+  const sig = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+async function verifyAuthToken(authHeader, secret, getTokenVersion, options = {}) {
   const header = String(authHeader || '');
   const token = header.startsWith('Bearer ') ? header.slice(7) : header;
   if (!token || typeof token !== 'string') return null;
@@ -235,13 +261,21 @@ async function verifyAuthToken(authHeader, secret, getTokenVersion) {
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const [userId, tokenVersionStr] = payload.split('.');
-  if (!userId || !tokenVersionStr) return null;
+  // Require userId.tokenVersion.issuedAt (legacy 2-part payloads no longer verify).
+  const parts = payload.split('.');
+  if (parts.length !== 3) return null;
+  const [userId, tokenVersionStr, issuedAtStr] = parts;
+  if (!userId || !tokenVersionStr || !issuedAtStr) return null;
+  const issuedAt = Number(issuedAtStr);
+  if (!Number.isFinite(issuedAt) || issuedAt < 0) return null;
   if (!secret) return null;
   const expected = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const nowSec = Number.isFinite(options.nowSec) ? Math.floor(options.nowSec) : Math.floor(Date.now() / 1000);
+  const ttl = Number.isFinite(options.ttlSec) ? options.ttlSec : getTokenTtlSec();
+  if (nowSec - issuedAt > ttl) return null;
   if (typeof getTokenVersion !== 'function') {
     throw new Error('verifyAuthToken requires a getTokenVersion(userId) function to check revocation');
   }
@@ -606,8 +640,18 @@ async function logMessageActivityIdempotent(rows, { db }) {
 
 function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
   const hits = new Map(); // key -> { count, resetAt }
+  let lastSweep = 0;
+  // Evict expired entries so distinct keys cannot grow the Map without bound.
+  function sweep(now) {
+    if (now - lastSweep < windowMs) return;
+    lastSweep = now;
+    for (const [key, entry] of hits) {
+      if (now >= entry.resetAt) hits.delete(key);
+    }
+  }
   function check(key) {
     const now = Date.now();
+    sweep(now);
     let entry = hits.get(key);
     if (!entry || now >= entry.resetAt) {
       entry = { count: 0, resetAt: now + windowMs };
@@ -660,6 +704,9 @@ function evaluatePasswordServerSide(password) {
 
 module.exports = {
   verifyAuthToken,
+  issueAuthToken,
+  getTokenTtlSec,
+  DEFAULT_TOKEN_TTL_SEC,
   enforceDbOperationAccess,
   assertWorkspaceRole,
   ALLOWED_TABLES,

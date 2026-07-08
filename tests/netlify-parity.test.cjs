@@ -122,9 +122,10 @@ test('verifyAuthToken returns null for missing/garbage tokens (gates every requi
   assert.equal(await core.verifyAuthToken('Bearer garbage', secret, unreachableGetTokenVersion), null); // no dot -> not a token
   assert.equal(await core.verifyAuthToken('Bearer user-1.deadbeef', secret, unreachableGetTokenVersion), null); // 1 dot -> no version segment
   const crypto = require('node:crypto');
-  const payload = 'user-1.1'; // `${userId}.${tokenVersion}`
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const payload = `user-1.1.${issuedAt}`; // `${userId}.${tokenVersion}.${issuedAt}`
   const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
-  // Well-formed (userId + version) payload, but the signature doesn't match.
+  // Well-formed payload, but the signature doesn't match.
   assert.equal(await core.verifyAuthToken(`Bearer ${payload}.deadbeef`, secret, unreachableGetTokenVersion), null); // bad signature
   // A correctly signed token whose embedded version matches the current
   // (looked-up) version round-trips (sanity that null isn't unconditional).
@@ -133,6 +134,13 @@ test('verifyAuthToken returns null for missing/garbage tokens (gates every requi
   // longer matches the CURRENT looked-up version (e.g. after sign-out/password
   // change bumped it) is rejected, even though the signature is perfectly valid.
   assert.equal(await core.verifyAuthToken(`Bearer ${payload}.${sig}`, secret, async () => '2'), null);
+  // TTL: correctly signed + matching version but past expiry is rejected.
+  assert.equal(
+    await core.verifyAuthToken(`Bearer ${payload}.${sig}`, secret, async () => '1', {
+      nowSec: issuedAt + core.DEFAULT_TOKEN_TTL_SEC + 1,
+    }),
+    null,
+  );
 });
 
 test('createTokenVersionCache actually caches: serves a stale version within its TTL, then refreshes', async () => {
@@ -234,11 +242,10 @@ test('POST /backend/users/me/change-password rejects a weak newPassword (validat
   const prevSecret = process.env.AUTH_SECRET;
   try {
     process.env.AUTH_SECRET = 'change-password-test-secret';
-    // Plan 005 token format: `${userId}.${tokenVersion}.${sig}`, sig computed
-    // over the `${userId}.${tokenVersion}` payload. token_version '1' matches
-    // the default the module-level DB mock (see test.before above) answers for
-    // the auth step's token_version lookup.
-    const payload = 'user-1.1';
+    // Token format: `${userId}.${tokenVersion}.${issuedAt}.${sig}`.
+    // token_version '1' matches the default the module-level DB mock answers.
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const payload = `user-1.1.${issuedAt}`;
     const sig = require('crypto').createHmac('sha256', 'change-password-test-secret').update(payload).digest('base64url');
     const token = `${payload}.${sig}`;
 

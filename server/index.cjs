@@ -16,8 +16,17 @@ const {
   VERSIONED_TABLES,
   JSON_COLUMNS_BY_TABLE,
   WORKSPACE_SCOPED_TABLES: SHARED_WORKSPACE_SCOPED_TABLES,
+  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
+  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
   stripPrivilegedDbValues,
   storagePathBelongsToWorkspace,
+  issueAuthToken,
+  verifyAuthToken,
+  getTokenTtlSec,
+  DEFAULT_TOKEN_TTL_SEC,
+  createRateLimiter,
+  evaluatePasswordServerSide,
+  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
 } = require('../shared/backend-core.cjs');
 
 const execFileAsync = promisify(execFile);
@@ -210,31 +219,17 @@ function setCachedTokenVersion(userId, version) {
   tokenVersionCache.set(userId, { version: String(version), expiresAt: Date.now() + TOKEN_VERSION_CACHE_TTL_MS });
 }
 
-async function issueToken(userId, tokenVersion) {
+async function issueToken(userId, tokenVersion, options = {}) {
   const secret = await getAuthSecret();
-  const payload = `${userId}.${tokenVersion}`;
-  const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+  return issueAuthToken(userId, tokenVersion, secret, options);
 }
 
-async function verifyToken(token) {
+async function verifyToken(token, options = {}) {
   if (!token || typeof token !== 'string') return null;
-  const dot = token.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const [userId, tokenVersionStr] = payload.split('.');
-  if (!userId || !tokenVersionStr) return null;
   const secret = await getAuthSecret();
-  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  // Check the signed version still matches the user's CURRENT version in the DB
-  // (via the short-TTL cache above) — a stale/rolled-back/revoked token fails here.
-  const currentVersion = await getCachedTokenVersion(userId);
-  if (currentVersion === null || currentVersion !== tokenVersionStr) return null;
-  return userId;
+  // Reuse shared verifier (TTL + signature + token_version). Auth header form
+  // accepts a raw token as well as "Bearer …".
+  return verifyAuthToken(token, secret, getCachedTokenVersion, options);
 }
 
 // Verify a Netlify outgoing-webhook signature. When a JWS secret is configured on
@@ -303,54 +298,9 @@ async function userCanAccessWorkspace(userId, workspaceId) {
 // and Fly cannot drift (parity test also locks the set).
 const WORKSPACE_SCOPED_TABLES = SHARED_WORKSPACE_SCOPED_TABLES;
 
-const WORKSPACE_ROLE_CAPABILITIES = {
-  owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
-  admin: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
-  editor: new Set(['read', 'write', 'comment', 'run_agents']),
-  commenter: new Set(['read', 'comment']),
-  viewer: new Set(['read']),
-};
-
-const DEFAULT_TABLE_ACCESS = {
-  select: 'read',
-  insert: 'write',
-  update: 'write',
-  delete: 'write',
-};
-
-const DB_TABLE_ACCESS = {
-  documents: DEFAULT_TABLE_ACCESS,
-  chat_sessions: DEFAULT_TABLE_ACCESS,
-  messages: DEFAULT_TABLE_ACCESS,
-  memory_facts: DEFAULT_TABLE_ACCESS,
-  uploaded_files: DEFAULT_TABLE_ACCESS,
-  canvas_groups: DEFAULT_TABLE_ACCESS,
-  canvas_objects: DEFAULT_TABLE_ACCESS,
-  tasks: DEFAULT_TABLE_ACCESS,
-  document_versions: DEFAULT_TABLE_ACCESS,
-  workspace_agents: DEFAULT_TABLE_ACCESS,
-  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
-  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
-  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
-  activity_events: DEFAULT_TABLE_ACCESS,
-  document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  // The file mirror is daemon-owned (written via the agent_memory_sync WS action),
-  // so the REST/browser path is read-only; writes require manage to keep it server-side.
-  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
-  // External-agent registration approvals: reads are fine for any member, but
-  // approving/creating/removing a registration is a manage-only action (the
-  // dedicated routes enforce this) — without an explicit entry the generic CRUD
-  // path would default insert/update/delete to 'write' and let editors approve
-  // agents (M1, 2026-07 review).
-  agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  // Per-thread widget items (todo / plan / blocker). Any member with write can
-  // add/toggle; agents write via the same REST path with their run_agents cap.
-  thread_items: DEFAULT_TABLE_ACCESS,
-};
+// Single-sourced from shared/backend-core.cjs (Wave 2 security dedup).
+const WORKSPACE_ROLE_CAPABILITIES = SHARED_WORKSPACE_ROLE_CAPABILITIES;
+const DB_TABLE_ACCESS = SHARED_DB_TABLE_ACCESS;
 
 function findFilterValue(filters, column) {
   if (!Array.isArray(filters)) return undefined;
@@ -475,96 +425,22 @@ async function enforceWorkspaceRole(userId, workspaceId, mode) {
   }
 }
 
-async function resolveWorkspaceRowById(id) {
-  if (!id) return null;
-  const rows = await getDb().unsafe('select id from workspaces where id = $1 limit 1', [id]);
-  return rows[0]?.id || null;
+// Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
+function sharedDbAdapter(sql, params = []) {
+  return getDb().unsafe(sql, params);
 }
 
-// Parent-reference columns that define a child row's tenancy. An UPDATE may set
-// these (e.g. moving a canvas object between groups) but only to a parent in the
-// SAME workspace as the source row. Mirror of shared/backend-core.mjs.
-const UPDATE_PARENT_REF_LOOKUPS = {
-  session_id: 'select workspace_id from chat_sessions where id = $1 limit 1',
-  document_id: 'select workspace_id from documents where id = $1 limit 1',
-  task_id: 'select workspace_id from tasks where id = $1 limit 1',
-  group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
-};
-
-// H1 (2026-07 review): reject an UPDATE whose `values` would move/inject the row
-// into a workspace other than the one it currently belongs to.
-async function assertUpdateKeepsTenancy(sourceWorkspaceId, values) {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) return;
-  const src = String(sourceWorkspaceId);
-  if (values.workspace_id != null && String(values.workspace_id) !== src) {
-    throw forbidden('Cannot move a row to another workspace');
-  }
-  for (const [col, sql] of Object.entries(UPDATE_PARENT_REF_LOOKUPS)) {
-    const v = values[col];
-    if (v == null) continue; // absent, or explicitly cleared to null, is fine
-    const rows = await getDb().unsafe(sql, [v]);
-    const targetWs = rows[0]?.workspace_id;
-    if (!targetWs || String(targetWs) !== src) {
-      throw forbidden('Cannot reassign a row to another workspace');
-    }
-  }
-}
-
-function operationRows(values) {
-  if (!values) return [];
-  return Array.isArray(values) ? values : [values];
-}
-
-async function enforceDbOperationAccess(userId, table, action, payload) {
-  if (table === 'app_users') {
-    const idFilter = findFilterValue(payload.filters, 'id');
-    if (action === 'select' && idFilter && String(idFilter) === String(userId)) return;
-    throw forbidden('Direct user table access is not allowed');
-  }
-
-  if (table === 'workspaces') {
-    if (action === 'select') return;
-    if (action === 'insert') {
-      for (const row of operationRows(payload.values)) {
-        if (row && row.user_id && String(row.user_id) !== String(userId)) {
-          throw forbidden('Cannot create a workspace for another user');
-        }
-      }
-      return;
-    }
-    const workspaceId = findFilterValue(payload.filters, 'id') || await resolveWorkspaceRowById(findFilterValue(payload.filters, 'workspace_id'));
-    if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
-    await enforceWorkspaceRole(userId, workspaceId, 'manage');
-    return;
-  }
-
-  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
-
-  const mode = capabilityForDbOperation(table, action);
-
-  // UPDATE: authorize the SOURCE row's workspace (resolved from filters), then
-  // verify `values` can't move the row into a different workspace (H1).
-  if (action === 'update') {
-    const resolved = await resolveOperationWorkspace(table, { filters: payload.filters });
-    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
-    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
-    await assertUpdateKeepsTenancy(resolved.workspaceId, payload.values);
-    return;
-  }
-
-  for (const row of operationRows(payload.values)) {
-    if (!row || typeof row !== 'object') continue;
-    const resolved = await resolveOperationWorkspace(table, { values: row });
-    if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
-    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
-    await assertUpdateKeepsTenancy(resolved.workspaceId, row);
-  }
-
-  if (operationRows(payload.values).length === 0) {
-    const resolved = await resolveOperationWorkspace(table, { filters: payload.filters });
-    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
-    await enforceWorkspaceRole(userId, resolved.workspaceId, mode);
-  }
+// Thin wrapper preserving the server call signature used throughout index.cjs
+// and tests (__test.enforceDbOperationAccess(userId, table, action, payload)).
+async function enforceDbOperationAccess(userId, table, action, payload = {}) {
+  return sharedEnforceDbOperationAccess({
+    userId,
+    table,
+    op: action,
+    filters: payload.filters,
+    payload: { values: payload.values, filters: payload.filters },
+    db: sharedDbAdapter,
+  });
 }
 
 function getDatabaseUrl() {
@@ -1042,43 +918,8 @@ function jsonError(res, status, error) {
   res.status(status).json({ data: null, error: mapDbError(error) });
 }
 
-// ============================================================
-// H4 — Rate limiting (in-memory fixed window).
-// Canonical implementation lives in shared/backend-core.mjs; this CJS server is
-// self-contained (it keeps its own copies of the security helpers, e.g.
-// enforceDbOperationAccess) so the limiter is duplicated here rather than
-// importing the ESM core. Keep the two in sync.
-// NOTE: in-memory state is per-process — a multi-instance deploy needs a SHARED
-// store (Redis, etc.) for a globally accurate limit.
-// ============================================================
-function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
-  const hits = new Map(); // key -> { count, resetAt }
-  let lastSweep = 0;
-  // H2 (2026-07 review): evict expired entries so a flood of distinct keys
-  // (e.g. spoofed IPs before the keying fix, or simply many users over time)
-  // can't grow the Map without bound. Amortized: sweep at most once per window.
-  function sweep(now) {
-    if (now - lastSweep < windowMs) return;
-    lastSweep = now;
-    for (const [key, entry] of hits) {
-      if (now >= entry.resetAt) hits.delete(key);
-    }
-  }
-  function check(key) {
-    const now = Date.now();
-    sweep(now);
-    let entry = hits.get(key);
-    if (!entry || now >= entry.resetAt) {
-      entry = { count: 0, resetAt: now + windowMs };
-      hits.set(key, entry);
-    }
-    entry.count += 1;
-    const allowed = entry.count <= max;
-    return { allowed, retryAfterMs: allowed ? 0 : Math.max(0, entry.resetAt - now) };
-  }
-  return { check };
-}
-
+// H4 — Rate limiting. createRateLimiter is single-sourced from shared/backend-core.cjs
+// (Wave 2). In-memory state remains per-process — multi-instance needs Redis later.
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
@@ -1117,34 +958,7 @@ function clientIpFromReq(req) {
   return req.socket?.remoteAddress || req.ip || 'unknown';
 }
 
-// ============================================================
-// Plan 004 — auth hardening: server-side password policy.
-// Mirrors src/lib/passwordPolicy.ts's `evaluatePassword` rule (min length +
-// character-class count) and shared/backend-core.mjs's
-// `evaluatePasswordServerSide` (the Netlify path's copy). Kept as an inline
-// CJS copy here for the same reason this file duplicates its rate limiter
-// and enforceDbOperationAccess rather than importing the ESM core — keep all
-// three in sync if this policy changes.
-// ============================================================
-const PASSWORD_MIN_LENGTH = 10;
-const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
-
-function evaluatePasswordServerSide(password) {
-  const value = String(password || '');
-  const classesMet =
-    (/[a-z]/.test(value) ? 1 : 0) +
-    (/[A-Z]/.test(value) ? 1 : 0) +
-    (/[0-9]/.test(value) ? 1 : 0) +
-    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
-  const longEnough = value.length >= PASSWORD_MIN_LENGTH;
-  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
-  const message = valid
-    ? ''
-    : !longEnough
-      ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
-      : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
-  return { valid, classesMet, longEnough, message };
-}
+// Plan 004 password policy: evaluatePasswordServerSide imported from shared.
 
 function workspaceIdFromSettingsRequest(req) {
   return String(req.query?.workspaceId || req.body?.workspace_id || req.body?.workspaceId || '').trim();
@@ -2036,6 +1850,114 @@ function agentRuntimePayload(agent) {
     permissionFlags: agentPermissionFlags(permissionMode),
     version: Number(agent.version || 0),
     enabled: isAgentEnabled(agent),
+  };
+}
+
+/** Caps for workspace bootstrap snapshot lists (cold-load fan-in). */
+const BOOTSTRAP_LIMITS = {
+  agents: 200,
+  sessions: 200,
+  documents: 100,
+  tasks: 200,
+  files: 100,
+  connections: 100,
+  memoryFacts: 100,
+};
+
+/**
+ * Single workspace snapshot for SPA cold load. Metadata only for docs/files
+ * (no full document bodies / file bytes). Messages stay per-session lazy.
+ */
+async function buildWorkspaceBootstrap(workspaceId, userId) {
+  const db = getDb();
+  const [
+    workspaceRows,
+    agentRows,
+    sessionRows,
+    documentRows,
+    taskRows,
+    fileRows,
+    connectionRows,
+    memoryRows,
+  ] = await Promise.all([
+    db.unsafe(
+      `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+              w.created_at, w.updated_at,
+              case when w.user_id = $2 then 'owner' else coalesce(wm.role, 'viewer') end as role
+       from workspaces w
+       left join workspace_members wm on wm.workspace_id = w.id and wm.user_id = $2
+       where w.id = $1
+       limit 1`,
+      [workspaceId, userId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+       from workspace_agents
+       where workspace_id = $1
+       order by created_at asc, name asc
+       limit ${BOOTSTRAP_LIMITS.agents}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, title, kind, parent_message_id, folder, archived_at, deleted_at, created_at, updated_at
+       from chat_sessions
+       where workspace_id = $1 and deleted_at is null
+       order by updated_at desc nulls last
+       limit ${BOOTSTRAP_LIMITS.sessions}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, title, folder, favorite, created_at, updated_at
+       from documents
+       where workspace_id = $1
+       order by updated_at desc nulls last
+       limit ${BOOTSTRAP_LIMITS.documents}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, title, description, status, priority, due_date, assignee_id, parent_id, source_type, source_id, created_at, updated_at
+       from tasks
+       where workspace_id = $1
+       order by created_at desc
+       limit ${BOOTSTRAP_LIMITS.tasks}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, name, size, type, content_sha256, created_at
+       from uploaded_files
+       where workspace_id = $1
+       order by created_at desc
+       limit ${BOOTSTRAP_LIMITS.files}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, agent_id, name, handle, host, cwd, status, last_seen_at, created_at, updated_at
+       from agent_connections
+       where workspace_id = $1
+       order by last_seen_at desc nulls last
+       limit ${BOOTSTRAP_LIMITS.connections}`,
+      [workspaceId],
+    ),
+    db.unsafe(
+      `select id, workspace_id, category, content, created_at, updated_at
+       from memory_facts
+       where workspace_id = $1
+       order by updated_at desc nulls last
+       limit ${BOOTSTRAP_LIMITS.memoryFacts}`,
+      [workspaceId],
+    ),
+  ]);
+
+  return {
+    workspace: workspaceRows[0] ? publicWorkspace(workspaceRows[0]) : null,
+    agents: agentRows.map(agentRuntimePayload),
+    sessions: sessionRows,
+    documents: documentRows,
+    tasks: taskRows,
+    files: fileRows,
+    connections: connectionRows.map(publicAgentConnection),
+    memoryFacts: memoryRows,
+    limits: BOOTSTRAP_LIMITS,
   };
 }
 
@@ -5404,10 +5326,17 @@ function createApp() {
         if (!verifyNetlifyDeploySignature(signature, req.rawBody, secret)) {
           return res.status(401).json({ data: null, error: 'Invalid signature' });
         }
+      } else if (process.env.NODE_ENV === 'production') {
+        // Fail closed in production: unsigned deploy webhooks would let anyone
+        // spoof "new version — reload" to all connected clients.
+        console.error('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — rejecting (production fail-closed)');
+        return res.status(503).json({
+          data: null,
+          error: 'Deploy webhook secret is not configured',
+        });
       } else {
-        // No secret configured → we cannot prove the sender. Accept (so the feature
-        // works before the secret is wired) but log it so it isn't a silent gap.
-        console.warn('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — accepting unsigned deploy webhook');
+        // Dev/test only: accept so local wiring works before the secret is set.
+        console.warn('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — accepting unsigned deploy webhook (non-production)');
       }
 
       const deploy = req.body || {};
@@ -5497,6 +5426,20 @@ function createApp() {
         [workspaceId],
       );
       res.json({ data: rows.map(agentRuntimePayload), error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  // Cold-load snapshot: one round-trip for the heaviest workspace-scoped lists
+  // so the SPA does not open ~15 parallel queries before first paint.
+  app.get('/backend/workspaces/:id/bootstrap', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+      const data = await buildWorkspaceBootstrap(workspaceId, req.userId);
+      res.json({ data, error: null });
     } catch (error) {
       jsonError(res, error.status || 500, error);
     }
@@ -6836,6 +6779,8 @@ module.exports = {
     projectFsAllowed,
     isWithinAllowedProjectRoot,
     WORKSPACE_SCOPED_TABLES,
+    getTokenTtlSec,
+    DEFAULT_TOKEN_TTL_SEC,
     verifyToken,
     // Token revocation cache — exposed so tests can assert the cache is real
     // (not a no-op) without hardcoding its TTL.
@@ -6853,6 +6798,8 @@ module.exports = {
     normalizeCursorBuddyScope,
     publicCursorBuddyConnectionKey,
     publicWorkspace,
+    buildWorkspaceBootstrap,
+    BOOTSTRAP_LIMITS,
     ensureCursorBuddyAgentForKey,
     runAgentTurn,
     hasActiveBurstJob,

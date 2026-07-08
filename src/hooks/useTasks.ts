@@ -16,9 +16,13 @@ export interface CreateTaskInput {
   source_id?: string | null;
 }
 
-export function useTasks(workspaceId: string | null, userId?: string) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useTasks(workspaceId: string | null, userId?: string, seed?: Task[] | null) {
+  const [tasks, setTasks] = useState<Task[]>(() => seed || []);
+  const [loading, setLoading] = useState(!seed?.length);
+
+  useEffect(() => {
+    if (seed) setTasks(seed);
+  }, [seed]);
 
   const fetchTasks = useCallback(async () => {
     if (!workspaceId) {

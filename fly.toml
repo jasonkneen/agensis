@@ -21,20 +21,15 @@ primary_region = "fra"
   HOST = "0.0.0.0"
   API_PORT = "8080"
   NODE_ENV = "production"
-  # Uploaded file bytes default to <cwd>/.agensis_uploads on the machine's
-  # EPHEMERAL rootfs, so they are lost on every deploy/restart and are not shared
-  # across machines (review H6). To persist them, provision a volume and point
-  # the upload root at its mount (uncomment this + the [[mounts]] block below):
-  #   fly volumes create agensis_uploads --region fra --size 3
-  # AGENSIS_UPLOAD_ROOT = "/data/uploads"
+  # Persistent upload root on the mounted volume (H6). Volume provisioned:
+  #   fly volumes create agensis_uploads --region fra --size 3 --app agensis-backend
+  # Note: a single volume attaches to ONE machine — durable but not shared across
+  # machines; multi-machine scale-out needs object storage (S3/R2).
+  AGENSIS_UPLOAD_ROOT = "/data/uploads"
 
-# Persistent storage for uploaded files (H6). Uncomment once the volume above
-# exists; adding a mount for a volume that does not exist yet breaks `fly deploy`.
-# Note: a single volume attaches to ONE machine, so uploads are durable but not
-# shared — for multi-machine scale-out, move bytes to object storage (S3/R2).
-# [[mounts]]
-#   source = "agensis_uploads"
-#   destination = "/data"
+[[mounts]]
+  source = "agensis_uploads"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080

@@ -29,9 +29,13 @@ function agentHandle(value: string) {
     .slice(0, 40) || 'agent';
 }
 
-export function useAgents(workspaceId: string | null, userId?: string) {
-  const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useAgents(workspaceId: string | null, userId?: string, seed?: WorkspaceAgent[] | null) {
+  const [agents, setAgents] = useState<WorkspaceAgent[]>(() => seed || []);
+  const [loading, setLoading] = useState(!seed?.length);
+
+  useEffect(() => {
+    if (seed) setAgents(seed);
+  }, [seed]);
 
   const fetchAgents = useCallback(async () => {
     if (!workspaceId) {

@@ -15,9 +15,13 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-export function useFiles(workspaceId: string | null) {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | null) {
+  const [files, setFiles] = useState<UploadedFile[]>(() => seed || []);
+  const [loading, setLoading] = useState(!seed?.length);
+
+  useEffect(() => {
+    if (seed) setFiles(seed);
+  }, [seed]);
 
   const fetchFiles = useCallback(async () => {
     if (!workspaceId) return;

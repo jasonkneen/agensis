@@ -4,10 +4,14 @@ import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { Document } from '../types';
 
-export function useDocuments(workspaceId: string | null) {
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useDocuments(workspaceId: string | null, seed?: Document[] | null) {
+  const [documents, setDocuments] = useState<Document[]>(() => seed || []);
+  const [loading, setLoading] = useState(!seed?.length);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (seed) setDocuments(seed);
+  }, [seed]);
 
   const fetchDocuments = useCallback(async () => {
     if (!workspaceId) return;
