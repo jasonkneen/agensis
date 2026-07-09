@@ -7,8 +7,15 @@
 // `typeof __BUILD_ID__ !== 'undefined'` guard — never bare.
 declare const __BUILD_ID__: string;
 
+/** Native SDK JS bridge (desktop shell). Absent in the browser / PWA. */
+interface NativeZeroBridge {
+  invoke: (command: string, payload?: Record<string, unknown>) => Promise<unknown>;
+}
+
 interface Window {
+  /** @deprecated Electron shell removed; use `zero` (Native SDK). */
   electronAPI?: {
     pickFolder: () => Promise<string | null>;
   };
+  zero?: NativeZeroBridge;
 }

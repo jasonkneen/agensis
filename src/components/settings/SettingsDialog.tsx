@@ -172,11 +172,34 @@ function GeneralPanel({
     setPathStatus(null);
   }, [workspace?.id, workspace?.local_path]);
 
+  const isNativeDesktop = Boolean(window.zero?.invoke);
   const isElectron = Boolean(window.electronAPI);
-  const hasDirectoryPicker = !isElectron && 'showDirectoryPicker' in window;
-  const canBrowse = isElectron || hasDirectoryPicker;
+  const isDesktopShell = isNativeDesktop || isElectron;
+  const hasDirectoryPicker = !isDesktopShell && 'showDirectoryPicker' in window;
+  const canBrowse = isDesktopShell || hasDirectoryPicker;
 
   const browsePath = async () => {
+    // Native SDK desktop shell (replaces Electron pick-folder IPC).
+    if (isNativeDesktop) {
+      try {
+        const picked = await window.zero!.invoke('native-sdk.dialog.openFile', {
+          title: 'Select project folder',
+          allowDirectories: true,
+          allowMultiple: false,
+        });
+        const path =
+          Array.isArray(picked) && typeof picked[0] === 'string'
+            ? picked[0]
+            : null;
+        if (path) {
+          setPathDraft(path);
+          setPathStatus(null);
+        }
+      } catch {
+        // user cancelled or bridge denied
+      }
+      return;
+    }
     if (isElectron) {
       const picked = await window.electronAPI!.pickFolder();
       if (picked) {
@@ -256,7 +279,7 @@ function GeneralPanel({
         </InputGroup>
         <FieldDescription>
           {pathStatus || workspace?.git_root || workspace?.local_path || (
-            isElectron
+            isDesktopShell
               ? 'Click Browse or type the path, then Link.'
               : 'Web mode — type the full system path (e.g. /Users/name/projects/repo), then click Link.'
           )}

@@ -13,6 +13,11 @@ release
 build/icon.png
 *.local
 
+# Native SDK desktop shell
+desktop/zig-out/
+desktop/.zig-cache/
+desktop/third_party/
+
 .vscode/*
 !.vscode/extensions.json
 .idea

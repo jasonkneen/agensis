@@ -92,13 +92,13 @@ This serves the Neon-backed database API, local auth, realtime websocket bridge,
 npm run dev
 ```
 
-### 6. Run the Electron app in development
+### 6. Run the desktop app in development (Native SDK)
 
 ```bash
-npm run electron:dev
+npm run desktop:dev
 ```
 
-This starts Vite, waits for the dev server, then launches Electron pointed at the local app.
+This ensures the local backend is up, then builds the Native SDK shell and starts Vite + the native WebView window. Requires Zig 0.16+, the `native` CLI (`npm i -g @native-sdk/cli`), and a sibling checkout of the SDK at `../native`.
 
 ### 7. Production build
 
@@ -106,16 +106,16 @@ This starts Vite, waits for the dev server, then launches Electron pointed at th
 npm run build
 ```
 
-### 8. Package Electron
+### 8. Package desktop app
 
 ```bash
-npm run electron:dist
+npm run desktop:dist
 ```
 
 Packaged desktop artifacts are written to:
 
 ```text
-release/
+desktop/zig-out/package/
 ```
 
 ### 9. Typecheck
