@@ -1507,7 +1507,18 @@ function AgentDetailPane({
           {activeConnections.length > 0 && (
             <AgentDetailSection title="Connections">
               <div className="space-y-1.5">
-                {activeConnections.map(connection => (
+                {activeConnections.map(connection => {
+                  // A freshly-connected daemon can arrive with `capabilities` present but its
+                  // skills/clis/mcpServers arrays not yet populated (the capability payload lands on
+                  // a later heartbeat). Coerce every field to an array before reading `.length` so a
+                  // single in-flight connection row can never white-screen the whole workspace.
+                  const caps = connection.capabilities;
+                  const capSkills = Array.isArray(caps?.skills) ? caps.skills : [];
+                  const capClis = Array.isArray(caps?.clis) ? caps.clis : [];
+                  const capMcpServers = Array.isArray(caps?.mcpServers) ? caps.mcpServers : [];
+                  const capSharedModels = Array.isArray(caps?.sharedModels) ? caps.sharedModels : [];
+                  const hasCapabilities = capSkills.length > 0 || capClis.length > 0 || capMcpServers.length > 0 || capSharedModels.length > 0;
+                  return (
                   <div key={connection.id} className="rounded-md border bg-muted/35 px-2 py-1.5 text-xs">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <Monitor className="size-3 shrink-0" />
@@ -1520,47 +1531,48 @@ function AgentDetailPane({
                       )}
                     </div>
                     {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
-                    {connection.capabilities && (connection.capabilities.skills.length > 0 || connection.capabilities.clis.length > 0 || connection.capabilities.mcpServers.length > 0 || (connection.capabilities.sharedModels?.length || 0) > 0) && (
+                    {hasCapabilities && (
                       <div className="mt-1.5 space-y-1">
-                        {connection.capabilities.skills.length > 0 && (
+                        {capSkills.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             <span className="shrink-0 text-muted-foreground/60">Skills:</span>
-                            {connection.capabilities.skills.slice(0, 8).map(s => (
+                            {capSkills.slice(0, 8).map(s => (
                               <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{s}</span>
                             ))}
-                            {connection.capabilities.skills.length > 8 && <span className="text-muted-foreground/60">+{connection.capabilities.skills.length - 8}</span>}
+                            {capSkills.length > 8 && <span className="text-muted-foreground/60">+{capSkills.length - 8}</span>}
                           </div>
                         )}
-                        {connection.capabilities.clis.length > 0 && (
+                        {capClis.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
-                            {connection.capabilities.clis.map(c => (
+                            {capClis.map(c => (
                               <span key={c} className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">{c}</span>
                             ))}
                           </div>
                         )}
-                        {connection.capabilities.mcpServers.length > 0 && (
+                        {capMcpServers.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             <span className="shrink-0 text-muted-foreground/60">MCP:</span>
-                            {connection.capabilities.mcpServers.slice(0, 6).map(m => (
+                            {capMcpServers.slice(0, 6).map(m => (
                               <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
                             ))}
-                            {connection.capabilities.mcpServers.length > 6 && <span className="text-muted-foreground/60">+{connection.capabilities.mcpServers.length - 6}</span>}
+                            {capMcpServers.length > 6 && <span className="text-muted-foreground/60">+{capMcpServers.length - 6}</span>}
                           </div>
                         )}
-                        {(connection.capabilities.sharedModels?.length || 0) > 0 && (
+                        {capSharedModels.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
-                            {connection.capabilities.sharedModels?.slice(0, 6).map(model => (
+                            {capSharedModels.slice(0, 6).map(model => (
                               <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{model.name || model.id}</span>
                             ))}
-                            {(connection.capabilities.sharedModels?.length || 0) > 6 && <span className="text-muted-foreground/60">+{(connection.capabilities.sharedModels?.length || 0) - 6}</span>}
+                            {capSharedModels.length > 6 && <span className="text-muted-foreground/60">+{capSharedModels.length - 6}</span>}
                           </div>
                         )}
                       </div>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </AgentDetailSection>
           )}

@@ -1940,6 +1940,12 @@ function publicAgentConnection(row) {
   // via the hub peer_list channel (F7). Every browser-facing row (INSERT/UPDATE/DELETE
   // notify + REST) funnels through here, so strip it once, here.
   if (capabilities && typeof capabilities === 'object') delete capabilities.reach;
+  // A fresh connection stores a null/partial capabilities blob before the daemon pushes its
+  // full payload. Backfill the array fields the browser treats as always-present (AgentCapabilities
+  // declares skills/clis/mcpServers as required arrays) so it can never read `.length` of undefined.
+  capabilities.skills = Array.isArray(capabilities.skills) ? capabilities.skills : [];
+  capabilities.clis = Array.isArray(capabilities.clis) ? capabilities.clis : [];
+  capabilities.mcpServers = Array.isArray(capabilities.mcpServers) ? capabilities.mcpServers : [];
   capabilities.sharedModels = sharedModelsFromMessage(capabilities.sharedModels);
   return {
     id: row.id,
@@ -6134,7 +6140,14 @@ function createApp() {
       const data = await buildWorkspaceBootstrap(workspaceId, req.userId);
       res.json({ data, error: null });
     } catch (error) {
-      jsonError(res, error.status || 500, error);
+      const status = error.status || 500;
+      // jsonError only ships a sanitized message to the client, so a 5xx here otherwise leaves
+      // no server-side trace. Log the stack + who/where so the (reproduced-only-on-connect)
+      // bootstrap 500 is diagnosable from fly logs next time instead of invisible.
+      if (status >= 500) {
+        console.error('[bootstrap] %d for workspace=%s user=%s:', status, req.params?.id, req.userId, error);
+      }
+      jsonError(res, status, error);
     }
   });
 
