@@ -1520,7 +1520,7 @@ function AgentDetailPane({
                       )}
                     </div>
                     {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
-                    {connection.capabilities && (connection.capabilities.skills.length > 0 || connection.capabilities.clis.length > 0 || connection.capabilities.mcpServers.length > 0) && (
+                    {connection.capabilities && (connection.capabilities.skills.length > 0 || connection.capabilities.clis.length > 0 || connection.capabilities.mcpServers.length > 0 || (connection.capabilities.sharedModels?.length || 0) > 0) && (
                       <div className="mt-1.5 space-y-1">
                         {connection.capabilities.skills.length > 0 && (
                           <div className="flex flex-wrap gap-1">
@@ -1546,6 +1546,15 @@ function AgentDetailPane({
                               <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
                             ))}
                             {connection.capabilities.mcpServers.length > 6 && <span className="text-muted-foreground/60">+{connection.capabilities.mcpServers.length - 6}</span>}
+                          </div>
+                        )}
+                        {(connection.capabilities.sharedModels?.length || 0) > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
+                            {connection.capabilities.sharedModels?.slice(0, 6).map(model => (
+                              <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{model.name || model.id}</span>
+                            ))}
+                            {(connection.capabilities.sharedModels?.length || 0) > 6 && <span className="text-muted-foreground/60">+{(connection.capabilities.sharedModels?.length || 0) - 6}</span>}
                           </div>
                         )}
                       </div>

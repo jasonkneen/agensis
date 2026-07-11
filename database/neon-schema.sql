@@ -392,6 +392,41 @@ CREATE TABLE IF NOT EXISTS agent_connections (
   last_seen_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS farm_integration_device_codes (
+  id uuid PRIMARY KEY,
+  device_code_hash text NOT NULL UNIQUE,
+  user_code text NOT NULL UNIQUE,
+  name text NOT NULL DEFAULT 'Agent Farm',
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'consumed')),
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+  approved_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  denied_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  integration_id uuid,
+  expires_at timestamptz NOT NULL,
+  approved_at timestamptz,
+  denied_at timestamptz,
+  consumed_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_farm_device_user_code ON farm_integration_device_codes(user_code);
+CREATE INDEX IF NOT EXISTS idx_farm_device_expires_at ON farm_integration_device_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS farm_integrations (
+  id uuid PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT 'Agent Farm',
+  token_hash text NOT NULL UNIQUE,
+  scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  approved_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  revoked_at timestamptz,
+  last_seen_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_farm_integrations_workspace ON farm_integrations(workspace_id, revoked_at);
 CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status);

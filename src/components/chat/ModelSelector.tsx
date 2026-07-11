@@ -1,5 +1,5 @@
 import { Sparkles, Zap } from 'lucide-react';
-import { AI_MODELS } from '../../types';
+import { AI_MODELS, type AIModel } from '../../types';
 import {
   Select,
   SelectContent,
@@ -12,10 +12,11 @@ import {
 interface ModelSelectorProps {
   value: string;
   onChange: (model: string) => void;
+  models?: AIModel[];
 }
 
-export function ModelSelector({ value, onChange }: ModelSelectorProps) {
-  const selected = AI_MODELS.find(model => model.id === value) || AI_MODELS[0];
+export function ModelSelector({ value, onChange, models = AI_MODELS }: ModelSelectorProps) {
+  const selected = models.find(model => model.id === value) || models[0] || AI_MODELS[0];
 
   return (
     <Select value={selected.id} onValueChange={onChange}>
@@ -26,7 +27,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
       <SelectContent align="end" position="popper">
         <SelectGroup>
           <SelectLabel>Model</SelectLabel>
-          {AI_MODELS.map(model => (
+          {models.map(model => (
             <SelectItem key={model.id} value={model.id} textValue={model.label}>
               {model.id === 'auto' ? <Sparkles data-icon="inline-start" /> : <Zap data-icon="inline-start" />}
               <span className="flex min-w-0 flex-col">

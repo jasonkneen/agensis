@@ -49,6 +49,14 @@ function parseArgs(argv) {
       args.lanListener = true;
       continue;
     }
+    if (key === "share") {
+      args.share = true;
+      continue;
+    }
+    if (key === "noCoding") {
+      args.noCoding = true;
+      continue;
+    }
     if (key === "cursorbuddyBridge") {
       args.cursorBuddyBridge = true;
       continue;
@@ -96,6 +104,7 @@ Options:
   --name <name>           Display name
   --cwd <path>            Folder where the coding CLI runs
   --coding-cmd <command>  Command used for jobs, default: claude -p
+  --no-coding             Disable coding jobs; keep presence/shared inference only
   --model <id>            Default model to pass to supported coding CLIs
   --permission-mode <m>   default, accept_edits, or yolo
   --yolo                  Alias for --permission-mode yolo
@@ -108,6 +117,9 @@ Options:
   --once                  Run one queued job then exit
   --lan                   Opt in to the agent-mesh LAN listener for direct
                           daemon-to-daemon job handoff (default: off)
+  --share                 Advertise local inference models to this workspace
+  --shared-models-file <path>
+                          JSON config for loopback OpenAI-compatible models
   --profile <name>        Save/reuse a local daemon profile, default: default
   --version               Print the CLI version
   --help                  Show this help

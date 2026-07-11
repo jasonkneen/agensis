@@ -325,6 +325,18 @@ export type AIModel = {
   description: string;
 };
 
+export type SharedAgentModel = {
+  id: string;
+  name: string;
+  provider: string;
+  protocol: 'openai-chat' | string;
+  upstreamModel: string;
+  capabilities: string[];
+  contextWindow?: number;
+  maxConcurrency: number;
+  shared: true;
+};
+
 export const AI_MODELS: AIModel[] = [
   { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Most capable model' },
@@ -374,8 +386,12 @@ export interface WorkspaceAgent {
 
 export interface AgentCapabilities {
   skills: string[];
+  commands?: Array<{ name: string; parent?: string | null }>;
   clis: string[];
   mcpServers: string[];
+  sharedModels?: SharedAgentModel[];
+  codingRoute?: boolean;
+  shared?: boolean;
   memoryRoot: string | null;
 }
 

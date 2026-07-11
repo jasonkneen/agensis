@@ -114,6 +114,9 @@ test('CursorBuddy buddy connect restarts from cache when a key was already claim
       cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
       model: 'claude-fable-5',
       permissionMode: 'yolo',
+      share: true,
+      sharedModelsFile: '/Users/jkneen/models.json',
+      noCoding: true,
     }, {
       homedir: home,
       fetchImpl: async () => jsonResponse(409, {
@@ -129,6 +132,9 @@ test('CursorBuddy buddy connect restarts from cache when a key was already claim
     assert.equal(daemonArgs.cwd, '/Users/jkneen/Documents/GitHub/3Dpet');
     assert.equal(daemonArgs.model, 'claude-fable-5');
     assert.equal(daemonArgs.permissionMode, 'yolo');
+    assert.equal(daemonArgs.share, true);
+    assert.equal(daemonArgs.sharedModelsFile, '/Users/jkneen/models.json');
+    assert.equal(daemonArgs.noCoding, true);
     assert.equal(daemonArgs.cursorBuddyRuntime, true);
   } finally {
     await fs.rm(home, { recursive: true, force: true });

@@ -10,6 +10,12 @@
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
 
+# Device-authorization links and future app routes are handled by the Vite SPA.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
 [[headers]]
   for = "/release-notes.json"
   [headers.values]

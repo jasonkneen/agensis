@@ -9,6 +9,7 @@ import { createQueue } from "./queue.mjs";
 import { startCursorBuddyLocalBridge } from "./cursorbuddyLocalBridge.mjs";
 import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
 import { detectCommandEntries, detectSkillNames } from "./slashEnum.mjs";
+import { loadSharedModelConfig, runSharedInference, sharedModelAdvertisements } from "./sharedInference.mjs";
 import {
   writeAgentMirror,
   writeHeartbeatFile,
@@ -27,10 +28,13 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
-export const AGENSIS_CLI_VERSION = "0.1.21";
+export const AGENSIS_CLI_VERSION = "0.1.22";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
+  config.sharedModels = config.share
+    ? await loadSharedModelConfig(config.sharedModelsFile)
+    : [];
   let stopped = false;
   let ws = null;
   let reconnectTimer = null;
@@ -43,6 +47,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
   let cursorBuddyBridge = null;
   let socketRegistered = false;
   let registeredConnection = null;
+  const activeInference = new Map();
 
   // --- Agent-mesh (F1/F5/F6/F7): opt-in LAN listener + peer ticket/list plumbing for
   // direct daemon-to-daemon job handoff. Every human<->agent turn stays hub-relayed
@@ -185,6 +190,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
 
   const stop = () => {
     stopped = true;
+    abortInferenceRequests(activeInference);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (fileHeartbeatTimer) clearInterval(fileHeartbeatTimer);
@@ -298,6 +304,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
               queue,
               agentStatus,
               canHandleCursorBuddyControlJobs(config) ? cursorBuddyBridge?.getContext?.() : null,
+              activeInference,
             ),
           });
         });
@@ -345,6 +352,50 @@ export async function runAgensisDaemon(rawConfig = {}) {
       }
       if (message.type === "agent_capabilities_refresh") {
         void pushCapabilitiesSnapshot(ws, config, currentReach());
+        return;
+      }
+      if (message.type === "agent_inference_cancel") {
+        activeInference.get(String(message.requestId || ""))?.abort();
+        return;
+      }
+      if (message.type === "agent_job_cancel") {
+        const jobId = String(message.jobId || "");
+        if (jobId && queue.cancel(jobId, message.reason || "Cancelled by Agensis")) {
+          log(`Cancelled job ${jobId}`);
+        }
+        return;
+      }
+      if (message.type === "agent_inference_request" && message.requestId) {
+        const requestId = String(message.requestId);
+        const selected = config.sharedModels.find((model) => model.id === message.model);
+        const activeForModel = [...activeInference.values()].filter((entry) => entry.model === message.model).length;
+        if (!selected) {
+          send(ws, { action: "agent_inference_error", requestId, error: `Shared model '${message.model || ""}' is not available.` });
+          return;
+        }
+        if (activeForModel >= selected.maxConcurrency) {
+          send(ws, { action: "agent_inference_error", requestId, error: "Shared model is at capacity.", code: "capacity_exhausted" });
+          return;
+        }
+        const controller = new AbortController();
+        activeInference.set(requestId, { abort: () => controller.abort(), model: selected.id });
+        send(ws, { action: "agent_heartbeat", metadata: heartbeatMetadata(config, queue, null, null, activeInference) });
+        void runSharedInference({
+          models: config.sharedModels,
+          request: message,
+          signal: controller.signal,
+          send: (event) => send(ws, event),
+        }).catch((error) => {
+          send(ws, {
+            action: "agent_inference_error",
+            requestId,
+            error: controller.signal.aborted ? "Inference cancelled." : error?.message || String(error),
+            code: controller.signal.aborted ? "cancelled" : "inference_failed",
+          });
+        }).finally(() => {
+          activeInference.delete(requestId);
+          send(ws, { action: "agent_heartbeat", metadata: heartbeatMetadata(config, queue, null, null, activeInference) });
+        });
         return;
       }
       // --- Agent-mesh (F5/F6/F7) wire, mirrored from the hub's peer_ticket_request /
@@ -401,6 +452,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
     });
 
     ws.on("close", (code, reason) => {
+      abortInferenceRequests(activeInference);
       socketRegistered = false;
       registeredConnection = null;
       const closeReason = String(reason || "");
@@ -476,6 +528,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
 
 function normalizeConfig(raw) {
   const cursorBuddyBridge = normalizeCursorBuddyBridgeFlag(raw.cursorBuddyBridge);
+  const codingDisabled = raw.noCoding === true || process.env.AGENSIS_NO_CODING === "1";
   const config = {
     url: String(raw.url || raw.baseUrl || process.env.AGENSIS_URL || "").trim(),
     token: String(raw.token || process.env.AGENSIS_TOKEN || "").trim(),
@@ -484,7 +537,7 @@ function normalizeConfig(raw) {
     handle: slugHandle(raw.handle || process.env.AGENSIS_HANDLE || raw.name || process.env.AGENSIS_NAME || "agent"),
     name: String(raw.name || process.env.AGENSIS_NAME || raw.handle || process.env.AGENSIS_HANDLE || "agensis Agent").trim(),
     cwd: String(raw.cwd || process.env.AGENSIS_CWD || process.cwd()).trim(),
-    codingCmd: String(raw.codingCmd || process.env.AGENSIS_CODING_CMD || process.env.CODING_CMD || "claude -p").trim(),
+    codingCmd: codingDisabled ? "" : String(raw.codingCmd || process.env.AGENSIS_CODING_CMD || process.env.CODING_CMD || "claude -p").trim(),
     model: resolveModel(raw.model || process.env.AGENSIS_MODEL || process.env.CLAUDE_MODEL || ""),
     permissionMode: normalizePermissionMode(raw.permissionMode || raw.permission_mode || raw.permission || process.env.AGENSIS_PERMISSION_MODE || "default"),
     timeoutMs: Number(raw.timeoutMs || process.env.AGENSIS_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
@@ -502,12 +555,19 @@ function normalizeConfig(raw) {
     // Agent-mesh (F6): opt-in LAN listener for direct daemon-to-daemon job handoff.
     // Default OFF — a daemon never opens a network listener unless asked to.
     lanListener: Boolean(raw.lanListener || raw.lan || process.env.AGENSIS_LAN === "1"),
+    share: Boolean(raw.share || process.env.AGENSIS_SHARE === "1"),
+    sharedModelsFile: String(raw.sharedModelsFile || process.env.AGENSIS_SHARED_MODELS_FILE || "").trim(),
+    noCoding: codingDisabled,
   };
+  if (config.sharedModelsFile && !path.isAbsolute(config.sharedModelsFile)) {
+    config.sharedModelsFile = path.resolve(config.cwd, config.sharedModelsFile);
+  }
   const missing = [];
   if (!config.url) missing.push("--url");
   if (!config.token) missing.push("--token");
   if (!config.workspace) missing.push("--workspace");
   if (!config.agent) missing.push("--agent");
+  if (config.share && !config.sharedModelsFile) missing.push("--shared-models-file");
   if (missing.length) throw new Error(`Missing required option(s): ${missing.join(", ")}`);
   return config;
 }
@@ -772,7 +832,7 @@ async function runAgentJob(config, job, { signal }) {
   const result = await runCli({
     cmd: command.cmd,
     args: [...command.args, prompt],
-    cwd: config.cwd,
+    cwd: job.cwd || config.cwd,
     timeoutMs: config.timeoutMs,
     heartbeatMs: config.heartbeatMs,
     label: "agent job",
@@ -1025,7 +1085,7 @@ function permissionFlagsForMode(permissionMode) {
 // Build the heartbeat metadata sent to the server, folding in the agent's self-declared
 // status (from status.json) when present. The server merges this object into the stored
 // connection row, so agentStatus/agentNote surface on the agent card for free.
-function heartbeatMetadata(config, queue, agentStatus, cursorBuddyContext = null) {
+function heartbeatMetadata(config, queue, agentStatus, cursorBuddyContext = null, activeInference = null) {
   const metadata = {
     busy: queue.active() > 0,
     queueSize: queue.size(),
@@ -1044,6 +1104,14 @@ function heartbeatMetadata(config, queue, agentStatus, cursorBuddyContext = null
       cwd: config.cwd,
     },
   };
+  if (activeInference instanceof Map) {
+    const byModel = {};
+    for (const entry of activeInference.values()) {
+      const model = String(entry?.model || '');
+      if (model) byModel[model] = (byModel[model] || 0) + 1;
+    }
+    metadata.activeInferenceByModel = byModel;
+  }
   if (cursorBuddyContext && typeof cursorBuddyContext === "object") {
     metadata.cursorBuddy = sanitizeCursorBuddyContextForHeartbeat(cursorBuddyContext);
   }
@@ -1153,9 +1221,10 @@ async function computeCapabilities(config, reach = null) {
   // commands change. `reach` (agent-mesh F2/F6) is folded in too, so a listener
   // opening/closing or an address changing re-pushes via the SAME drift nudge —
   // no second sync channel.
-  const capabilitiesHash = sha1Short(JSON.stringify({ skills, commands, clis, mcpServers, memoryRoot, reach: reach || null }));
+  const sharedModels = sharedModelAdvertisements(config.sharedModels);
+  const capabilitiesHash = sha1Short(JSON.stringify({ skills, commands, clis, mcpServers, memoryRoot, sharedModels, codingRoute: Boolean(config.codingCmd), shared: config.share, reach: reach || null }));
   const memoryHash = sha1Short(await memoryFingerprint(memoryRoot));
-  return { skills, commands, clis, mcpServers, memoryRoot, reach: reach || null, capabilitiesHash, memoryHash };
+  return { skills, commands, clis, mcpServers, memoryRoot, sharedModels, codingRoute: Boolean(config.codingCmd), shared: config.share, reach: reach || null, capabilitiesHash, memoryHash };
 }
 
 // Push a snapshot of this agent's runtime capabilities (skills, CLIs, MCP servers,
@@ -1173,6 +1242,9 @@ async function pushCapabilitiesSnapshot(ws, config, reach = null) {
       commands: caps.commands,
       clis: caps.clis,
       mcpServers: caps.mcpServers,
+      sharedModels: caps.sharedModels,
+      codingRoute: caps.codingRoute,
+      shared: caps.shared,
       memoryRoot: caps.memoryRoot,
       reach: caps.reach || undefined,
       hash: caps.capabilitiesHash,
@@ -1342,10 +1414,20 @@ function log(message) {
   process.stderr.write(`[agensis] ${message}\n`);
 }
 
+function abortInferenceRequests(activeInference) {
+  if (!(activeInference instanceof Map)) return;
+  for (const entry of activeInference.values()) {
+    try { entry?.abort?.(); } catch { /* request is already settling */ }
+  }
+}
+
 export const __test = {
   cursorBuddyControlInstructions,
   isAddressInUseError,
   probeExistingCursorBuddyBridge,
   parseCursorBuddyControlIntent,
   runAgentJob,
+  normalizeConfig,
+  heartbeatMetadata,
+  abortInferenceRequests,
 };

@@ -10,6 +10,8 @@ const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
+const { createInferenceBroker } = require('./inference-broker.cjs');
+const { createFarmIntegrationCore } = require('./farm-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
   ALLOWED_TABLES,
@@ -40,6 +42,18 @@ let envLoaded = false;
 let db;
 let websocketClients = new Set();
 const connectedAgents = new Map();
+const inferenceBroker = createInferenceBroker({
+  sendToAgent(agentId, message, connectionId) {
+    const exact = connectionId ? connectedAgents.get(connectionId) : null;
+    const entry = exact && String(exact.agentId) === String(agentId) && exact.ws?.readyState === 1
+      ? exact
+      : [...connectedAgents.values()].find(
+        (candidate) => !connectionId && String(candidate.agentId) === String(agentId) && candidate.ws?.readyState === 1,
+      );
+    if (!entry) return false;
+    return sendWs(entry.ws, message);
+  },
+});
 
 // Heartbeat cadence for agent sockets. An ungraceful drop (laptop sleep, network
 // loss) leaves ws.readyState === 1 until a ping goes unanswered, so detection
@@ -278,6 +292,37 @@ async function requireAuth(req, res, next) {
   } catch (error) {
     jsonError(res, 401, new Error('Authentication failed'));
   }
+}
+
+function bearerToken(req) {
+  const header = String(req.headers?.authorization || '');
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+}
+
+function requireUserOrFarm(requiredScope) {
+  return async (req, res, next) => {
+    try {
+      const token = bearerToken(req);
+      if (token.startsWith('agf_')) {
+        req.farmIntegration = await getFarmIntegrationCore().authenticate(token, requiredScope);
+        return next();
+      }
+      const userId = await verifyToken(token);
+      if (!userId) return jsonError(res, 401, new Error('Authentication required'));
+      req.userId = userId;
+      return next();
+    } catch (error) {
+      return jsonError(res, error.status || 401, error);
+    }
+  };
+}
+
+async function authorizeUserOrFarmWorkspace(req, workspaceId, userCapability) {
+  if (req.farmIntegration) {
+    if (String(req.farmIntegration.workspaceId) !== String(workspaceId)) throw forbidden('Integration token does not match this workspace');
+    return;
+  }
+  await enforceWorkspaceRole(req.userId, workspaceId, userCapability);
 }
 
 // True if the user owns the workspace or is a member of it.
@@ -538,6 +583,40 @@ async function ensureRuntimeSchema() {
       last_seen_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
+    CREATE TABLE IF NOT EXISTS farm_integration_device_codes (
+      id uuid PRIMARY KEY,
+      device_code_hash text NOT NULL UNIQUE,
+      user_code text NOT NULL UNIQUE,
+      name text NOT NULL DEFAULT 'Agent Farm',
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'consumed')),
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+      approved_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      denied_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      integration_id uuid,
+      expires_at timestamptz NOT NULL,
+      approved_at timestamptz,
+      denied_at timestamptz,
+      consumed_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_farm_device_user_code ON farm_integration_device_codes(user_code);
+    CREATE INDEX IF NOT EXISTS idx_farm_device_expires_at ON farm_integration_device_codes(expires_at);
+
+    CREATE TABLE IF NOT EXISTS farm_integrations (
+      id uuid PRIMARY KEY,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Agent Farm',
+      token_hash text NOT NULL UNIQUE,
+      scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      approved_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      revoked_at timestamptz,
+      last_seen_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_farm_integrations_workspace ON farm_integrations(workspace_id, revoked_at);
     ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS capabilities jsonb DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
@@ -801,6 +880,138 @@ function getDb() {
   return db;
 }
 
+function farmDeviceRecord(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    deviceCodeHash: row.device_code_hash,
+    userCode: row.user_code,
+    name: row.name,
+    status: row.status,
+    workspaceId: row.workspace_id,
+    approvedBy: row.approved_by,
+    deniedBy: row.denied_by,
+    scopes: parseJsonArray(row.scopes),
+    integrationId: row.integration_id,
+    expiresAt: Date.parse(row.expires_at),
+    approvedAt: row.approved_at ? Date.parse(row.approved_at) : null,
+    deniedAt: row.denied_at ? Date.parse(row.denied_at) : null,
+    consumedAt: row.consumed_at ? Date.parse(row.consumed_at) : null,
+    createdAt: Date.parse(row.created_at),
+  };
+}
+
+function farmIntegrationRecord(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    tokenHash: row.token_hash,
+    scopes: parseJsonArray(row.scopes),
+    approvedBy: row.approved_by,
+    revokedAt: row.revoked_at ? Date.parse(row.revoked_at) : null,
+    lastSeenAt: row.last_seen_at ? Date.parse(row.last_seen_at) : null,
+    createdAt: Date.parse(row.created_at),
+  };
+}
+
+function createPostgresFarmIntegrationStore() {
+  return {
+    async insertDevice(record) {
+      const rows = await getDb().unsafe(
+        `insert into farm_integration_device_codes
+         (id, device_code_hash, user_code, name, status, expires_at, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), to_timestamp($7 / 1000.0), now()) returning *`,
+        [record.id, record.deviceCodeHash, record.userCode, record.name, record.status, record.expiresAt, record.createdAt],
+      );
+      return farmDeviceRecord(rows[0]);
+    },
+    async pruneDevices(expiredBefore) {
+      await getDb().unsafe(
+        'delete from farm_integration_device_codes where expires_at < to_timestamp($1 / 1000.0)',
+        [expiredBefore],
+      );
+    },
+    async findDeviceByHash(hash) {
+      const rows = await getDb().unsafe('select * from farm_integration_device_codes where device_code_hash = $1 limit 1', [hash]);
+      return farmDeviceRecord(rows[0]);
+    },
+    async findDeviceByUserCode(code) {
+      const rows = await getDb().unsafe('select * from farm_integration_device_codes where upper(user_code) = upper($1) limit 1', [code]);
+      return farmDeviceRecord(rows[0]);
+    },
+    async updateDevice(id, patch) {
+      const currentRows = await getDb().unsafe('select * from farm_integration_device_codes where id = $1 limit 1', [id]);
+      const current = farmDeviceRecord(currentRows[0]);
+      if (!current) return null;
+      const next = { ...current, ...patch };
+      const rows = await getDb().unsafe(
+        `update farm_integration_device_codes set
+          status = $2, workspace_id = $3, approved_by = $4, denied_by = $5,
+          scopes = $6::jsonb, integration_id = $7,
+          approved_at = case when $8::bigint is null then null else to_timestamp($8 / 1000.0) end,
+          denied_at = case when $9::bigint is null then null else to_timestamp($9 / 1000.0) end,
+          consumed_at = case when $10::bigint is null then null else to_timestamp($10 / 1000.0) end,
+          updated_at = now() where id = $1 returning *`,
+        [id, next.status, next.workspaceId || null, next.approvedBy || null, next.deniedBy || null, JSON.stringify(next.scopes || []), next.integrationId || null, next.approvedAt || null, next.deniedAt || null, next.consumedAt || null],
+      );
+      return farmDeviceRecord(rows[0]);
+    },
+    async insertIntegration(record) {
+      const rows = await getDb().unsafe(
+        `insert into farm_integrations
+         (id, workspace_id, name, token_hash, scopes, approved_by, created_at, updated_at)
+         values ($1, $2, $3, $4, $5::jsonb, $6, to_timestamp($7 / 1000.0), now()) returning *`,
+        [record.id, record.workspaceId, record.name, record.tokenHash, JSON.stringify(record.scopes), record.approvedBy || null, record.createdAt],
+      );
+      return farmIntegrationRecord(rows[0]);
+    },
+    async consumeApprovedDevice(id, integration, consumedAt) {
+      const rows = await getDb().unsafe(
+        `with claimed as (
+           update farm_integration_device_codes
+              set status = 'consumed', integration_id = $2,
+                  consumed_at = to_timestamp($8 / 1000.0), updated_at = now()
+            where id = $1 and status = 'approved'
+            returning workspace_id
+         )
+         insert into farm_integrations
+           (id, workspace_id, name, token_hash, scopes, approved_by, created_at, updated_at)
+         select $2, $3, $4, $5, $6::jsonb, $7, to_timestamp($8 / 1000.0), now()
+           from claimed
+         returning *`,
+        [id, integration.id, integration.workspaceId, integration.name, integration.tokenHash, JSON.stringify(integration.scopes), integration.approvedBy || null, consumedAt],
+      );
+      return farmIntegrationRecord(rows[0]);
+    },
+    async findIntegrationByHash(hash) {
+      const rows = await getDb().unsafe('select * from farm_integrations where token_hash = $1 limit 1', [hash]);
+      return farmIntegrationRecord(rows[0]);
+    },
+    async revokeIntegration(id, revokedAt) {
+      const rows = await getDb().unsafe('update farm_integrations set revoked_at = to_timestamp($2 / 1000.0), updated_at = now() where id = $1 returning *', [id, revokedAt]);
+      return farmIntegrationRecord(rows[0]);
+    },
+    async touchIntegration(id, lastSeenAt) {
+      const rows = await getDb().unsafe('update farm_integrations set last_seen_at = to_timestamp($2 / 1000.0), updated_at = now() where id = $1 returning *', [id, lastSeenAt]);
+      return farmIntegrationRecord(rows[0]);
+    },
+    async listIntegrations(workspaceId) {
+      const rows = await getDb().unsafe('select * from farm_integrations where workspace_id = $1 order by created_at desc', [workspaceId]);
+      return rows.map(farmIntegrationRecord);
+    },
+  };
+}
+
+let farmIntegrationCoreInstance;
+function getFarmIntegrationCore() {
+  if (!farmIntegrationCoreInstance) {
+    farmIntegrationCoreInstance = createFarmIntegrationCore({ store: createPostgresFarmIntegrationStore() });
+  }
+  return farmIntegrationCoreInstance;
+}
+
 function quoteIdent(value) {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
     throw new Error(`Invalid identifier: ${value}`);
@@ -933,6 +1144,7 @@ const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // many different emails from one host, which the per-email limiter can't catch.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+const farmDeviceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below.
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
@@ -1728,6 +1940,7 @@ function publicAgentConnection(row) {
   // via the hub peer_list channel (F7). Every browser-facing row (INSERT/UPDATE/DELETE
   // notify + REST) funnels through here, so strip it once, here.
   if (capabilities && typeof capabilities === 'object') delete capabilities.reach;
+  capabilities.sharedModels = sharedModelsFromMessage(capabilities.sharedModels);
   return {
     id: row.id,
     workspace_id: row.workspace_id,
@@ -1743,6 +1956,12 @@ function publicAgentConnection(row) {
     last_seen_at: row.last_seen_at,
     updated_at: row.updated_at,
   };
+}
+
+function publicFarmEnrolledAgent(row) {
+  if (!row) return row;
+  const { connect_token_hash: _connectTokenHash, ...agent } = row;
+  return agent;
 }
 
 function parseJsonObject(value) {
@@ -1788,6 +2007,19 @@ async function disconnectAgentDaemons(agentId, workspaceId) {
     connectedAgents.delete(connectionId);
     await markAgentConnectionOffline(entry.ws);
   }
+}
+
+async function disableFarmIntegrationAgents(workspaceId, integrationId) {
+  const rows = await getDb().unsafe(
+    `update workspace_agents
+        set enabled = false, connect_token_hash = '', updated_at = now()
+      where workspace_id = $1 and metadata->>'farmIntegrationId' = $2
+      returning *`,
+    [String(workspaceId), String(integrationId)],
+  );
+  if (rows.length > 0) notifyDbSubscribers('workspace_agents', 'UPDATE', rows.map(publicFarmEnrolledAgent));
+  for (const agent of rows) await disconnectAgentDaemons(agent.id, workspaceId);
+  return rows;
 }
 
 function findConnectedAgent(workspaceId, agentId, handle) {
@@ -2908,12 +3140,17 @@ async function failConnectionJobs(connectionId, reason) {
   }
 }
 
-// Backstop: time out any running job pending too long (covers half-open sockets
-// that never fire 'close', or a daemon that connected but never returned a result).
+// Backstop: time out jobs whose result/progress has gone stale. Farm coding jobs
+// share the CLI's 30-minute budget; chat turns retain the faster four-minute guard.
 async function reapStuckAgentJobs() {
   try {
     const rows = await getDb().unsafe(
-      `select * from agent_jobs where status = 'running' and started_at < now() - interval '240 seconds'`,
+      `select * from agent_jobs
+       where status = 'running'
+         and (
+           ((metadata->>'mode') = 'farm' and updated_at < now() - interval '31 minutes')
+           or (coalesce(metadata->>'mode', '') <> 'farm' and started_at < now() - interval '240 seconds')
+         )`,
     );
     for (const job of rows) await finalizeStuckJob(job, 'timed out');
   } catch {
@@ -2925,6 +3162,7 @@ async function markAgentConnectionOffline(ws) {
   const connectionId = ws.agentConnectionId;
   if (!connectionId) return;
   connectedAgents.delete(connectionId);
+  inferenceBroker.failConnection(connectionId, 'The inference agent connection disconnected.');
   void failConnectionJobs(connectionId, 'the daemon disconnected');
   try {
     const rows = await getDb().unsafe(
@@ -3160,6 +3398,133 @@ function reachIsDirect(caps) {
   return Boolean(reach && reach.listening === true && Array.isArray(reach.addrs) && reach.addrs.length > 0);
 }
 
+// Shared model adverts are intentionally descriptive only. The daemon keeps
+// endpoint URLs and credentials private and performs inference locally; the
+// hub only needs enough information to authorize, display, and route a model.
+function sharedModelsFromMessage(raw) {
+  if (!Array.isArray(raw)) return [];
+  const models = [];
+  for (const candidate of raw.slice(0, 64)) {
+    if (!candidate || typeof candidate !== 'object' || candidate.shared !== true) continue;
+    const id = String(candidate.id || '').trim().slice(0, 160);
+    if (!id || !/^[a-zA-Z0-9._:@/-]+$/.test(id)) continue;
+    const capabilities = [...new Set(
+      (Array.isArray(candidate.capabilities) ? candidate.capabilities : ['text'])
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean),
+    )].slice(0, 16);
+    const contextWindow = Number.isFinite(Number(candidate.contextWindow))
+      ? Math.max(1, Math.min(10_000_000, Math.trunc(Number(candidate.contextWindow))))
+      : undefined;
+    const maxConcurrency = Number.isFinite(Number(candidate.maxConcurrency))
+      ? Math.max(1, Math.min(64, Math.trunc(Number(candidate.maxConcurrency))))
+      : 1;
+    models.push({
+      id,
+      name: String(candidate.name || id).trim().slice(0, 160) || id,
+      provider: String(candidate.provider || 'local').trim().slice(0, 80) || 'local',
+      protocol: candidate.protocol === 'openai-chat' ? 'openai-chat' : 'openai-chat',
+      upstreamModel: String(candidate.upstreamModel || id).trim().slice(0, 200) || id,
+      capabilities,
+      ...(contextWindow ? { contextWindow } : {}),
+      maxConcurrency,
+      shared: true,
+    });
+    if (models.length === 32) break;
+  }
+  return models;
+}
+
+function canonicalSharedModelId(workspaceId, agentId, modelId) {
+  return `agensis/${String(workspaceId)}/${String(agentId)}/${encodeURIComponent(String(modelId))}`;
+}
+
+function sharedModelRoutesFromConnections(workspaceId, connections) {
+  const routes = [];
+  for (const row of Array.isArray(connections) ? connections : []) {
+    if (String(row?.workspace_id || '') !== String(workspaceId || '')) continue;
+    if (!['online', 'busy'].includes(String(row?.status || ''))) continue;
+    const capabilities = parseJsonObject(row.capabilities);
+    const metadata = parseJsonObject(row.metadata);
+    for (const model of sharedModelsFromMessage(capabilities.sharedModels)) {
+      routes.push({
+        id: canonicalSharedModelId(workspaceId, row.agent_id, model.id),
+        workspaceId: String(workspaceId),
+        agentId: String(row.agent_id),
+        connectionId: String(row.id || ''),
+        modelId: model.id,
+        name: model.name,
+        provider: model.provider,
+        protocol: model.protocol,
+        capabilities: model.capabilities,
+        maxConcurrency: model.maxConcurrency,
+        activeInference: Math.max(0, Number(metadata.activeInferenceByModel?.[model.id] ?? metadata.activeInference ?? 0) || 0),
+        status: row.status,
+        handle: String(row.handle || ''),
+        host: String(row.name || row.host || ''),
+      });
+    }
+  }
+  return routes;
+}
+
+async function liveSharedModelRoutes(workspaceId) {
+  const rows = await getDb().unsafe(
+    `select * from agent_connections
+     where workspace_id = $1 and status in ('online', 'busy')
+       and last_seen_at > now() - interval '120 seconds'
+     order by last_seen_at desc`,
+    [workspaceId],
+  );
+  const reconciled = rows.map((row) => (
+    isConnectionSocketOpen(row.id) ? row : { ...row, status: 'offline' }
+  ));
+  return sharedModelRoutesFromConnections(workspaceId, reconciled);
+}
+
+function publicInferenceModel(route) {
+  return {
+    id: route.id,
+    object: 'model',
+    created: 0,
+    owned_by: `agensis:${route.agentId}`,
+    farm: {
+      workspaceId: route.workspaceId,
+      agentId: route.agentId,
+      modelId: route.modelId,
+      handle: route.handle,
+      host: route.host,
+      provider: route.provider,
+      protocol: route.protocol,
+      capabilities: route.capabilities,
+      maxConcurrency: route.maxConcurrency,
+      activeInference: route.activeInference,
+      status: route.status,
+    },
+  };
+}
+
+function createOpenAIInferenceStreamRelay(res, publicModel) {
+  let usageForwarded = false;
+  return {
+    onEvent(event) {
+      if (event.action !== 'agent_inference_delta' || !event.chunk) return;
+      if (event.chunk.usage) usageForwarded = true;
+      res.write(`data: ${JSON.stringify({ ...event.chunk, model: publicModel })}\n\n`);
+    },
+    appendUsage(result) {
+      if (!usageForwarded && result?.usage) {
+        res.write(`data: ${JSON.stringify({ choices: [], model: publicModel, usage: result.usage })}\n\n`);
+      }
+    },
+  };
+}
+
+function bindInferenceAbort(req, res, controller, isComplete = () => false) {
+  req.once('aborted', () => controller.abort());
+  res.once('close', () => { if (!isComplete()) controller.abort(); });
+}
+
 // --- agent-mesh pairwise peer auth (F5). Peers can't verify each other's aga_ tokens
 // directly (only the hub holds connect_token_hash). The hub is the trust root: it mints
 // a short-lived, single-use ticket for a requested handoff and pushes the matching grant
@@ -3253,6 +3618,9 @@ async function handleAgentCapabilitiesSync(ws, message) {
     commands: Array.isArray(message.commands) ? message.commands : [],
     clis: Array.isArray(message.clis) ? message.clis : [],
     mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
+    sharedModels: sharedModelsFromMessage(message.sharedModels),
+    codingRoute: message.codingRoute === true,
+    shared: message.shared === true,
     memoryRoot: typeof message.memoryRoot === 'string' ? message.memoryRoot : null,
     // Direct-reachability advert (agent-mesh F2). Rides the SAME drift channel as the
     // rest of capabilities; the daemon folds JSON.stringify(reach) into its
@@ -3274,6 +3642,8 @@ async function handleAgentCapabilitiesSync(ws, message) {
      where id = $1 returning *`,
     [connectionId, JSON.stringify(capabilities)],
   );
+  const liveConnection = connectedAgents.get(connectionId);
+  if (liveConnection) liveConnection.capabilities = capabilities;
   if (rows.length > 0) notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
 }
 
@@ -3283,19 +3653,29 @@ async function handleAgentCapabilitiesSync(ws, message) {
 // continue the channel turn loop. `job` must carry agent_name/agent_handle (join on load).
 async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null } = {}) {
   const status = errorText ? 'error' : 'done';
+  const jobMetadata = parseJsonObject(job.metadata);
+  const statusGuard = jobMetadata.mode === 'farm'
+    ? "status in ('queued', 'running')"
+    : "status in ('queued', 'running', 'error')";
   const updatedRows = await getDb().unsafe(
     `update agent_jobs set status = $2, response = $3, error = $4, finished_at = now(), updated_at = now()
-     where id = $1 returning *`,
+     where id = $1 and ${statusGuard} returning *`,
     [job.id, status, responseText, errorText],
   );
+  if (updatedRows.length === 0) return null;
   notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+
+  // Farm-originated coding jobs are control-plane work, not chat turns. They
+  // deliberately have no session and are polled through the integration API;
+  // writing a message with a null session would both violate the FK contract
+  // and leak an automation result into an unrelated conversation.
+  if (jobMetadata.mode === 'farm' || !job.session_id) return updatedRows[0] || null;
 
   const handle = job.agent_handle || fallbackHandle || slugHandle(job.agent_name);
   const senderName = job.agent_name || fallbackName || handle;
   const content = errorText
     ? `@${handle} failed: ${errorText}`
     : (responseText || `@${handle} finished without output.`);
-  const jobMetadata = parseJsonObject(job.metadata);
   const threadParentId = jobMetadata.threadParentId || null;
   const responseMessageId = jobMetadata.responseMessageId || null;
   if (responseMessageId) {
@@ -3318,6 +3698,116 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   }
   void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
     .catch((error) => console.error('continueConversation (job finalize) failed', error));
+  return updatedRows[0] || null;
+}
+
+function publicFarmAgentJob(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    workspaceId: job.workspace_id,
+    agentId: job.agent_id,
+    connectionId: job.connection_id,
+    sessionId: job.session_id || null,
+    prompt: job.prompt || '',
+    status: job.status,
+    response: job.response || '',
+    error: job.error || '',
+    metadata: parseJsonObject(job.metadata),
+    startedAt: job.started_at || null,
+    finishedAt: job.finished_at || null,
+    createdAt: job.created_at || null,
+    updatedAt: job.updated_at || null,
+  };
+}
+
+async function dispatchFarmAgentJob({ workspaceId, agentId, prompt, model = '', permissionMode = '', cwd = '', connection = null } = {}) {
+  if (!workspaceId || !agentId || !String(prompt || '').trim()) throw badRequest('workspaceId, agentId, and prompt are required');
+  const agentRows = await getDb().unsafe(
+    'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+    [String(agentId), String(workspaceId)],
+  );
+  const agent = agentRows[0];
+  if (!agent || !isAgentEnabled(agent) || agent.run_mode !== 'daemon') throw badRequest('Farm jobs require an enabled daemon agent');
+  const target = connection || findConnectedAgent(String(workspaceId), String(agentId), agent.handle || agent.name);
+  if (!target) throw Object.assign(new Error('The selected agent daemon is offline'), { status: 503, code: 'agent_offline' });
+  if (target.capabilities?.codingRoute === false) {
+    throw Object.assign(new Error('The selected agent does not advertise coding support'), { status: 409, code: 'coding_route_unavailable' });
+  }
+  const metadata = { mode: 'farm', source: 'agensis-farm', cwd: String(cwd || '').slice(0, 1000) || null };
+  const jobRows = await getDb().unsafe(
+    `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, prompt, status, started_at, metadata)
+     values ($1, $2, $3, null, $4, 'running', now(), $5::jsonb) returning *`,
+    [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), JSON.stringify(metadata)],
+  );
+  const job = jobRows[0];
+  notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  const agentPayload = agentRuntimePayload(agent);
+  const requestedPermission = permissionMode ? normalizeAgentPermissionMode(permissionMode) : agentPayload.permissionMode;
+  const sent = sendWs(target.ws, {
+    type: 'agent_job',
+    job: {
+      id: job.id,
+      workspaceId: String(workspaceId),
+      sessionId: null,
+      threadParentId: null,
+      prompt: String(prompt).trim(),
+      cwd: String(cwd || '').trim() || null,
+      handle: slugHandle(agent.handle || agent.name),
+      model: String(model || '').trim() || agentPayload.model,
+      permissionMode: requestedPermission,
+      permission_mode: requestedPermission,
+      permissionFlags: agentPermissionFlags(requestedPermission),
+      agent: { ...agentPayload, model: String(model || '').trim() || agentPayload.model, permissionMode: requestedPermission, permission_mode: requestedPermission },
+    },
+  });
+  if (!sent) {
+    const failed = await getDb().unsafe(
+      `update agent_jobs set status = 'error', error = 'Agent connection could not accept the job', finished_at = now(), updated_at = now()
+       where id = $1 and status = 'running' returning *`,
+      [job.id],
+    );
+    notifyDbSubscribers('agent_jobs', 'UPDATE', failed);
+    throw Object.assign(new Error('The selected agent connection could not accept the job'), { status: 503, code: 'agent_offline' });
+  }
+  await updateAgentHeartbeat(target.ws, { busy: true }).catch(() => {});
+  return publicFarmAgentJob(job);
+}
+
+async function getFarmAgentJob({ workspaceId, jobId } = {}) {
+  const rows = await getDb().unsafe(
+    `select * from agent_jobs where id = $1 and workspace_id = $2 and (metadata->>'mode') = 'farm' limit 1`,
+    [String(jobId || ''), String(workspaceId || '')],
+  );
+  if (!rows[0]) throw Object.assign(new Error('Farm job was not found'), { status: 404 });
+  return publicFarmAgentJob(rows[0]);
+}
+
+async function cancelFarmAgentJob({ workspaceId, jobId, connection = null } = {}) {
+  const rows = await getDb().unsafe(
+    `select * from agent_jobs where id = $1 and workspace_id = $2 and (metadata->>'mode') = 'farm' limit 1`,
+    [String(jobId || ''), String(workspaceId || '')],
+  );
+  const job = rows[0];
+  if (!job) throw Object.assign(new Error('Farm job was not found'), { status: 404 });
+  if (!['queued', 'running'].includes(job.status)) return publicFarmAgentJob(job);
+  const updated = await getDb().unsafe(
+    `update agent_jobs set status = 'cancelled', error = 'Cancelled by Farm', finished_at = now(), updated_at = now()
+     where id = $1 and status in ('queued', 'running') returning *`,
+    [job.id],
+  );
+  if (updated.length === 0) {
+    const current = await getDb().unsafe(
+      `select * from agent_jobs where id = $1 and workspace_id = $2 and (metadata->>'mode') = 'farm' limit 1`,
+      [job.id, String(workspaceId || '')],
+    );
+    return publicFarmAgentJob(current[0] || job);
+  }
+  notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
+  const exactConnection = connectedAgents.get(job.connection_id);
+  const target = connection || (exactConnection?.ws?.readyState === 1 ? exactConnection : null) || findConnectedAgent(String(workspaceId), String(job.agent_id), '');
+  if (target) sendWs(target.ws, { type: 'agent_job_cancel', jobId: job.id, reason: 'Cancelled by Farm' });
+  return publicFarmAgentJob(updated[0] || { ...job, status: 'cancelled', error: 'Cancelled by Farm' });
 }
 
 async function handleAgentJobResult(ws, message) {
@@ -3333,6 +3823,13 @@ async function handleAgentJobResult(ws, message) {
   );
   const job = rows[0];
   if (!job) throw forbidden('Agent job not found');
+  // A cancelled control-plane job may still race with process teardown and
+  // report one final result. Cancellation is authoritative; discard the late
+  // frame rather than changing it back to done/error.
+  if (job.status === 'cancelled') {
+    await updateAgentHeartbeat(ws, { busy: false }).catch(() => {});
+    return;
+  }
   await finalizeAgentJobResult(job, {
     responseText: textFromValue(message.response).trim(),
     errorText: textFromValue(message.error).trim(),
@@ -3522,33 +4019,36 @@ async function handleAgentJobDelta(ws, message) {
   if (!job) throw forbidden('Agent job not found');
   const metadata = parseJsonObject(job.metadata);
   const responseMessageId = metadata.responseMessageId || null;
-  if (!responseMessageId) return;
-  const content = agentLiveMessageContent(message);
-  const updatedRows = await getDb().unsafe(
-    `update messages
-     set content = $2,
-         sender_kind = 'agent',
-         sender_id = $3,
-         sender_name = $4
-     where id = $1 and session_id = $5
-     returning *`,
-    [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', job.session_id],
-  );
-  if (updatedRows.length > 0) {
-    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
-  }
-  await getDb().unsafe(
+  const deltaRows = await getDb().unsafe(
     `update agent_jobs
      set response = $2,
          updated_at = now(),
          metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb
-     where id = $1`,
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
     [
       jobId,
       textFromValue(message.content ?? message.response ?? '').trim(),
       JSON.stringify({ lastDeltaAt: new Date().toISOString(), elapsedMs: Number(message.elapsedMs || 0) }),
     ],
   );
+  if (deltaRows.length === 0) return;
+  if (responseMessageId) {
+    const content = agentLiveMessageContent(message);
+    const updatedRows = await getDb().unsafe(
+      `update messages
+       set content = $2,
+           sender_kind = 'agent',
+           sender_id = $3,
+           sender_name = $4
+       where id = $1 and session_id = $5
+       returning *`,
+      [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', job.session_id],
+    );
+    if (updatedRows.length > 0) {
+      notifyDbSubscribers('messages', 'UPDATE', updatedRows);
+    }
+  }
   await updateAgentHeartbeat(ws, { busy: true }).catch(() => {});
 }
 
@@ -4236,14 +4736,16 @@ function normalizeAiChatMessages(messages) {
 }
 
 function sendWs(ws, message) {
-  if (ws.readyState !== 1) return;
+  if (ws.readyState !== 1) return false;
   // Drop instead of unbounded-buffering when a slow client backs up, and never let
   // a broken-pipe send throw into the realtime loop (it would skip later clients).
-  if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > 4 * 1024 * 1024) return;
+  if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > 4 * 1024 * 1024) return false;
   try {
     ws.send(JSON.stringify(message));
+    return true;
   } catch {
     // socket went away mid-send; its 'close' handler will clean up subscriptions
+    return false;
   }
 }
 
@@ -4760,6 +5262,10 @@ function attachRealtime(server) {
           await handleAgentJobDelta(ws, message);
           return;
         }
+        if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {
+          inferenceBroker.handleAgentEvent(ws.agentId, message, ws.agentConnectionId);
+          return;
+        }
         if (message.action === 'agent_memory_sync') {
           await handleAgentMemorySync(ws, message);
           return;
@@ -4852,6 +5358,193 @@ function createApp() {
       next();
     } catch (error) {
       jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/device/start', async (req, res) => {
+    try {
+      if (rateLimitBlocked(res, farmDeviceRateLimiter, `farm-device:${clientIpFromReq(req)}`)) return;
+      const result = await getFarmIntegrationCore().start({ name: req.body?.name });
+      const appBaseUrl = normalizeBaseUrl(process.env.AGENSIS_APP_URL || '') || requestBaseUrl(req);
+      const verificationUri = `${appBaseUrl}/integrations/farm?code=${encodeURIComponent(result.userCode)}`;
+      return res.status(201).json({ ...result, verificationUri });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/device/approve', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.body?.workspaceId || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const result = await getFarmIntegrationCore().approve({
+        userCode: req.body?.userCode,
+        workspaceId,
+        approvedBy: req.userId,
+        scopes: req.body?.scopes,
+      });
+      return res.json({ data: { status: result.status, workspaceId: result.workspaceId, scopes: result.scopes }, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/device/deny', requireAuth, async (req, res) => {
+    try {
+      const result = await getFarmIntegrationCore().deny({ userCode: req.body?.userCode, deniedBy: req.userId });
+      return res.json({ data: { status: result.status }, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/device/token', async (req, res) => {
+    try {
+      if (rateLimitBlocked(res, farmDeviceRateLimiter, `farm-token:${clientIpFromReq(req)}`)) return;
+      return res.json(await getFarmIntegrationCore().exchange(req.body?.deviceCode));
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/integrations/farm', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.query.workspaceId || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const integrations = await createPostgresFarmIntegrationStore().listIntegrations(workspaceId);
+      return res.json({ data: integrations.map(({ tokenHash: _tokenHash, ...integration }) => integration), error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.delete('/backend/integrations/farm/:id', requireAuth, async (req, res) => {
+    try {
+      const rows = await getDb().unsafe('select workspace_id from farm_integrations where id = $1 limit 1', [req.params.id]);
+      if (!rows[0]) return jsonError(res, 404, new Error('Farm integration was not found'));
+      await enforceWorkspaceRole(req.userId, rows[0].workspace_id, 'manage');
+      await getFarmIntegrationCore().revoke(req.params.id);
+      const disabled = await disableFarmIntegrationAgents(rows[0].workspace_id, req.params.id);
+      return res.json({ data: { id: req.params.id, revoked: true, disabledAgents: disabled.length }, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/integrations/farm/silos', requireUserOrFarm('agents:read'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const workspaceId = req.farmIntegration.workspaceId;
+      const rows = await getDb().unsafe(
+        `select c.*, a.metadata as agent_metadata, a.model as agent_model, a.run_mode, a.enabled
+         from agent_connections c join workspace_agents a on a.id = c.agent_id
+         where c.workspace_id = $1 and c.last_seen_at > now() - interval '24 hours'
+         order by c.last_seen_at desc`,
+        [workspaceId],
+      );
+      const silos = rows.map((row) => {
+        const connection = publicAgentConnection(row);
+        const agentMetadata = parseJsonObject(row.agent_metadata);
+        if (['online', 'busy'].includes(connection.status) && !isConnectionSocketLive(connection.id)) connection.status = 'offline';
+        return {
+          ...connection,
+          agentModel: row.agent_model,
+          runMode: row.run_mode,
+          enabled: row.enabled !== false,
+          farmManaged: agentMetadata.farmIntegrationId === req.farmIntegration.id,
+          runtime: agentMetadata.farmRuntime || connection.metadata.runtime || 'external-agent',
+        };
+      });
+      return res.json({ data: silos, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/agents', requireUserOrFarm('agents:enroll'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const workspaceId = req.farmIntegration.workspaceId;
+      const name = String(req.body?.name || 'Farm silo').trim().slice(0, 120) || 'Farm silo';
+      const handle = slugHandle(req.body?.handle || name);
+      const runtime = String(req.body?.runtime || 'external-agent').trim().slice(0, 60) || 'external-agent';
+      const token = createAgentConnectToken();
+      const metadata = {
+        ...parseJsonObject(req.body?.metadata),
+        farmIntegrationId: req.farmIntegration.id,
+        farmRuntime: runtime,
+        farmManaged: true,
+      };
+      const rows = await getDb().unsafe(
+        `insert into workspace_agents
+         (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, enabled, connect_token_hash, metadata, created_by)
+         values ($1, $2, $3, $4, '', $5, 'daemon', $6, true, $7, $8::jsonb, $9) returning *`,
+        [workspaceId, name, handle, String(req.body?.description || '').slice(0, 500), String(req.body?.model || 'auto').slice(0, 160), normalizeAgentPermissionMode(req.body?.permissionMode), hashAgentToken(token), JSON.stringify(metadata), req.farmIntegration.approvedBy || null],
+      );
+      const agent = rows[0];
+      notifyDbSubscribers('workspace_agents', 'INSERT', rows.map(publicFarmEnrolledAgent));
+      const url = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
+      return res.status(201).json({
+        data: {
+          agent: publicFarmEnrolledAgent(agent),
+          connection: { url, token, workspaceId, agentId: agent.id, handle: agent.handle, name: agent.name },
+        },
+        error: null,
+      });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.delete('/backend/integrations/farm/agents/:id', requireUserOrFarm('agents:enroll'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const rows = await getDb().unsafe('select * from workspace_agents where id = $1 and workspace_id = $2 limit 1', [req.params.id, req.farmIntegration.workspaceId]);
+      const agent = rows[0];
+      if (!agent || parseJsonObject(agent.metadata).farmIntegrationId !== req.farmIntegration.id) throw forbidden('This Farm integration does not manage that agent');
+      const updated = await getDb().unsafe("update workspace_agents set enabled = false, connect_token_hash = '', updated_at = now() where id = $1 returning *", [agent.id]);
+      notifyDbSubscribers('workspace_agents', 'UPDATE', updated.map(publicFarmEnrolledAgent));
+      await disconnectAgentDaemons(agent.id, req.farmIntegration.workspaceId);
+      return res.json({ data: { id: agent.id, disabled: true }, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/jobs', requireUserOrFarm('agents:dispatch'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const data = await dispatchFarmAgentJob({
+        workspaceId: req.farmIntegration.workspaceId,
+        agentId: req.body?.agentId,
+        prompt: req.body?.prompt,
+        model: req.body?.model,
+        permissionMode: req.body?.permissionMode,
+        cwd: req.body?.cwd,
+      });
+      return res.status(201).json({ data, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/integrations/farm/jobs/:id', requireUserOrFarm('agents:dispatch'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const data = await getFarmAgentJob({ workspaceId: req.farmIntegration.workspaceId, jobId: req.params.id });
+      return res.json({ data, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/integrations/farm/jobs/:id/cancel', requireUserOrFarm('agents:dispatch'), async (req, res) => {
+    try {
+      if (!req.farmIntegration) throw forbidden('A Farm integration token is required');
+      const data = await cancelFarmAgentJob({ workspaceId: req.farmIntegration.workspaceId, jobId: req.params.id });
+      return res.json({ data, error: null });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
     }
   });
 
@@ -5684,6 +6377,67 @@ function createApp() {
       });
     } catch (error) {
       jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/inference/v1/models', requireUserOrFarm('models:read'), async (req, res) => {
+    try {
+      const workspaceId = String(req.query.workspaceId || '').trim();
+      if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+      await authorizeUserOrFarmWorkspace(req, workspaceId, 'read');
+      const routes = await liveSharedModelRoutes(workspaceId);
+      return res.json({ object: 'list', data: routes.map(publicInferenceModel) });
+    } catch (error) {
+      return jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.post('/backend/inference/v1/chat/completions', requireUserOrFarm('models:invoke'), async (req, res) => {
+    let completed = false;
+    const controller = new AbortController();
+    bindInferenceAbort(req, res, controller, () => completed);
+    try {
+      const { workspaceId, ...request } = req.body || {};
+      if (!workspaceId || !request.model || !Array.isArray(request.messages)) {
+        return jsonError(res, 400, new Error('workspaceId, model, and messages are required'));
+      }
+      await authorizeUserOrFarmWorkspace(req, workspaceId, 'run_agents');
+      const routes = await liveSharedModelRoutes(workspaceId);
+      const route = routes.find((candidate) => candidate.id === request.model);
+      if (!route) return jsonError(res, 404, new Error(`Shared model '${request.model}' is not available`));
+
+      if (request.stream === true) {
+        res.status(200);
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders?.();
+      }
+      const streamRelay = request.stream === true ? createOpenAIInferenceStreamRelay(res, request.model) : null;
+      const result = await inferenceBroker.request(route, request, {
+        signal: controller.signal,
+        onEvent(event) {
+          streamRelay?.onEvent(event);
+        },
+      });
+      completed = true;
+      if (request.stream === true) {
+        streamRelay.appendUsage(result);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      return res.json({ ...(result.response || {}), model: request.model });
+    } catch (error) {
+      completed = true;
+      const status = error.code === 'agent_offline' || error.code === 'capacity_exhausted' ? 503
+        : error.code === 'timeout' ? 504
+          : error.code === 'cancelled' ? 499
+            : error.status || 500;
+      if (res.headersSent) {
+        try { res.write(`data: ${JSON.stringify({ error: { message: error.message, code: error.code || 'inference_failed' } })}\n\n`); } catch { /* client gone */ }
+        return res.end('data: [DONE]\n\n');
+      }
+      return jsonError(res, status, error);
     }
   });
 
@@ -6615,9 +7369,6 @@ function createApp() {
       const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = req.body || {};
       if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
       await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
-      const apiKey = await getAnthropicApiKey(workspaceId);
-      if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
-      const resolvedModel = resolveAnthropicModel(model);
       const chat = normalizeAiChatMessages(messages);
       const resolvedAgentContext = chat.systemPrompt
         ? {
@@ -6625,6 +7376,55 @@ function createApp() {
           systemPrompt: [agentContext?.systemPrompt, chat.systemPrompt].filter(Boolean).join('\n\n'),
         }
         : agentContext;
+      const systemPrompt = buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext);
+
+      // Workspace-shared inference routes are first-class chat models. Keep
+      // the browser on the same /backend/ai-chat SSE contract while the broker
+      // relays OpenAI-compatible chunks over the selected daemon socket.
+      if (String(model || '').startsWith(`agensis/${workspaceId}/`)) {
+        const routes = await liveSharedModelRoutes(workspaceId);
+        const route = routes.find((candidate) => candidate.id === model);
+        if (!route) return jsonError(res, 404, new Error(`Shared model '${model}' is not available`));
+        const controller = new AbortController();
+        let completed = false;
+        bindInferenceAbort(req, res, controller, () => completed);
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        let wroteDelta = false;
+        let result;
+        try {
+          result = await inferenceBroker.request(route, {
+            model,
+            stream: true,
+            messages: [
+              ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+              ...chat.messages,
+            ],
+          }, {
+            signal: controller.signal,
+            onEvent(event) {
+              if (event.action !== 'agent_inference_delta' || !event.chunk) return;
+              wroteDelta = true;
+              res.write(`data: ${JSON.stringify(event.chunk)}\n\n`);
+            },
+          });
+        } finally {
+          completed = true;
+        }
+        if (!wroteDelta) {
+          const text = result.response?.choices?.[0]?.message?.content;
+          if (typeof text === 'string' && text) {
+            res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`);
+          }
+        }
+        res.write('data: [DONE]\n\n');
+        return res.end();
+      }
+
+      const apiKey = await getAnthropicApiKey(workspaceId);
+      if (!apiKey) return jsonError(res, 503, new Error('ANTHROPIC_API_KEY is not configured'));
+      const resolvedModel = resolveAnthropicModel(model);
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -6639,7 +7439,7 @@ function createApp() {
           max_tokens: 4096,
           stream: true,
           messages: chat.messages,
-          system: buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext),
+          system: systemPrompt,
         }),
       });
 
@@ -6739,6 +7539,8 @@ function resetTestState() {
   websocketClients = new Set();
   envLoaded = false;
   tokenVersionCache.clear();
+  farmIntegrationCoreInstance = undefined;
+  connectedAgents.clear();
 }
 
 // Test seam: register a fake WS client so the realtime-revocation path can be
@@ -6746,6 +7548,11 @@ function resetTestState() {
 function registerTestWebsocketClient(ws) {
   websocketClients.add(ws);
   return ws;
+}
+
+function registerTestConnectedAgent(entry) {
+  connectedAgents.set(entry.connectionId, entry);
+  return entry;
 }
 
 module.exports = {
@@ -6758,6 +7565,7 @@ module.exports = {
     authorizeRealtimeBroadcast,
     revokeRealtimeAccessForMember,
     registerTestWebsocketClient,
+    registerTestConnectedAgent,
     insertActiveAgentJob,
     buildWhereClause,
     capabilityForDbOperation,
@@ -6807,14 +7615,27 @@ module.exports = {
     capabilitiesDriftNudges,
     reachFromMessage,
     reachIsDirect,
+    sharedModelsFromMessage,
+    canonicalSharedModelId,
+    sharedModelRoutesFromConnections,
     publicAgentConnection,
+    publicFarmEnrolledAgent,
+    createOpenAIInferenceStreamRelay,
+    bindInferenceAbort,
     mintPeerTicket,
     mergeSlashCommands,
     finalizeStuckJob,
+    reapStuckAgentJobs,
     claimMcpJob,
     submitMcpJobResult,
     reapStuckMcpJobs,
     finalizeAgentJobResult,
+    dispatchFarmAgentJob,
+    disableFarmIntegrationAgents,
+    getFarmAgentJob,
+    cancelFarmAgentJob,
+    handleAgentJobDelta,
+    handleAgentCapabilitiesSync,
     resolveWorkspaceAgentByHandle,
     registerAgentRequest,
     finalizeRegistrationApproval,

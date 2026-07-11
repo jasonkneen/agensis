@@ -46,6 +46,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
+import { ModelSelector } from '../chat/ModelSelector';
 import { SubThreadPanel } from '../chat/SubThreadPanel';
 import {
   ComposerAddContent,
@@ -150,6 +151,8 @@ import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '..
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { cn } from '@/lib/utils';
+import { getSettings } from '../../lib/settings';
+import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -260,6 +263,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 }: ChatWindowContentProps) {
   const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
+  const [selectedModel, setSelectedModel] = useState(() => getSettings().ai_default_model || 'auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
@@ -336,6 +340,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
     [composerProjectGroups],
   );
+  const modelOptions = useMemo(
+    () => workspaceChatModels(workspaceId, agentConnections),
+    [workspaceId, agentConnections],
+  );
+
+  useEffect(() => {
+    setSelectedModel(current => availableChatModelId(current, modelOptions));
+  }, [modelOptions]);
 
   const skillOptions = useMemo(() => {
     const fromCapabilities = systemCapabilities?.skills
@@ -420,7 +432,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
-    onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    onSendMessage(content, selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
@@ -1707,6 +1719,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </div>
 
                 <div className="flex min-w-0 items-center gap-1">
+                  <ModelSelector value={selectedModel} onChange={setSelectedModel} models={modelOptions} />
                   <Button
                     type="button"
                     size="icon-sm"
@@ -1766,6 +1779,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
               streaming={streaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
+              models={modelOptions}
               onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded

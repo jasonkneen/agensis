@@ -21,6 +21,7 @@ primary_region = "fra"
   HOST = "0.0.0.0"
   API_PORT = "8080"
   NODE_ENV = "production"
+  AGENSIS_APP_URL = "https://agensis.io"
   # Persistent upload root on the mounted volume (H6). Volume provisioned:
   #   fly volumes create agensis_uploads --region fra --size 3 --app agensis-backend
   # Note: a single volume attaches to ONE machine — durable but not shared across

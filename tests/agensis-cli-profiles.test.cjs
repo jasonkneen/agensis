@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 
 const repoRoot = path.resolve(__dirname, '..');
 const moduleUrl = pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/connectProfiles.mjs')).href;
+const agentModuleUrl = pathToFileURL(path.join(repoRoot, 'agent/agensis-cli/src/agensis.mjs')).href;
 
 async function loadModule() {
   return import(moduleUrl);
@@ -34,6 +35,9 @@ test('daemon profiles persist a complete main agent connect command securely', a
       cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
       model: 'claude-opus-4-8',
       permissionMode: 'accept_edits',
+      share: true,
+      sharedModelsFile: '/Users/jkneen/models.json',
+      noCoding: true,
       exitOnOnce: true,
       onRegistered: () => {},
     }, { homedir: home });
@@ -52,6 +56,9 @@ test('daemon profiles persist a complete main agent connect command securely', a
       cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
       model: 'claude-opus-4-8',
       permissionMode: 'accept_edits',
+      share: true,
+      sharedModelsFile: '/Users/jkneen/models.json',
+      noCoding: true,
     });
   } finally {
     await fs.rm(home, { recursive: true, force: true });
@@ -79,6 +86,15 @@ test('daemon profile merge lets one-off flags override the cached profile', asyn
   assert.equal(merged.cwd, '/new');
   assert.equal(merged.model, 'claude-fable-5');
   assert.equal(merged.once, true);
+});
+
+test('an explicit coding command re-enables a saved no-coding profile', async () => {
+  const { mergeDaemonProfile } = await loadModule();
+  const merged = mergeDaemonProfile({
+    url: 'https://agensis.test', token: 'aga_secret', workspace: 'workspace-1', agent: 'agent-1', noCoding: true,
+  }, { codingCmd: 'codex exec' });
+  assert.equal(merged.codingCmd, 'codex exec');
+  assert.equal(merged.noCoding, false);
 });
 
 test('daemon profile merge disables CursorBuddy bridge for non-primary saved agents', async () => {
@@ -138,4 +154,21 @@ test('bare connect setup message points users at Agensis setup first', async () 
   assert.match(message, /primary local agent/);
   assert.match(message, /copy a connection command/);
   assert.match(message, /agensis connect/);
+});
+
+test('normalized no-coding state survives the real profile write and read path', async () => {
+  const { readDaemonProfile, writeDaemonProfile } = await loadModule();
+  const { __test: agentTest } = await import(agentModuleUrl);
+  const home = await tempHome();
+  try {
+    const config = agentTest.normalizeConfig({
+      url: 'https://agensis.test', token: 'aga_secret', workspace: 'workspace-1', agent: 'agent-1', noCoding: true,
+    });
+    await writeDaemonProfile('shared-only', config, { homedir: home });
+    const stored = await readDaemonProfile('shared-only', { homedir: home });
+    assert.equal(stored.noCoding, true);
+    assert.equal(stored.codingCmd, undefined);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
 });

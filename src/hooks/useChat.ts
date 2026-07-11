@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
 import { computeThreadDivergence } from '../lib/threadMerge';
+import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -433,7 +434,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         body: JSON.stringify({
           workspaceId,
           messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
-          model: agent?.model || model,
+          model: directAiModel(model, agent?.model),
           memory: memoryContext,
           documents: docContext,
           workspaceContext: workspaceContext ?? null,
@@ -588,7 +589,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
     const autoChannel = session.conversation_mode === 'auto';
-    const shouldRouteToAgent = Boolean(workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
+    const sharedModelRoute = isSharedModelRoute(model);
+    const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
 
     if (shouldRouteToAgent) {
       const dispatched = await dispatchToAgent(
@@ -621,7 +623,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         }
         return;
       }
-    } else if (!agent) {
+    } else if (!agent && !sharedModelRoute) {
       return;
     }
 

@@ -1,10 +1,12 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import type { Message as ChatMessage } from '../../types';
+import type { AIModel, Message as ChatMessage } from '../../types';
+import { ModelSelector } from './ModelSelector';
+import { availableChatModelId } from '../../lib/sharedModels';
 import { Button } from '@/components/ui/button';
 import {
   Empty,
@@ -36,6 +38,7 @@ interface ChatThreadPanelProps {
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
+  models?: AIModel[];
 }
 
 export function ChatThreadPanel({
@@ -47,15 +50,21 @@ export function ChatThreadPanel({
   onAgentProfile,
   onClose,
   embedded = false,
+  models,
 }: ChatThreadPanelProps) {
   const [input, setInput] = useState('');
+  const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const replies = threadMessages.filter(m => m.id !== parentMessage.id);
 
+  useEffect(() => {
+    if (models) setModel(current => availableChatModelId(current, models));
+  }, [models]);
+
   const handleSend = () => {
     if (!input.trim() || streaming) return;
-    onSendReply(input.trim(), 'auto');
+    onSendReply(input.trim(), model);
     setInput('');
     inputRef.current?.focus();
   };
@@ -137,7 +146,7 @@ export function ChatThreadPanel({
             }}
           />
           <InputGroupAddon align="block-end" className="min-h-10 justify-between gap-2 border-t px-2 py-1.5">
-            <div className="text-xs text-muted-foreground">@mention agents in the channel</div>
+            <ModelSelector value={model} onChange={setModel} models={models} />
             <Button
               type="button"
               size="icon-sm"

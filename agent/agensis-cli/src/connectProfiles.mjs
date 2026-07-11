@@ -19,6 +19,9 @@ const PROFILE_KEYS = [
   "timeoutMs",
   "heartbeatMs",
   "maxConcurrency",
+  "share",
+  "sharedModelsFile",
+  "noCoding",
   "lanListener",
   "primaryDaemon",
   "cursorBuddyBridge",
@@ -117,6 +120,7 @@ export async function writeDaemonProfile(name = DEFAULT_PROFILE, config = {}, op
 
 export function mergeDaemonProfile(profile, args = {}) {
   const merged = { ...profile, ...pickedDaemonArgs(args), command: "connect" };
+  if (args.codingCmd !== undefined && args.noCoding === undefined) merged.noCoding = false;
   if (args.cursorBuddyBridge === undefined && !merged.primaryDaemon) {
     merged.cursorBuddyBridge = false;
   }

@@ -108,11 +108,15 @@ function mergeCachedDaemonArgs(cached, args, cwd) {
     "timeoutMs",
     "heartbeatMs",
     "maxConcurrency",
+    "share",
+    "sharedModelsFile",
+    "noCoding",
     "lanListener",
     "once",
   ]) {
     if (args[key] !== undefined) merged[key] = args[key];
   }
+  if (args.codingCmd !== undefined && args.noCoding === undefined) merged.noCoding = false;
   if (!merged.cwd) merged.cwd = cwd;
   merged.cursorBuddyRuntime = true;
   return merged;

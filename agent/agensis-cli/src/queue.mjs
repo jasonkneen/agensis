@@ -63,6 +63,8 @@ export function looksLikeCancel(text) {
  * - cancelActive(reason, laneKey?) aborts in-flight jobs' AbortSignals; queued
  *   jobs are untouched. With no laneKey it cancels every lane's active job; with a
  *   laneKey it cancels only that conversation's active job.
+ * - cancel(key, reason?) aborts or removes exactly one keyed job, regardless of
+ *   its lane. This is used by authenticated control-plane cancellation frames.
  * - idle() resolves when nothing is active or queued anywhere (used to drain on
  *   --once). active() is the total in-flight count; size() the total queued.
  */
@@ -111,7 +113,10 @@ export function createQueue(opts = {}) {
       lane.active = { job, controller, cancelled: false };
       running += 1;
       Promise.resolve()
-        .then(() => runJob(job, { signal: controller.signal }))
+        // `cancel()` can run synchronously after `enqueue()`, before this
+        // microtask begins. Do not start work whose signal is already aborted;
+        // many AbortSignal consumers only observe future abort events.
+        .then(() => (controller.signal.aborted ? undefined : runJob(job, { signal: controller.signal })))
         .catch(() => {
           // runJob is expected to handle its own errors; never break the pump.
         })
@@ -159,6 +164,24 @@ export function createQueue(opts = {}) {
     return cancelled;
   }
 
+  function cancel(key, reason) {
+    if (key == null) return false;
+    let cancelled = false;
+    for (const [laneKey, lane] of [...lanes]) {
+      if (lane.active?.job?.key === key) {
+        lane.active.cancelled = true;
+        lane.active.controller.abort(reason || "cancelled");
+        cancelled = true;
+      }
+      const before = lane.queued.length;
+      lane.queued = lane.queued.filter((job) => job.key !== key);
+      if (lane.queued.length !== before) cancelled = true;
+      if (!lane.active && lane.queued.length === 0) lanes.delete(laneKey);
+    }
+    maybeResolveIdle();
+    return cancelled;
+  }
+
   function size() {
     let total = 0;
     for (const lane of lanes.values()) total += lane.queued.length;
@@ -172,5 +195,5 @@ export function createQueue(opts = {}) {
     return new Promise((r) => idleResolvers.push(r));
   }
 
-  return { enqueue, cancelActive, has, size, active: activeCount, idle };
+  return { enqueue, cancel, cancelActive, has, size, active: activeCount, idle };
 }

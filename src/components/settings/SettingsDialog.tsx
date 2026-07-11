@@ -129,7 +129,7 @@ export function SettingsDialog({
                   onThemeChange={onThemeChange}
                 />
               )}
-              {tab === 'ai' && <AIPanel />}
+              {tab === 'ai' && <AIPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'about' && <AboutPanel />}
@@ -886,9 +886,35 @@ function AppearancePanel({
   );
 }
 
-function AIPanel() {
+function AIPanel({ workspaceId }: { workspaceId: string | null }) {
   const [model, setModel] = useState(getSettings().ai_default_model);
   const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
+  const [models, setModels] = useState(AI_MODELS);
+
+  useEffect(() => {
+    if (!workspaceId) {
+      setModels(AI_MODELS);
+      return;
+    }
+    let cancelled = false;
+    fetch(apiUrl(`/backend/inference/v1/models?workspaceId=${encodeURIComponent(workspaceId)}`), { headers: apiAuthHeaders() })
+      .then(async response => response.ok ? response.json() : Promise.reject(new Error('Shared models unavailable')))
+      .then(payload => {
+        if (cancelled) return;
+        const shared = (Array.isArray(payload?.data) ? payload.data : []).map((entry: { id: string; farm?: { modelId?: string; host?: string; provider?: string } }) => ({
+          id: entry.id,
+          label: `${entry.farm?.modelId || entry.id} · ${entry.farm?.host || 'Agensis agent'}`,
+          description: `${entry.farm?.provider || 'local'} workspace model`,
+        }));
+        const next = [...AI_MODELS, ...shared];
+        if (model && !next.some(item => item.id === model)) next.unshift({ id: model, label: model, description: 'Saved model (currently unavailable)' });
+        setModels(next);
+      })
+      .catch(() => setModels(model && !AI_MODELS.some(item => item.id === model)
+        ? [{ id: model, label: model, description: 'Saved model (currently unavailable)' }, ...AI_MODELS]
+        : AI_MODELS));
+    return () => { cancelled = true; };
+  }, [workspaceId, model]);
 
   return (
     <FieldGroup>
@@ -903,7 +929,7 @@ function AIPanel() {
           }}
           className="w-full"
         >
-          {AI_MODELS.map(item => (
+          {models.map(item => (
             <NativeSelectOption key={item.id} value={item.id}>
               {item.label} - {item.description}
             </NativeSelectOption>
