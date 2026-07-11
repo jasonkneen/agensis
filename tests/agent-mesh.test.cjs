@@ -88,6 +88,35 @@ test('publicAgentConnection is a no-op passthrough on a null/undefined row', () 
   assert.equal(publicAgentConnection(undefined), undefined);
 });
 
+test('publicAgentConnection normalizes missing skills/clis/mcpServers to arrays (fresh-connect crash guard)', () => {
+  // A daemon that has just connected but not yet pushed its capability payload stores a
+  // null/partial capabilities blob. publicAgentConnection force-adds `sharedModels`, which
+  // made the object truthy while skills/clis/mcpServers stayed undefined — the browser then
+  // read `capabilities.skills.length` and white-screened the whole app until a reload picked
+  // up the settled row. Guarantee the array fields are always arrays, matching AgentCapabilities.
+  const freshConnect = {
+    id: 'conn-2', workspace_id: 'ws-1', agent_id: 'agent-2',
+    name: 'Coder', handle: 'coder', host: 'mac', cwd: '/repo', status: 'online',
+    metadata: '{}', capabilities: null,
+    connected_at: null, last_seen_at: null, updated_at: null,
+  };
+  const fresh = publicAgentConnection(freshConnect);
+  assert.deepEqual(fresh.capabilities.skills, []);
+  assert.deepEqual(fresh.capabilities.clis, []);
+  assert.deepEqual(fresh.capabilities.mcpServers, []);
+  assert.ok(Array.isArray(fresh.capabilities.sharedModels));
+
+  // A partial payload (only sharedModels present) must still backfill the other arrays.
+  const partial = publicAgentConnection({
+    ...freshConnect,
+    capabilities: JSON.stringify({ sharedModels: [{ id: 'llama', shared: true }] }),
+  });
+  assert.deepEqual(partial.capabilities.skills, []);
+  assert.deepEqual(partial.capabilities.clis, []);
+  assert.deepEqual(partial.capabilities.mcpServers, []);
+  assert.equal(partial.capabilities.sharedModels.length, 1);
+});
+
 test('mintPeerTicket produces unique agp_-prefixed single-use ticket ids', () => {
   const a = mintPeerTicket();
   const b = mintPeerTicket();
