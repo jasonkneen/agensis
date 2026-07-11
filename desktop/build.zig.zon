@@ -1,6 +1,6 @@
 .{
     .name = .agensis_desktop,
-    .fingerprint = 0xa6e15c0d4f2b91c3,
+    .fingerprint = 0x8caeb1b65b65e7b8,
     .version = "0.1.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},

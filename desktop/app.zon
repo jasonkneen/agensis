@@ -37,8 +37,11 @@
             .min_width = 800,
             .min_height = 600,
             .restore_state = true,
-            // Same shape as Electron hiddenInset: content under traffic lights.
-            .titlebar = "hidden_inset",
+            // macOS 26 (Tahoe): unified-toolbar / tall hidden titlebar is what
+            // gets the larger system window corner radius. Plain hidden_inset
+            // keeps the older, tighter corners and looks wrong next to native
+            // Tahoe apps. Traffic lights center in the ~52pt band.
+            .titlebar = "hidden_inset_tall",
         },
     },
 }

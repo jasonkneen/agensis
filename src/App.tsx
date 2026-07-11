@@ -114,17 +114,17 @@ const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
 
-// In the Native SDK desktop shell the window uses a hidden-inset title bar, so
-// the native macOS traffic lights overlay the app content. Reserve a small clear
-// strip at the top so the sidebar WORKSPACE header sits below them. Web builds
-// (no window.zero) get zero inset — layout is byte-identical there.
+// Native SDK desktop shell: app.zon uses titlebar = "hidden_inset_tall"
+// (unified toolbar ~52pt). Traffic lights overlay content; pad the top so the
+// sidebar header sits under them. Web builds get zero inset.
 const IS_DESKTOP_SHELL =
   typeof window !== 'undefined' &&
   Boolean(
     (window as unknown as { zero?: unknown; electronAPI?: unknown }).zero ||
       (window as unknown as { electronAPI?: unknown }).electronAPI,
   );
-const DESKTOP_TITLEBAR_INSET = IS_DESKTOP_SHELL ? 28 : 0;
+// Match hidden_inset_tall band (~52pt). Short hidden_inset was ~28pt.
+const DESKTOP_TITLEBAR_INSET = IS_DESKTOP_SHELL ? 52 : 0;
 
 function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'chat') return <MessageSquare className="size-4" />;

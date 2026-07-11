@@ -26,7 +26,8 @@ const PackageTarget = enum {
     linux,
 };
 
-const default_native_sdk_path = "../native";
+// Sibling of the agensis repo: .../GitHub/native (desktop is .../agensis/desktop).
+const default_native_sdk_path = "../../native";
 const app_exe_name = "agensis";
 
 pub fn build(b: *std.Build) void {

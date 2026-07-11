@@ -98,7 +98,7 @@ npm run dev
 npm run desktop:dev
 ```
 
-This ensures the local backend is up, then builds the Native SDK shell and starts Vite + the native WebView window. Requires Zig 0.16+, the `native` CLI (`npm i -g @native-sdk/cli`), and a sibling checkout of the SDK at `../native`.
+This ensures the local backend is up, then builds the Native SDK shell and starts Vite + the native WebView window. Requires Zig 0.16+, the `native` CLI (`npm i -g @native-sdk/cli`), and a sibling checkout of the SDK at `../native` (i.e. next to this repo).
 
 ### 7. Production build
 
