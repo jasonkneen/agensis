@@ -914,6 +914,8 @@ function AgentRow({
   const toolBadges = normalizeList(agent.tools).slice(0, 3);
   const accent = agentAccentColor(agent);
   const agentActive = isAgentActive(agent);
+  const handleLabel = `@${agent.handle || agentHandle(agent.name)}`;
+  const modelLabel = displayModel(agent.model);
 
   const handleSave = () => {
     onSave({
@@ -1057,15 +1059,23 @@ function AgentRow({
           <ItemDescription>No description</ItemDescription>
         )}
         <div className="agent-token-row min-w-0 flex flex-wrap gap-1">
-          <Badge variant="outline" className="agent-token-chip">@{agent.handle || agentHandle(agent.name)}</Badge>
+          <Badge variant="outline" className="agent-token-chip" title={handleLabel}>
+            <span className="min-w-0 truncate">{handleLabel}</span>
+          </Badge>
           <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
             {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
           </Badge>
-          <Badge variant="outline" className="agent-token-chip">{displayModel(agent.model)}</Badge>
+          <Badge variant="outline" className="agent-token-chip" title={modelLabel}>
+            <span className="min-w-0 truncate">{modelLabel}</span>
+          </Badge>
           <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
           {!agentActive && <Badge variant="secondary">deactivated</Badge>}
           {toolBadges.length > 0
-            ? toolBadges.map(tool => <Badge key={tool} variant="outline" className="agent-token-chip">{tool}</Badge>)
+            ? toolBadges.map(tool => (
+                <Badge key={tool} variant="outline" className="agent-token-chip" title={tool}>
+                  <span className="min-w-0 truncate">{tool}</span>
+                </Badge>
+              ))
             : <Badge variant="secondary" className="agent-token-chip">None</Badge>}
         </div>
         {activeConnections.length > 0 && (

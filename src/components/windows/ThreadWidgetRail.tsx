@@ -184,7 +184,7 @@ export function ThreadWidgetRail({
     // The container stays mounted even when hidden so the ResizeObserver keeps
     // reporting width; the toggle now lives in the chat header (not here), so
     // it no longer clashes with the per-message action toolbar.
-    <div ref={rootRef} className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-1 z-10 flex w-[272px] flex-col gap-2 px-3 py-3">
+    <div ref={rootRef} className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-2 z-10 flex w-[272px] flex-col gap-2 px-3 py-3">
       {!hidden && (
         <>
           {/* re-add chips for any widget the user has closed */}
@@ -205,7 +205,7 @@ export function ThreadWidgetRail({
             </div>
           )}
 
-          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
+          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
             {widgets.map((w, index) => (
               <WidgetCard
                 key={w.kind}
