@@ -656,6 +656,14 @@ function AppContent() {
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
 
+  // The viewport clips floating panels to the 8px chrome gap by default. Only a
+  // full-bleed candidate — a maximized window, or a tiled group that can fill the
+  // panel — needs the viewport un-clipped so its shell can paint over the gap out
+  // to the true panel edge. The per-edge bleed itself is still gated in the shell
+  // (FloatingWindowShell), so a tiled split that DOESN'T fill the panel stays put.
+  const viewportUnclipped = !isMobile
+    && windows.some(win => !win.minimized && (win.maximized || Boolean(win.groupId)));
+
   // Windows are in-memory and keyed by canvas layer id, which is 'base' for
   // every workspace's default layer — so without this, the previous
   // workspace's open windows leak onto a newly created/selected workspace's
