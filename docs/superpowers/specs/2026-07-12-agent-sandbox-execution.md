@@ -70,6 +70,9 @@ e2b is the MVP provider because it is the thinnest possible proof-of-seam:
 Options: your **laptop daemon** calls e2b, vs. the **fly.dev server** calls e2b.
 → **Decision: server-orchestrated.** The whole point of "no local daemon required" (driver B) is that ephemeral cloud agents shouldn't need your laptop powered on. Server holds the e2b key (a `workspace_secrets` row), creates the sandbox, streams deltas over the existing WS path. The daemon path stays for `daemon` mode; `sandbox` mode is server-driven.
 
+> **⚠️ AMENDED during planning (2026-07-12) — Fork 1 reversed to DAEMON-orchestrated for the MVP.**
+> Grounding in code: the server's `builtin` path is a plain Anthropic chat completion (`server/index.cjs:2835` → `runAnthropicCompletion`) — it spawns **no** coding CLI and has none of the streaming/stream-json/delta machinery. The coding CLI only ever runs in the **daemon**, which already owns `runCli` + the `onData→sendDelta` WS path. So the single seam is the daemon's `runCli` call site, and daemon-orchestrated is the genuinely *easiest* MVP: the daemon spins up the e2b sandbox and supervises it; the untrusted code still runs in the cloud (isolation win intact). Server-orchestration ("runs with laptop off") means teaching the server to spawn+stream a CLI from scratch — a much bigger build, deferred to a later phase. See the plan's "Finding that changes the spec" section: `docs/superpowers/plans/2026-07-12-agent-sandbox-execution.md`.
+
 **Fork 2 — How the repo gets in and results come out.**
 Options: **git-clone-in / patch-out** (clean; needs a repo URL + token) vs. **upload-working-tree / return-patch** (works on local uncommitted state).
 → **Decision: git-clone-in / patch-out for the MVP.** Sandbox clones the repo (token from `workspace_secrets`), runs the agent, and we return the resulting `git diff` as the artifact. Working-tree upload (for daemon-local uncommitted repos) is a Phase-2 add-on behind the same interface.
