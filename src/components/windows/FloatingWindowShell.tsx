@@ -11,7 +11,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
+import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
+import { ALL_WINDOW_EDGES, computeFlushEdges, computeFullBleed, type WindowEdge } from '../../lib/windowBleed';
 
 const SNAP_THRESHOLD = 44;
 const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
@@ -568,13 +569,36 @@ export function FloatingWindowShell({
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
   const displayBounds = getCurrentWindowBounds(shellRef.current, win);
   const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current);
+
+  // Full bleed: a window that fills the whole panel (maximized, or a tiled group
+  // whose tiles collectively fill it) drops its corners + chrome gap and paints
+  // edge-to-edge into the main panel. Its shell extends by the chrome gap on each
+  // boundary-flush edge to cover the padding; <main> un-clips (see App.tsx) so the
+  // extension reaches the true panel edge. A maximized window fills the viewport
+  // by construction, so use all four edges; otherwise measure which edges are flush.
+  const viewportSize = getShellViewport(shellRef.current);
+  const flushEdges = fullViewport
+    ? new Set<WindowEdge>(ALL_WINDOW_EDGES)
+    : computeFlushEdges(displayBounds, viewportSize);
+  const { isFullBleed, bleedEdges, squareCorners } = computeFullBleed({
+    isMobile,
+    isMaximized,
+    adjacentEdges,
+    flushEdges,
+  });
+  const bleedLeft = bleedEdges.has('left') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedRight = bleedEdges.has('right') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedTop = bleedEdges.has('top') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedBottom = bleedEdges.has('bottom') ? WORKSPACE_CHROME_GAP : 0;
+  const isFullSurface = isFullView || isFullBleed;
+
   const shellStyle: React.CSSProperties = fullViewport
     ? {
         position: 'absolute',
-        left: MAXIMIZED_EDGE_INSET,
-        top: MAXIMIZED_TOP_RESERVE,
-        width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px)`,
-        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + (isMobile ? MOBILE_BOTTOM_RESERVE : MAXIMIZED_BOTTOM_RESERVE) + MAXIMIZED_EDGE_INSET}px)`,
+        left: MAXIMIZED_EDGE_INSET - bleedLeft,
+        top: MAXIMIZED_TOP_RESERVE - bleedTop,
+        width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px + ${bleedLeft + bleedRight}px)`,
+        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + (isMobile ? MOBILE_BOTTOM_RESERVE : MAXIMIZED_BOTTOM_RESERVE) + MAXIMIZED_EDGE_INSET}px + ${bleedTop + bleedBottom}px)`,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -583,10 +607,10 @@ export function FloatingWindowShell({
       }
     : {
         position: 'absolute',
-        left: displayBounds.x,
-        top: displayBounds.y,
-        width: displayBounds.width,
-        height: displayBounds.height,
+        left: displayBounds.x - bleedLeft,
+        top: displayBounds.y - bleedTop,
+        width: displayBounds.width + bleedLeft + bleedRight,
+        height: displayBounds.height + bleedTop + bleedBottom,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -600,7 +624,9 @@ export function FloatingWindowShell({
   // surviving the CSS pipeline and resolving at runtime — the recurring
   // "corners are square again" bug. Classes emit the radius into the CSS layer
   // where it's cascade-normal and purge-proof. Unlisted corners stay square.
+  // Full-bleed windows square every corner (they fill the panel edge-to-edge).
   const cornerClass = (() => {
+    if (squareCorners) return '';
     if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-xl';
     const corners: string[] = [];
     if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-xl');
@@ -629,7 +655,7 @@ export function FloatingWindowShell({
         data-floating-window
         data-floating-window-id={win.id}
         data-window-group={win.groupId || undefined}
-        data-window-view-mode={isFullView ? 'full' : 'floating'}
+        data-window-view-mode={isFullSurface ? 'full' : 'floating'}
         onPointerDown={() => onFocus(win.id)}
         onDragOver={e => e.stopPropagation()}
         onDragEnter={e => e.stopPropagation()}
@@ -649,7 +675,7 @@ export function FloatingWindowShell({
             // wrapper (see index.css) so the selection ring's box-shadow on
             // this element is never clobbered.
             'shadow-none',
-            isFullView ? 'bg-card' : 'bg-card/45',
+            isFullSurface ? 'bg-card' : 'bg-card/45',
             isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}
         >
