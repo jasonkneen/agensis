@@ -1693,7 +1693,19 @@ function AppContent() {
           onClearQueue={clearPendingQueue}
         />
 
-        <main ref={canvasRef} data-workspace-viewport className="relative min-h-0 flex-1 overflow-hidden rounded-none">
+        <main
+          ref={canvasRef}
+          data-workspace-viewport
+          className={cn(
+            'relative min-h-0 flex-1 rounded-none',
+            // A full-bleed window (maximized, or a tiled group filling the panel)
+            // paints OVER the 8px chrome gap by extending its shell into the
+            // padding — so the viewport must un-clip to let that extension reach
+            // the true panel edge. Clipped by default so floating panels + their
+            // resize handles never spill into the gap.
+            viewportUnclipped ? 'overflow-visible' : 'overflow-hidden',
+          )}
+        >
           <CanvasDropZone
             onAddObject={addCanvasObject}
             onUploadFiles={uploadFiles}
