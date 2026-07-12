@@ -3815,6 +3815,11 @@ select {
   padding: 0 !important;
   /* Desktop only: push the pill past the macOS traffic lights (0px on web). */
   padding-left: var(--sidebar-titlebar-inset, 0px) !important;
+  /* `padding: 0` above wiped the base header's 8px top pad (pt-2). Native
+     traffic lights are fixed by the titlebar style and can't be repositioned
+     per-theme, so restore the 8px here: it drops the brutal header content down
+     8px, which reads as the traffic lights sitting ~8px higher against it. */
+  padding-top: 8px !important;
 }
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
   background: transparent !important;

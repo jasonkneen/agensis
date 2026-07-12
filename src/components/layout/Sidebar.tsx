@@ -359,7 +359,10 @@ export const Sidebar = React.memo(function Sidebar({
     // to the right of it (previously two gaps straddled a floating panel).
     const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP;
     document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
-    document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP + titlebarInset}px`);
+    // Canvas viewport clears only the chrome gap at top now — the titlebar band
+    // is over the sidebar (left), not the canvas column, so panels reach the top
+    // edge. (This var is the fallback used when the live viewport rect is 0.)
+    document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
     document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
     document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
   }, [collapsed, overlay, titlebarInset]);

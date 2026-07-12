@@ -1673,7 +1673,12 @@ function AppContent() {
       <div
         className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         style={{
-          paddingTop: WORKSPACE_CHROME_GAP + DESKTOP_TITLEBAR_INSET,
+          // Canvas column sits to the RIGHT of the full-height sidebar, so the
+          // macOS traffic lights (top-left, over the sidebar) never overlap it —
+          // it only needs the uniform 8px chrome gap, not the 52px titlebar
+          // reserve. This lets panels + the maximize button fill to 8px from the
+          // window's top edge. The sidebar keeps its own titlebarInset (below).
+          paddingTop: WORKSPACE_CHROME_GAP,
           paddingRight: WORKSPACE_CHROME_GAP,
           paddingBottom: WORKSPACE_CHROME_GAP,
           paddingLeft: WORKSPACE_CHROME_GAP,

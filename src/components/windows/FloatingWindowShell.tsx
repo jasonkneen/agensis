@@ -15,7 +15,14 @@ import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RES
 
 const SNAP_THRESHOLD = 44;
 const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
-const MAXIMIZED_BOTTOM_RESERVE = WORKSPACE_BOTTOM_RESERVE;
+// Desktop: maximize + the drag/position clamps fill the whole workspace viewport
+// — the visible 8px gap top/bottom comes from the canvas column's padding, so no
+// extra bottom reserve is needed. (Floating panels can therefore be dragged all
+// the way to the bottom edge too.)
+const MAXIMIZED_BOTTOM_RESERVE = 0;
+// Mobile still shows one window edge-to-edge but keeps a strip clear at the
+// bottom for the floating bell/presence controls.
+const MOBILE_BOTTOM_RESERVE = WORKSPACE_BOTTOM_RESERVE;
 const MAXIMIZED_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
@@ -567,7 +574,7 @@ export function FloatingWindowShell({
         left: MAXIMIZED_EDGE_INSET,
         top: MAXIMIZED_TOP_RESERVE,
         width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px)`,
-        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + MAXIMIZED_BOTTOM_RESERVE + MAXIMIZED_EDGE_INSET}px)`,
+        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + (isMobile ? MOBILE_BOTTOM_RESERVE : MAXIMIZED_BOTTOM_RESERVE) + MAXIMIZED_EDGE_INSET}px)`,
         zIndex: win.zIndex,
         opacity: isDimmed ? dimmedOpacity : 1,
         filter: isDimmed ? 'saturate(0.55)' : undefined,
