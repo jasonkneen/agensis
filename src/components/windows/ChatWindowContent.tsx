@@ -1483,7 +1483,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         )}
         <div className="channel-composer border-t border-border p-2">
           {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
-            <div className="mb-2 flex flex-wrap gap-1.5">
+            <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
               {linkedFiles.map(file => (
                 <FileChip
                   key={file.id}
@@ -1510,7 +1510,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             </div>
           )}
 
-          <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+          <div className="relative mx-auto w-full max-w-[800px]" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
             {showSlashPicker && (
               <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                 <CommandList className="max-h-[min(260px,44vh)]">
