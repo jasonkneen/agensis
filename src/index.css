@@ -3375,8 +3375,7 @@ select {
 
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="neo"] [data-floating-window],
-:root[data-ui-theme="neo"] [data-sidebar-panel] {
+:root[data-ui-theme="neo"] [data-floating-window] {
   border-radius: 12px !important;
 }
 
@@ -3802,6 +3801,9 @@ select {
 }
 /* sidebar header matches window titlebar treatment */
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
+  /* Full-height flush-left rail: square all corners so the right edge is a clean
+     divider (matching the base theme's rounded-none), not a floating-card curve. */
+  border-radius: 0 !important;
   border-top: 2.5px solid var(--neo-edge) !important;
   border-left: 2.5px solid var(--neo-edge) !important;
 }
@@ -3811,6 +3813,8 @@ select {
   font-family: var(--neo-mono);
   border-radius: 0 !important;
   padding: 0 !important;
+  /* Desktop only: push the pill past the macOS traffic lights (0px on web). */
+  padding-left: var(--sidebar-titlebar-inset, 0px) !important;
 }
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
   background: transparent !important;

@@ -477,7 +477,12 @@ export const Sidebar = React.memo(function Sidebar({
       <div
         data-sidebar-titlebar
         className="px-2 pt-2 pb-3"
-        style={titlebarInset ? { paddingLeft: SIDEBAR_TITLEBAR_LEFT_INSET } : undefined}
+        style={{
+          paddingLeft: titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : undefined,
+          // Desktop traffic-light clearance, also exposed as a CSS var so themes
+          // that reset the titlebar padding (neo/brutal) can still honour it.
+          '--sidebar-titlebar-inset': `${titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : 0}px`,
+        } as React.CSSProperties}
       >
         <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
