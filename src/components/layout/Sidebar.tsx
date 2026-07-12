@@ -125,17 +125,24 @@ function AgentStatusFeedOverlay({
   );
 }
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
-import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
+import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
 const COLLAPSED_SIDEBAR_WIDTH = 52;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
+// Full-height rail: the sidebar spans the entire viewport, flush to the left
+// edge. Traffic-light clearance on desktop is handled with internal padding
+// (see titlebarInset) rather than a top margin.
 const SIDEBAR_FRAME_STYLE: React.CSSProperties = {
-  marginTop: WORKSPACE_TOP_RESERVE,
-  height: `calc(100% - ${WORKSPACE_TOP_RESERVE + WORKSPACE_BOTTOM_RESERVE}px)`,
+  height: '100%',
 };
+
+// Width of the macOS traffic-light cluster in the hidden_inset_tall band. The
+// expanded header row (collapse button + workspace pill) is inset by this on the
+// desktop shell so those controls sit just to the right of the window buttons.
+const SIDEBAR_TITLEBAR_LEFT_INSET = 78;
 
 type SidebarAgentTarget = {
   id: string;
@@ -158,6 +165,9 @@ interface SidebarProps {
   // Phone drawer mode: the sidebar floats as an off-canvas overlay, so it must
   // NOT inset the workspace viewport — the canvas keeps the full screen width.
   overlay?: boolean;
+  // Desktop shell traffic-light band (~52px). Padded into the sidebar header so
+  // the workspace controls sit below the macOS window buttons.
+  titlebarInset?: number;
   onToggleCollapse: () => void;
   onOpenCommandPalette: () => void;
   onOpenWorkspaceGrid?: () => void;
@@ -204,6 +214,7 @@ export const Sidebar = React.memo(function Sidebar({
   activeLayerName,
   collapsed,
   overlay = false,
+  titlebarInset = 0,
   onToggleCollapse,
   onOpenCommandPalette,
   onOpenWorkspaceGrid,
@@ -344,12 +355,14 @@ export const Sidebar = React.memo(function Sidebar({
     // Overlay (phone drawer): the sidebar floats above the canvas, so the
     // viewport's left inset is just the chrome gap — never the sidebar width.
     const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width);
-    const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP * 2;
+    // Sidebar is flush to the left edge now, so the canvas starts one chrome gap
+    // to the right of it (previously two gaps straddled a floating panel).
+    const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP;
     document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
-    document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
+    document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP + titlebarInset}px`);
     document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
     document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
-  }, [collapsed, overlay]);
+  }, [collapsed, overlay, titlebarInset]);
 
   React.useEffect(() => {
     setWorkspaceViewportLeft(sidebarWidth);
@@ -388,8 +401,8 @@ export const Sidebar = React.memo(function Sidebar({
     return (
       <aside
         data-sidebar-panel
-        className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-xl border border-border bg-card/45 py-2 text-card-foreground shadow-xl"
-        style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH }}
+        className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+        style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
       >
         <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
           <PanelLeft />
@@ -458,10 +471,14 @@ export const Sidebar = React.memo(function Sidebar({
     <aside
       ref={sidebarRef}
       data-sidebar-panel
-      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card/45 text-card-foreground shadow-xl"
+      className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-none border-r border-border bg-card/45 text-card-foreground shadow-xl"
       style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
     >
-      <div data-sidebar-titlebar className="px-2 pt-2 pb-3">
+      <div
+        data-sidebar-titlebar
+        className="px-2 pt-2 pb-3"
+        style={titlebarInset ? { paddingLeft: SIDEBAR_TITLEBAR_LEFT_INSET } : undefined}
+      >
         <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
           <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
             <PanelLeftClose />

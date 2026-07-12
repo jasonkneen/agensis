@@ -1596,7 +1596,7 @@ function AppContent() {
 
   return (
     <TooltipProvider>
-    <div className="relative flex h-screen overflow-hidden bg-background" style={{ gap: WORKSPACE_CHROME_GAP, padding: WORKSPACE_CHROME_GAP, paddingTop: WORKSPACE_CHROME_GAP + DESKTOP_TITLEBAR_INSET }}>
+    <div className="relative flex h-screen overflow-hidden bg-background">
       <img
         src={workspaceBackdropImage}
         alt=""
@@ -1619,6 +1619,7 @@ function AppContent() {
         workspace={activeWorkspace}
         activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
         overlay={isMobile}
+        titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
         collapsed={isMobile ? false : sidebarCollapsed}
         onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
         onOpenCommandPalette={handleOpenCommandPalette}
@@ -1669,7 +1670,15 @@ function AppContent() {
         />
       )}
 
-      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div
+        className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        style={{
+          paddingTop: WORKSPACE_CHROME_GAP + DESKTOP_TITLEBAR_INSET,
+          paddingRight: WORKSPACE_CHROME_GAP,
+          paddingBottom: WORKSPACE_CHROME_GAP,
+          paddingLeft: WORKSPACE_CHROME_GAP,
+        }}
+      >
         <NetworkStatusBar
           online={online}
           syncing={syncing}
