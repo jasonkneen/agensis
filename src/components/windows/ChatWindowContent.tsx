@@ -62,6 +62,7 @@ import {
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
   BUILTIN_SLASH_ITEMS,
   matchSlashItems,
@@ -288,6 +289,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
   const [channelMeta, setChannelMeta] = useState<ChannelSessionMeta | null>(null);
   const [channelActionStatus, setChannelActionStatus] = useState('');
+  const [flowConnectOpen, setFlowConnectOpen] = useState(false);
+  const [flowConnectChannelId, setFlowConnectChannelId] = useState<string | null>(null);
   const [selectedParticipantIds, setSelectedParticipantIds] = useState<Set<string>>(() => new Set());
   const [messageOverrides, setMessageOverrides] = useState<MessageOverrides>({});
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -994,6 +997,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return next;
   };
 
+  const handleOpenFlowConnect = async () => {
+    setChannelActionStatus('');
+    const session = await findChannelSession();
+    if (!session?.id) {
+      setChannelActionStatus('Connect unavailable until this channel exists.');
+      return;
+    }
+    setFlowConnectChannelId(session.id);
+    setFlowConnectOpen(true);
+  };
+
   const conversationMode = channelMeta?.conversation_mode ?? 'auto';
   const autoInterject = conversationMode === 'auto';
 
@@ -1241,7 +1255,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2">
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => void handleOpenFlowConnect()}>
                   <Link2 data-icon="inline-start" />
                   Connect
                 </Button>
@@ -1969,6 +1983,13 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConnectFlowsDialog
+        workspaceId={workspaceId || null}
+        channelId={flowConnectChannelId}
+        open={flowConnectOpen}
+        onOpenChange={setFlowConnectOpen}
+      />
     </div>
   );
 });

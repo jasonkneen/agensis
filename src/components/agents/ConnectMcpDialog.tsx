@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 
 // "Connect an MCP client" — mints the ONE workspace token, shows the paste-able config,
 // and toggles auto-approve. A client added with this can register_agent to become an
@@ -14,6 +15,7 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
   const [auto, setAuto] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [flowsOpen, setFlowsOpen] = useState(false);
 
   const generate = async () => {
     if (!workspaceId) return;
@@ -38,36 +40,48 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Connect an MCP client</DialogTitle>
-          <DialogDescription>
-            One token for this workspace. Add it to any MCP client (Claude Code, Cursor, Codex); the client then
-            registers itself as an agent and you approve it with a popup — or automatically if you turn on auto-approve.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Connect an MCP client</DialogTitle>
+            <DialogDescription>
+              One token for this workspace. Add it to any MCP client (Claude Code, Cursor, Codex); the client then
+              registers itself as an agent and you approve it with a popup — or automatically if you turn on auto-approve.
+            </DialogDescription>
+          </DialogHeader>
 
-        {!info ? (
-          <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
-        ) : (
-          <div className="space-y-3 overflow-hidden">
-            <Row label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
-            <Row label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
-            <Row label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
-            <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
-              <div>
-                <div className="text-sm">Auto-approve new agents</div>
-                <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+          {!info ? (
+            <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
+          ) : (
+            <div className="space-y-3 overflow-hidden">
+              <Row label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+              <Row label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
+              <Row label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
+              <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
+                <div>
+                  <div className="text-sm">Auto-approve new agents</div>
+                  <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+                </div>
+                <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
               </div>
-              <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
+              <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Regenerate token</Button>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Regenerate token</Button>
+          )}
+          {err && <p className="text-xs text-destructive">{err}</p>}
+          <div className="border-t pt-4">
+            <div className="mb-2 text-sm font-medium">Connect Flows</div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Create a workspace-scoped MCP connection with an optional signed event webhook.
+            </p>
+            <Button type="button" variant="outline" onClick={() => setFlowsOpen(true)} disabled={!workspaceId}>
+              Connect Flows workspace
+            </Button>
           </div>
-        )}
-        {err && <p className="text-xs text-destructive">{err}</p>}
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      <ConnectFlowsDialog workspaceId={workspaceId} channelId={null} open={flowsOpen} onOpenChange={setFlowsOpen} />
+    </>
   );
 }
 

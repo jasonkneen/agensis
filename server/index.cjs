@@ -12,6 +12,12 @@ const { WebSocketServer } = require('ws');
 const { createMcpHandler } = require('./mcp.cjs');
 const { createInferenceBroker } = require('./inference-broker.cjs');
 const { createFarmIntegrationCore } = require('./farm-integration.cjs');
+const {
+  createFlowConnectionCore,
+  flowWebhookRetryDecision,
+  normalizeFlowWebhookUrl,
+  signFlowWebhook,
+} = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
   ALLOWED_TABLES,
@@ -617,6 +623,44 @@ async function ensureRuntimeSchema() {
       updated_at timestamptz DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_farm_integrations_workspace ON farm_integrations(workspace_id, revoked_at);
+    CREATE TABLE IF NOT EXISTS flow_connections (
+      id uuid PRIMARY KEY,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      channel_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Flows',
+      token_hash text NOT NULL UNIQUE,
+      signing_secret_cipher text NOT NULL,
+      webhook_url text,
+      events jsonb NOT NULL DEFAULT '[]'::jsonb,
+      scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      revoked_at timestamptz,
+      last_seen_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_flow_connections_workspace ON flow_connections(workspace_id, revoked_at);
+    CREATE INDEX IF NOT EXISTS idx_flow_connections_channel ON flow_connections(channel_id, revoked_at);
+    CREATE TABLE IF NOT EXISTS flow_webhook_deliveries (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      connection_id uuid NOT NULL REFERENCES flow_connections(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      event_id text NOT NULL,
+      event_type text NOT NULL,
+      payload jsonb NOT NULL,
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'inflight', 'delivered', 'dead')),
+      attempt_count integer NOT NULL DEFAULT 0,
+      next_attempt_at timestamptz NOT NULL DEFAULT now(),
+      claim_token uuid,
+      lease_expires_at timestamptz,
+      last_http_status integer,
+      last_error text,
+      delivered_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (connection_id, event_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_flow_deliveries_due ON flow_webhook_deliveries(status, next_attempt_at);
     ALTER TABLE agent_connections ADD COLUMN IF NOT EXISTS capabilities jsonb DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id);
@@ -1010,6 +1054,106 @@ function getFarmIntegrationCore() {
     farmIntegrationCoreInstance = createFarmIntegrationCore({ store: createPostgresFarmIntegrationStore() });
   }
   return farmIntegrationCoreInstance;
+}
+
+function flowConnectionRecord(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    channelId: row.channel_id || null,
+    name: row.name,
+    tokenHash: row.token_hash,
+    signingSecretCipher: row.signing_secret_cipher,
+    webhookUrl: row.webhook_url || null,
+    events: parseJsonArray(row.events),
+    scopes: parseJsonArray(row.scopes),
+    createdBy: row.created_by || null,
+    revokedAt: row.revoked_at ? Date.parse(row.revoked_at) : null,
+    lastSeenAt: row.last_seen_at ? Date.parse(row.last_seen_at) : null,
+    createdAt: Date.parse(row.created_at),
+  };
+}
+
+async function flowSecretKey() {
+  const authSecret = await getAuthSecret();
+  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
+}
+
+async function encryptFlowSecret(value) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', await flowSecretKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString('base64url')).join('.');
+}
+
+async function decryptFlowSecret(value) {
+  const [iv, tag, encrypted] = String(value || '').split('.').map(part => Buffer.from(part, 'base64url'));
+  if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted Flows webhook secret');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', await flowSecretKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+function createPostgresFlowConnectionStore() {
+  return {
+    async insertConnection(record) {
+      const rows = await getDb().unsafe(
+        `insert into flow_connections
+         (id, workspace_id, channel_id, name, token_hash, signing_secret_cipher,
+          webhook_url, events, scopes, created_by, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10,
+                 to_timestamp($11 / 1000.0), now()) returning *`,
+        [
+          record.id,
+          record.workspaceId,
+          record.channelId || null,
+          record.name,
+          record.tokenHash,
+          await encryptFlowSecret(record.signingSecret),
+          record.webhookUrl || null,
+          JSON.stringify(record.events || []),
+          JSON.stringify(record.scopes || []),
+          record.createdBy || null,
+          record.createdAt,
+        ],
+      );
+      return flowConnectionRecord(rows[0]);
+    },
+    async findConnectionByHash(hash) {
+      const rows = await getDb().unsafe('select * from flow_connections where token_hash = $1 limit 1', [hash]);
+      return flowConnectionRecord(rows[0]);
+    },
+    async touchConnection(id, lastSeenAt) {
+      const rows = await getDb().unsafe(
+        'update flow_connections set last_seen_at = to_timestamp($2 / 1000.0), updated_at = now() where id = $1 returning *',
+        [id, lastSeenAt],
+      );
+      return flowConnectionRecord(rows[0]);
+    },
+    async revokeConnection(id, revokedAt) {
+      const rows = await getDb().unsafe(
+        'update flow_connections set revoked_at = to_timestamp($2 / 1000.0), updated_at = now() where id = $1 returning *',
+        [id, revokedAt],
+      );
+      return flowConnectionRecord(rows[0]);
+    },
+    async listConnections(workspaceId) {
+      const rows = await getDb().unsafe(
+        'select * from flow_connections where workspace_id = $1 order by created_at desc',
+        [workspaceId],
+      );
+      return rows.map(flowConnectionRecord);
+    },
+  };
+}
+
+let flowConnectionCoreInstance;
+function getFlowConnectionCore() {
+  if (!flowConnectionCoreInstance) {
+    flowConnectionCoreInstance = createFlowConnectionCore({ store: createPostgresFlowConnectionStore() });
+  }
+  return flowConnectionCoreInstance;
 }
 
 function quoteIdent(value) {
@@ -1865,12 +2009,23 @@ async function verifyUserAuthMcpToken(token) {
   return { kind: 'user', userId, workspaceId: ws.id, name: 'MCP client', autoApprove: Boolean(ws.mcp_auto_approve) };
 }
 
+async function verifyFlowConnectionToken(token) {
+  if (!String(token || '').startsWith('agx_')) return null;
+  try {
+    return await getFlowConnectionCore().authenticate(token);
+  } catch (error) {
+    if (error && error.status === 401) return null;
+    throw error;
+  }
+}
+
 // The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS that
 // agent), the one workspace MCP token, an invite link (auto-approve), or the user's
 // agensis login. The latter three authenticate into the workspace; the client then
 // calls register_agent to become an agent.
 async function verifyMcpToken(token, req = null) {
   return (await verifyAgentConnectToken(token, req))
+    || (await verifyFlowConnectionToken(token))
     || (await verifyWorkspaceMcpToken(token))
     || (await verifyInviteToken(token))
     || (await verifyUserAuthMcpToken(token));
@@ -4925,6 +5080,187 @@ async function revokeRealtimeAccessForMember(userId) {
   }
 }
 
+const FLOW_EVENT_BY_CHANGE = Object.freeze({
+  'messages:INSERT': 'message.created',
+  'messages:UPDATE': 'message.updated',
+  'chat_sessions:INSERT': 'channel.created',
+  'chat_sessions:UPDATE': 'channel.updated',
+  'documents:INSERT': 'document.created',
+  'documents:UPDATE': 'document.updated',
+  'workspace_members:INSERT': 'member.created',
+  'workspace_members:UPDATE': 'member.updated',
+  'workspace_agents:INSERT': 'agent.created',
+  'workspace_agents:UPDATE': 'agent.updated',
+});
+
+function publicFlowEventRecord(table, row) {
+  if (!row || typeof row !== 'object') return {};
+  if (table === 'messages') {
+    return {
+      id: row.id,
+      channelId: row.session_id,
+      role: row.role,
+      content: textFromValue(row.content).slice(0, 20_000),
+      threadParentId: row.thread_parent_id || null,
+      senderKind: row.sender_kind || '',
+      senderId: row.sender_id || null,
+      senderName: row.sender_name || '',
+      createdAt: row.created_at || null,
+    };
+  }
+  if (table === 'chat_sessions') {
+    return {
+      id: row.id,
+      title: row.title,
+      folder: row.folder,
+      conversationMode: row.conversation_mode,
+      archivedAt: row.archived_at || null,
+      updatedAt: row.updated_at || null,
+    };
+  }
+  if (table === 'documents') {
+    return { id: row.id, title: row.title, folder: row.folder, version: row.version, updatedAt: row.updated_at || null };
+  }
+  if (table === 'workspace_agents') {
+    return { id: row.id, name: row.name, handle: row.handle, enabled: row.enabled !== false, model: row.model || null, updatedAt: row.updated_at || null };
+  }
+  if (table === 'workspace_members') {
+    return { userId: row.user_id, role: row.role, updatedAt: row.updated_at || null };
+  }
+  return {};
+}
+
+async function flowEventLocation(table, row) {
+  if (table === 'messages') {
+    const sessions = await getDb().unsafe('select id, workspace_id from chat_sessions where id = $1 limit 1', [row.session_id]);
+    return sessions[0] ? { workspaceId: sessions[0].workspace_id, channelId: row.session_id } : null;
+  }
+  return row.workspace_id ? { workspaceId: row.workspace_id, channelId: table === 'chat_sessions' ? row.id : null } : null;
+}
+
+async function enqueueFlowWebhookEvents(table, eventType, rows) {
+  const flowEventType = FLOW_EVENT_BY_CHANGE[`${table}:${eventType}`];
+  if (!flowEventType) return;
+  for (const row of rows) {
+    const location = await flowEventLocation(table, row);
+    if (!location) continue;
+    const connections = await getDb().unsafe(
+      `select id, workspace_id, channel_id, events
+         from flow_connections
+        where workspace_id = $1 and revoked_at is null and webhook_url is not null`,
+      [location.workspaceId],
+    );
+    const record = publicFlowEventRecord(table, row);
+    const version = row.version || row.updated_at || row.created_at
+      || crypto.createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 16);
+    const eventId = `${flowEventType}:${row.id || row.user_id}:${version}`;
+    for (const connection of connections) {
+      const subscribedEvents = parseJsonArray(connection.events);
+      if (!subscribedEvents.includes(flowEventType)) continue;
+      if (connection.channel_id && String(connection.channel_id) !== String(location.channelId || '')) continue;
+      if (
+        table === 'messages'
+        && row.sender_kind === 'integration'
+        && String(row.sender_id || '') === String(connection.id)
+      ) continue;
+      const payload = {
+        id: eventId,
+        type: flowEventType,
+        occurredAt: new Date().toISOString(),
+        workspaceId: location.workspaceId,
+        channelId: location.channelId,
+        data: record,
+      };
+      await getDb().unsafe(
+        `insert into flow_webhook_deliveries
+         (connection_id, workspace_id, event_id, event_type, payload)
+         values ($1, $2, $3, $4, $5::jsonb)
+         on conflict (connection_id, event_id) do nothing`,
+        [connection.id, location.workspaceId, eventId, flowEventType, JSON.stringify(payload)],
+      );
+    }
+  }
+}
+
+async function claimFlowWebhookDelivery() {
+  const rows = await getDb().unsafe(
+    `with candidate as (
+       select d.id
+         from flow_webhook_deliveries d
+         join flow_connections c on c.id = d.connection_id
+        where c.revoked_at is null
+          and c.webhook_url is not null
+          and (
+            (d.status = 'pending' and d.next_attempt_at <= now())
+            or (d.status = 'inflight' and d.lease_expires_at <= now())
+          )
+        order by d.next_attempt_at asc, d.created_at asc
+        for update skip locked
+        limit 1
+     )
+     update flow_webhook_deliveries d
+        set status = 'inflight', claim_token = gen_random_uuid(),
+            lease_expires_at = now() + interval '30 seconds',
+            attempt_count = attempt_count + 1, updated_at = now()
+       from candidate, flow_connections c
+      where d.id = candidate.id and c.id = d.connection_id
+      returning d.*, c.webhook_url, c.signing_secret_cipher`,
+  );
+  return rows[0] || null;
+}
+
+async function deliverNextFlowWebhook() {
+  const delivery = await claimFlowWebhookDelivery();
+  if (!delivery) return false;
+  const body = JSON.stringify(delivery.payload);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  let httpStatus = null;
+  let failure = '';
+  try {
+    const secret = await decryptFlowSecret(delivery.signing_secret_cipher);
+    const response = await fetch(delivery.webhook_url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'idempotency-key': delivery.event_id,
+        'x-agensis-event-id': delivery.event_id,
+        'x-agensis-timestamp': timestamp,
+        'x-agensis-signature': signFlowWebhook({ secret, timestamp, body }),
+      },
+      body,
+      signal: AbortSignal.timeout(10_000),
+      redirect: 'error',
+    });
+    httpStatus = response.status;
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) {
+      await getDb().unsafe(
+        `update flow_webhook_deliveries
+            set status = 'delivered', delivered_at = now(), last_http_status = $3,
+                last_error = null, lease_expires_at = null, updated_at = now()
+          where id = $1 and claim_token = $2`,
+        [delivery.id, delivery.claim_token, response.status],
+      );
+      return true;
+    }
+    failure = `HTTP ${response.status}`;
+  } catch (error) {
+    failure = String(error?.message || error || 'Webhook delivery failed').slice(0, 1000);
+  }
+
+  const attempts = Number(delivery.attempt_count || 1);
+  const { dead, delaySeconds } = flowWebhookRetryDecision({ httpStatus, attempts });
+  await getDb().unsafe(
+    `update flow_webhook_deliveries
+        set status = $3, next_attempt_at = now() + ($4 * interval '1 second'),
+            last_http_status = $5, last_error = $6,
+            lease_expires_at = null, updated_at = now()
+      where id = $1 and claim_token = $2`,
+    [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, httpStatus, failure],
+  );
+  return true;
+}
+
 function notifyDbSubscribers(table, eventType, rows) {
   const rowList = Array.isArray(rows) ? rows : [];
   if (rowList.length === 0) return;
@@ -4934,6 +5270,10 @@ function notifyDbSubscribers(table, eventType, rows) {
   if (table === 'messages' && eventType === 'INSERT') {
     void logMessageActivity(rowList);
   }
+
+  void enqueueFlowWebhookEvents(table, eventType, rowList).catch((error) => {
+    console.error('[flows] failed to queue webhook event:', error.message || error);
+  });
 
   if (table === 'workspace_agents') {
     refreshConnectedAgentConfigs(eventType, rowList);
@@ -7133,6 +7473,91 @@ function createApp() {
 
   // --- Connect an MCP client (one workspace token) + agent-registration approvals ---
 
+  app.post('/backend/workspaces/:id/flow-connections', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const channelId = req.body?.channelId ? String(req.body.channelId).trim() : null;
+      if (channelId) {
+        const rows = await getDb().unsafe(
+          'select id from chat_sessions where id = $1 and workspace_id = $2 limit 1',
+          [channelId, workspaceId],
+        );
+        if (!rows[0]) return jsonError(res, 404, new Error('Channel not found in this workspace'));
+      }
+      const created = await getFlowConnectionCore().create({
+        workspaceId,
+        channelId,
+        name: req.body?.name || 'Flows',
+        webhookUrl: normalizeFlowWebhookUrl(req.body?.webhookUrl),
+        events: req.body?.events,
+        createdBy: req.userId,
+      });
+      const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+        || normalizeBaseUrl(req.body?.baseUrl)
+        || requestBaseUrl(req);
+      const connection = created.connection;
+      return res.status(201).json({
+        data: {
+          id: connection.id,
+          name: connection.name,
+          workspaceId: connection.workspaceId,
+          channelId: connection.channelId,
+          scopes: connection.scopes,
+          events: connection.events,
+          webhookUrl: connection.webhookUrl,
+          endpoint: mcpEndpoint(baseUrl),
+          token: created.token,
+          signingSecret: created.signingSecret,
+        },
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.get('/backend/workspaces/:id/flow-connections', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const connections = await createPostgresFlowConnectionStore().listConnections(workspaceId);
+      return res.json({
+        data: connections.map(connection => ({
+          id: connection.id,
+          name: connection.name,
+          workspaceId: connection.workspaceId,
+          channelId: connection.channelId,
+          scopes: connection.scopes,
+          events: connection.events,
+          webhookUrl: connection.webhookUrl,
+          revokedAt: connection.revokedAt,
+          lastSeenAt: connection.lastSeenAt,
+          createdAt: connection.createdAt,
+        })),
+        error: null,
+      });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
+  app.delete('/backend/workspaces/:id/flow-connections/:connectionId', requireAuth, async (req, res) => {
+    try {
+      const workspaceId = String(req.params.id || '').trim();
+      await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+      const rows = await getDb().unsafe(
+        'select id from flow_connections where id = $1 and workspace_id = $2 limit 1',
+        [req.params.connectionId, workspaceId],
+      );
+      if (!rows[0]) return jsonError(res, 404, new Error('Flows connection not found'));
+      await getFlowConnectionCore().revoke(req.params.connectionId);
+      return res.json({ data: { id: req.params.connectionId, revoked: true }, error: null });
+    } catch (error) {
+      jsonError(res, error.status || 500, error);
+    }
+  });
+
   // Generate/rotate the one workspace MCP token and return the ready-to-paste config.
   app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
     try {
@@ -7527,7 +7952,18 @@ function startBackendServer(port = DEFAULT_PORT) {
   void reconcileAgentConnectionsAtStartup();
   const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); }, 30_000);
   if (jobReaper.unref) jobReaper.unref();
+  let flowDeliveryRunning = false;
+  const flowDeliveryWorker = setInterval(() => {
+    if (flowDeliveryRunning) return;
+    flowDeliveryRunning = true;
+    void deliverNextFlowWebhook()
+      .catch(error => console.error('[flows] webhook worker failed:', error.message || error))
+      .finally(() => { flowDeliveryRunning = false; });
+  }, 1_000);
+  flowDeliveryWorker.unref?.();
   server.on('close', () => {
+    clearInterval(jobReaper);
+    clearInterval(flowDeliveryWorker);
     wss.close();
     websocketClients = new Set();
   });
@@ -7553,6 +7989,7 @@ function resetTestState() {
   envLoaded = false;
   tokenVersionCache.clear();
   farmIntegrationCoreInstance = undefined;
+  flowConnectionCoreInstance = undefined;
   connectedAgents.clear();
 }
 

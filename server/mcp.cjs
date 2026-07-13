@@ -1,5 +1,10 @@
 'use strict';
 
+const {
+  assertConnectionChannel,
+  connectionCanUseTool,
+} = require('./flow-integration.cjs');
+
 // Native MCP (Model Context Protocol) server for agensis.
 //
 // Mirrors the hilos `/api/mcp` model: a single POST endpoint speaking stateless
@@ -88,7 +93,7 @@ function buildTools() {
   //   'invite'    — an invite link (auto-approve).
   // The last three authenticate INTO a workspace; you then register_agent to become an
   // agent. Default kinds = everything that can act in a workspace. Handler enforces it.
-  const CONNECTED = ['agent', 'workspace', 'user', 'invite'];
+  const CONNECTED = ['agent', 'workspace', 'user', 'invite', 'integration'];
   const add = (def) => tools.push({ kinds: CONNECTED, ...def });
 
   // -- Identity & discovery --------------------------------------------------
@@ -134,6 +139,16 @@ function buildTools() {
     async run(args, { db, identity }) {
       const limit = optInt(args?.limit, 50, 200);
       const includeArchived = args?.include_archived === true;
+      if (identity.kind === 'integration' && identity.channelId) {
+        const rows = await db.unsafe(
+          `select id, title, folder, model, conversation_mode, participants, archived_at, updated_at
+             from chat_sessions
+            where workspace_id = $1 and id = $2 ${includeArchived ? '' : 'and archived_at is null'}
+            limit 1`,
+          [identity.workspaceId, identity.channelId],
+        );
+        return { channels: rows };
+      }
       const rows = await db.unsafe(
         `select id, title, folder, model, conversation_mode, participants, archived_at, updated_at
            from chat_sessions
@@ -199,15 +214,22 @@ function buildTools() {
     async run(args, { db, identity }) {
       const query = requireString(args, 'query');
       const limit = optInt(args?.limit, 30, 100);
+      const channelClause = identity.kind === 'integration' && identity.channelId
+        ? 'and s.id = $3'
+        : '';
+      const params = identity.kind === 'integration' && identity.channelId
+        ? [identity.workspaceId, `%${query}%`, identity.channelId, limit]
+        : [identity.workspaceId, `%${query}%`, limit];
+      const limitParam = identity.kind === 'integration' && identity.channelId ? '$4' : '$3';
       const rows = await db.unsafe(
         `select m.id, m.session_id, s.title as channel_title, m.role, m.content,
                 m.sender_kind, m.sender_name, m.created_at
            from messages m
            join chat_sessions s on s.id = m.session_id
           where s.workspace_id = $1 and m.content ilike $2
-            and m.deleted_at is null and s.deleted_at is null
-          order by m.created_at desc limit $3`,
-        [identity.workspaceId, `%${query}%`, limit],
+            and m.deleted_at is null and s.deleted_at is null ${channelClause}
+          order by m.created_at desc limit ${limitParam}`,
+        params,
       );
       return { results: rows };
     },
@@ -265,7 +287,7 @@ function buildTools() {
 
   add({
     name: 'post_message',
-    kinds: ['agent'],
+    kinds: ['agent', 'integration'],
     description: 'Post a message into a channel as this agent. Pure "speak" — it does NOT trigger other agents to respond. Use dispatch_agent if you want @mentioned/direct/auto agents to act on it.',
     inputSchema: {
       type: 'object',
@@ -289,7 +311,7 @@ function buildTools() {
 
   add({
     name: 'dispatch_agent',
-    kinds: ['agent'],
+    kinds: ['agent', 'integration'],
     description: 'Post a message into a channel as this agent AND advance the conversation, so @mentioned, direct, or auto-mode agents respond. Use this to delegate work or ask a teammate. Returns immediately; replies arrive asynchronously.',
     inputSchema: {
       type: 'object',
@@ -643,8 +665,15 @@ function buildTools() {
     async run(args, { db, identity, deps }) {
       const itemId = requireString(args, 'item_id');
       const existing = await db.unsafe(
-        'select id from thread_items where id = $1 and workspace_id = $2 limit 1', [itemId, identity.workspaceId]);
+        'select id, session_id from thread_items where id = $1 and workspace_id = $2 limit 1', [itemId, identity.workspaceId]);
       if (!existing[0]) throw new ToolError('Thread item not found in this workspace');
+      if (identity.kind === 'integration' && identity.channelId) {
+        try {
+          assertConnectionChannel(identity, existing[0].session_id);
+        } catch (err) {
+          throw new ToolError(err.message);
+        }
+      }
       const status = ['open', 'done', 'answered', 'dismissed'].includes(args?.status) ? args.status : null;
       const rows = await db.unsafe(
         `update thread_items set
@@ -979,8 +1008,17 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId) {
   await assertChannelInWorkspace(db, channelId, identity.workspaceId);
   const rows = await db.unsafe(
     `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-     values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
-    [channelId, content, threadParentId || null, identity.agentId ? String(identity.agentId) : null, identity.name]);
+     values ($1, 'assistant', $2, $3, $4, $5, $6) returning *`,
+    [
+      channelId,
+      content,
+      threadParentId || null,
+      identity.kind === 'integration' ? 'integration' : 'agent',
+      identity.kind === 'integration'
+        ? String(identity.connectionId || '')
+        : (identity.agentId ? String(identity.agentId) : null),
+      identity.name,
+    ]);
   deps.notifyDbSubscribers('messages', 'INSERT', rows);
   await db.unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => {});
   return rows[0];
@@ -1001,8 +1039,14 @@ function createMcpHandler(deps) {
   } = deps;
 
   const TOOLS = buildTools();
-  const TOOL_LIST = TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
   const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+
+  function toolsForIdentity(identity) {
+    return TOOLS.filter((tool) => {
+      const kinds = tool.kinds || ['agent', 'invite'];
+      return kinds.includes(identity.kind) && connectionCanUseTool(identity, tool.name);
+    });
+  }
 
   async function handleOne(rpc, identity) {
     const id = rpc && Object.prototype.hasOwnProperty.call(rpc, 'id') ? rpc.id : undefined;
@@ -1030,7 +1074,13 @@ function createMcpHandler(deps) {
       case 'ping':
         return jsonrpcResult(id, {});
       case 'tools/list':
-        return jsonrpcResult(id, { tools: TOOL_LIST });
+        return jsonrpcResult(id, {
+          tools: toolsForIdentity(identity).map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          })),
+        });
       case 'resources/list':
         return jsonrpcResult(id, { resources: [] });
       case 'prompts/list':
@@ -1044,6 +1094,19 @@ function createMcpHandler(deps) {
           return jsonrpcResult(id, toolError(`Tool "${tool.name}" is not available for a ${identity.kind} token.`));
         }
         const args = params.arguments && typeof params.arguments === 'object' ? params.arguments : {};
+        if (!connectionCanUseTool(identity, tool.name)) {
+          return jsonrpcResult(id, toolError(`Tool "${tool.name}" is outside this connection's granted scopes.`));
+        }
+        if (identity.kind === 'integration' && identity.channelId) {
+          const requestedChannelId = args.channel_id || args.session_id || null;
+          if (requestedChannelId) {
+            try {
+              assertConnectionChannel(identity, requestedChannelId);
+            } catch (err) {
+              return jsonrpcResult(id, toolError(err.message));
+            }
+          }
+        }
         try {
           const value = await tool.run(args, { db: getDb(), identity, deps });
           return jsonrpcResult(id, toolContent(value));

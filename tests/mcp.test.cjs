@@ -13,6 +13,14 @@ const COMMENTER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-comme
 const EDITOR_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-editor', name: 'editor@x.com', autoApprove: true, role: 'editor' };
 const ADMIN_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-admin', name: 'admin@x.com', autoApprove: true, role: 'admin' };
 const WORKSPACE = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
+const FLOW_CHANNEL = {
+  kind: 'integration',
+  connectionId: 'flow-1',
+  workspaceId: WS,
+  channelId: 'ch-1',
+  name: 'Flows',
+  scopes: ['channels:read', 'messages:read', 'messages:write', 'agents:read', 'agents:dispatch'],
+};
 
 // Minimal fake postgres client. Recognizes only the statements the MCP tools
 // under test issue; everything else returns []. Channels: ch-1 in WS, ch-x in OTHER_WS.
@@ -28,9 +36,15 @@ function makeDb() {
         const [id, ws] = params;
         return (id === 'ch-1' && ws === WS) ? [{ id: 'ch-1' }] : [];
       }
+      if (n.startsWith('select id, session_id from thread_items where id = $1 and workspace_id = $2')) {
+        if (params[1] !== WS) return [];
+        if (params[0] === 'item-1') return [{ id: 'item-1', session_id: 'ch-1' }];
+        if (params[0] === 'item-other') return [{ id: 'item-other', session_id: 'ch-other' }];
+        return [];
+      }
       if (n.startsWith('insert into messages')) {
         messageSeq += 1;
-        const row = { id: `m-${messageSeq}`, session_id: params[0], content: params[1], sender_kind: 'agent', sender_id: params[3], sender_name: params[4] };
+        const row = { id: `m-${messageSeq}`, session_id: params[0], content: params[1], sender_kind: params[3], sender_id: params[4], sender_name: params[5] };
         db.inserted.push(row);
         return [row];
       }
@@ -52,6 +66,7 @@ function makeDeps(overrides = {}) {
     'commenter-invite-token': COMMENTER_INVITE,
     'editor-invite-token': EDITOR_INVITE,
     'admin-invite-token': ADMIN_INVITE,
+    'flow-token': FLOW_CHANNEL,
   };
   const deps = {
     getDb: () => overrides.db,
@@ -151,6 +166,39 @@ test('whoami returns the resolved agent identity', async () => {
   assert.equal(payload.agentId, 'agent-1');
   assert.equal(payload.handle, 'coder');
   assert.equal(payload.workspaceId, WS);
+});
+
+test('channel-scoped Flows connections discover only granted tools and cannot cross channels', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const listed = await call(handler, { token: 'flow-token', body: rpc('tools/list') });
+  const names = listed.body.result.tools.map((tool) => tool.name);
+
+  assert.ok(names.includes('read_channel'));
+  assert.ok(names.includes('post_message'));
+  assert.ok(names.includes('dispatch_agent'));
+  assert.equal(names.includes('read_doc'), false);
+  assert.equal(names.includes('register_agent'), false);
+
+  const denied = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
+    name: 'read_channel', arguments: { channel_id: 'ch-x' },
+  }) });
+  assert.equal(denied.body.result.isError, true);
+  assert.match(denied.body.result.content[0].text, /limited to a different channel/i);
+
+  const posted = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
+    name: 'post_message', arguments: { channel_id: 'ch-1', content: 'workflow reply' },
+  }) });
+  assert.equal(JSON.parse(posted.body.result.content[0].text).posted, true);
+  assert.equal(db.inserted[0].sender_kind, 'integration');
+  assert.equal(db.inserted[0].sender_name, 'Flows');
+
+  const deniedThreadUpdate = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
+    name: 'update_thread_item', arguments: { item_id: 'item-other', status: 'done' },
+  }) });
+  assert.equal(deniedThreadUpdate.body.result.isError, true);
+  assert.match(deniedThreadUpdate.body.result.content[0].text, /limited to a different channel/i);
 });
 
 test('post_message inserts + notifies but does NOT trigger continueConversation', async () => {
