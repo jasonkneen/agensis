@@ -8,8 +8,7 @@ import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
-import { DocWindowContent } from './components/windows/DocWindowContent';
-import { TasksWindowContent } from './components/windows/TasksWindowContent';
+import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { ActivityWindowContent } from './components/windows/ActivityWindowContent';
 import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
 import { UsersWindow } from './components/windows/UsersWindow';
@@ -273,6 +272,11 @@ function renderDockButton(
 }
 
 const ADJACENT_EDGE_TOLERANCE = 2;
+
+// Hoisted rather than written inline (`() => {}`, `[]`), which would allocate a
+// fresh reference every render and defeat ChatWindowContent's React.memo.
+const NOOP_SEND_MESSAGE = () => {};
+const EMPTY_MESSAGES: never[] = [];
 
 function computeAdjacentEdges(win: FloatingWindow, allWindows: FloatingWindow[]): Set<'left' | 'right' | 'top' | 'bottom'> {
   const edges = new Set<'left' | 'right' | 'top' | 'bottom'>();
@@ -2287,8 +2291,13 @@ function CanvasLayerScene({
                     onOpenThread={onOpenThread}
                   />
                 ) : (
-                <ChatWindowContent
-                  messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : []}
+                <ChatWindowBody
+                  winSession={winSession}
+                  isActiveSession={activeSession?.id === win.sessionId}
+                  onAppSendMessage={onSendMessage}
+                  onSetActiveSession={onSetActiveSession}
+                  onAppSplitThread={onSplitThread}
+                  messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
                   topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
                   threadMessages={threadMessages}
                   threadReplyCounts={threadReplyCounts}
@@ -2311,16 +2320,8 @@ function CanvasLayerScene({
                   onCreateTask={onCreateTask}
                   systemCapabilities={systemCapabilities}
                   contextControls={contextControlsElement}
-                  onSendMessage={(content, model, mf, docs) => {
-                    if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                    onSendMessage(content, model, mf, docs, null, winSession || null);
-                  }}
                   onOpenThread={onOpenThread}
                   onCloseThread={onCloseThread}
-                  onSendThreadReply={(content, model) => {
-                    if (winSession && activeSession?.id !== win.sessionId) onSetActiveSession(winSession);
-                    onSendMessage(content, model, facts, undefined, activeThreadId, winSession || null);
-                  }}
                   subThreadsByMessage={subThreadsByMessage}
                   activeSubThread={activeSubThread}
                   subThreadMessages={subThreadMessages}
@@ -2329,7 +2330,6 @@ function CanvasLayerScene({
                   onCloseSubThread={onCloseSubThread}
                   onCreateSubThread={onCreateSubThreadProp}
                   onSendSubThreadMessage={onSendSubThreadMessage}
-                  onSplitThread={winSession ? () => onSplitThread(winSession) : undefined}
                   channelTitle={winSession?.title || win.title}
                   currentUserId={userId}
                 />
@@ -2373,25 +2373,18 @@ function CanvasLayerScene({
               titleIcon={<FileText size={13} />}
               breadcrumb={workspaceName}
             >
-              <DocWindowContent
+              <DocWindowBody
+                windowId={win.id}
+                onDeleteDocument={onDeleteDocument}
+                onCloseWindow={onCloseWindow}
+                onUpdateWindow={onUpdateWindow}
+                onRequestConfirm={onRequestConfirm}
                 document={doc}
                 workspaceId={workspaceId}
                 userId={userId}
                 currentUserEmail={userEmail}
                 onAutoSave={onAutoSaveDocument}
                 onToggleFavorite={onToggleFavorite}
-                onDelete={(id) => {
-                  onRequestConfirm({
-                    title: 'Delete this document?',
-                    description: 'This removes the document from the workspace.',
-                    actionLabel: 'Delete',
-                    onConfirm: async () => {
-                      await onDeleteDocument(id);
-                      onCloseWindow(win.id);
-                    },
-                  });
-                }}
-                onTitleChange={(title) => onUpdateWindow(win.id, { title })}
                 onCommentCreated={onCommentCreated}
                 tasks={tasks}
                 onUpdateTask={onUpdateTask}
@@ -2453,7 +2446,9 @@ function CanvasLayerScene({
               titleIcon={<CheckCircle2 size={13} />}
               breadcrumb={workspaceName}
             >
-              <TasksWindowContent
+              <TasksWindowBody
+                windowId={win.id}
+                onUpdateWindow={onUpdateWindow}
                 tasks={tasks}
                 members={members}
                 agents={agents}
@@ -2466,7 +2461,6 @@ function CanvasLayerScene({
                 onDeleteTask={onDeleteTask}
                 onUpdateAgent={onUpdateAgent}
                 focusTaskId={win.focusTaskId}
-                onFocusTaskConsumed={() => onUpdateWindow(win.id, { focusTaskId: undefined })}
               />
             </FloatingWindowShell>
           );
@@ -2642,7 +2636,7 @@ function ReadOnlyChatWindowContent({
       canvasObjects={canvasObjects}
       workspaceId={workspaceId}
       uploadedFiles={uploadedFiles}
-      onSendMessage={() => {}}
+      onSendMessage={NOOP_SEND_MESSAGE}
       readOnly
     />
   );
@@ -2709,6 +2703,23 @@ function InactiveChatWindow({
     return counts;
   }, [messages]);
 
+  // Stable references, or the React.memo on ChatWindowContent never hits.
+  const handleSendMessage = useCallback(
+    (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
+      onSetActiveSession(session);
+      onSendMessage(content, model, mf, docs, null, session);
+    },
+    [onSetActiveSession, onSendMessage, session],
+  );
+
+  const handleOpenThread = useCallback(
+    (messageId: string) => {
+      onSetActiveSession(session);
+      onOpenThread(messageId);
+    },
+    [onSetActiveSession, onOpenThread, session],
+  );
+
   return (
     <ChatWindowContent
       messages={messages as never[]}
@@ -2732,14 +2743,8 @@ function InactiveChatWindow({
       onCreateTask={onCreateTask}
       systemCapabilities={systemCapabilities}
       contextControls={contextControls}
-      onSendMessage={(content, model, mf, docs) => {
-        onSetActiveSession(session);
-        onSendMessage(content, model, mf, docs, null, session);
-      }}
-      onOpenThread={(messageId) => {
-        onSetActiveSession(session);
-        onOpenThread(messageId);
-      }}
+      onSendMessage={handleSendMessage}
+      onOpenThread={handleOpenThread}
       channelTitle={session.title || windowTitle}
     />
   );

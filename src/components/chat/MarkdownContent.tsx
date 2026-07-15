@@ -1,13 +1,6 @@
 import React from 'react';
 import { MermaidDiagram } from './MermaidDiagram';
-
-type Block =
-  | { type: 'code'; language: string; content: string }
-  | { type: 'heading'; level: 1 | 2 | 3; content: string }
-  | { type: 'list'; ordered: boolean; items: string[] }
-  | { type: 'blockquote'; content: string }
-  | { type: 'table'; rows: string[][] }
-  | { type: 'paragraph'; content: string };
+import { parseBlocks, parseFrontmatter, closeOpenMarkers, type Block, type FrontmatterValue } from '../../lib/markdownBlocks';
 
 interface MarkdownContentProps {
   content: string;
@@ -34,48 +27,6 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content, co
   );
 });
 
-type FrontmatterValue = string | Record<string, string>;
-
-// Minimal flat-YAML frontmatter reader: a leading `---` block of `key: value`
-// lines, with one level of 2-space-indented nesting (e.g. a `metadata:` object).
-// Not a general YAML parser — matches the shape memory/doc files actually use.
-function parseFrontmatter(content: string): { meta: Record<string, FrontmatterValue>; body: string } | null {
-  const lines = content.replace(/\r\n/g, '\n').split('\n');
-  if (lines[0]?.trim() !== '---') return null;
-
-  let end = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') { end = i; break; }
-  }
-  if (end === -1) return null;
-
-  const meta: Record<string, FrontmatterValue> = {};
-  let currentKey: string | null = null;
-  for (let i = 1; i < end; i++) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-
-    const nested = line.match(/^\s{2,}([\w.-]+):\s*(.*)$/);
-    if (nested && currentKey) {
-      const existing = meta[currentKey];
-      const obj = typeof existing === 'object' && existing ? existing : {};
-      obj[nested[1]] = nested[2].trim();
-      meta[currentKey] = obj;
-      continue;
-    }
-
-    const top = line.match(/^([\w.-]+):\s*(.*)$/);
-    if (top) {
-      currentKey = top[1];
-      meta[currentKey] = top[2].trim();
-    }
-  }
-
-  if (!meta.name && !meta.description) return null;
-  const body = lines.slice(end + 1).join('\n').replace(/^\n+/, '');
-  return { meta, body };
-}
-
 function FrontmatterHeader({ meta }: { meta: Record<string, FrontmatterValue> }) {
   const name = typeof meta.name === 'string' ? meta.name : '';
   const description = typeof meta.description === 'string' ? meta.description : '';
@@ -100,113 +51,6 @@ function FrontmatterHeader({ meta }: { meta: Record<string, FrontmatterValue> })
   );
 }
 
-function parseBlocks(content: string): Block[] {
-  const lines = content.replace(/\r\n/g, '\n').split('\n');
-  const blocks: Block[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i += 1;
-      continue;
-    }
-
-    const fence = line.match(/^```(\w+)?\s*$/);
-    if (fence) {
-      const language = fence[1] || '';
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
-        code.push(lines[i]);
-        i += 1;
-      }
-      if (i < lines.length) i += 1;
-      blocks.push({ type: 'code', language, content: code.join('\n') });
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      blocks.push({
-        type: 'heading',
-        level: heading[1].length as 1 | 2 | 3,
-        content: heading[2],
-      });
-      i += 1;
-      continue;
-    }
-
-    if (/^\s*>\s?/.test(line)) {
-      const quote: string[] = [];
-      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-        quote.push(lines[i].replace(/^\s*>\s?/, ''));
-        i += 1;
-      }
-      blocks.push({ type: 'blockquote', content: quote.join('\n') });
-      continue;
-    }
-
-    const listMatch = line.match(/^(\s*)([-*]|\d+\.)\s+(.+)$/);
-    if (listMatch) {
-      const ordered = /\d+\./.test(listMatch[2]);
-      const items: string[] = [];
-      while (i < lines.length) {
-        const item = lines[i].match(/^(\s*)([-*]|\d+\.)\s+(.+)$/);
-        if (!item || /\d+\./.test(item[2]) !== ordered) break;
-        items.push(item[3]);
-        i += 1;
-      }
-      blocks.push({ type: 'list', ordered, items });
-      continue;
-    }
-
-    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]+\s*$/.test(lines[i + 1])) {
-      const rows: string[][] = [splitTableRow(line)];
-      i += 2;
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
-        rows.push(splitTableRow(lines[i]));
-        i += 1;
-      }
-      blocks.push({ type: 'table', rows });
-      continue;
-    }
-
-    const paragraph: string[] = [];
-    while (i < lines.length && lines[i].trim()) {
-      if (/^```/.test(lines[i]) || /^(#{1,3})\s+/.test(lines[i]) || /^(\s*)([-*]|\d+\.)\s+/.test(lines[i])) break;
-      paragraph.push(lines[i]);
-      i += 1;
-    }
-    blocks.push({ type: 'paragraph', content: paragraph.join('\n') });
-  }
-
-  return blocks;
-}
-
-// During streaming the tail often ends mid-token (`**bold` with no closer yet),
-// which would render as literal asterisks until the next delta arrives. Close the
-// most common dangling markers on the last line so formatting appears as it streams.
-// Only invoked while streaming — finished messages are rendered verbatim, so a
-// legitimately-odd marker (e.g. "2 * 3") is never altered.
-function closeOpenMarkers(content: string): string {
-  const text = content;
-  // Inside an open code fence: the block parser already renders the remainder as
-  // code, so leave it untouched.
-  if (((text.match(/^```/gm) || []).length) % 2 === 1) return text;
-
-  const nlIndex = text.lastIndexOf('\n');
-  const head = nlIndex === -1 ? '' : text.slice(0, nlIndex + 1);
-  let tail = nlIndex === -1 ? text : text.slice(nlIndex + 1);
-
-  if (((tail.match(/`/g) || []).length) % 2 === 1) {
-    tail += '`';
-  } else if (((tail.match(/\*\*/g) || []).length) % 2 === 1) {
-    tail += '**';
-  }
-  return head + tail;
-}
-
 // Render a block's text with single newlines as hard breaks. The block parser joins
 // soft-wrapped lines with "\n"; without this they collapse to spaces (CommonMark soft
 // break) and fuse separate sentences into one running paragraph.
@@ -218,15 +62,6 @@ function renderInlineLines(text: string, onMentionClick?: (mention: string) => v
     out.push(<React.Fragment key={`ln-${idx}`}>{renderInline(line, onMentionClick)}</React.Fragment>);
   });
   return out;
-}
-
-function splitTableRow(row: string) {
-  return row
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map(cell => cell.trim());
 }
 
 function renderBlock(block: Block, index: number, onMentionClick?: (mention: string) => void, streaming = false) {
