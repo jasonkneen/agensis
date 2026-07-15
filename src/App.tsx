@@ -2455,6 +2455,7 @@ function CanvasLayerScene({
                 tasks={tasks}
                 members={members}
                 agents={agents}
+                agentConnections={agentConnections}
                 currentUserEmail={userEmail}
                 workspaceId={workspaceId}
                 currentUserId={userId}

@@ -225,6 +225,8 @@ export interface TaskComment {
   task_id: string;
   workspace_id: string;
   user_id: string | null;
+  /** Set when the comment was authored by an agent (a mirrored subthread reply). */
+  agent_id?: string | null;
   parent_id: string | null;
   content: string;
   resolved: boolean;

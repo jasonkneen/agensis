@@ -115,6 +115,11 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
 
+-- Tasks <-> subthread <-> comments loop: a task @mention runs the agent inside a
+-- per-task subthread; source_task_id ties the thread root back to its task.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
+CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+
 CREATE TABLE IF NOT EXISTS flow_connections (
   id uuid PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -517,6 +522,9 @@ CREATE TABLE IF NOT EXISTS task_comments (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+-- Agent-authored comments (a mirrored subthread reply) attribute to an agent, not a user.
+ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
 CREATE INDEX IF NOT EXISTS idx_task_comments_task_id ON task_comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_comments_workspace_id ON task_comments(workspace_id);
