@@ -71,7 +71,6 @@ import { cn } from '@/lib/utils';
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
-import { ConnectMcpDialog } from '../agents/ConnectMcpDialog';
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -97,6 +96,7 @@ interface AgentsWindowContentProps {
   onDeleteAgent: (id: string) => void;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  onOpenConnections: () => void;
 }
 
 const DEFAULT_AGENT_AVATAR = 'AI';
@@ -125,9 +125,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onDeleteAgent,
   onCreateWebhook,
   onUpdateWebhook,
+  onOpenConnections,
 }: AgentsWindowContentProps) {
   const [showCreate, setShowCreate] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
   const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
@@ -243,7 +243,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           type="button"
           size="sm"
           variant="outline"
-          onClick={() => setConnectOpen(true)}
+          onClick={onOpenConnections}
         >
           <Plug data-icon="inline-start" />
           Connect a client
@@ -258,7 +258,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           Create Agent
         </Button>
       </div>
-      <ConnectMcpDialog workspaceId={agents[0]?.workspace_id ?? null} open={connectOpen} onOpenChange={setConnectOpen} />
       <AgentConnectDialog
         agent={connectAgent}
         open={connectAgentId != null}

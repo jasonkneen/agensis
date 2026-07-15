@@ -908,9 +908,9 @@ function AppContent() {
       background_image: settingsLayer.background_image ?? activeWorkspace.background_image ?? '',
     };
   }, [activeWorkspace, settingsLayer]);
-  const openLayerSettings = useCallback((layerId = activeLayerId) => {
+  const openLayerSettings = useCallback((layerId = activeLayerId, tab: SettingsTabId = 'general') => {
     setSettingsLayerId(layerId);
-    setSettingsInitialTab('general');
+    setSettingsInitialTab(tab);
     setSettingsOpen(true);
   }, [activeLayerId]);
   const handleUpdateSettingsWorkspace = useCallback((id: string, updates: Partial<Workspace>) => {
@@ -1796,6 +1796,7 @@ function AppContent() {
                 onDeleteAgent={deleteAgent}
                 onCreateAgentWebhook={createAgentWebhook}
                 onUpdateAgentWebhook={updateAgentWebhook}
+                onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
                 topLevelMessages={topLevelMessages}
                 threadMessages={threadMessages}
                 threadReplyCounts={threadReplyCounts}
@@ -2076,6 +2077,7 @@ function CanvasLayerScene({
   onAgentProfile,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
+  onOpenConnections,
   topLevelMessages,
   threadMessages,
   threadReplyCounts,
@@ -2158,6 +2160,7 @@ function CanvasLayerScene({
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  onOpenConnections: () => void;
   topLevelMessages: import('./types').Message[];
   threadMessages: import('./types').Message[];
   threadReplyCounts: Record<string, number>;
@@ -2525,6 +2528,7 @@ function CanvasLayerScene({
                 onDeleteAgent={onDeleteAgent}
                 onCreateWebhook={onCreateAgentWebhook}
                 onUpdateWebhook={onUpdateAgentWebhook}
+                onOpenConnections={onOpenConnections}
               />
             </FloatingWindowShell>
           );
