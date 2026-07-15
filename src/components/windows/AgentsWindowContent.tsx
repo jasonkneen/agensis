@@ -56,7 +56,6 @@ import {
   Item,
   ItemActions,
   ItemContent,
-  ItemDescription,
   ItemGroup,
   ItemMedia,
   ItemTitle,
@@ -916,11 +915,23 @@ function AgentRow({
   const [editModel, setEditModel] = useState(agent.model || 'auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
-  const toolBadges = normalizeList(agent.tools).slice(0, 3);
+  const tools = normalizeList(agent.tools);
+  const skills = normalizeList(agent.skills);
   const accent = agentAccentColor(agent);
   const agentActive = isAgentActive(agent);
   const handleLabel = `@${agent.handle || agentHandle(agent.name)}`;
   const modelLabel = displayModel(agent.model);
+  const busy = activeConnections.some(connection => connection.status === 'busy');
+  // The agent's self-declared status.json note (folded into heartbeat metadata by the
+  // daemon). Surfaced on hover over the connection dot so the simplified row keeps the
+  // "what is it doing right now" signal without spending row height on it.
+  const selfNote = activeConnections
+    .map(connection => {
+      const status = typeof connection.metadata?.agentStatus === 'string' ? connection.metadata.agentStatus : '';
+      const note = typeof connection.metadata?.agentNote === 'string' ? connection.metadata.agentNote : '';
+      return [status, note].filter(Boolean).join(' — ');
+    })
+    .find(Boolean) || '';
 
   const handleSave = () => {
     onSave({
@@ -1018,30 +1029,27 @@ function AgentRow({
           <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
           {agent.name}
         </ItemTitle>
-        {agent.description ? (
-          <ItemDescription>{agent.description}</ItemDescription>
-        ) : (
-          <ItemDescription>No description</ItemDescription>
-        )}
-        <div className="agent-token-row min-w-0 flex flex-wrap gap-1">
-          <Badge variant="outline" className="agent-token-chip" title={handleLabel}>
-            <span className="min-w-0 truncate">{handleLabel}</span>
-          </Badge>
-          <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
-            {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
-          </Badge>
-          <Badge variant="outline" className="agent-token-chip" title={modelLabel}>
-            <span className="min-w-0 truncate">{modelLabel}</span>
-          </Badge>
-          <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
-          {!agentActive && <Badge variant="secondary">deactivated</Badge>}
-          {toolBadges.length > 0
-            ? toolBadges.map(tool => (
-                <Badge key={tool} variant="outline" className="agent-token-chip" title={tool}>
-                  <span className="min-w-0 truncate">{tool}</span>
-                </Badge>
-              ))
-            : <Badge variant="secondary" className="agent-token-chip">None</Badge>}
+        {/* Compact feature strip: identity + iconised features. Full text detail
+            (description, model name, tool/skill lists, connections, webhooks) lives
+            in the detail pane on the right. Keeps the list row short and scannable. */}
+        <div className="agent-feature-icons mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+          <span className="min-w-0 truncate text-xs opacity-70" title={handleLabel}>{handleLabel}</span>
+          <FeatureIcon
+            icon={agent.run_mode === 'daemon' ? Monitor : Bot}
+            label={agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in agent'}
+          />
+          <FeatureIcon icon={Brain} label={`Model: ${modelLabel}`} />
+          {tools.length > 0 && (
+            <FeatureIcon icon={Wrench} label={`Tools: ${tools.join(', ')}`} count={tools.length} />
+          )}
+          {skills.length > 0 && (
+            <FeatureIcon icon={Sparkles} label={`Skills: ${skills.join(', ')}`} count={skills.length} />
+          )}
+          {webhooks.length > 0 && (
+            <FeatureIcon icon={Link2} label={`${webhooks.length} webhook${webhooks.length === 1 ? '' : 's'}`} count={webhooks.length} />
+          )}
+          <ConnectionDot count={activeConnections.length} busy={busy} title={selfNote || undefined} />
+          {!agentActive && <FeatureIcon icon={Power} label="Deactivated" muted />}
         </div>
         {activeConnections.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
@@ -1901,21 +1909,50 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
   );
 }
 
-function ConnectionDot({ count, busy = false }: { count: number; busy?: boolean }) {
+function ConnectionDot({ count, busy = false, title }: { count: number; busy?: boolean; title?: string }) {
   const connected = count > 0;
   // Match the three-tier presence palette used by the sidebar dots and the
   // notifications bell: online = emerald, busy = amber (pulsing), offline = grey.
   const tone = !connected ? 'bg-muted-foreground/40' : busy ? 'bg-amber-500' : 'bg-emerald-500';
-  const label = !connected
+  const baseLabel = !connected
     ? 'Not connected'
     : busy
       ? `${count} daemon ${count === 1 ? 'connection' : 'connections'} · working`
       : `${count} daemon ${count === 1 ? 'connection' : 'connections'}`;
+  // `title` carries the agent's self-declared status note when present, appended so the
+  // hover tooltip shows both the connection state and what the agent is doing.
+  const label = title ? `${baseLabel} — ${title}` : baseLabel;
   return (
     <Badge variant="outline" className="gap-1 px-1.5" title={label} aria-label={label}>
       <span className={cn('size-1.5 rounded-full', tone, busy && 'animate-pulse')} aria-hidden />
       {connected && count > 1 ? count : null}
     </Badge>
+  );
+}
+
+// A single iconised feature in the compact agent-list row: an icon with a hover
+// tooltip and an optional count. The label (full text) is what the detail pane spells
+// out; here it is only a tooltip so the row stays short.
+function FeatureIcon({
+  icon: Icon,
+  label,
+  count,
+  muted = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+  muted?: boolean;
+}) {
+  return (
+    <span
+      className={cn('inline-flex shrink-0 items-center gap-1 text-xs', muted && 'opacity-50')}
+      title={label}
+      aria-label={label}
+    >
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      {typeof count === 'number' && count > 1 ? <span className="tabular-nums">{count}</span> : null}
+    </span>
   );
 }
 
