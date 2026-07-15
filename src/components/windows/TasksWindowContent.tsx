@@ -16,11 +16,12 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import type { Task, TaskComment, TaskPriority, TaskStatus, WorkspaceAgent } from '../../types';
+import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
+import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -69,6 +70,8 @@ interface TasksWindowContentProps {
   tasks: Task[];
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
+  /** Live daemon connections — used to show which assigned agents are actively working. */
+  agentConnections: AgentConnection[];
   currentUserEmail: string;
   workspaceId: string;
   currentUserId?: string;
@@ -114,6 +117,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   tasks,
   members,
   agents,
+  agentConnections,
   currentUserEmail,
   workspaceId,
   currentUserId,
@@ -308,6 +312,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                         task={task}
                         subtasks={childrenMap[task.id] || []}
                         assigneeLabel={memberLabel(task.assignee_id)}
+                        assigneeActive={isAssigneeActive(task.assignee_id, agentConnections)}
                         members={members}
                         agents={agents}
                         onUpdateAgent={onUpdateAgent}
@@ -339,6 +344,7 @@ function TaskRow({
   task,
   subtasks,
   assigneeLabel,
+  assigneeActive,
   members,
   agents,
   onUpdateAgent,
@@ -357,6 +363,7 @@ function TaskRow({
   task: Task;
   subtasks: Task[];
   assigneeLabel: string | null;
+  assigneeActive: boolean;
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
@@ -411,9 +418,21 @@ function TaskRow({
               </Badge>
             )}
             {assigneeLabel && (
-              <Badge variant="outline">
-                <User />
+              <Badge
+                variant="outline"
+                className={cn(assigneeActive && 'border-amber-500/60 text-amber-600 dark:text-amber-400')}
+                title={assigneeActive ? `${assigneeLabel} is working on this` : undefined}
+              >
+                {assigneeActive ? (
+                  <span className="relative flex size-1.5" aria-hidden>
+                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-500 opacity-75" />
+                    <span className="relative inline-flex size-1.5 rounded-full bg-amber-500" />
+                  </span>
+                ) : (
+                  <User />
+                )}
                 {assigneeLabel}
+                {assigneeActive && <span className="text-[10px] font-medium">· working</span>}
               </Badge>
             )}
             {subtasks.length > 0 && (
@@ -678,6 +697,7 @@ function TaskDetail({
                 key={comment.id}
                 comment={comment}
                 members={members}
+                agents={agents}
                 currentUserId={currentUserId}
                 currentUserEmail={currentUserEmail}
                 onDelete={() => deleteComment(comment.id)}
@@ -797,29 +817,38 @@ function TaskDetail({
 function TaskCommentItem({
   comment,
   members,
+  agents,
   currentUserId,
   currentUserEmail,
   onDelete,
 }: {
   comment: TaskComment;
   members: WorkspaceMember[];
+  agents: WorkspaceAgent[];
   currentUserId?: string;
   currentUserEmail: string;
   onDelete: () => void;
 }) {
-  const member = comment.user_id ? members.find(item => item.user_id === comment.user_id) : null;
-  const isCurrentUser = Boolean(currentUserId && comment.user_id === currentUserId);
-  const authorEmail = member?.email || (isCurrentUser ? currentUserEmail : undefined);
-  const authorLabel = isCurrentUser
-    ? 'You'
-    : authorEmail?.split('@')[0] || 'Teammate';
+  const author = resolveTaskCommentAuthor(comment, { members, agents, currentUserId, currentUserEmail });
+  const isAgent = author.kind === 'agent';
 
   return (
     <Item size="xs" variant="muted" className="task-comment-row items-start">
-      <TaskCommentAvatar email={authorEmail} seed={comment.user_id || comment.id} />
+      {isAgent ? (
+        <Avatar size="sm" className="size-5">
+          <AvatarFallback className="bg-primary/15 text-primary">
+            <Bot className="size-3" />
+          </AvatarFallback>
+        </Avatar>
+      ) : (
+        <TaskCommentAvatar email={author.email} seed={comment.user_id || comment.id} />
+      )}
       <ItemContent className="min-w-0 gap-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-[11px] font-semibold text-foreground">{authorLabel}</span>
+          <span className="min-w-0 truncate text-[11px] font-semibold text-foreground">{author.label}</span>
+          {isAgent && (
+            <Badge variant="secondary" className="h-3.5 px-1 py-0 text-[9px] leading-none">agent</Badge>
+          )}
           <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
         </div>
         <ItemTitle className="max-w-full whitespace-normal text-xs font-normal leading-snug">{comment.content}</ItemTitle>

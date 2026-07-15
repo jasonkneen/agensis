@@ -748,6 +748,14 @@ async function ensureRuntimeSchema() {
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
+    -- Tasks <-> subthread <-> comments loop (2026-07): a task @mention runs the
+    -- agent inside a per-task SUBTHREAD (messages.source_task_id ties the thread
+    -- root to its task), and the agent's reply is mirrored back as an
+    -- agent-authored task comment (task_comments.agent_id).
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
+    CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+    ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
+
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
 
     CREATE TABLE IF NOT EXISTS agent_memory_files (
@@ -2486,6 +2494,8 @@ function directAgentParticipantFromSession(session) {
 const COMMENT_MENTION_TABLES = {
   task_comments: {
     anchorColumn: 'task_id',
+    // A task @mention runs the agent inside this task's subthread (and assigns it).
+    sourceTaskId: (row) => row.task_id || null,
     describe: async (row) => {
       const t = await getDb().unsafe('select title from tasks where id = $1 limit 1', [row.task_id]).catch(() => []);
       const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)}`;
@@ -2552,6 +2562,95 @@ async function findOrCreateDirectSession(workspaceId, agent) {
   return created[0] || null;
 }
 
+// The status a task moves to when an agent is dispatched onto it via an @mention.
+// A fresh ('todo') task starts progressing; a task that has already started, or is
+// done/cancelled, is left exactly as-is — dispatch must never resurrect or
+// un-finish a task.
+function taskStatusOnDispatch(current) {
+  return current === 'todo' ? 'in_progress' : current;
+}
+
+// Whether a just-written message should be mirrored back to a task's comments:
+// only a REAL agent reply that lives inside a subthread (thread_parent_id set)
+// qualifies. Humans, main-timeline (non-subthread) replies, and the streaming
+// "Thinking …" placeholder are excluded.
+function shouldMirrorAgentMessage(row) {
+  if (!row || row.sender_kind !== 'agent') return false;
+  if (!row.thread_parent_id) return false;
+  const text = String(row.content || '').trim();
+  if (!text) return false;
+  if (/^Thinking\b/.test(text)) return false;
+  return true;
+}
+
+// Route a task @mention into a STABLE per-task subthread of the agent's session.
+// The first mention on a task opens a root message (tagged with source_task_id);
+// every later mention is appended under that same root, so a task's whole
+// conversation — and the agent's replies — stay in one thread instead of
+// scattering across the main DM timeline. Returns { threadParentId, messageRow }.
+async function postTaskSubthreadMention({ session, taskId, content, authorUserId, authorName }) {
+  const existing = await getDb().unsafe(
+    `select id from messages
+     where session_id = $1 and source_task_id = $2 and thread_parent_id is null and deleted_at is null
+     order by created_at asc limit 1`,
+    [session.id, String(taskId)],
+  );
+  const rootId = existing[0]?.id || null;
+  const senderId = String(authorUserId || '');
+  const messageRows = rootId
+    ? await getDb().unsafe(
+        `insert into messages (session_id, role, content, thread_parent_id, source_task_id, sender_kind, sender_id, sender_name)
+         values ($1, 'user', $2, $3, $4, 'user', $5, $6)
+         returning *`,
+        [session.id, content, rootId, String(taskId), senderId, authorName],
+      )
+    : await getDb().unsafe(
+        `insert into messages (session_id, role, content, source_task_id, sender_kind, sender_id, sender_name)
+         values ($1, 'user', $2, $3, 'user', $4, $5)
+         returning *`,
+        [session.id, content, String(taskId), senderId, authorName],
+      );
+  notifyDbSubscribers('messages', 'INSERT', messageRows);
+  const threadParentId = rootId || messageRows[0]?.id || null;
+  return { threadParentId, messageRow: messageRows[0] || null };
+}
+
+// Mirror an agent's subthread reply back into its source task's comment stream,
+// closing the loop so a human watching the task sees the response without opening
+// the DM. Inserted DIRECTLY (never via the /backend/db/insert route) so it can't
+// re-arm dispatchCommentMentions; attributed to the agent via task_comments.agent_id.
+// No-ops for anything that isn't a real agent reply whose subthread root is tied
+// to a task. Best-effort: never throws to the caller.
+async function mirrorAgentReplyToTaskComment(messageRow) {
+  try {
+    if (!shouldMirrorAgentMessage(messageRow)) return null;
+    const rootRows = await getDb().unsafe(
+      'select source_task_id from messages where id = $1 limit 1',
+      [messageRow.thread_parent_id],
+    );
+    const taskId = rootRows[0]?.source_task_id || null;
+    if (!taskId) return null;
+    const taskRows = await getDb().unsafe(
+      'select workspace_id from tasks where id = $1 limit 1',
+      [String(taskId)],
+    );
+    const workspaceId = taskRows[0]?.workspace_id || null;
+    if (!workspaceId) return null;
+    const commentRows = await getDb().unsafe(
+      `insert into task_comments (task_id, workspace_id, content, agent_id)
+       values ($1, $2, $3, $4)
+       returning *`,
+      [String(taskId), String(workspaceId), String(messageRow.content || ''), String(messageRow.sender_id || '')],
+    );
+    if (commentRows[0]) notifyDbSubscribers('task_comments', 'INSERT', commentRows);
+    await getDb().unsafe('update tasks set updated_at = now() where id = $1', [String(taskId)]).catch(() => {});
+    return commentRows[0] || null;
+  } catch (error) {
+    console.error('mirrorAgentReplyToTaskComment failed', error);
+    return null;
+  }
+}
+
 // When a human posts a comment that @mentions agents (on a task, document, or memory
 // file), wake each mentioned agent in its DM with a message that quotes the comment
 // and links back to the source — so "you were tagged" turns into a real, visible
@@ -2559,6 +2658,9 @@ async function findOrCreateDirectSession(workspaceId, agent) {
 async function dispatchCommentMentions({ table, row, authorUserId }) {
   const config = COMMENT_MENTION_TABLES[table];
   if (!config || !row) return;
+  // Never dispatch on an agent-authored comment (e.g. a reply this loop mirrored
+  // back onto the task) — that would let the loop re-arm itself.
+  if (row.agent_id) return;
   const workspaceId = row.workspace_id;
   if (!workspaceId) return;
   const handles = parseAgentMentions(row.content);
@@ -2603,17 +2705,40 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
         `> ${String(row.content || '').replace(/\n/g, '\n> ')}\n\n` +
         `Pick this up and reply here in your DM.${linkLine}`;
 
-      const messageRows = await getDb().unsafe(
-        `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
-         values ($1, 'user', $2, 'user', $3, $4)
-         returning *`,
-        [session.id, content, String(authorUserId || ''), authorName],
-      );
-      notifyDbSubscribers('messages', 'INSERT', messageRows);
-
-      void continueConversation({ workspaceId, sessionId: session.id }).catch((error) =>
-        console.error('continueConversation (comment mention) failed', error),
-      );
+      const taskId = config.sourceTaskId ? config.sourceTaskId(row) : null;
+      if (taskId) {
+        // Assign the task to the mentioned agent and move it into progress (never
+        // clobbering a started/done/cancelled status), then run the agent inside
+        // the task's own subthread so its reply mirrors back as a task comment.
+        try {
+          const cur = await getDb().unsafe('select status from tasks where id = $1 limit 1', [String(taskId)]);
+          const nextStatus = taskStatusOnDispatch(cur[0]?.status || 'todo');
+          const taskRows = await getDb().unsafe(
+            'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
+            [String(agent.id), nextStatus, String(taskId)],
+          );
+          if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
+        } catch (error) {
+          console.error('assign task on mention failed', error);
+        }
+        const { threadParentId } = await postTaskSubthreadMention({
+          session, taskId, content, authorUserId, authorName,
+        });
+        void continueConversation({ workspaceId, sessionId: session.id, threadParentId }).catch((error) =>
+          console.error('continueConversation (task subthread mention) failed', error),
+        );
+      } else {
+        const messageRows = await getDb().unsafe(
+          `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
+           values ($1, 'user', $2, 'user', $3, $4)
+           returning *`,
+          [session.id, content, String(authorUserId || ''), authorName],
+        );
+        notifyDbSubscribers('messages', 'INSERT', messageRows);
+        void continueConversation({ workspaceId, sessionId: session.id }).catch((error) =>
+          console.error('continueConversation (comment mention) failed', error),
+        );
+      }
     } catch (error) {
       console.error(`comment mention dispatch failed for @${handle}`, error);
     }
@@ -3018,6 +3143,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
         [sessionId, responseText || `@${handle} finished without output.`, threadParentId || null, String(agent.id), agent.name],
       );
       notifyDbSubscribers('messages', 'INSERT', messageRows);
+      void mirrorAgentReplyToTaskComment(messageRows[0]);
       return { ok: true, pending: false };
     } catch (error) {
       const errorText = error?.message || 'Built-in agent failed';
@@ -3848,6 +3974,7 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
     if (messageRows.length > 0) {
       notifyDbSubscribers('messages', 'UPDATE', messageRows);
       void logMessageActivity(messageRows);
+      void mirrorAgentReplyToTaskComment(messageRows[0]);
     }
   } else {
     const messageRows = await getDb().unsafe(
@@ -3856,6 +3983,7 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
       [job.session_id, content, threadParentId, String(job.agent_id || ''), senderName],
     );
     notifyDbSubscribers('messages', 'INSERT', messageRows);
+    void mirrorAgentReplyToTaskComment(messageRows[0]);
   }
   void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
     .catch((error) => console.error('continueConversation (job finalize) failed', error));
@@ -8060,6 +8188,10 @@ module.exports = {
     BOOTSTRAP_LIMITS,
     ensureCursorBuddyAgentForKey,
     runAgentTurn,
+    taskStatusOnDispatch,
+    shouldMirrorAgentMessage,
+    postTaskSubthreadMention,
+    mirrorAgentReplyToTaskComment,
     hasActiveBurstJob,
     capabilitiesShapeValid,
     capabilitiesDriftNudges,
