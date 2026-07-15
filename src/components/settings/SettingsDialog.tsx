@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Bell,
   Check,
+  Copy,
   Eye,
   EyeOff,
   FolderOpen,
@@ -9,6 +10,7 @@ import {
   Info,
   KeyRound,
   Palette,
+  Plug,
   Settings as SettingsIcon,
   Sparkles,
   Upload,
@@ -22,6 +24,8 @@ import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../sh
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -60,9 +64,13 @@ interface SettingsDialogProps {
   // prop above is a layer-flavored view whose id is the canvas layer id (e.g.
   // 'base'), which is NOT a uuid and must never reach a workspace_id column.
   secretsWorkspaceId: string | null;
+  // Which tab to show when the dialog opens (defaults to General). Lets callers
+  // deep-link — e.g. the Agents window "Connect a client" button opens Connections.
+  initialTab?: SettingsTabId;
 }
 
-type TabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'secrets' | 'about';
+export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'about';
+type TabId = SettingsTabId;
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <SettingsIcon /> },
@@ -70,6 +78,7 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'appearance', label: 'Appearance', icon: <Palette /> },
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
+  { id: 'connections', label: 'Connections', icon: <Plug /> },
   { id: 'secrets', label: 'Secret keys', icon: <KeyRound /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
@@ -84,9 +93,15 @@ export function SettingsDialog({
   themeMode,
   onThemeChange,
   secretsWorkspaceId,
+  initialTab,
 }: SettingsDialogProps) {
-  const [tab, setTab] = useState<TabId>('general');
+  const [tab, setTab] = useState<TabId>(initialTab ?? 'general');
   const activeTab = TABS.find(item => item.id === tab);
+
+  // Jump to the requested tab each time the dialog is (re)opened.
+  useEffect(() => {
+    if (open) setTab(initialTab ?? 'general');
+  }, [open, initialTab]);
 
   return (
     <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
@@ -131,6 +146,7 @@ export function SettingsDialog({
               )}
               {tab === 'ai' && <AIPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
+              {tab === 'connections' && <ConnectionsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'about' && <AboutPanel />}
             </div>
@@ -1049,6 +1065,91 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
         Rescan
       </Button>
     </FieldGroup>
+  );
+}
+
+// Workspace connections — mint the ONE workspace MCP token, show the paste-able
+// config, and toggle auto-approve. Any client that pastes this token can
+// register_agent and join the whole workspace; this is intentionally NOT scoped
+// to a single agent (that confusion is why it lives here, not the Agents window).
+function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
+  const [info, setInfo] = useState<McpConnectInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [auto, setAuto] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [flowsOpen, setFlowsOpen] = useState(false);
+
+  const generate = async () => {
+    if (!workspaceId) return;
+    setBusy(true); setErr(null);
+    try {
+      const next = await generateMcpToken(workspaceId);
+      setInfo(next);
+      setAuto(next.autoApprove);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to generate token');
+    } finally { setBusy(false); }
+  };
+
+  const toggleAuto = async (next: boolean) => {
+    if (!workspaceId) return;
+    setAuto(next);
+    try { await setMcpAutoApprove(workspaceId, next); } catch { setAuto(!next); }
+  };
+
+  const copy = async (key: string, value: string) => {
+    try { await navigator.clipboard.writeText(value); setCopied(key); setTimeout(() => setCopied(null), 1500); } catch { /* ignore */ }
+  };
+
+  return (
+    <FieldGroup>
+      <FieldDescription>
+        Hand out one key that lets an MCP client — Claude Code, Cursor, Codex — join <strong>this whole workspace</strong> as an agent.
+        It is not tied to a single agent: any client that pastes this token can register itself, which you approve with a popup
+        (or instantly when auto-approve is on).
+      </FieldDescription>
+
+      {!info ? (
+        <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
+      ) : (
+        <div className="space-y-3 overflow-hidden">
+          <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+          <ConnectionRow label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
+          <ConnectionRow label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
+          <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
+            <div>
+              <div className="text-sm">Auto-approve new agents</div>
+              <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+            </div>
+            <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Regenerate token</Button>
+        </div>
+      )}
+      {err && <p className="text-xs text-destructive">{err}</p>}
+
+      <div className="border-t border-border pt-4">
+        <div className="mb-2 text-sm font-medium">Connect Flows</div>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Create a workspace-scoped MCP connection with an optional signed event webhook.
+        </p>
+        <Button type="button" variant="outline" onClick={() => setFlowsOpen(true)} disabled={!workspaceId}>
+          Connect Flows workspace
+        </Button>
+      </div>
+      <ConnectFlowsDialog workspaceId={workspaceId} channelId={null} open={flowsOpen} onOpenChange={setFlowsOpen} />
+    </FieldGroup>
+  );
+}
+
+function ConnectionRow({ label, value, secret, copied, onCopy }: { label: string; value: string; secret?: boolean; copied: boolean; onCopy: () => void }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="w-28 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs">{secret ? `${value.slice(0, 10)}…${value.slice(-4)}` : value}</code>
+      <Button type="button" size="sm" variant="ghost" onClick={onCopy} aria-label={`Copy ${label}`}>{copied ? <Check /> : <Copy />}</Button>
+    </div>
   );
 }
 

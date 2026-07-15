@@ -22,7 +22,7 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import { CanvasSelectionLayer } from './components/canvas/CanvasSelectionLayer';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
-import { SettingsDialog } from './components/settings/SettingsDialog';
+import { SettingsDialog, type SettingsTabId } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from './components/ui/separator';
@@ -795,6 +795,7 @@ function AppContent() {
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLayerId, setSettingsLayerId] = useState<string | null>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabId>('general');
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     description: string;
@@ -909,6 +910,7 @@ function AppContent() {
   }, [activeWorkspace, settingsLayer]);
   const openLayerSettings = useCallback((layerId = activeLayerId) => {
     setSettingsLayerId(layerId);
+    setSettingsInitialTab('general');
     setSettingsOpen(true);
   }, [activeLayerId]);
   const handleUpdateSettingsWorkspace = useCallback((id: string, updates: Partial<Workspace>) => {
@@ -1994,6 +1996,7 @@ function AppContent() {
         onClose={() => setSettingsOpen(false)}
         workspace={settingsWorkspace}
         secretsWorkspaceId={activeWorkspace?.id ?? null}
+        initialTab={settingsInitialTab}
         onUpdateWorkspace={handleUpdateSettingsWorkspace}
         workspaceName={settingsWorkspace?.name || 'Personal'}
         userEmail={user.email || ''}

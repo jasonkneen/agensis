@@ -66,11 +66,18 @@ import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
  * canvas like a real speech bubble. Portal it to `document.body` and position
  * it with a measured rect off the sidebar's own ref instead.
  */
+// Breathing room between the feed's bottom edge and the top of the sidebar
+// footer (account / theme / settings row) so the bubble's shadow doesn't kiss
+// the footer border.
+const FEED_FOOTER_GAP = 6;
+
 function AgentStatusFeedOverlay({
   anchorRef,
+  footerRef,
   feed,
 }: {
   anchorRef: React.RefObject<HTMLElement | null>;
+  footerRef: React.RefObject<HTMLDivElement | null>;
   feed: AgentStatusFeedState;
 }) {
   const [rect, setRect] = React.useState<{ left: number; bottom: number; width: number } | null>(null);
@@ -88,17 +95,29 @@ function AgentStatusFeedOverlay({
     }
     const measure = () => {
       const box = el.getBoundingClientRect();
-      setRect({ left: box.left, bottom: window.innerHeight - box.bottom, width: box.width });
+      // Anchor the feed's BOTTOM edge to the TOP of the sidebar footer (the
+      // account / theme / settings row), not the sidebar's own bottom. The
+      // feed grows upward, so pinning it here keeps that control row fully
+      // clear at every feed height. Anchoring to the sidebar bottom laid the
+      // overlay — even the tiny muted "restore" pill — directly over those
+      // controls, and its full-width pointer-events surface silently ate their
+      // clicks. Fall back to the sidebar bottom if the footer isn't measured.
+      const footer = footerRef.current;
+      const bottom = footer
+        ? window.innerHeight - footer.getBoundingClientRect().top + FEED_FOOTER_GAP
+        : window.innerHeight - box.bottom;
+      setRect({ left: box.left, bottom, width: box.width });
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
+    if (footerRef.current) observer.observe(footerRef.current);
     window.addEventListener('resize', measure);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [anchorRef, visible]);
+  }, [anchorRef, footerRef, visible]);
 
   if (!visible || !rect) return null;
 
@@ -266,6 +285,7 @@ export const Sidebar = React.memo(function Sidebar({
     return Number.isFinite(saved) ? Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, saved)) : 280;
   });
   const sidebarRef = React.useRef<HTMLElement | null>(null);
+  const footerRef = React.useRef<HTMLDivElement | null>(null);
   const resizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
   const resizeFrameRef = React.useRef<number | null>(null);
   const [openSections, setOpenSections] = React.useState<Set<string>>(() => new Set());
@@ -724,7 +744,7 @@ export const Sidebar = React.memo(function Sidebar({
         </div>
       </ScrollArea>
 
-      <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
+      <div ref={footerRef} className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -778,7 +798,7 @@ export const Sidebar = React.memo(function Sidebar({
         onPointerDown={handleResizeStart}
       />
     </aside>
-    {agentStatusFeed && <AgentStatusFeedOverlay anchorRef={sidebarRef} feed={agentStatusFeed} />}
+    {agentStatusFeed && <AgentStatusFeedOverlay anchorRef={sidebarRef} footerRef={footerRef} feed={agentStatusFeed} />}
     </>
   );
 });

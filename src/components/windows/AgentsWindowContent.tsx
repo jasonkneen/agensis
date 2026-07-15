@@ -128,6 +128,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 }: AgentsWindowContentProps) {
   const [showCreate, setShowCreate] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
   const [newOpenPetAvatarId, setNewOpenPetAvatarId] = useState('');
@@ -149,6 +150,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || focusedAgent || agents[0] || null;
+  const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
 
   const presenceByAgent = new Map<string, AgentPresence>(
     agents.map(agent => [
@@ -257,6 +259,14 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         </Button>
       </div>
       <ConnectMcpDialog workspaceId={agents[0]?.workspace_id ?? null} open={connectOpen} onOpenChange={setConnectOpen} />
+      <AgentConnectDialog
+        agent={connectAgent}
+        open={connectAgentId != null}
+        onOpenChange={(o) => { if (!o) setConnectAgentId(null); }}
+        webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
+        onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
+        onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+      />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-2">
         <div className="agents-master-detail h-full min-h-0">
@@ -417,7 +427,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     capabilities={capabilities}
                     webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
                     connections={connections.filter(connection => connection.agent_id === agent.id)}
-                    onCreateWebhook={() => onCreateWebhook({ agent_id: agent.id, name: `${agent.name} webhook` })}
+                    onConnect={() => setConnectAgentId(agent.id)}
                     onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
                   />
                 ))}
@@ -491,7 +501,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 capabilities={capabilities}
                 webhooks={selectedAgent ? webhooks.filter(webhook => webhook.agent_id === selectedAgent.id) : []}
                 connections={selectedAgent ? connections.filter(connection => connection.agent_id === selectedAgent.id) : []}
-                onCreateWebhook={() => selectedAgent ? onCreateWebhook({ agent_id: selectedAgent.id, name: `${selectedAgent.name} webhook` }) : Promise.resolve(null)}
+                onConnect={() => selectedAgent && setConnectAgentId(selectedAgent.id)}
                 onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
               />
             )}
@@ -872,7 +882,7 @@ function AgentRow({
   capabilities,
   webhooks,
   connections,
-  onCreateWebhook,
+  onConnect,
   onToggleWebhook,
 }: {
   agent: WorkspaceAgent;
@@ -890,7 +900,7 @@ function AgentRow({
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
-  onCreateWebhook: () => Promise<AgentWebhook | null>;
+  onConnect: () => void;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
   const [editName, setEditName] = useState(agent.name);
@@ -906,10 +916,6 @@ function AgentRow({
   const [editSkills, setEditSkills] = useState(joinList(agent.skills));
   const [editModel, setEditModel] = useState(agent.model || 'auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
-  const [creatingWebhook, setCreatingWebhook] = useState(false);
-  const [connectionCommand, setConnectionCommand] = useState('');
-  const [connectionError, setConnectionError] = useState('');
-  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const activeConnections = connections.filter(connection => connection.status !== 'offline');
   const toolBadges = normalizeList(agent.tools).slice(0, 3);
   const accent = agentAccentColor(agent);
@@ -933,46 +939,6 @@ function AgentRow({
       model: editModel,
       run_mode: editRunMode,
     });
-  };
-
-  const handleCreateWebhook = async () => {
-    setCreatingWebhook(true);
-    try {
-      await onCreateWebhook();
-    } finally {
-      setCreatingWebhook(false);
-    }
-  };
-
-  const handleConnectionCommand = async () => {
-    try {
-      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...apiAuthHeaders(),
-        },
-        body: JSON.stringify({
-          handle: editHandle || agent.handle || agentHandle(agent.name),
-          baseUrl: apiBaseUrl(),
-        }),
-      });
-      const payload = await response.json().catch(() => null);
-      const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
-      if (!response.ok || !command) {
-        setConnectionCommand('');
-        setConnectionError(payload?.error?.message || 'Daemon websocket backend is not available.');
-        return;
-      }
-      setConnectionError('');
-      setConnectionCommand(command);
-      setEditRunMode('daemon');
-      await navigator.clipboard?.writeText(command);
-      setCopyState('copied');
-      window.setTimeout(() => setCopyState('idle'), 1600);
-    } catch {
-      setConnectionError('Could not create a daemon connection command.');
-    }
   };
 
   if (isEditing) {
@@ -1102,26 +1068,6 @@ function AgentRow({
             })}
           </div>
         )}
-        {connectionCommand && (
-          <div className="agents-list-expanded-meta mt-2 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
-            <Terminal className="size-3 shrink-0" />
-            <code className="min-w-0 flex-1 truncate" title={connectionCommand}>Connect command</code>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => void navigator.clipboard?.writeText(connectionCommand)}
-              aria-label={`Copy connection command for ${agent.name}`}
-            >
-              <Copy />
-            </Button>
-          </div>
-        )}
-        {connectionError && (
-          <div className="agents-list-expanded-meta mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-            {connectionError}
-          </div>
-        )}
         {webhooks.length > 0 && (
           <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1.5">
             {webhooks.map(webhook => {
@@ -1174,27 +1120,17 @@ function AgentRow({
         </Button>
         <Button
           type="button"
-          variant={copyState === 'copied' ? 'secondary' : 'outline'}
+          variant="outline"
           size="sm"
           onClick={(event) => {
             event.stopPropagation();
-            void handleConnectionCommand();
+            onConnect();
           }}
           disabled={!agentActive}
-          aria-label={`Copy connection command for ${agent.name}`}
+          aria-label={`Connect ${agent.name}`}
         >
-          {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
-          {copyState === 'copied' ? 'Copied' : 'Connect'}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={handleCreateWebhook}
-          disabled={creatingWebhook}
-          aria-label={`Create webhook for ${agent.name}`}
-        >
-          <Link2 />
+          <Plug data-icon="inline-start" />
+          Connect
         </Button>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} aria-label={`Edit ${agent.name}`}>
           <Pencil />
@@ -1225,7 +1161,7 @@ function AgentDetailPane({
   capabilities,
   webhooks,
   connections,
-  onCreateWebhook,
+  onConnect,
   onToggleWebhook,
 }: {
   agent: WorkspaceAgent | null;
@@ -1239,7 +1175,7 @@ function AgentDetailPane({
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
-  onCreateWebhook: () => Promise<AgentWebhook | null>;
+  onConnect: () => void;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
   const [editName, setEditName] = useState('');
@@ -1255,11 +1191,6 @@ function AgentDetailPane({
   const [editSkills, setEditSkills] = useState('');
   const [editModel, setEditModel] = useState('auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>('builtin');
-  const [creatingWebhook, setCreatingWebhook] = useState(false);
-  const [connectionCommand, setConnectionCommand] = useState('');
-  const [connectionError, setConnectionError] = useState('');
-  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
-  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!agent) return;
@@ -1276,9 +1207,6 @@ function AgentDetailPane({
     setEditSkills(joinList(agent.skills));
     setEditModel(agent.model || 'auto');
     setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
-    setConnectionCommand('');
-    setConnectionError('');
-    setCopyState('idle');
   }, [agent?.id]);
 
   if (!agent) {
@@ -1316,45 +1244,6 @@ function AgentDetailPane({
       model: editModel,
       run_mode: editRunMode,
     });
-  };
-
-  const handleCreateWebhook = async () => {
-    setCreatingWebhook(true);
-    try {
-      await onCreateWebhook();
-    } finally {
-      setCreatingWebhook(false);
-    }
-  };
-
-  const handleConnectionCommand = async () => {
-    try {
-      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...apiAuthHeaders(),
-        },
-        body: JSON.stringify({
-          handle: editHandle || agent.handle || agentHandle(agent.name),
-          baseUrl: apiBaseUrl(),
-        }),
-      });
-      const payload = await response.json().catch(() => null);
-      const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
-      if (!response.ok || !command) {
-        setConnectionCommand('');
-        setConnectionError(payload?.error?.message || 'Daemon websocket backend is not available.');
-        return;
-      }
-      setConnectionError('');
-      setConnectionCommand(command);
-      await navigator.clipboard?.writeText(command);
-      setCopyState('copied');
-      window.setTimeout(() => setCopyState('idle'), 1600);
-    } catch {
-      setConnectionError('Could not create a daemon connection command.');
-    }
   };
 
   if (isEditing) {
@@ -1453,27 +1342,13 @@ function AgentDetailPane({
           </Button>
           <Button
             type="button"
-            variant={copyState === 'copied' ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={handleConnectionCommand}
-            disabled={!agentActive}
-          >
-            {copyState === 'copied' ? <Check data-icon="inline-start" /> : <Terminal data-icon="inline-start" />}
-            {copyState === 'copied' ? 'Copied' : 'Connect'}
-          </Button>
-          <Button
-            type="button"
             variant="outline"
             size="sm"
-            onClick={() => setMcpDialogOpen(true)}
+            onClick={onConnect}
             disabled={!agentActive}
           >
             <Plug data-icon="inline-start" />
-            Configure MCP
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={handleCreateWebhook} disabled={creatingWebhook}>
-            <Link2 data-icon="inline-start" />
-            Webhook
+            Connect
           </Button>
           <Button
             type="button"
@@ -1485,27 +1360,6 @@ function AgentDetailPane({
             {confirmDelete ? 'Confirm delete' : 'Delete'}
           </Button>
         </div>
-
-        {connectionCommand && (
-          <div className="mt-3 flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs">
-            <Terminal className="size-3 shrink-0" />
-            <code className="min-w-0 flex-1 truncate" title={connectionCommand}>{connectionCommand}</code>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => void navigator.clipboard?.writeText(connectionCommand)}
-              aria-label={`Copy connection command for ${agent.name}`}
-            >
-              <Copy />
-            </Button>
-          </div>
-        )}
-        {connectionError && (
-          <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-            {connectionError}
-          </div>
-        )}
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
@@ -1636,7 +1490,6 @@ function AgentDetailPane({
           )}
         </div>
       </div>
-      <ConfigureMcpDialog agent={agent} open={mcpDialogOpen} onOpenChange={setMcpDialogOpen} />
     </div>
   );
 }
@@ -1648,29 +1501,75 @@ interface SkillManifest {
   tools: Array<{ name: string; description: string }>;
 }
 
-function ConfigureMcpDialog({
+type ConnectTab = 'cli' | 'mcp' | 'webhook';
+
+// A short benefit line + a caveat, shown at the top of each Connect tab so the
+// human picks the right connection method without guessing.
+function ConnectExplainer({ benefit, note }: { benefit: string; note: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/25 p-3 text-xs">
+      <p className="text-foreground">{benefit}</p>
+      <p className="mt-1.5 flex items-start gap-1.5 text-muted-foreground">
+        <TriangleAlert className="mt-0.5 size-3 shrink-0" />
+        <span>{note}</span>
+      </p>
+    </div>
+  );
+}
+
+// One unified per-agent Connect dialog: CLI (local daemon), MCP client, or Webhook.
+// Every tab is auto-scoped to `agent`, so there is no picker — you open it from the
+// agent you want to connect. Replaces the old scattered Connect / Configure MCP /
+// Webhook buttons and the workspace ConfigureMcpDialog.
+function AgentConnectDialog({
   agent,
   open,
   onOpenChange,
+  webhooks,
+  onCreateWebhook,
+  onToggleWebhook,
 }: {
-  agent: WorkspaceAgent;
+  agent: WorkspaceAgent | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  webhooks: AgentWebhook[];
+  onCreateWebhook: () => Promise<AgentWebhook | null>;
+  onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
+  const [tab, setTab] = useState<ConnectTab>('cli');
+
+  // CLI (local daemon)
+  const [cliCommand, setCliCommand] = useState('');
+  const [cliError, setCliError] = useState('');
+  const [cliBusy, setCliBusy] = useState(false);
+
+  // MCP client
   const [manifest, setManifest] = useState<SkillManifest | null>(null);
   const [loadError, setLoadError] = useState('');
   const [token, setToken] = useState('');
   const [generating, setGenerating] = useState(false);
   const [tokenError, setTokenError] = useState('');
 
-  const handle = agent.handle || agentHandle(agent.name);
+  // Webhook
+  const [creatingWebhook, setCreatingWebhook] = useState(false);
 
+  const handle = agent ? (agent.handle || agentHandle(agent.name)) : '';
+
+  // Reset everything per-open: never carry a command/token across opens.
   useEffect(() => {
     if (!open) return;
-    // Reset per-open: never carry a token across opens, and re-fetch the manifest.
+    setTab('cli');
+    setCliCommand('');
+    setCliError('');
+    setManifest(null);
+    setLoadError('');
     setToken('');
     setTokenError('');
-    setLoadError('');
+  }, [open, agent?.id]);
+
+  // Load the MCP skill manifest once the dialog is open for an agent.
+  useEffect(() => {
+    if (!open || !agent) return;
     let cancelled = false;
     const params = new URLSearchParams({ name: agent.name, handle });
     fetch(apiUrl(`/backend/skill?${params.toString()}`), { headers: { ...apiAuthHeaders() } })
@@ -1689,17 +1588,38 @@ function ConfigureMcpDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, agent.id, agent.name, handle]);
+  }, [open, agent?.id, agent?.name, handle]);
+
+  if (!agent) return null;
 
   const placeholder = manifest?.mcp.tokenPlaceholder || 'aga_YOUR_AGENT_TOKEN';
-
-  const withToken = (text: string) =>
-    token ? text.split(placeholder).join(token) : text;
-
-  const configJson = manifest
-    ? withToken(JSON.stringify(manifest.mcp.configTemplate, null, 2))
-    : '';
+  const withToken = (text: string) => (token ? text.split(placeholder).join(token) : text);
+  const configJson = manifest ? withToken(JSON.stringify(manifest.mcp.configTemplate, null, 2)) : '';
   const claudeMcpAdd = manifest ? withToken(manifest.install.claudeMcpAdd) : '';
+
+  const handleGenerateCli = async () => {
+    setCliBusy(true);
+    setCliError('');
+    try {
+      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ handle, baseUrl: apiBaseUrl() }),
+      });
+      const payload = await response.json().catch(() => null);
+      const command = payload?.data?.portableCommand || payload?.data?.command || payload?.data?.localCommand || '';
+      if (!response.ok || !command) {
+        setCliError(payload?.error?.message || 'Daemon websocket backend is not available.');
+        return;
+      }
+      setCliCommand(command);
+      void navigator.clipboard?.writeText(command);
+    } catch {
+      setCliError('Could not create a daemon connection command.');
+    } finally {
+      setCliBusy(false);
+    }
+  };
 
   const handleGenerateToken = async () => {
     setGenerating(true);
@@ -1724,98 +1644,197 @@ function ConfigureMcpDialog({
     }
   };
 
+  const handleCreateWebhook = async () => {
+    setCreatingWebhook(true);
+    try {
+      await onCreateWebhook();
+    } finally {
+      setCreatingWebhook(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
         <DialogHeader className="border-b px-4 py-3">
           <DialogTitle className="flex items-center gap-2 text-sm">
             <Plug className="size-4 text-primary" />
-            Configure MCP — {agent.name}
+            Connect {agent.name}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Connect any MCP-capable agent (Claude Code, Codex, Cursor, Qwen…) to this workspace
-            as @{handle}. No daemon required.
+            Choose how something connects to @{handle} — a local CLI daemon, an MCP client, or an HTTP webhook.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[calc(85vh-4rem)] space-y-4 overflow-y-auto p-4">
-          {loadError && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {loadError}
-            </div>
-          )}
+        <Tabs value={tab} onValueChange={(value) => setTab(value as ConnectTab)} className="flex min-h-0 flex-1 flex-col">
+          <div className="border-b px-4 pt-3">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="cli" className="gap-1.5"><Terminal className="size-3.5" />CLI</TabsTrigger>
+              <TabsTrigger value="mcp" className="gap-1.5"><Plug className="size-3.5" />MCP</TabsTrigger>
+              <TabsTrigger value="webhook" className="gap-1.5"><Link2 className="size-3.5" />Webhook</TabsTrigger>
+            </TabsList>
+          </div>
 
-          {/* Token */}
-          <McpDialogSection icon={KeyRound} title="1. API key (agent token)">
-            <p className="text-xs text-muted-foreground">
-              The token authenticates the agent as @{handle}. Tokens are stored hashed and shown
-              once — copy it now.
-            </p>
-            <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">
-              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              <span>Generating a token replaces the agent&apos;s previous one. If a daemon is
-                running for this agent, update it with the new token too.</span>
-            </div>
-            {token ? (
-              <CopyField value={token} label="Agent token" mono />
-            ) : (
-              <div className="mt-2 text-xs text-muted-foreground">
-                No token generated yet — the config below uses a <code>{placeholder}</code> placeholder.
-              </div>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              variant={token ? 'outline' : 'default'}
-              className="mt-2"
-              onClick={handleGenerateToken}
-              disabled={generating}
-            >
-              <RefreshCw data-icon="inline-start" className={generating ? 'animate-spin' : undefined} />
-              {token ? 'Regenerate token' : 'Generate token'}
-            </Button>
-            {tokenError && <div className="mt-2 text-xs text-destructive">{tokenError}</div>}
-          </McpDialogSection>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {/* CLI — local daemon */}
+            <TabsContent value="cli" className="mt-0 space-y-4">
+              <ConnectExplainer
+                benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
+                note="Needs the agensis CLI installed, and the agent only runs while your daemon is up."
+              />
+              <McpDialogSection icon={Terminal} title="Daemon connect command">
+                <p className="text-xs text-muted-foreground">
+                  Generate a one-line command, then run it where the daemon should execute. It&apos;s copied to your clipboard.
+                </p>
+                <Button type="button" size="sm" className="mt-2" onClick={handleGenerateCli} disabled={cliBusy}>
+                  <RefreshCw data-icon="inline-start" className={cliBusy ? 'animate-spin' : undefined} />
+                  {cliCommand ? 'Regenerate command' : 'Generate connect command'}
+                </Button>
+                {cliCommand && <CopyBlock value={cliCommand} className="mt-2" />}
+                {cliError && <div className="mt-2 text-xs text-destructive">{cliError}</div>}
+              </McpDialogSection>
+            </TabsContent>
 
-          {/* Endpoint + config */}
-          <McpDialogSection icon={Globe} title="2. MCP endpoint & config">
-            {manifest && <CopyField value={manifest.mcp.endpoint} label="Endpoint" mono />}
-            <p className="mt-3 mb-1 text-xs text-muted-foreground">
-              Claude Code one-liner:
-            </p>
-            {manifest && <CopyBlock value={claudeMcpAdd} />}
-            <p className="mt-3 mb-1 text-xs text-muted-foreground">
-              Or paste into your MCP client config (Claude Code <code>.mcp.json</code>, Codex
-              <code> ~/.codex/config.toml</code>, etc.):
-            </p>
-            {manifest && <CopyBlock value={configJson} />}
-          </McpDialogSection>
+            {/* MCP client */}
+            <TabsContent value="mcp" className="mt-0 space-y-4">
+              <ConnectExplainer
+                benefit={`Plug any MCP client (Claude Code, Cursor, Codex) into @${handle} with one token — no daemon required.`}
+                note="The token authenticates as this agent; generating a new one replaces the old token."
+              />
+              {loadError && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {loadError}
+                </div>
+              )}
 
-          {/* Prompt */}
-          <McpDialogSection icon={Sparkles} title="3. Agent prompt (optional)">
-            <p className="text-xs text-muted-foreground">
-              Paste this into the agent so it knows it&apos;s now an agensis teammate and how to behave.
-            </p>
-            {manifest && <CopyBlock value={manifest.prompt} className="mt-2 max-h-44" />}
-          </McpDialogSection>
+              {/* Token */}
+              <McpDialogSection icon={KeyRound} title="1. API key (agent token)">
+                <p className="text-xs text-muted-foreground">
+                  The token authenticates the agent as @{handle}. Tokens are stored hashed and shown
+                  once — copy it now.
+                </p>
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+                  <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                  <span>Generating a token replaces the agent&apos;s previous one. If a daemon is
+                    running for this agent, update it with the new token too.</span>
+                </div>
+                {token ? (
+                  <CopyField value={token} label="Agent token" mono />
+                ) : (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    No token generated yet — the config below uses a <code>{placeholder}</code> placeholder.
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={token ? 'outline' : 'default'}
+                  className="mt-2"
+                  onClick={handleGenerateToken}
+                  disabled={generating}
+                >
+                  <RefreshCw data-icon="inline-start" className={generating ? 'animate-spin' : undefined} />
+                  {token ? 'Regenerate token' : 'Generate token'}
+                </Button>
+                {tokenError && <div className="mt-2 text-xs text-destructive">{tokenError}</div>}
+              </McpDialogSection>
 
-          {/* Skill / marketplace */}
-          <McpDialogSection icon={Wrench} title="4. Install as a skill (agentskills.io)">
-            <p className="text-xs text-muted-foreground">
-              Give the agent durable know-how via the open Agent Skills format. Drop the skill into
-              any compatible client:
-            </p>
-            {manifest && <CopyBlock value={manifest.install.curlSkill} className="mt-2" />}
-            <p className="mt-2 text-xs text-muted-foreground">
-              Claude Code plugin marketplace (git-hosted): add this repo, then install the
-              <code> agensis</code> plugin:
-            </p>
-            <CopyBlock
-              value={'/plugin marketplace add <your-org>/agensis\n/plugin install agensis@agensis'}
-              className="mt-2"
-            />
-          </McpDialogSection>
-        </div>
+              {/* Endpoint + config */}
+              <McpDialogSection icon={Globe} title="2. MCP endpoint & config">
+                {manifest && <CopyField value={manifest.mcp.endpoint} label="Endpoint" mono />}
+                <p className="mt-3 mb-1 text-xs text-muted-foreground">
+                  Claude Code one-liner:
+                </p>
+                {manifest && <CopyBlock value={claudeMcpAdd} />}
+                <p className="mt-3 mb-1 text-xs text-muted-foreground">
+                  Or paste into your MCP client config (Claude Code <code>.mcp.json</code>, Codex
+                  <code> ~/.codex/config.toml</code>, etc.):
+                </p>
+                {manifest && <CopyBlock value={configJson} />}
+              </McpDialogSection>
+
+              {/* Prompt */}
+              <McpDialogSection icon={Sparkles} title="3. Agent prompt (optional)">
+                <p className="text-xs text-muted-foreground">
+                  Paste this into the agent so it knows it&apos;s now an agensis teammate and how to behave.
+                </p>
+                {manifest && <CopyBlock value={manifest.prompt} className="mt-2 max-h-44" />}
+              </McpDialogSection>
+
+              {/* Skill / marketplace */}
+              <McpDialogSection icon={Wrench} title="4. Install as a skill (agentskills.io)">
+                <p className="text-xs text-muted-foreground">
+                  Give the agent durable know-how via the open Agent Skills format. Drop the skill into
+                  any compatible client:
+                </p>
+                {manifest && <CopyBlock value={manifest.install.curlSkill} className="mt-2" />}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Claude Code plugin marketplace (git-hosted): add this repo, then install the
+                  <code> agensis</code> plugin:
+                </p>
+                <CopyBlock
+                  value={'/plugin marketplace add <your-org>/agensis\n/plugin install agensis@agensis'}
+                  className="mt-2"
+                />
+              </McpDialogSection>
+            </TabsContent>
+
+            {/* Webhook */}
+            <TabsContent value="webhook" className="mt-0 space-y-4">
+              <ConnectExplainer
+                benefit={`Trigger @${handle} over HTTP from anything — CI, cron, Zapier, a curl one-liner.`}
+                note="One-way fire-and-forget, not a live connection. Treat the URL as a secret — anyone with it can post to this agent."
+              />
+              <McpDialogSection icon={Link2} title="Webhook URLs">
+                {webhooks.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {webhooks.map(webhook => {
+                      const url = webhookUrl(webhook.token);
+                      return (
+                        <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
+                          <Link2 className="size-3 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => void navigator.clipboard?.writeText(url)}
+                            aria-label={`Copy webhook for ${agent.name}`}
+                          >
+                            <Copy />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={webhook.enabled ? 'secondary' : 'ghost'}
+                            size="icon-xs"
+                            onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
+                            aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
+                            title={webhook.enabled ? 'Enabled' : 'Disabled'}
+                          >
+                            <Power />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No webhooks yet. Create one to get a signed URL.</p>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={webhooks.length ? 'outline' : 'default'}
+                  className="mt-2"
+                  onClick={handleCreateWebhook}
+                  disabled={creatingWebhook}
+                >
+                  <Plus data-icon="inline-start" />
+                  {creatingWebhook ? 'Creating…' : 'Create webhook'}
+                </Button>
+              </McpDialogSection>
+            </TabsContent>
+          </div>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
