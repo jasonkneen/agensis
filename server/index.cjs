@@ -534,6 +534,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_provider text;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
@@ -2043,7 +2045,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -2054,7 +2056,7 @@ async function verifyAgentConnectToken(token, req = null) {
   const { workspaceId, agentId } = agentIdsFromWsRequest(req);
   if (workspaceId && agentId) {
    const fallbackRows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -2352,7 +2354,11 @@ function agentRuntimePayload(agent) {
   skills: parseJsonArray(agent.skills),
   metadata: parseJsonObject(agent.metadata),
   model: resolveAnthropicModel(agent.model),
-  run_mode: agent.run_mode === 'daemon' ? 'daemon' : 'builtin',
+  run_mode: agent.run_mode === 'daemon' ? 'daemon'
+   : agent.run_mode === 'sandbox' ? 'sandbox'
+    : 'builtin',
+  sandbox_provider: agent.sandbox_provider || null,
+  sandbox_config: parseJsonObject(agent.sandbox_config),
   permissionMode,
   permission_mode: permissionMode,
   permissionFlags: agentPermissionFlags(permissionMode),
@@ -2399,7 +2405,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -3176,10 +3182,18 @@ async function hasActiveBurstJob(sessionId, agentId) {
 // Runs exactly one agent turn (builtin or daemon), rebuilding context from the DB.
 // Returns { ok, pending }. pending=true means a daemon job is in flight and the
 // conversation will resume from handleAgentJobResult.
+// One agent turn runs in-process (builtin chat completion) or is dispatched to a
+// connected daemon. 'sandbox' rides the daemon path — the daemon spins up the
+// remote sandbox and supervises it — so only 'builtin' stays in-process.
+function resolveRunTarget(agent) {
+ const m = agent && agent.run_mode;
+ return m === 'daemon' || m === 'sandbox' ? 'daemon' : 'builtin';
+}
+
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
  if (!isAgentEnabled(agent)) return { ok: false, pending: false };
  const handle = slugHandle(agent.handle || agent.name);
- const runMode = agent.run_mode === 'daemon' ? 'daemon' : 'builtin';
+ const runMode = resolveRunTarget(agent);
  const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
  const agentContext = agentContextFromRow(agent, coParticipants);
  const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
@@ -6803,7 +6817,7 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
          from workspace_agents
          where workspace_id = $1
          order by created_at asc, name asc`,
@@ -8588,6 +8602,8 @@ module.exports = {
   BOOTSTRAP_LIMITS,
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
+  agentRuntimePayload,
+  resolveRunTarget,
   taskStatusOnDispatch,
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
