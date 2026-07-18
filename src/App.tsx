@@ -1709,7 +1709,7 @@ function AppContent() {
                 onInvite={handleOpenUsers}
               />
             )}
-            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} />}
+            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" />}
           />
         </div>
         {isMobile && mobileDrawerOpen && (

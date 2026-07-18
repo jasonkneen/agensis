@@ -64,7 +64,7 @@ function StatusDot({ tone }: { tone: NotificationTone }) {
   );
 }
 
-export function NotificationsBell({ workspaceId }: { workspaceId: string | null }) {
+export function NotificationsBell({ workspaceId, variant = 'floating' }: { workspaceId: string | null; variant?: 'floating' | 'inline' }) {
   const { pending } = useAgentRegistrations(workspaceId);
   const { events } = useActivity(workspaceId);
 
@@ -166,9 +166,13 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
       <PopoverTrigger asChild>
         <Button
           type="button"
-          variant="default"
-          size="icon-lg"
-          className="relative size-9 rounded-full shadow-lg transition-transform hover:scale-105"
+          variant={variant === 'inline' ? 'ghost' : 'default'}
+          size={variant === 'inline' ? 'icon-sm' : 'icon-lg'}
+          className={
+            variant === 'inline'
+              ? 'relative'
+              : 'relative size-9 rounded-full shadow-lg transition-transform hover:scale-105'
+          }
           title={hasUnseen ? 'Notifications — new activity' : 'Notifications'}
           aria-label={
             badgeCount > 0
