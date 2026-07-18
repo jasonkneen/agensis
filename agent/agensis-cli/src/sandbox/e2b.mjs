@@ -4,7 +4,10 @@
 // resulting `git diff` as the artifact. Method names match the e2b Node SDK
 // (v2.x): Sandbox.create(opts) / Sandbox.create(template, opts), sandbox.commands
 // .run(cmd, { cwd, envs, onStdout }) -> { exitCode, stdout, stderr }, sandbox.kill().
-import { Sandbox } from "e2b";
+// NOTE: e2b is imported DYNAMICALLY inside ensureEnv (not a top-level import) so
+// that bundling this module never forces a top-level `import ... from "e2b"` into
+// the daemon bundle — e2b is an OPTIONAL dep (Node >=20.18.1) and the daemon must
+// start fine without it. The executor's Node-version guard runs before this loads.
 
 const REPO_DIR = "/home/user/repo";
 
@@ -21,6 +24,7 @@ export function createE2bProvider({ apiKey, anthropicApiKey, gitToken = "", repo
         apiKey,
         envs: anthropicApiKey ? { ANTHROPIC_API_KEY: anthropicApiKey } : {},
       };
+      const { Sandbox } = await import("e2b");
       const sbx = template ? await Sandbox.create(template, opts) : await Sandbox.create(opts);
       // Ensure the claude CLI exists (MVP: install-on-boot, no baked template).
       await sbx.commands.run("bash -lc 'command -v claude >/dev/null || npm i -g @anthropic-ai/claude-code'");
