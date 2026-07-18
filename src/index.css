@@ -2075,12 +2075,14 @@
  margin-right: 4px;
  margin-bottom: 5px;
  background: transparent !important;
- box-shadow: none !important;
+ /* Resting depth so the card reads as a raised surface before hover; hover and
+    selected states deepen it further for a clear delta. */
+ box-shadow: var(--neo-shadow-xs) !important;
 }
 
 :root[data-ui-theme="neo"] .agents-list-card:hover {
  background: color-mix(in srgb, var(--agent-accent, var(--primary)) 12%, var(--card) 88%) !important;
- box-shadow: var(--neo-shadow-xs) !important;
+ box-shadow: var(--neo-shadow-sm) !important;
  transform: none;
 }
 
