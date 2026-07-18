@@ -665,6 +665,7 @@ function AppContent() {
     focusWindowGroup,
     minimizeWindowGroup,
     ungroupTiledWindows,
+    viewMode,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
 
@@ -673,8 +674,17 @@ function AppContent() {
   // panel — needs the viewport un-clipped so its shell can paint over the gap out
   // to the true panel edge. The per-edge bleed itself is still gated in the shell
   // (FloatingWindowShell), so a tiled split that DOESN'T fill the panel stays put.
+  // viewMode is workspace-global, but a layer switch can land on a layer with no
+  // visible window. Only treat the workspace as "full" for dock/viewport purposes
+  // when the ACTIVE layer actually has a non-minimized window to show full — else
+  // the dock would hide with nothing rendered. (The scene mirrors this per layer.)
+  const activeLayerHasVisibleWindow = windows.some(
+    win => !win.minimized && (win.canvasId || 'base') === activeLayerId,
+  );
+  const isFullExpandMode = viewMode === 'full' && activeLayerHasVisibleWindow;
   const viewportUnclipped = !isMobile
-    && windows.some(win => !win.minimized && (win.maximized || Boolean(win.groupId)));
+    && (isFullExpandMode
+      || windows.some(win => !win.minimized && (win.maximized || Boolean(win.groupId))));
 
   // Windows are in-memory and keyed by canvas layer id, which is 'base' for
   // every workspace's default layer — so without this, the previous
@@ -1925,7 +1935,7 @@ function AppContent() {
                 className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
                 style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
               >
-                {dockEntries.map(entry => {
+                {!isFullExpandMode && dockEntries.map(entry => {
                   if (entry.kind === 'window') {
                     const win = entry.win;
                     return renderDockButton(win, focusedDockWindow, {
@@ -1962,7 +1972,7 @@ function AppContent() {
                     </div>
                   );
                 })}
-                {dockWindows.length > 0 && (
+                {!isFullExpandMode && dockWindows.length > 0 && (
                   <Separator orientation="vertical" className="mx-0.5 h-6" />
                 )}
                 <Button
@@ -2248,15 +2258,21 @@ function CanvasLayerScene({
     onConfirm: () => void | Promise<void>;
   }) => void;
 }) {
-  const { selectedWindowIds } = useWindowManager();
+  const { selectedWindowIds, viewMode, toggleFullExpand } = useWindowManager();
+  const isFullExpandMode = viewMode === 'full';
 
   // On a phone the canvas shows exactly one window — the focused one (highest
   // zIndex, the same signal a click uses to raise a window). Everything else is
   // reachable through the bottom switcher bar instead of the free-floating layout.
   const nonMinimizedWindows = windows.filter(win => !win.minimized);
-  const mobileActiveWindowId = pickActiveWindowId(windows);
-  const renderedWindows = isMobile && mobileActiveWindowId
-    ? nonMinimizedWindows.filter(win => win.id === mobileActiveWindowId)
+  const topWindowId = pickActiveWindowId(windows);
+  const mobileActiveWindowId = topWindowId;
+  // Full-expand shows exactly one window — the top (highest-z, most recently
+  // opened/focused) — edge-to-edge; every other window stays mounted upstream in
+  // useWindows state (cached) so switching to it via the sidebar is instant.
+  // Mobile keeps its own single-window rule. Otherwise render the full float set.
+  const renderedWindows = (isFullExpandMode || isMobile) && topWindowId
+    ? nonMinimizedWindows.filter(win => win.id === topWindowId)
     : nonMinimizedWindows;
 
   const adjacencyByWindowId = useMemo(
@@ -2304,6 +2320,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2415,6 +2433,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2454,6 +2474,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2488,6 +2510,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2528,6 +2552,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2557,6 +2583,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2595,6 +2623,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}
@@ -2626,6 +2656,8 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
               onFocus={onFocusWindow}
               onUpdate={onUpdateWindow}

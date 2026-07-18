@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { FloatingWindow, FloatingWindowType } from '../types';
 import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../lib/workspaceLayout';
 
@@ -413,6 +413,19 @@ export function useWindows() {
   const [selectedWindowIds, setSelectedWindowIds] = useState<string[]>([]);
   const lastBoundsByWindowKey = useRef<Record<string, WindowBounds>>({});
   const nextZIndexRef = useRef(100);
+  // Full-expand (focus) mode: the whole workspace shows exactly one window
+  // edge-to-edge, the multi-tasking dock is hidden, and the floating-window
+  // system collapses to a single window (drag-to-tile disabled). Which window is
+  // visible is derived from z-order (the top non-minimized window, same signal as
+  // focus/open), so opening or focusing a window instantly swaps the visible one
+  // while every other window stays mounted in this hook's state — fast switching,
+  // one instance of each type max (see openWindow's type-reuse path).
+  const [viewMode, setViewMode] = useState<'multi' | 'full'>('multi');
+  // Ref mirror of viewMode so bounds/tiling callbacks can read the current mode
+  // without listing viewMode in their deps (which would rebuild them every
+  // toggle and churn the memoized WindowManager context value).
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
 
   const rememberWindowBounds = useCallback((win: FloatingWindow) => {
     lastBoundsByWindowKey.current[getWindowIdentityKey(win)] = getVisibleBounds(win);
@@ -441,6 +454,22 @@ export function useWindows() {
           return prev.map(w =>
             w.id === existing.id
               ? { ...w, minimized: false, zIndex: nextZIndexRef.current }
+              : w
+          );
+        }
+      }
+      // Singleton window types (everything but chat/document, which are keyed by
+      // session/document) get at most one instance per canvas: reopening focuses
+      // and un-minimizes the existing one instead of stacking a duplicate. App's
+      // launchers already do this; enforcing it here keeps full-expand's
+      // "one instance of each type max" invariant true regardless of caller.
+      if (!opts?.sessionId && !opts?.documentId) {
+        const existing = prev.find(w => w.type === type && w.canvasId === opts?.canvasId);
+        if (existing) {
+          nextZIndexRef.current++;
+          return prev.map(w =>
+            w.id === existing.id
+              ? { ...w, minimized: false, zIndex: nextZIndexRef.current, focusTaskId: opts?.focusTaskId ?? w.focusTaskId }
               : w
           );
         }
@@ -500,6 +529,36 @@ export function useWindows() {
         nextZIndexRef.current++;
         return prev.map(w =>
           w.id === existingFork.id ? { ...w, minimized: false, zIndex: nextZIndexRef.current } : w);
+      }
+
+      // Full-expand is single-window: opening a split must NOT tile/regroup the
+      // source (that would mutate the cached multi-window layout underneath and
+      // break restore-on-exit). Open the fork as a plain full-viewport window;
+      // it becomes the visible one by z-order, one at a time.
+      if (viewModeRef.current === 'full') {
+        nextZIndexRef.current++;
+        const solo = getFullViewportBounds();
+        const soloFork: FloatingWindow = {
+          id: generateId(),
+          type: 'chat',
+          title: opts.title || 'Untitled',
+          x: solo.x,
+          y: solo.y,
+          width: solo.width,
+          height: solo.height,
+          zIndex: nextZIndexRef.current,
+          minimized: false,
+          maximized: false,
+          restoreBounds: solo,
+          canvasId: opts.canvasId,
+          sessionId: opts.sessionId,
+          ownerUserId: opts.ownerUserId ?? null,
+          isPrivate: false,
+          locked: false,
+          shared: false,
+          groupId: null,
+        };
+        return [...prev, soloFork];
       }
 
       const canvasKey = opts.canvasId || 'base';
@@ -604,7 +663,8 @@ export function useWindows() {
         return after ? syncGroupBounds(updated, before, after, options?.interaction) : updated;
       }
 
-      if (options?.interaction !== 'drag') return updated;
+      // Full-expand is single-window: never split/tile on drag while in full mode.
+      if (options?.interaction !== 'drag' || viewModeRef.current === 'full') return updated;
       return maybeSplitPartner(prev, updated, id);
     });
   }, []);
@@ -620,5 +680,36 @@ export function useWindows() {
     );
   }, []);
 
-  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows };
+  // Enter full-expand focused on `id`: raise it to the top so it becomes the
+  // single visible window, un-minimize it, and switch the workspace into full
+  // mode. Every other open window stays mounted (cached) for instant switching.
+  const enterFullExpand = useCallback((id: string) => {
+    nextZIndexRef.current++;
+    const z = nextZIndexRef.current;
+    setWindows(prev => prev.map(w => (w.id === id ? { ...w, minimized: false, zIndex: z } : w)));
+    setViewMode('full');
+  }, []);
+
+  // Leave full-expand and restore the previous multi-window layout + dock.
+  const exitFullExpand = useCallback(() => {
+    setViewMode('multi');
+  }, []);
+
+  const toggleFullExpand = useCallback((id: string) => {
+    if (viewMode === 'full') {
+      setViewMode('multi');
+      return;
+    }
+    enterFullExpand(id);
+  }, [viewMode, enterFullExpand]);
+
+  // Full mode needs exactly one visible window. If every window closes (or all
+  // are minimized), collapse back to multi so the workspace can't get stuck
+  // showing an empty full viewport with the dock hidden.
+  const hasVisibleWindow = windows.some(w => !w.minimized);
+  useEffect(() => {
+    if (viewMode === 'full' && !hasVisibleWindow) setViewMode('multi');
+  }, [viewMode, hasVisibleWindow]);
+
+  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
 }

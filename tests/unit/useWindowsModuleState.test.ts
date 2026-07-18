@@ -78,3 +78,57 @@ describe('useWindows module-state isolation', () => {
     expect(b.api().windows[0].zIndex).toBe(101);
   });
 });
+
+describe('useWindows full-expand (focus) mode', () => {
+  it('starts in multi mode and toggles into/out of full', () => {
+    const a = mount();
+    act(() => { a.api().openWindow('chat', { title: 'A1' }); });
+    expect(a.api().viewMode).toBe('multi');
+
+    const id = a.api().windows[0].id;
+    act(() => { a.api().toggleFullExpand(id); });
+    expect(a.api().viewMode).toBe('full');
+    // Focus target is raised + un-minimized so it is the single visible window.
+    expect(a.api().windows[0].minimized).toBe(false);
+
+    act(() => { a.api().toggleFullExpand(id); });
+    expect(a.api().viewMode).toBe('multi');
+  });
+
+  it('enterFullExpand un-minimizes and raises the target', () => {
+    const a = mount();
+    act(() => { a.api().openWindow('chat', { title: 'A1' }); });
+    act(() => { a.api().openWindow('document', { title: 'A2' }); });
+    const chatId = a.api().windows[0].id;
+    // Minimize the chat, then enter full-expand focused on it.
+    act(() => { a.api().minimizeWindow(chatId); });
+    expect(a.api().windows[0].minimized).toBe(true);
+    act(() => { a.api().enterFullExpand(chatId); });
+    expect(a.api().viewMode).toBe('full');
+    const chat = a.api().windows.find(w => w.id === chatId)!;
+    expect(chat.minimized).toBe(false);
+    // Raised above the other window.
+    const other = a.api().windows.find(w => w.id !== chatId)!;
+    expect(chat.zIndex).toBeGreaterThan(other.zIndex);
+  });
+
+  it('singleton window types reuse one instance instead of duplicating', () => {
+    const a = mount();
+    act(() => { a.api().openWindow('tasks', { title: 'Tasks' }); });
+    act(() => { a.api().openWindow('tasks', { title: 'Tasks again' }); });
+    const tasks = a.api().windows.filter(w => w.type === 'tasks');
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].minimized).toBe(false);
+  });
+
+  it('collapses back to multi when the last visible window closes', () => {
+    const a = mount();
+    act(() => { a.api().openWindow('chat', { title: 'A1' }); });
+    const id = a.api().windows[0].id;
+    act(() => { a.api().enterFullExpand(id); });
+    expect(a.api().viewMode).toBe('full');
+    act(() => { a.api().closeWindow(id); });
+    // Auto-reset effect: no visible window ⇒ full mode cannot persist.
+    expect(a.api().viewMode).toBe('multi');
+  });
+});

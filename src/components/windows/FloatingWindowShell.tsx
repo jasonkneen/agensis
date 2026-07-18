@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Copy, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Trash2, Unlock, X } from 'lucide-react';
+import { Copy, Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -295,6 +295,11 @@ interface FloatingWindowShellProps {
   // and only the active window is mounted (see CanvasLayerScene). The switcher
   // bar handles moving between windows instead of the free-floating canvas.
   isMobile?: boolean;
+  // Full-expand (focus) mode: this window fills the whole workspace viewport as
+  // the single visible window, drag/resize/tiling are disabled, and the chrome
+  // shows a "shrink" toggle instead of maximize. Driven by useWindows' viewMode.
+  isFullExpand?: boolean;
+  onToggleFullExpand?: (id: string) => void;
 }
 
 export function FloatingWindowShell({
@@ -313,6 +318,8 @@ export function FloatingWindowShell({
   isSelected = false,
   adjacentEdges,
   isMobile = false,
+  isFullExpand = false,
+  onToggleFullExpand,
 }: FloatingWindowShellProps) {
   const shellRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; winX: number; winY: number } | null>(null);
@@ -324,7 +331,9 @@ export function FloatingWindowShell({
   // On phones the window always fills the viewport (edge-to-edge, one at a time),
   // so it renders with the same geometry as a maximized window regardless of the
   // stored floating bounds — and never runs the bounds-sync/ResizeObserver path.
-  const fullViewport = isMaximized || isMobile;
+  // Full-expand windows fill the viewport exactly like a maximized/mobile window
+  // and skip the floating bounds-sync + drag/resize paths (single-window mode).
+  const fullViewport = isMaximized || isMobile || isFullExpand;
 
   useEffect(() => {
     const syncBounds = () => {
@@ -346,7 +355,7 @@ export function FloatingWindowShell({
   }, [win, fullViewport, isDragging, isResizing]);
 
   const handleDragStart = useCallback((e: React.PointerEvent) => {
-    if (!canControl || isMobile) return;
+    if (!canControl || isMobile || isFullExpand) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus(win.id);
@@ -462,7 +471,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile]);
+  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand]);
 
   const handleResizeStart = useCallback((e: React.PointerEvent) => {
     if (!canControl || isMaximized || isMobile) return;
@@ -582,7 +591,7 @@ export function FloatingWindowShell({
     : computeFlushEdges(displayBounds, viewportSize);
   const { isFullBleed, bleedEdges, squareCorners } = computeFullBleed({
     isMobile,
-    isMaximized,
+    isMaximized: isMaximized || isFullExpand,
     adjacentEdges,
     flushEdges,
   });
@@ -788,6 +797,20 @@ export function FloatingWindowShell({
                   aria-label={isMaximized ? 'Restore' : 'Maximize'}
                 >
                   {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                </Button>
+              )}
+              {!isMobile && onToggleFullExpand && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-xs"
+                  onClick={() => onToggleFullExpand(win.id)}
+                  disabled={!canControl}
+                  aria-label={isFullExpand ? 'Exit full expand' : 'Full expand'}
+                  aria-pressed={isFullExpand}
+                  title={isFullExpand ? 'Exit full expand' : 'Full expand'}
+                >
+                  {isFullExpand ? <Shrink /> : <Expand />}
                 </Button>
               )}
               <Button
