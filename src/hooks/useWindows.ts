@@ -7,6 +7,7 @@ const WORKSPACE_WINDOW_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 const TILE_TOLERANCE = 12;
+const VIEW_MODE_STORAGE_KEY = 'agensis:viewMode';
 
 export type WindowBounds = { x: number; y: number; width: number; height: number };
 export type TileEdge = 'left' | 'right' | 'top' | 'bottom';
@@ -420,12 +421,33 @@ export function useWindows() {
   // focus/open), so opening or focusing a window instantly swaps the visible one
   // while every other window stays mounted in this hook's state — fast switching,
   // one instance of each type max (see openWindow's type-reuse path).
-  const [viewMode, setViewMode] = useState<'multi' | 'full'>('multi');
+  const [viewMode, setViewMode] = useState<'multi' | 'full'>(() => {
+    if (typeof window === 'undefined') return 'multi';
+    try {
+      return window.localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'full' ? 'full' : 'multi';
+    } catch {
+      return 'multi';
+    }
+  });
   // Ref mirror of viewMode so bounds/tiling callbacks can read the current mode
   // without listing viewMode in their deps (which would rebuild them every
   // toggle and churn the memoized WindowManager context value).
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
+
+  // Persisted *preference* (distinct from the live viewMode, which the empty-
+  // window guard below force-collapses to 'multi'). Only explicit user toggles
+  // write this, so a reload with no windows yet can still restore full-expand
+  // once the first window opens. localStorage is wrapped because it throws in
+  // private mode / on quota — a preference write must never crash the manager.
+  const writeViewModePreference = useCallback((mode: 'multi' | 'full') => {
+    try {
+      window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+    } catch {
+      // ignore — preference persistence is best-effort
+    }
+  }, []);
+  const prefersFullExpandRef = useRef(viewMode === 'full');
 
   const rememberWindowBounds = useCallback((win: FloatingWindow) => {
     lastBoundsByWindowKey.current[getWindowIdentityKey(win)] = getVisibleBounds(win);
@@ -687,28 +709,37 @@ export function useWindows() {
     nextZIndexRef.current++;
     const z = nextZIndexRef.current;
     setWindows(prev => prev.map(w => (w.id === id ? { ...w, minimized: false, zIndex: z } : w)));
+    prefersFullExpandRef.current = true;
+    writeViewModePreference('full');
     setViewMode('full');
-  }, []);
+  }, [writeViewModePreference]);
 
   // Leave full-expand and restore the previous multi-window layout + dock.
   const exitFullExpand = useCallback(() => {
+    prefersFullExpandRef.current = false;
+    writeViewModePreference('multi');
     setViewMode('multi');
-  }, []);
+  }, [writeViewModePreference]);
 
   const toggleFullExpand = useCallback((id: string) => {
     if (viewMode === 'full') {
-      setViewMode('multi');
+      exitFullExpand();
       return;
     }
     enterFullExpand(id);
-  }, [viewMode, enterFullExpand]);
+  }, [viewMode, enterFullExpand, exitFullExpand]);
 
-  // Full mode needs exactly one visible window. If every window closes (or all
-  // are minimized), collapse back to multi so the workspace can't get stuck
-  // showing an empty full viewport with the dock hidden.
+  // Full mode needs exactly one visible window. When none is visible we drop the
+  // live mode to 'multi' WITHOUT clearing the saved preference, then re-enter
+  // full once a window appears again — so the choice survives a reload (windows
+  // are in-memory and start empty) and a close-everything.
   const hasVisibleWindow = windows.some(w => !w.minimized);
   useEffect(() => {
-    if (viewMode === 'full' && !hasVisibleWindow) setViewMode('multi');
+    if (!hasVisibleWindow) {
+      if (viewMode === 'full') setViewMode('multi');
+      return;
+    }
+    if (viewMode === 'multi' && prefersFullExpandRef.current) setViewMode('full');
   }, [viewMode, hasVisibleWindow]);
 
   return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };

@@ -43,6 +43,10 @@ afterEach(() => {
     act(() => m.root.unmount());
     m.container.remove();
   }
+  // enterFullExpand/exitFullExpand persist a view-mode preference to
+  // localStorage; clear it so it can't leak across tests and spuriously
+  // restore full-expand in a later instance.
+  try { window.localStorage.clear(); } catch { /* jsdom always has it */ }
 });
 
 describe('useWindows module-state isolation', () => {
@@ -132,3 +136,48 @@ describe('useWindows full-expand (focus) mode', () => {
     expect(a.api().viewMode).toBe('multi');
   });
 });
+
+describe('useWindows full-expand preference persistence', () => {
+  afterEach(() => {
+    try { window.localStorage.clear(); } catch { /* jsdom always has it */ }
+  });
+
+  it('persists the full-expand choice to localStorage on toggle', () => {
+    const a = mount();
+    act(() => { a.api().openWindow('chat', { title: 'A1' }); });
+    const id = a.api().windows[0].id;
+    act(() => { a.api().enterFullExpand(id); });
+    expect(window.localStorage.getItem('agensis:viewMode')).toBe('full');
+    act(() => { a.api().exitFullExpand(); });
+    expect(window.localStorage.getItem('agensis:viewMode')).toBe('multi');
+  });
+
+  it('restores full-expand after a remount once a window becomes visible', () => {
+    // First session: choose full-expand.
+    const first = mount();
+    act(() => { first.api().openWindow('chat', { title: 'A1' }); });
+    act(() => { first.api().enterFullExpand(first.api().windows[0].id); });
+    expect(first.api().viewMode).toBe('full');
+
+    // Simulate a reload: a brand-new hook instance. Windows are in-memory so it
+    // starts empty and in 'multi' (full needs a visible window)...
+    const second = mount();
+    expect(second.api().windows).toHaveLength(0);
+    expect(second.api().viewMode).toBe('multi');
+
+    // ...but opening a window restores the remembered full-expand mode.
+    act(() => { second.api().openWindow('chat', { title: 'B1' }); });
+    expect(second.api().viewMode).toBe('full');
+  });
+
+  it('does not restore full-expand after the user explicitly exited it', () => {
+    const first = mount();
+    act(() => { first.api().openWindow('chat', { title: 'A1' }); });
+    act(() => { first.api().enterFullExpand(first.api().windows[0].id); });
+    act(() => { first.api().exitFullExpand(); });
+
+    const second = mount();
+    act(() => { second.api().openWindow('chat', { title: 'B1' }); });
+    expect(second.api().viewMode).toBe('multi');
+  });
+})
