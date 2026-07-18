@@ -64,6 +64,11 @@ export function createE2bProvider({ apiKey, anthropicApiKey, gitToken = "", repo
       const full = `${cmd} ${args.map(shellQuote).join(" ")}`;
       const opts = {
         cwd: handle.dir,
+        // This IS a real sandbox (an ephemeral Firecracker microVM), so it is
+        // honest — not a bypass — to tell the coding CLI so. Claude Code allows
+        // --dangerously-skip-permissions as root only when IS_SANDBOX=1, which is
+        // exactly this case; without it the in-VM run (always root) hard-fails.
+        envs: { IS_SANDBOX: "1", AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS: "1" },
         onStdout: (d) => { try { onData?.(d); } catch { /* stream tracker must not break the run */ } },
       };
       // A coding CLI exiting non-zero is a normal outcome (tests failed, lint

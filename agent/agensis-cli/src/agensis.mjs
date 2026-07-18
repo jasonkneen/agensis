@@ -953,22 +953,27 @@ function buildAgentCommand(config, job) {
     if (permissionMode === "yolo") {
       // Claude Code refuses --dangerously-skip-permissions when the process is
       // root/sudo ("cannot be used with root/sudo privileges"), which hard-fails
-      // the whole job. A root daemon is the common case (containers, some hosts),
-      // so by default we drop the flag there and let Claude run in its normal
-      // permission mode instead of erroring out. Faking IS_SANDBOX=1 would lie
-      // about sandboxing and defeat a real safety guard, so it's opt-in only:
-      // a user who truly runs inside a sandbox can set
-      // AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 to force the flag.
+      // the whole job. Two cases:
+      //  - Sandbox jobs (run_mode 'sandbox') execute inside an ephemeral e2b
+      //    microVM where the skip is SAFE and required (the VM runs as root); the
+      //    e2b exec sets IS_SANDBOX=1 so Claude accepts it in the VM. Always keep
+      //    the flag — the daemon host's own uid is irrelevant to the in-VM run.
+      //  - Local jobs on a root daemon: Claude rejects the flag, so drop it by
+      //    default (the job runs in normal permission mode instead of erroring),
+      //    unless the operator asserts a real sandbox via
+      //    AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1. Faking IS_SANDBOX would lie
+      //    about sandboxing and defeat a genuine safety guard.
+      const isSandboxJob = job && job.agent && job.agent.run_mode === "sandbox";
       const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
       const forceSkip = process.env.AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS === "1";
-      if (!isRoot || forceSkip) {
+      if (isSandboxJob || !isRoot || forceSkip) {
         nextArgs.push("--dangerously-skip-permissions");
       } else {
         // The command runs without the skip, so don't advertise the yolo flags
         // in heartbeat/job metadata — the UI would otherwise claim a permission
         // level the process isn't actually using.
         permissionFlags = [];
-        log("running as root: dropping --dangerously-skip-permissions (Claude rejects it as root). Set AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 only if this really is a sandboxed remote host.");
+        log("running as root: dropping --dangerously-skip-permissions (Claude rejects it as root). Use run_mode 'sandbox', or set AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 only if this really is a sandboxed host.");
       }
     }
 
