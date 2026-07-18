@@ -11,6 +11,7 @@ import {
   Globe,
   KeyRound,
   Link2,
+  LayoutGrid,
   Monitor,
   Pencil,
   Plug,
@@ -20,6 +21,7 @@ import {
   Rocket,
   Save,
   ShieldCheck,
+  Share2,
   Search,
   Sparkles,
   Terminal,
@@ -34,6 +36,7 @@ import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AgentNetworkDiagram } from './AgentNetworkDiagram';
 import {
   Dialog,
   DialogContent,
@@ -261,6 +264,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
+  const [layoutView, setLayoutView] = useState<'grid' | 'network'>('grid');
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -397,6 +401,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           />
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {!createStep && !selectedAgent && agents.length > 0 && (
+            <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
+              <Button type="button" size="icon-sm" variant={layoutView === 'grid' ? 'default' : 'ghost'} onClick={() => setLayoutView('grid')} aria-label="Grid view" aria-pressed={layoutView === 'grid'} title="Grid view">
+                <LayoutGrid />
+              </Button>
+              <Button type="button" size="icon-sm" variant={layoutView === 'network' ? 'default' : 'ghost'} onClick={() => setLayoutView('network')} aria-label="Network view" aria-pressed={layoutView === 'network'} title="Network diagram">
+                <Share2 />
+              </Button>
+            </div>
+          )}
           <Button
             type="button"
             size="sm"
@@ -702,6 +716,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : ownerFilter === 'mine' && statusFilter.size === 0 ? "You haven't created any agents yet." : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
+            ) : layoutView === 'network' ? (
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <AgentNetworkDiagram agents={visibleAgents} onSelectAgent={setSelectedAgentId} />
+              </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
                 <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))]">
