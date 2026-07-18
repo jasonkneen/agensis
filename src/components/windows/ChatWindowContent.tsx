@@ -1650,7 +1650,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                       : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
                   </div>
                 )}
-                <InputGroup className="h-auto flex-col items-stretch">
+                <InputGroup className="chat-composer h-auto flex-col items-stretch border bg-card/80 shadow-sm">
                   <InputGroupTextarea
                     ref={inputRef}
                     value={input}
