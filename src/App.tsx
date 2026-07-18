@@ -14,6 +14,7 @@ import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
 import { UsersWindow } from './components/windows/UsersWindow';
 import { MemorySection } from './components/memory/MemorySection';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
+import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
 import CommandPalette from './components/search/CommandPalette';
 import { AuthPage } from './components/auth/AuthPage';
 import { ShareDialog } from './components/sharing/ShareDialog';
@@ -120,7 +121,7 @@ const IS_DESKTOP_SHELL =
   typeof window !== 'undefined' &&
   Boolean(
     (window as unknown as { zero?: unknown; electronAPI?: unknown }).zero ||
-      (window as unknown as { electronAPI?: unknown }).electronAPI,
+    (window as unknown as { electronAPI?: unknown }).electronAPI,
   );
 // Match hidden_inset_tall band (~52pt). Short hidden_inset was ~28pt.
 const DESKTOP_TITLEBAR_INSET = IS_DESKTOP_SHELL ? 52 : 0;
@@ -275,7 +276,7 @@ const ADJACENT_EDGE_TOLERANCE = 2;
 
 // Hoisted rather than written inline (`() => {}`, `[]`), which would allocate a
 // fresh reference every render and defeat ChatWindowContent's React.memo.
-const NOOP_SEND_MESSAGE = () => {};
+const NOOP_SEND_MESSAGE = () => { };
 const EMPTY_MESSAGES: never[] = [];
 
 function computeAdjacentEdges(win: FloatingWindow, allWindows: FloatingWindow[]): Set<'left' | 'right' | 'top' | 'bottom'> {
@@ -394,15 +395,15 @@ const CONTEXT_COUNT_ITEMS: Array<{
   label: string;
   icon: React.ReactNode;
 }> = [
-  { key: 'docs', label: 'Documents', icon: <FileText /> },
-  { key: 'facts', label: 'Memory', icon: <Brain /> },
-  { key: 'tasks', label: 'Tasks', icon: <CheckCircle2 /> },
-  { key: 'agents', label: 'AI agents', icon: <Bot /> },
-  { key: 'skills', label: 'Skills', icon: <Sparkles /> },
-  { key: 'commands', label: 'Commands', icon: <Command /> },
-  { key: 'tools', label: 'Tools', icon: <Wrench /> },
-  { key: 'webhooks', label: 'Webhooks', icon: <Activity /> },
-];
+    { key: 'docs', label: 'Documents', icon: <FileText /> },
+    { key: 'facts', label: 'Memory', icon: <Brain /> },
+    { key: 'tasks', label: 'Tasks', icon: <CheckCircle2 /> },
+    { key: 'agents', label: 'AI agents', icon: <Bot /> },
+    { key: 'skills', label: 'Skills', icon: <Sparkles /> },
+    { key: 'commands', label: 'Commands', icon: <Command /> },
+    { key: 'tools', label: 'Tools', icon: <Wrench /> },
+    { key: 'webhooks', label: 'Webhooks', icon: <Activity /> },
+  ];
 
 function KnowledgeContextControl({
   counts,
@@ -846,10 +847,10 @@ function AppContent() {
   const activeWindows = useMemo(() => {
     const exactWorkspaceWindows = focusedRemotePresence
       ? focusedRemotePresence.windows.map(win => ({
-          ...win,
-          id: `remote:${focusedRemotePresence.userId}:${win.id}`,
-          ownerUserId: focusedRemotePresence.userId,
-        }))
+        ...win,
+        id: `remote:${focusedRemotePresence.userId}:${win.id}`,
+        ownerUserId: focusedRemotePresence.userId,
+      }))
       : windows;
     return exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
   }, [focusedRemotePresence, windows, viewedLayerId]);
@@ -1589,7 +1590,7 @@ function AppContent() {
 
   const handleCloseMobileDrawer = useCallback(() => setMobileDrawerOpen(false), []);
   const handleOpenCommandPalette = useCallback(() => setCommandPaletteOpen(true), []);
-  const handleSidebarUploadFile = useCallback(() => {}, []);
+  const handleSidebarUploadFile = useCallback(() => { }, []);
   const handleOpenTemplates = useCallback(() => setTemplatePickerOpen(true), []);
   const handleOpenSettingsFromSidebar = useCallback(() => openLayerSettings(activeLayerId), [openLayerSettings, activeLayerId]);
   const handleSidebarAgentProfile = useCallback((agent: { id: string; agentId: string | null; handle: string | null; name: string }) => {
@@ -1610,287 +1611,298 @@ function AppContent() {
 
   return (
     <TooltipProvider>
-    <div className="relative flex h-screen overflow-hidden bg-background">
-      <img
-        src={workspaceBackdropImage}
-        alt=""
-        className="pointer-events-none absolute inset-0 z-0 size-full object-cover"
-        style={{ opacity: workspaceBackdropOpacity }}
-      />
-      <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
-      <div
-        className={cn(
-          isMobile
-            ? cn(
+      <div className="relative flex h-screen overflow-hidden bg-background">
+        <img
+          src={workspaceBackdropImage}
+          alt=""
+          className="pointer-events-none absolute inset-0 z-0 size-full object-cover"
+          style={{ opacity: workspaceBackdropOpacity }}
+        />
+        <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
+        <div
+          className={cn(
+            isMobile
+              ? cn(
                 'fixed inset-y-0 left-0 z-[12000] flex transition-transform duration-200 ease-out',
                 mobileDrawerOpen ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
               )
-            : 'contents',
-        )}
-        style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
-      >
-      <Sidebar
-        workspace={activeWorkspace}
-        activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
-        overlay={isMobile}
-        titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
-        collapsed={isMobile ? false : sidebarCollapsed}
-        onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
-        onOpenCommandPalette={handleOpenCommandPalette}
-        onOpenWorkspaceGrid={handleOpenCanvasGrid}
-        onNewChat={handleNewChat}
-        onNewDocument={handleNewDocument}
-        onUploadFile={handleSidebarUploadFile}
-        onCreateWorkspace={handleCreateWorkspace}
-        onDocumentOpen={handleDocumentOpen}
-        onDocumentUpdate={saveDocument}
-        onSessionOpen={handleSessionOpen}
-        onSessionUpdate={updateSession}
-        onSessionArchive={archiveSession}
-        onSessionDelete={deleteSession}
-        onDirectMessageDelete={handleDeleteDm}
-        onSessionSplit={handleSplitThread}
-        onSessionMerge={handleMergeThread}
-        onOpenMemory={handleOpenMemory}
-        onOpenTasks={handleOpenTasks}
-        onOpenActivity={handleOpenActivity}
-        onOpenAgents={handleOpenAgents}
-        onOpenUsers={handleOpenUsers}
-        onAgentMessage={handleAgentDirectMessage}
-        onAgentProfile={handleSidebarAgentProfile}
-        onOpenTemplates={handleOpenTemplates}
-        openTaskCount={openTasks.length}
-        recents={recents}
-        sessions={sessions}
-        agents={agents}
-        agentConnections={agentConnections}
-        floatingWindows={windows}
-        documentPresence={itemPresence.documentPresence}
-        chatPresence={itemPresence.chatPresence}
-        agentStatusFeed={agentStatusFeed}
-        themeMode={themeMode}
-        onThemeChange={setTheme}
-        userEmail={user.email || ''}
-        userId={user.id}
-        onSignOut={signOut}
-        onOpenSettings={handleOpenSettingsFromSidebar}
-      />
-      </div>
-      {isMobile && mobileDrawerOpen && (
-        <div
-          className="fixed inset-0 z-[11999] bg-black/50 backdrop-blur-sm"
-          onClick={() => setMobileDrawerOpen(false)}
-          aria-hidden
-        />
-      )}
-
-      <div
-        className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-        style={{
-          // Canvas column sits to the RIGHT of the full-height sidebar, so the
-          // macOS traffic lights (top-left, over the sidebar) never overlap it —
-          // it only needs the uniform 8px chrome gap, not the 52px titlebar
-          // reserve. This lets panels + the maximize button fill to 8px from the
-          // window's top edge. The sidebar keeps its own titlebarInset (below).
-          paddingTop: WORKSPACE_CHROME_GAP,
-          paddingRight: WORKSPACE_CHROME_GAP,
-          paddingBottom: WORKSPACE_CHROME_GAP,
-          paddingLeft: WORKSPACE_CHROME_GAP,
-        }}
-      >
-        <NetworkStatusBar
-          online={online}
-          syncing={syncing}
-          pendingCount={pendingCount}
-          syncError={syncError}
-          onSync={flushQueue}
-          onClearQueue={clearPendingQueue}
-        />
-
-        <main
-          ref={canvasRef}
-          data-workspace-viewport
-          className={cn(
-            'relative min-h-0 flex-1 rounded-none',
-            // A full-bleed window (maximized, or a tiled group filling the panel)
-            // paints OVER the 8px chrome gap by extending its shell into the
-            // padding — so the viewport must un-clip to let that extension reach
-            // the true panel edge. Clipped by default so floating panels + their
-            // resize handles never spill into the gap.
-            viewportUnclipped ? 'overflow-visible' : 'overflow-hidden',
+              : 'contents',
           )}
+          style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
         >
-          <CanvasDropZone
-            onAddObject={addCanvasObject}
-            onUploadFiles={uploadFiles}
-          >
-            <div
-              className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
-              style={{ bottom: isMobile ? WORKSPACE_BOTTOM_RESERVE + 12 : WORKSPACE_DOCK_BOTTOM_OFFSET }}
-            >
-              <NotificationsBell workspaceId={activeWorkspaceId || null} />
-              <WorkspacePresenceAvatars
-                users={workspacePresenceUsers}
-                getMode={getPresenceMode}
-                onModeChange={setPresenceMode}
-                favoriteIds={presenceFavorites}
-                focusedUserId={focusedPresenceUserId}
-                onToggleFavorite={togglePresenceFavorite}
-                onFocusUser={setFocusedPresenceUserId}
-                onOpenRemoteWindow={handleOpenPresenceWindow}
-                onCopyInviteLink={handleCopyInviteLink}
-                onMessageAgent={person => handleAgentDirectMessage({
-                  id: person.agentId || person.id,
-                  agentId: person.agentId,
-                  name: person.name,
-                  handle: person.handle ?? null,
-                })}
-              />
-            </div>
-
-            <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
-
-            <div
-              ref={activeSceneRef}
-              className={cn('absolute inset-0 transition-opacity duration-200', showCanvasGrid ? 'opacity-10' : 'opacity-100')}
-            >
-              <CanvasLayerScene
-                documents={documents}
-                facts={facts}
-                categories={categories}
-                sessions={sessions}
-                activeSession={activeSession}
-                messages={messages}
-                streaming={streaming}
-                workspaceName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
-                workspaceId={activeWorkspaceId || ''}
-                userId={user.id}
-                userEmail={user.email || ''}
-                canvasObjects={visibleCanvasObjects}
-                canvasGroups={visibleCanvasGroups}
-                windows={activeWindows}
-                isMobile={isMobile}
-                onOpenMobileMenu={handleOpenMobileMenu}
-                tasks={tasks}
-                members={members}
-                activityEvents={activityEvents}
-                activityLoading={activityLoading}
+          <Sidebar
+            workspace={activeWorkspace}
+            activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
+            overlay={isMobile}
+            titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+            collapsed={isMobile ? false : sidebarCollapsed}
+            onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
+            onOpenCommandPalette={handleOpenCommandPalette}
+            onOpenWorkspaceGrid={handleOpenCanvasGrid}
+            onNewChat={handleNewChat}
+            onNewDocument={handleNewDocument}
+            onUploadFile={handleSidebarUploadFile}
+            onCreateWorkspace={handleCreateWorkspace}
+            onDocumentOpen={handleDocumentOpen}
+            onDocumentUpdate={saveDocument}
+            onSessionOpen={handleSessionOpen}
+            onSessionUpdate={updateSession}
+            onSessionArchive={archiveSession}
+            onSessionDelete={deleteSession}
+            onDirectMessageDelete={handleDeleteDm}
+            onSessionSplit={handleSplitThread}
+            onSessionMerge={handleMergeThread}
+            onOpenMemory={handleOpenMemory}
+            onOpenTasks={handleOpenTasks}
+            onOpenActivity={handleOpenActivity}
+            onOpenAgents={handleOpenAgents}
+            onOpenUsers={handleOpenUsers}
+            onAgentMessage={handleAgentDirectMessage}
+            onAgentProfile={handleSidebarAgentProfile}
+            onOpenTemplates={handleOpenTemplates}
+            openTaskCount={openTasks.length}
+            recents={recents}
+            sessions={sessions}
+            agents={agents}
+            agentConnections={agentConnections}
+            floatingWindows={windows}
+            documentPresence={itemPresence.documentPresence}
+            chatPresence={itemPresence.chatPresence}
+            agentStatusFeed={agentStatusFeed}
+            themeMode={themeMode}
+            onThemeChange={setTheme}
+            userEmail={user.email || ''}
+            userId={user.id}
+            onSignOut={signOut}
+            onOpenSettings={handleOpenSettingsFromSidebar}
+            getStartedSlot={(
+              <GetStartedChecklist
                 agents={agents}
-                agentWebhooks={agentWebhooks}
-                agentConnections={agentConnections}
-                presenceUsers={workspacePresenceUsers}
-                uploadedFiles={uploadedFiles}
-                onUploadFiles={uploadFiles}
-                selectedAgent={selectedAgent}
-                focusedAgentKey={focusedAgentKey}
-                systemCapabilities={systemCapabilities}
-                getPresenceMode={getPresenceMode}
-                backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
-                backgroundImage=""
-                contextCounts={contextCounts}
-                contextCountsTitle={contextCountsTitle}
-                onSelectAgent={setSelectedAgent}
-                onAgentProfile={handleOpenAgentProfile}
-                onCreateAgent={createAgent}
-                onUpdateAgent={updateAgent}
-                onDeleteAgent={deleteAgent}
-                onCreateAgentWebhook={createAgentWebhook}
-                onUpdateAgentWebhook={updateAgentWebhook}
-                onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
-                topLevelMessages={topLevelMessages}
-                threadMessages={threadMessages}
-                threadReplyCounts={threadReplyCounts}
-                activeThreadId={activeThreadId}
-                onOpenThread={openThread}
-                onCloseThread={closeThread}
-                subThreadsByMessage={subThreadsByMessage}
-                activeSubThread={activeSubThread}
-                subThreadMessages={subThreadMessages}
-                subThreadStreaming={subThreadStreaming}
-                onOpenSubThread={openSubThread}
-                onCloseSubThread={closeSubThread}
-                onCreateSubThread={handleCreateSubThreadFromScene}
-                onSendSubThreadMessage={sendSubThreadMessage}
-                onSplitThread={handleSplitThread}
-                useWorkspaceCtx={useWorkspaceCtx}
-                onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
-                onHomeSendMessage={handleHomeSendMessage}
-                onNewDocument={handleNewDocument}
-                onCloseWindow={handleCloseWindow}
-                onFocusWindow={focusWindow}
-                onUpdateWindow={updateWindow}
-                onMinimizeWindow={minimizeWindow}
-                onShareWindow={handleShareWindow}
-                onSendMessage={wrappedSendMessage}
-                onSetActiveSession={setActiveSession}
-                onDeleteDocument={handleDeleteDocumentFromScene}
-                onAutoSaveDocument={autoSave}
-                onToggleFavorite={toggleFavorite}
-                onAddFact={handleAddFactFromScene}
-                onUpdateFact={updateFact}
-                onDeleteFact={deleteFact}
-                onCreateTask={handleCreateTask}
-                onUpdateTask={handleUpdateTask}
-                onToggleTaskStatus={handleToggleTaskStatus}
-                onDeleteTask={handleDeleteTask}
-                onCommentCreated={handleCommentCreatedFromScene}
-                onRequestConfirm={setConfirmAction}
-              />
-            </div>
-
-            <DrawingLayer
-              objects={visibleCanvasObjects}
-              groups={visibleCanvasGroups}
-              drawingActive={drawingActive}
-              onToggleDrawing={() => setDrawingActive(prev => !prev)}
-              onAddObject={addCanvasObject}
-              onUpdateObject={updateCanvasObject}
-              onDeleteObject={deleteCanvasObject}
-              onBringToFront={bringCanvasObjectToFront}
-              onCreateGroup={createCanvasGroup}
-              onDeleteGroup={deleteCanvasGroup}
-              onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
-              tasks={tasks}
-              agents={agents}
-              documents={documents}
-              getPresenceMode={getPresenceMode}
-              canEditObject={canEditCanvasObject}
-              onCreateAppletTask={handleCreateTask}
-              onUpdateAppletTask={handleUpdateTask}
-              focusObjectId={focusCanvasObjectId}
-              onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
-            />
-
-            {showCanvasGrid && (
-              <CanvasGridOverlay
-                layers={layers}
-                objects={canvasObjects}
-                windows={windows}
-                activeLayerId={activeLayerId}
-                backgroundImage={canvasGridBackground}
-                onClose={handleCloseCanvasGrid}
-                onSelectLayer={handleSelectCanvasFromGrid}
-                onCreateLayer={handleCreateCanvasFromGrid}
-                onDeleteLayer={handleDeleteCanvasFromGrid}
-                onOpenSettings={(layerId) => openLayerSettings(layerId)}
-                baseLayerId={baseLayerId}
+                sessions={sessions}
+                memberCount={members.length}
+                onCreateAgent={handleOpenAgents}
+                onStartRoom={handleNewChat}
+                onMessageAgent={handleOpenAgents}
+                onInvite={handleOpenUsers}
               />
             )}
+          />
+        </div>
+        {isMobile && mobileDrawerOpen && (
+          <div
+            className="fixed inset-0 z-[11999] bg-black/50 backdrop-blur-sm"
+            onClick={() => setMobileDrawerOpen(false)}
+            aria-hidden
+          />
+        )}
 
-            <CanvasTemplatePicker
-              open={templatePickerOpen}
-              onClose={() => setTemplatePickerOpen(false)}
-              onCreateApp={handleCreateCanvasApp}
-              onCreateDocApp={handleCreateDocApp}
-              onCreateCustomApp={handleCreateCustomApplet}
-              documents={documents}
-            />
+        <div
+          className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          style={{
+            // Canvas column sits to the RIGHT of the full-height sidebar, so the
+            // macOS traffic lights (top-left, over the sidebar) never overlap it —
+            // it only needs the uniform 8px chrome gap, not the 52px titlebar
+            // reserve. This lets panels + the maximize button fill to 8px from the
+            // window's top edge. The sidebar keeps its own titlebarInset (below).
+            paddingTop: WORKSPACE_CHROME_GAP,
+            paddingRight: WORKSPACE_CHROME_GAP,
+            paddingBottom: WORKSPACE_CHROME_GAP,
+            paddingLeft: WORKSPACE_CHROME_GAP,
+          }}
+        >
+          <NetworkStatusBar
+            online={online}
+            syncing={syncing}
+            pendingCount={pendingCount}
+            syncError={syncError}
+            onSync={flushQueue}
+            onClearQueue={clearPendingQueue}
+          />
 
-            <div
-              className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
-              style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
+          <main
+            ref={canvasRef}
+            data-workspace-viewport
+            className={cn(
+              'relative min-h-0 flex-1 rounded-none',
+              // A full-bleed window (maximized, or a tiled group filling the panel)
+              // paints OVER the 8px chrome gap by extending its shell into the
+              // padding — so the viewport must un-clip to let that extension reach
+              // the true panel edge. Clipped by default so floating panels + their
+              // resize handles never spill into the gap.
+              viewportUnclipped ? 'overflow-visible' : 'overflow-hidden',
+            )}
+          >
+            <CanvasDropZone
+              onAddObject={addCanvasObject}
+              onUploadFiles={uploadFiles}
             >
-              {dockEntries.map(entry => {
+              <div
+                className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
+                style={{ bottom: isMobile ? WORKSPACE_BOTTOM_RESERVE + 12 : WORKSPACE_DOCK_BOTTOM_OFFSET }}
+              >
+                <NotificationsBell workspaceId={activeWorkspaceId || null} />
+                <WorkspacePresenceAvatars
+                  users={workspacePresenceUsers}
+                  getMode={getPresenceMode}
+                  onModeChange={setPresenceMode}
+                  favoriteIds={presenceFavorites}
+                  focusedUserId={focusedPresenceUserId}
+                  onToggleFavorite={togglePresenceFavorite}
+                  onFocusUser={setFocusedPresenceUserId}
+                  onOpenRemoteWindow={handleOpenPresenceWindow}
+                  onCopyInviteLink={handleCopyInviteLink}
+                  onMessageAgent={person => handleAgentDirectMessage({
+                    id: person.agentId || person.id,
+                    agentId: person.agentId,
+                    name: person.name,
+                    handle: person.handle ?? null,
+                  })}
+                />
+              </div>
+
+              <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
+
+              <div
+                ref={activeSceneRef}
+                className={cn('absolute inset-0 transition-opacity duration-200', showCanvasGrid ? 'opacity-10' : 'opacity-100')}
+              >
+                <CanvasLayerScene
+                  documents={documents}
+                  facts={facts}
+                  categories={categories}
+                  sessions={sessions}
+                  activeSession={activeSession}
+                  messages={messages}
+                  streaming={streaming}
+                  workspaceName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
+                  workspaceId={activeWorkspaceId || ''}
+                  userId={user.id}
+                  userEmail={user.email || ''}
+                  canvasObjects={visibleCanvasObjects}
+                  canvasGroups={visibleCanvasGroups}
+                  windows={activeWindows}
+                  isMobile={isMobile}
+                  onOpenMobileMenu={handleOpenMobileMenu}
+                  tasks={tasks}
+                  members={members}
+                  activityEvents={activityEvents}
+                  activityLoading={activityLoading}
+                  agents={agents}
+                  agentWebhooks={agentWebhooks}
+                  agentConnections={agentConnections}
+                  presenceUsers={workspacePresenceUsers}
+                  uploadedFiles={uploadedFiles}
+                  onUploadFiles={uploadFiles}
+                  selectedAgent={selectedAgent}
+                  focusedAgentKey={focusedAgentKey}
+                  systemCapabilities={systemCapabilities}
+                  getPresenceMode={getPresenceMode}
+                  backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
+                  backgroundImage=""
+                  contextCounts={contextCounts}
+                  contextCountsTitle={contextCountsTitle}
+                  onSelectAgent={setSelectedAgent}
+                  onAgentProfile={handleOpenAgentProfile}
+                  onCreateAgent={createAgent}
+                  onUpdateAgent={updateAgent}
+                  onDeleteAgent={deleteAgent}
+                  onCreateAgentWebhook={createAgentWebhook}
+                  onUpdateAgentWebhook={updateAgentWebhook}
+                  onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
+                  topLevelMessages={topLevelMessages}
+                  threadMessages={threadMessages}
+                  threadReplyCounts={threadReplyCounts}
+                  activeThreadId={activeThreadId}
+                  onOpenThread={openThread}
+                  onCloseThread={closeThread}
+                  subThreadsByMessage={subThreadsByMessage}
+                  activeSubThread={activeSubThread}
+                  subThreadMessages={subThreadMessages}
+                  subThreadStreaming={subThreadStreaming}
+                  onOpenSubThread={openSubThread}
+                  onCloseSubThread={closeSubThread}
+                  onCreateSubThread={handleCreateSubThreadFromScene}
+                  onSendSubThreadMessage={sendSubThreadMessage}
+                  onSplitThread={handleSplitThread}
+                  useWorkspaceCtx={useWorkspaceCtx}
+                  onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
+                  onHomeSendMessage={handleHomeSendMessage}
+                  onNewDocument={handleNewDocument}
+                  onCloseWindow={handleCloseWindow}
+                  onFocusWindow={focusWindow}
+                  onUpdateWindow={updateWindow}
+                  onMinimizeWindow={minimizeWindow}
+                  onShareWindow={handleShareWindow}
+                  onSendMessage={wrappedSendMessage}
+                  onSetActiveSession={setActiveSession}
+                  onDeleteDocument={handleDeleteDocumentFromScene}
+                  onAutoSaveDocument={autoSave}
+                  onToggleFavorite={toggleFavorite}
+                  onAddFact={handleAddFactFromScene}
+                  onUpdateFact={updateFact}
+                  onDeleteFact={deleteFact}
+                  onCreateTask={handleCreateTask}
+                  onUpdateTask={handleUpdateTask}
+                  onToggleTaskStatus={handleToggleTaskStatus}
+                  onDeleteTask={handleDeleteTask}
+                  onCommentCreated={handleCommentCreatedFromScene}
+                  onRequestConfirm={setConfirmAction}
+                />
+              </div>
+
+              <DrawingLayer
+                objects={visibleCanvasObjects}
+                groups={visibleCanvasGroups}
+                drawingActive={drawingActive}
+                onToggleDrawing={() => setDrawingActive(prev => !prev)}
+                onAddObject={addCanvasObject}
+                onUpdateObject={updateCanvasObject}
+                onDeleteObject={deleteCanvasObject}
+                onBringToFront={bringCanvasObjectToFront}
+                onCreateGroup={createCanvasGroup}
+                onDeleteGroup={deleteCanvasGroup}
+                onCreateTask={({ title, sourceId }) => handleCreateTask({ title, source_type: 'canvas', source_id: sourceId })}
+                tasks={tasks}
+                agents={agents}
+                documents={documents}
+                getPresenceMode={getPresenceMode}
+                canEditObject={canEditCanvasObject}
+                onCreateAppletTask={handleCreateTask}
+                onUpdateAppletTask={handleUpdateTask}
+                focusObjectId={focusCanvasObjectId}
+                onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
+              />
+
+              {showCanvasGrid && (
+                <CanvasGridOverlay
+                  layers={layers}
+                  objects={canvasObjects}
+                  windows={windows}
+                  activeLayerId={activeLayerId}
+                  backgroundImage={canvasGridBackground}
+                  onClose={handleCloseCanvasGrid}
+                  onSelectLayer={handleSelectCanvasFromGrid}
+                  onCreateLayer={handleCreateCanvasFromGrid}
+                  onDeleteLayer={handleDeleteCanvasFromGrid}
+                  onOpenSettings={(layerId) => openLayerSettings(layerId)}
+                  baseLayerId={baseLayerId}
+                />
+              )}
+
+              <CanvasTemplatePicker
+                open={templatePickerOpen}
+                onClose={() => setTemplatePickerOpen(false)}
+                onCreateApp={handleCreateCanvasApp}
+                onCreateDocApp={handleCreateDocApp}
+                onCreateCustomApp={handleCreateCustomApplet}
+                documents={documents}
+              />
+
+              <div
+                className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
+                style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
+              >
+                {dockEntries.map(entry => {
                   if (entry.kind === 'window') {
                     const win = entry.win;
                     return renderDockButton(win, focusedDockWindow, {
@@ -1947,92 +1959,92 @@ function AppContent() {
                 </Button>
               </div>
 
-          </CanvasDropZone>
-        </main>
+            </CanvasDropZone>
+          </main>
+        </div>
+
+        {showTour && <OnboardingTour onComplete={handleTourComplete} />}
+
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          documents={documents}
+          sessions={sessions}
+          facts={facts}
+          tasks={tasks}
+          onDocumentOpen={handleDocumentOpen}
+          onSessionOpen={handleSessionOpen}
+          onTaskOpen={(task) => handleOpenTasks(task.id)}
+          onViewChange={(view) => {
+            if (view === 'tasks') handleOpenTasks();
+            else if (view === 'activity') handleOpenActivity();
+            else if (view === 'memory') handleOpenMemory();
+            else if (view === 'chat') handleNewChat();
+            else if (view === 'document') handleNewDocument();
+          }}
+        />
+
+        <ShareDialog
+          open={shareDialogOpen}
+          onClose={() => setShareDialogOpen(false)}
+          title={shareDialogTitle}
+          workspaceName={activeWorkspace?.name || 'Personal'}
+          currentUserEmail={user.email || ''}
+          members={members}
+          autoShare={autoShare}
+          onToggleAutoShare={toggleAutoShare}
+          onInvite={inviteByEmail}
+          onRemoveMember={removeMember}
+          onUpdateRole={updateMemberRole}
+        />
+
+        <CreateWorkspaceDialog
+          open={createWorkspaceDialogOpen}
+          onClose={() => setCreateWorkspaceDialogOpen(false)}
+          onCreate={handleCreateWorkspaceSubmit}
+        />
+
+        <SettingsDialog
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          workspace={settingsWorkspace}
+          secretsWorkspaceId={activeWorkspace?.id ?? null}
+          initialTab={settingsInitialTab}
+          onUpdateWorkspace={handleUpdateSettingsWorkspace}
+          workspaceName={settingsWorkspace?.name || 'Personal'}
+          userEmail={user.email || ''}
+          themeMode={themeMode}
+          onThemeChange={setTheme}
+        />
+
+        <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogMedia>
+                <Trash2 />
+              </AlertDialogMedia>
+              <AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle>
+              <AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  const action = confirmAction?.onConfirm;
+                  setConfirmAction(null);
+                  void action?.();
+                }}
+              >
+                {confirmAction?.actionLabel || 'Confirm'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
-
-      {showTour && <OnboardingTour onComplete={handleTourComplete} />}
-
-      <CommandPalette
-        open={commandPaletteOpen}
-        onClose={() => setCommandPaletteOpen(false)}
-        documents={documents}
-        sessions={sessions}
-        facts={facts}
-        tasks={tasks}
-        onDocumentOpen={handleDocumentOpen}
-        onSessionOpen={handleSessionOpen}
-        onTaskOpen={(task) => handleOpenTasks(task.id)}
-        onViewChange={(view) => {
-          if (view === 'tasks') handleOpenTasks();
-          else if (view === 'activity') handleOpenActivity();
-          else if (view === 'memory') handleOpenMemory();
-          else if (view === 'chat') handleNewChat();
-          else if (view === 'document') handleNewDocument();
-        }}
-      />
-
-      <ShareDialog
-        open={shareDialogOpen}
-        onClose={() => setShareDialogOpen(false)}
-        title={shareDialogTitle}
-        workspaceName={activeWorkspace?.name || 'Personal'}
-        currentUserEmail={user.email || ''}
-        members={members}
-        autoShare={autoShare}
-        onToggleAutoShare={toggleAutoShare}
-        onInvite={inviteByEmail}
-        onRemoveMember={removeMember}
-        onUpdateRole={updateMemberRole}
-      />
-
-      <CreateWorkspaceDialog
-        open={createWorkspaceDialogOpen}
-        onClose={() => setCreateWorkspaceDialogOpen(false)}
-        onCreate={handleCreateWorkspaceSubmit}
-      />
-
-      <SettingsDialog
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        workspace={settingsWorkspace}
-        secretsWorkspaceId={activeWorkspace?.id ?? null}
-        initialTab={settingsInitialTab}
-        onUpdateWorkspace={handleUpdateSettingsWorkspace}
-        workspaceName={settingsWorkspace?.name || 'Personal'}
-        userEmail={user.email || ''}
-        themeMode={themeMode}
-        onThemeChange={setTheme}
-      />
-
-      <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogMedia>
-              <Trash2 />
-            </AlertDialogMedia>
-            <AlertDialogTitle>{confirmAction?.title}</AlertDialogTitle>
-            <AlertDialogDescription>{confirmAction?.description}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                const action = confirmAction?.onConfirm;
-                setConfirmAction(null);
-                void action?.();
-              }}
-            >
-              {confirmAction?.actionLabel || 'Confirm'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-    <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
-    <AppUpdateManager />
-    <Toaster />
+      <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
+      <AppUpdateManager />
+      <Toaster />
     </TooltipProvider>
   );
 }
@@ -2297,48 +2309,48 @@ function CanvasLayerScene({
                     onOpenThread={onOpenThread}
                   />
                 ) : (
-                <ChatWindowBody
-                  winSession={winSession}
-                  isActiveSession={activeSession?.id === win.sessionId}
-                  onAppSendMessage={onSendMessage}
-                  onSetActiveSession={onSetActiveSession}
-                  onAppSplitThread={onSplitThread}
-                  messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
-                  topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
-                  threadMessages={threadMessages}
-                  threadReplyCounts={threadReplyCounts}
-                  activeThreadId={activeThreadId}
-                  streaming={activeSession?.id === win.sessionId ? streaming : false}
-                  memoryFacts={facts}
-                  documents={documents}
-                  agents={agents}
-                  agentConnections={agentConnections}
-                  presenceUsers={presenceUsers}
-                  selectedAgent={selectedAgent}
-	                  onSelectAgent={onSelectAgent}
-	                  onAgentProfile={onAgentProfile}
-	                  isDirectMessage={isDirectChatSession(winSession)}
-	                  canvasGroups={canvasGroups}
-                  canvasObjects={canvasObjects}
-                  workspaceId={workspaceId}
-                  uploadedFiles={uploadedFiles}
-                  onUploadFiles={onUploadFiles}
-                  onCreateTask={onCreateTask}
-                  systemCapabilities={systemCapabilities}
-                  contextControls={contextControlsElement}
-                  onOpenThread={onOpenThread}
-                  onCloseThread={onCloseThread}
-                  subThreadsByMessage={subThreadsByMessage}
-                  activeSubThread={activeSubThread}
-                  subThreadMessages={subThreadMessages}
-                  subThreadStreaming={subThreadStreaming}
-                  onOpenSubThread={onOpenSubThread}
-                  onCloseSubThread={onCloseSubThread}
-                  onCreateSubThread={onCreateSubThreadProp}
-                  onSendSubThreadMessage={onSendSubThreadMessage}
-                  channelTitle={winSession?.title || win.title}
-                  currentUserId={userId}
-                />
+                  <ChatWindowBody
+                    winSession={winSession}
+                    isActiveSession={activeSession?.id === win.sessionId}
+                    onAppSendMessage={onSendMessage}
+                    onSetActiveSession={onSetActiveSession}
+                    onAppSplitThread={onSplitThread}
+                    messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
+                    topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
+                    threadMessages={threadMessages}
+                    threadReplyCounts={threadReplyCounts}
+                    activeThreadId={activeThreadId}
+                    streaming={activeSession?.id === win.sessionId ? streaming : false}
+                    memoryFacts={facts}
+                    documents={documents}
+                    agents={agents}
+                    agentConnections={agentConnections}
+                    presenceUsers={presenceUsers}
+                    selectedAgent={selectedAgent}
+                    onSelectAgent={onSelectAgent}
+                    onAgentProfile={onAgentProfile}
+                    isDirectMessage={isDirectChatSession(winSession)}
+                    canvasGroups={canvasGroups}
+                    canvasObjects={canvasObjects}
+                    workspaceId={workspaceId}
+                    uploadedFiles={uploadedFiles}
+                    onUploadFiles={onUploadFiles}
+                    onCreateTask={onCreateTask}
+                    systemCapabilities={systemCapabilities}
+                    contextControls={contextControlsElement}
+                    onOpenThread={onOpenThread}
+                    onCloseThread={onCloseThread}
+                    subThreadsByMessage={subThreadsByMessage}
+                    activeSubThread={activeSubThread}
+                    subThreadMessages={subThreadMessages}
+                    subThreadStreaming={subThreadStreaming}
+                    onOpenSubThread={onOpenSubThread}
+                    onCloseSubThread={onCloseSubThread}
+                    onCreateSubThread={onCreateSubThreadProp}
+                    onSendSubThreadMessage={onSendSubThreadMessage}
+                    channelTitle={winSession?.title || win.title}
+                    currentUserId={userId}
+                  />
                 )
               ) : (
                 <ReadOnlyChatWindowContent
