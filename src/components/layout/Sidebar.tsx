@@ -753,23 +753,21 @@ export const Sidebar = React.memo(function Sidebar({
 
     <div ref={footerRef} className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
      {getStartedSlot}
-     <div className="flex items-center gap-2">
+     <div className="flex items-center gap-1">
+      <div className="min-w-0 flex-1 truncate px-1 text-xs font-medium text-muted-foreground">{userEmail}</div>
       <DropdownMenu>
        <DropdownMenuTrigger asChild>
         <button
          type="button"
-         className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition hover:bg-muted/60"
+         className="flex items-center rounded-md p-0.5 transition hover:bg-muted/60"
          aria-label="Account menu"
         >
          <Avatar size="sm">
           <AvatarFallback>{userInitial}</AvatarFallback>
          </Avatar>
-         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{userEmail}</div>
-         </div>
         </button>
        </DropdownMenuTrigger>
-       <DropdownMenuContent align="start" side="top" className="w-56">
+       <DropdownMenuContent align="end" side="top" className="w-56">
         <DropdownMenuItem onSelect={() => openAccountDialog('profile')}>
          <UserRound className="size-4" />
          Edit profile
