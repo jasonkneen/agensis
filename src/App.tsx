@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
@@ -12,6 +12,7 @@ import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/win
 import { ActivityWindowContent } from './components/windows/ActivityWindowContent';
 import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
 import { UsersWindow } from './components/windows/UsersWindow';
+import { SchedulesWindow } from './components/windows/SchedulesWindow';
 import { MemorySection } from './components/memory/MemorySection';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
@@ -1050,6 +1051,16 @@ function AppContent() {
     openWindow('users', { title: 'Users', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenSchedules = useCallback(() => {
+    const existing = windows.find(w => w.type === 'schedules');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('schedules', { title: 'Schedules', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
   // CursorBuddy and the Agensis CLI link unauthenticated users here. Once login
   // completes, CursorBuddy opens the agent surface; CLI setup additionally posts
   // a daemon connection payload back to the local setup callback.
@@ -1395,7 +1406,8 @@ function AppContent() {
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenMemory, handleOpenTasks, handleSessionOpen, sessions]);
+    else if (win.type === 'schedules') handleOpenSchedules();
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1661,6 +1673,7 @@ function AppContent() {
             onOpenActivity={handleOpenActivity}
             onOpenAgents={handleOpenAgents}
             onOpenUsers={handleOpenUsers}
+            onOpenSchedules={handleOpenSchedules}
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
@@ -2576,6 +2589,34 @@ function CanvasLayerScene({
                 workspaceName={workspaceName}
                 currentUserId={userId}
                 currentUserEmail={userEmail}
+              />
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'schedules') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Clock size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <SchedulesWindow
+                workspaceId={workspaceId}
+                agents={agents}
+                sessions={sessions}
               />
             </FloatingWindowShell>
           );

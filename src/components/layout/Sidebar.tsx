@@ -6,6 +6,7 @@ import {
  Users,
  Brain,
  ChevronRight,
+ Clock,
  Copy,
  CreditCard,
  FileText,
@@ -208,6 +209,7 @@ interface SidebarProps {
  onOpenActivity?: () => void;
  onOpenAgents?: () => void;
  onOpenUsers?: () => void;
+ onOpenSchedules?: () => void;
  onAgentMessage?: (agent: SidebarAgentTarget) => void;
  onAgentProfile?: (agent: SidebarAgentTarget) => void;
  onOpenTemplates?: () => void;
@@ -255,6 +257,7 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenActivity,
  onOpenAgents,
  onOpenUsers,
+ onOpenSchedules,
  onAgentMessage,
  onAgentProfile,
  onOpenTemplates,
@@ -448,6 +451,7 @@ export const Sidebar = React.memo(function Sidebar({
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
+    {onOpenSchedules && <SidebarRailButton icon={<Clock />} title="Schedules" onClick={onOpenSchedules} />}
     {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
     <div className="flex-1" />
     <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
@@ -742,6 +746,7 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
+      {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
      </div>
     </ScrollArea>
