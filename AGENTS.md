@@ -73,6 +73,30 @@ npm run build
   **Netlify**; a change touching both (e.g. a shared-core edit) needs both.
 - After deploying, confirm `git rev-parse HEAD` matches the pushed `main`.
 
+## Deploy environment variables (split Netlify + Fly)
+
+The static frontend + serverless HTTP routes run on **Netlify**; the long-running
+WebSocket/daemon backend (`server/index.cjs`) runs on **Fly**. Both point at the
+**same Neon DB**. The HMAC token secret MUST match across hosts or Netlify-signed
+tokens fail to verify on Fly.
+
+Local dev reads a `.env` (see README). For the deployed split:
+
+| Var | Netlify | Fly (server) | Purpose |
+|---|:--:|:--:|---|
+| `DATABASE_URL` (or `NETLIFY_DATABASE_URL`) | ✓ | ✓ | Neon connection — same DB on both |
+| `AUTH_SECRET` (a.k.a. `AGENSIS_AUTH_SECRET`) | ✓ | ✓ | **Must be identical** — HMAC session-token secret. Fly fails closed in prod without it |
+| `ANTHROPIC_API_KEY` | ✓ | ✓ | AI chat / built-in agents (per-workspace key overrides it if set) |
+| `AGENSIS_DAEMON_BASE_URL` | ✓ | — | Netlify → the Fly backend's public URL, so generated `agensis connect` commands + farm enrolment point at the WS host, not Netlify (which has no WS) |
+| `COMMIT_REF` | ✓ (build) | — | Netlify sets this automatically; baked into `__BUILD_ID__` + `version.json` for the update check |
+| `SECRETS_ENCRYPTION_KEY` | — | ✓ | Dedicated key for the per-workspace secret vault (else derived from `AUTH_SECRET`) |
+| `WORKSPACE_STORAGE_QUOTA_BYTES` | — | ✓ | Per-workspace upload quota (default 2 GB) |
+| `AGENSIS_CAPABILITIES_TTL_MS` | — | ✓ | TTL for the `/system/capabilities` cache (default 30 s) |
+| `AGENSIS_RUNTIME_SCHEMA` | — | ✓ | Set `false` to disable runtime DDL bootstrap (migrations become the sole schema source) |
+| `AGENSIS_PUBLIC_URL` / `AGENSIS_APP_URL` | — | ✓ | Public origin for links the server emits |
+| `NETLIFY_WEBHOOK_JWS_SECRET` | — | ✓ | Verifies Netlify deploy webhooks that trigger the update banner |
+| `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-4-8`) |
+
 ## Conventions
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
