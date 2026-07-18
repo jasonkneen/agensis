@@ -1475,295 +1475,295 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             Read-only workspace instance
           </div>
         ) : (
-        <>
-        {thinkingAgents.length > 0 && (
-          <div className="composer-status flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
-            <span className="composer-status-dots" aria-hidden>
-              <span />
-              <span />
-              <span />
-            </span>
-            <span className="truncate">
-              {thinkingAgents.map(({ name, activity }, i) => (
-                <React.Fragment key={name}>
-                  {i > 0 && (i === thinkingAgents.length - 1 ? ' and ' : ', ')}
-                  <span className="font-medium text-foreground">{name}</span>
-                  {' '}is {activity}
-                </React.Fragment>
-              ))}
-              {'…'}
-            </span>
-          </div>
-        )}
-        <div className="channel-composer border-t border-border p-2">
-          {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
-            <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
-              {linkedFiles.map(file => (
-                <FileChip
-                  key={file.id}
-                  name={file.name}
-                  onRemove={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
-                />
-              ))}
-              {linkedDocs.map(doc => (
-                <FileChip
-                  key={doc.id}
-                  name={doc.title}
-                  label={doc.title}
-                  onRemove={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
-                />
-              ))}
-              {linkedGroups.map(group => (
-                <FileChip
-                  key={group.id}
-                  name={`${group.name}.canvas`}
-                  label={group.name}
-                  onRemove={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="relative mx-auto w-full max-w-[800px]" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
-            {showSlashPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                <CommandList className="max-h-[min(260px,44vh)]">
-                  <CommandEmpty>No commands or skills match.</CommandEmpty>
-                  {slashGroups.map(group => {
-                    if (group.type === 'builtin') {
-                      return (
-                        <CommandGroup key="builtin" heading="Built-in">
-                          {group.items.map(item => (
-                            <SlashRow key={item.id} item={item} badge="runs" onSelect={() => handleSlashSelect(item)}>
-                              <Terminal className="size-4" />
-                            </SlashRow>
-                          ))}
-                        </CommandGroup>
-                      );
-                    }
-                    if (group.type === 'command') {
-                      return (
-                        <CommandGroup key="command" heading="Commands">
-                          {group.items.map(item => (
-                            <SlashRow key={item.id} item={item} badge="insert" onSelect={() => handleSlashSelect(item)}>
-                              <CommandIcon className="size-4" />
-                            </SlashRow>
-                          ))}
-                        </CommandGroup>
-                      );
-                    }
-                    return (
-                      <CommandGroup key={`skill:${group.label}`} heading={group.label}>
-                        {group.parent && (
-                          <SlashRow item={group.parent} badge="insert" onSelect={() => handleSlashSelect(group.parent!)}>
-                            <Sparkles className="size-4" />
-                          </SlashRow>
-                        )}
-                        {group.children.map(child => (
-                          <SlashRow key={child.id} item={child} badge="insert" indented onSelect={() => handleSlashSelect(child)}>
-                            <CornerDownRight className="size-4" />
-                          </SlashRow>
-                        ))}
-                      </CommandGroup>
-                    );
-                  })}
-                </CommandList>
-              </Command>
-            )}
-
-            {showDocPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                <CommandList className="max-h-[min(240px,40vh)]">
-                  <CommandEmpty>No agents or documents found.</CommandEmpty>
-                  {filteredAgents.length > 0 && (
-                    <CommandGroup heading="Agents">
-                      {filteredAgents.map(agent => (
-                        <CommandItem
-                          key={agent.id}
-                          value={`${agent.name} ${agentHandle(agent)}`}
-                          className="rounded-lg px-2 py-1.5"
-                          onSelect={() => handleAgentSelect(agent)}
-                        >
-                          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                            <Bot className="size-4" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium">{agent.name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">
-                              {agent.description || agent.model || 'Agent'}
-                            </span>
-                          </span>
-                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  )}
-                  <CommandGroup heading="Documents">
-                    {filteredDocs.map(doc => (
-                      <CommandItem
-                        key={doc.id}
-                        value={doc.title}
-                        className="rounded-lg px-2 py-1.5"
-                        onSelect={() => handleDocSelect(doc)}
-                      >
-                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                          <FileText className="size-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium">{doc.title}</span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {doc.folder || (doc.is_favorite ? 'Favorite document' : 'Document context')}
-                          </span>
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            )}
-
-            {showGroupPicker && (
-              <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] rounded-2xl border border-border bg-popover p-2 pt-3 shadow-xl">
-                <CommandList className="max-h-[min(240px,40vh)]">
-                  <CommandEmpty>No groups found.</CommandEmpty>
-                  <CommandGroup heading="Canvas groups">
-                    {filteredGroups.map(group => {
-                      const objectCount = canvasObjects.filter(object => object.group_id === group.id).length;
-                      return (
-                        <CommandItem
-                          key={group.id}
-                          value={group.name}
-                          className="min-h-14 rounded-xl px-3 py-2"
-                          onSelect={() => handleGroupSelect(group)}
-                        >
-                          <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
-                            <Layers className="size-4" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium">{group.name}</span>
-                            <span className="block truncate text-xs text-muted-foreground">Canvas group context</span>
-                          </span>
-                          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            {objectCount} item{objectCount === 1 ? '' : 's'}
-                          </span>
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            )}
-
-            {mentionedNotInChannel.length > 0 && (
-              <div className="px-1 pb-1 text-xs text-muted-foreground">
-                {mentionedNotInChannel.length === 1
-                  ? `${mentionedNotInChannel[0]} isn't in this channel yet — they'll be added when you send.`
-                  : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
+          <>
+            {thinkingAgents.length > 0 && (
+              <div className="composer-status flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
+                <span className="composer-status-dots" aria-hidden>
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span className="truncate">
+                  {thinkingAgents.map(({ name, activity }, i) => (
+                    <React.Fragment key={name}>
+                      {i > 0 && (i === thinkingAgents.length - 1 ? ' and ' : ', ')}
+                      <span className="font-medium text-foreground">{name}</span>
+                      {' '}is {activity}
+                    </React.Fragment>
+                  ))}
+                  {'…'}
+                </span>
               </div>
             )}
-            <InputGroup className="h-auto flex-col items-stretch">
-              <InputGroupTextarea
-                ref={inputRef}
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                onPaste={handleComposerPaste}
-                placeholder={isDirectMessage
-                  ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
-                  : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
-                disabled={streaming}
-                rows={1}
-                className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
-                onInput={e => {
-                  const el = e.currentTarget;
-                  el.style.height = 'auto';
-                  el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
-                }}
-              />
-              <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
-                <div className="flex items-center gap-1">
-                  <Popover open={addContextOpen} onOpenChange={(open) => {
-                    setAddContextOpen(open);
-                    if (open) {
-                      setShowDocPicker(false);
-                      setShowGroupPicker(false);
-                      closeSlashPicker();
-                    }
-                  }}>
-                    <PopoverTrigger asChild>
-                      <InputGroupButton size="icon-xs" aria-label="Add context">
-                        <Plus />
-                      </InputGroupButton>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      side="top"
-                      align="start"
-                      sideOffset={8}
-                      className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
-                    >
-                      <ComposerAddContent
-                        documents={documents}
-                        agents={agents}
-                        uploadedFiles={uploadedFiles}
-                        projectFiles={composerProjectFiles}
-                        canvasGroups={canvasGroups}
-                        skillOptions={skillOptions}
-                        toolOptions={toolOptions}
-                        uploadEnabled={Boolean(onUploadFiles)}
-                        uploadStatus={uploadStatus}
-                        onUploadFiles={() => fileInputRef.current?.click()}
-                        onUploadFolder={() => folderInputRef.current?.click()}
-                        onOpenFiles={() => {
-                          setSidePanel('files');
-                          setAddContextOpen(false);
-                        }}
-                        onAddUploadedFile={(file) => addLinkedFile(linkedUploadedFile(file))}
-                        onAddProjectFile={(file, source) => addLinkedFile(linkedProjectFile(file, source))}
-                        onAddDocument={addLinkedDoc}
-                        onAddGroup={addLinkedGroup}
-                        onAddAgent={(agent) => insertComposerText(`@${agentHandle(agent)} `)}
-                        onAddSkill={(skill) => insertComposerText(`Use skill: ${skill.label}. `)}
-                        onAddTool={(tool) => insertComposerText(`Use tool: ${tool.label}. `)}
-                      />
-                    </PopoverContent>
-                  </Popover>
-                  <InputGroupButton size="icon-xs" aria-label="Voice input">
-                    <Mic />
-                  </InputGroupButton>
+            <div className="channel-composer border-t border-border p-2">
+              {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
+                <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
+                  {linkedFiles.map(file => (
+                    <FileChip
+                      key={file.id}
+                      name={file.name}
+                      onRemove={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
+                    />
+                  ))}
+                  {linkedDocs.map(doc => (
+                    <FileChip
+                      key={doc.id}
+                      name={doc.title}
+                      label={doc.title}
+                      onRemove={() => setLinkedDocs(prev => prev.filter(d => d.id !== doc.id))}
+                    />
+                  ))}
+                  {linkedGroups.map(group => (
+                    <FileChip
+                      key={group.id}
+                      name={`${group.name}.canvas`}
+                      label={group.name}
+                      onRemove={() => setLinkedGroups(prev => prev.filter(g => g.id !== group.id))}
+                    />
+                  ))}
                 </div>
+              )}
 
-                <div className="flex min-w-0 items-center gap-1">
-                  <ModelSelector value={selectedModel} onChange={setSelectedModel} models={modelOptions} />
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    onClick={handleSend}
-                    disabled={!input.trim() || streaming}
-                    aria-label="Send message"
-                  >
-                    {streaming ? <Spinner /> : <Send />}
-                  </Button>
-                </div>
-              </InputGroupAddon>
-            </InputGroup>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleUploadSelection}
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleUploadSelection}
-              {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
-            />
-          </div>
-        </div>
-        </>
+              <div className="relative mx-auto w-full max-w-[800px]" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+                {showSlashPicker && (
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(260px,44vh)]">
+                      <CommandEmpty>No commands or skills match.</CommandEmpty>
+                      {slashGroups.map(group => {
+                        if (group.type === 'builtin') {
+                          return (
+                            <CommandGroup key="builtin" heading="Built-in">
+                              {group.items.map(item => (
+                                <SlashRow key={item.id} item={item} badge="runs" onSelect={() => handleSlashSelect(item)}>
+                                  <Terminal className="size-4" />
+                                </SlashRow>
+                              ))}
+                            </CommandGroup>
+                          );
+                        }
+                        if (group.type === 'command') {
+                          return (
+                            <CommandGroup key="command" heading="Commands">
+                              {group.items.map(item => (
+                                <SlashRow key={item.id} item={item} badge="insert" onSelect={() => handleSlashSelect(item)}>
+                                  <CommandIcon className="size-4" />
+                                </SlashRow>
+                              ))}
+                            </CommandGroup>
+                          );
+                        }
+                        return (
+                          <CommandGroup key={`skill:${group.label}`} heading={group.label}>
+                            {group.parent && (
+                              <SlashRow item={group.parent} badge="insert" onSelect={() => handleSlashSelect(group.parent!)}>
+                                <Sparkles className="size-4" />
+                              </SlashRow>
+                            )}
+                            {group.children.map(child => (
+                              <SlashRow key={child.id} item={child} badge="insert" indented onSelect={() => handleSlashSelect(child)}>
+                                <CornerDownRight className="size-4" />
+                              </SlashRow>
+                            ))}
+                          </CommandGroup>
+                        );
+                      })}
+                    </CommandList>
+                  </Command>
+                )}
+
+                {showDocPicker && (
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(240px,40vh)]">
+                      <CommandEmpty>No agents or documents found.</CommandEmpty>
+                      {filteredAgents.length > 0 && (
+                        <CommandGroup heading="Agents">
+                          {filteredAgents.map(agent => (
+                            <CommandItem
+                              key={agent.id}
+                              value={`${agent.name} ${agentHandle(agent)}`}
+                              className="rounded-lg px-2 py-1.5"
+                              onSelect={() => handleAgentSelect(agent)}
+                            >
+                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                                <Bot className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium">{agent.name}</span>
+                                <span className="block truncate text-xs text-muted-foreground">
+                                  {agent.description || agent.model || 'Agent'}
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      )}
+                      <CommandGroup heading="Documents">
+                        {filteredDocs.map(doc => (
+                          <CommandItem
+                            key={doc.id}
+                            value={doc.title}
+                            className="rounded-lg px-2 py-1.5"
+                            onSelect={() => handleDocSelect(doc)}
+                          >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                              <FileText className="size-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{doc.title}</span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {doc.folder || (doc.is_favorite ? 'Favorite document' : 'Document context')}
+                              </span>
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                )}
+
+                {showGroupPicker && (
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(280px,45vh)] rounded-2xl border border-border bg-popover p-2 pt-3 shadow-xl">
+                    <CommandList className="max-h-[min(240px,40vh)]">
+                      <CommandEmpty>No groups found.</CommandEmpty>
+                      <CommandGroup heading="Canvas groups">
+                        {filteredGroups.map(group => {
+                          const objectCount = canvasObjects.filter(object => object.group_id === group.id).length;
+                          return (
+                            <CommandItem
+                              key={group.id}
+                              value={group.name}
+                              className="min-h-14 rounded-xl px-3 py-2"
+                              onSelect={() => handleGroupSelect(group)}
+                            >
+                              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground">
+                                <Layers className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium">{group.name}</span>
+                                <span className="block truncate text-xs text-muted-foreground">Canvas group context</span>
+                              </span>
+                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                {objectCount} item{objectCount === 1 ? '' : 's'}
+                              </span>
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                )}
+
+                {mentionedNotInChannel.length > 0 && (
+                  <div className="px-1 pb-1 text-xs text-muted-foreground">
+                    {mentionedNotInChannel.length === 1
+                      ? `${mentionedNotInChannel[0]} isn't in this channel yet — they'll be added when you send.`
+                      : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
+                  </div>
+                )}
+                <InputGroup className="h-auto flex-col items-stretch">
+                  <InputGroupTextarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={handleInputChange}
+                    onKeyDown={handleKeyDown}
+                    onPaste={handleComposerPaste}
+                    placeholder={isDirectMessage
+                      ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
+                      : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
+                    disabled={streaming}
+                    rows={1}
+                    className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
+                    onInput={e => {
+                      const el = e.currentTarget;
+                      el.style.height = 'auto';
+                      el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
+                    }}
+                  />
+                  <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <Popover open={addContextOpen} onOpenChange={(open) => {
+                        setAddContextOpen(open);
+                        if (open) {
+                          setShowDocPicker(false);
+                          setShowGroupPicker(false);
+                          closeSlashPicker();
+                        }
+                      }}>
+                        <PopoverTrigger asChild>
+                          <InputGroupButton size="icon-xs" aria-label="Add context">
+                            <Plus />
+                          </InputGroupButton>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          side="top"
+                          align="start"
+                          sideOffset={8}
+                          className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                        >
+                          <ComposerAddContent
+                            documents={documents}
+                            agents={agents}
+                            uploadedFiles={uploadedFiles}
+                            projectFiles={composerProjectFiles}
+                            canvasGroups={canvasGroups}
+                            skillOptions={skillOptions}
+                            toolOptions={toolOptions}
+                            uploadEnabled={Boolean(onUploadFiles)}
+                            uploadStatus={uploadStatus}
+                            onUploadFiles={() => fileInputRef.current?.click()}
+                            onUploadFolder={() => folderInputRef.current?.click()}
+                            onOpenFiles={() => {
+                              setSidePanel('files');
+                              setAddContextOpen(false);
+                            }}
+                            onAddUploadedFile={(file) => addLinkedFile(linkedUploadedFile(file))}
+                            onAddProjectFile={(file, source) => addLinkedFile(linkedProjectFile(file, source))}
+                            onAddDocument={addLinkedDoc}
+                            onAddGroup={addLinkedGroup}
+                            onAddAgent={(agent) => insertComposerText(`@${agentHandle(agent)} `)}
+                            onAddSkill={(skill) => insertComposerText(`Use skill: ${skill.label}. `)}
+                            onAddTool={(tool) => insertComposerText(`Use tool: ${tool.label}. `)}
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      <InputGroupButton size="icon-xs" aria-label="Voice input">
+                        <Mic />
+                      </InputGroupButton>
+                    </div>
+
+                    <div className="flex min-w-0 items-center gap-1">
+                      <ModelSelector value={selectedModel} onChange={setSelectedModel} models={modelOptions} />
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        onClick={handleSend}
+                        disabled={!input.trim() || streaming}
+                        aria-label="Send message"
+                      >
+                        {streaming ? <Spinner /> : <Send />}
+                      </Button>
+                    </div>
+                  </InputGroupAddon>
+                </InputGroup>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handleUploadSelection}
+                />
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handleUploadSelection}
+                  {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
+                />
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -1878,9 +1878,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                         <button
                           key={participant.id}
                           type="button"
-                          className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
-                            selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
-                          }`}
+                          className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
+                            }`}
                           onClick={() => handleToggleParticipant(participant.id)}
                         >
                           <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
@@ -2012,7 +2011,7 @@ function ThinkingIndicator({ text = 'Thinking…' }: { text?: string }) {
   return (
     <span className="flex items-center gap-2 text-muted-foreground">
       <Spinner className="size-3" />
-      {text}
+      <span className="text-shimmer font-medium">{text}</span>
     </span>
   );
 }
@@ -2227,7 +2226,7 @@ function ChatMessageBubble({
               </PopoverTrigger>
               <PopoverContent side="top" align="end" className="w-auto p-1.5">
                 <div className="grid grid-cols-8 gap-0.5">
-                  {['👍','👎','❤️','😂','🎉','🔥','👀','✅','🙏','💯','😮','😢','🤔','🚀','⭐','🐛'].map(e => (
+                  {['👍', '👎', '❤️', '😂', '🎉', '🔥', '👀', '✅', '🙏', '💯', '😮', '😢', '🤔', '🚀', '⭐', '🐛'].map(e => (
                     <button
                       key={e}
                       type="button"
