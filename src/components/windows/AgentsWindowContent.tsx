@@ -703,7 +703,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 </EmptyHeader>
               </Empty>
             ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-2">
+              <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
                 <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))]">
                   {visibleAgents.map(agent => {
                     const accent = agentAccentColor(agent);
@@ -717,7 +717,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         onClick={() => setSelectedAgentId(agent.id)}
                         style={agentAccentStyle(agent)}
                         className={cn(
-                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30',
+                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
                           !active && 'opacity-60',
                         )}
                       >
