@@ -145,14 +145,21 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
   // An external focus request (e.g. opening an agent from elsewhere) drills into it;
   // otherwise the window opens on the card grid, not a pre-selected agent.
+  // A NEW external focus request drills into that agent exactly once; otherwise the
+  // window always opens on the card grid. A ref guards against a stale focus key
+  // re-drilling after the user has navigated back to the grid.
   const focusedAgentId = focusedAgent?.id || null;
+  const consumedFocusRef = useRef<string | null>(null);
   useEffect(() => {
-    if (focusedAgentId) setSelectedAgentId(focusedAgentId);
+    if (focusedAgentId && consumedFocusRef.current !== focusedAgentId) {
+      consumedFocusRef.current = focusedAgentId;
+      setSelectedAgentId(focusedAgentId);
+    }
   }, [focusedAgentId]);
 
   const presenceByAgent = new Map<string, AgentPresence>(
@@ -191,20 +198,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   useEffect(() => {
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
   }, []);
-
-  useEffect(() => {
-    if (focusedAgent?.id) setSelectedAgentId(focusedAgent.id);
-  }, [focusedAgent?.id]);
-
-  useEffect(() => {
-    if (agents.length === 0) {
-      setSelectedAgentId(null);
-      return;
-    }
-    if (!selectedAgentId || !agents.some(agent => agent.id === selectedAgentId)) {
-      setSelectedAgentId(focusedAgent?.id || agents[0].id);
-    }
-  }, [agents, focusedAgent?.id, selectedAgentId]);
 
   const handleCreate = () => {
     if (!newName.trim()) return;
@@ -496,7 +489,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         onClick={() => setSelectedAgentId(agent.id)}
                         style={agentAccentStyle(agent)}
                         className={cn(
-                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left backdrop-blur-md transition hover:border-primary/50 hover:bg-card/85',
+                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30',
                           !active && 'opacity-60',
                         )}
                       >

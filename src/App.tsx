@@ -1026,7 +1026,11 @@ function AppContent() {
     openWindow('activity', { title: 'Activity', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
-  const handleOpenAgents = useCallback(() => {
+  const handleOpenAgents = useCallback((opts?: { preserveFocus?: boolean }) => {
+    // The plain "Agents" launcher always lands on the card grid — clear any stale
+    // profile focus so a prior agent-profile click can't re-drill into detail.
+    // Profile drill-in passes { preserveFocus: true } to keep the just-set key.
+    if (opts?.preserveFocus !== true) setFocusedAgentKey(null);
     const existing = windows.find(w => w.type === 'agents');
     if (existing) {
       focusWindow(existing.id);
@@ -1187,7 +1191,7 @@ function AppContent() {
 
   const handleOpenAgentProfile = useCallback((agentIdOrHandle?: string | null) => {
     if (agentIdOrHandle) setFocusedAgentKey(agentIdOrHandle);
-    handleOpenAgents();
+    handleOpenAgents({ preserveFocus: true });
   }, [handleOpenAgents]);
 
   // Newly dropped applet to focus (select + raise) once it lands in the canvas
