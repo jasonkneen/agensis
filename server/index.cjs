@@ -5642,6 +5642,26 @@ async function deliverNextFlowWebhook() {
  return true;
 }
 
+// Realtime rows can be heavy: the daemon mirrors full file bodies into
+// agent_memory_files.content_cache. Clients keep a metadata-only list and fetch
+// bodies on demand (see useAgentMemory), so stripping content_cache from the
+// broadcast is the real network win — otherwise every UPSERT fans the full body
+// (plus ~1/s heartbeat re-syncs) to every subscribed client. Keep the row shape
+// otherwise intact so list metadata (path, byte_size, summary, version) updates.
+const REALTIME_HEAVY_FIELDS = { agent_memory_files: ['content_cache'] };
+function sanitizeRealtimeRow(table, row) {
+ const heavy = REALTIME_HEAVY_FIELDS[table];
+ if (!heavy || !row || typeof row !== 'object') return row;
+ let copy = null;
+ for (const field of heavy) {
+  if (field in row) {
+   if (!copy) copy = { ...row };
+   delete copy[field];
+  }
+ }
+ return copy || row;
+}
+
 function notifyDbSubscribers(table, eventType, rows) {
  const rowList = Array.isArray(rows) ? rows : [];
  if (rowList.length === 0) return;
@@ -5697,13 +5717,14 @@ function notifyDbSubscribers(table, eventType, rows) {
 
    for (const row of rowList) {
     if (!matchesFilter(subscription.filter, row)) continue;
+    const outRow = sanitizeRealtimeRow(table, row);
     sendWs(ws, {
      type: 'db_changes',
      schema: 'public',
      table,
      payload: eventType === 'DELETE'
-      ? { eventType, new: {}, old: row }
-      : { eventType, new: row, old: {} },
+      ? { eventType, new: {}, old: outRow }
+      : { eventType, new: outRow, old: {} },
     });
    }
   }

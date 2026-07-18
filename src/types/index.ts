@@ -99,7 +99,7 @@ export interface AgentMemoryFile {
  path: string;
  kind: string;
  summary: string;
- content_cache: string;
+ content_cache?: string;
  byte_size: number;
  editable: boolean;
  last_synced: string;

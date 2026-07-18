@@ -45,7 +45,7 @@ function fileName(path: string): string {
 }
 
 export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: AgentMemoryBrowserProps) {
-  const { files, loading, refresh } = useAgentMemory(workspaceId);
+  const { files, loading, refresh, fetchFileContent } = useAgentMemory(workspaceId);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,6 +82,19 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
     () => agentFiles.find(f => f.path === selectedPath) ?? null,
     [agentFiles, selectedPath],
   );
+
+  // NET-06 pattern: the file list is metadata-only, so the selected file's body
+  // is fetched on demand. Keyed on identity+version via the hook's own cache.
+  const [selectedContent, setSelectedContent] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedFile) { setSelectedContent(null); return; }
+    let cancelled = false;
+    setSelectedContent(null);
+    fetchFileContent(selectedFile).then(body => {
+      if (!cancelled) setSelectedContent(body);
+    });
+    return () => { cancelled = true; };
+  }, [selectedFile, fetchFileContent]);
 
   const comments = useMemoryFileComments(workspaceId, effectiveAgentId, selectedPath, userId);
 
@@ -169,17 +182,19 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
             </Button>
           </div>
           <ScrollArea className="min-h-0 flex-1">
-            {viewMode === 'preview' ? (
-              selectedFile.content_cache ? (
+            {selectedContent === null ? (
+              <p className="p-4 text-xs text-muted-foreground">Loading…</p>
+            ) : viewMode === 'preview' ? (
+              selectedContent ? (
                 <div className="p-4">
-                  <MarkdownContent content={selectedFile.content_cache} />
+                  <MarkdownContent content={selectedContent} />
                 </div>
               ) : (
                 <p className="p-4 text-xs text-muted-foreground">(empty file)</p>
               )
             ) : (
               <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground">
-                {selectedFile.content_cache || '(empty file)'}
+                {selectedContent || '(empty file)'}
               </pre>
             )}
           </ScrollArea>
