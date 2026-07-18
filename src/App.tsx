@@ -69,7 +69,7 @@ import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
-import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
@@ -1710,6 +1710,25 @@ function AppContent() {
               />
             )}
             notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" />}
+            presenceSlot={(
+              <WorkspacePresenceAvatars
+                users={workspacePresenceUsers}
+                getMode={getPresenceMode}
+                onModeChange={setPresenceMode}
+                favoriteIds={presenceFavorites}
+                focusedUserId={focusedPresenceUserId}
+                onToggleFavorite={togglePresenceFavorite}
+                onFocusUser={setFocusedPresenceUserId}
+                onOpenRemoteWindow={handleOpenPresenceWindow}
+                onCopyInviteLink={handleCopyInviteLink}
+                onMessageAgent={person => handleAgentDirectMessage({
+                  id: person.agentId || person.id,
+                  agentId: person.agentId,
+                  name: person.name,
+                  handle: person.handle ?? null,
+                })}
+              />
+            )}
           />
         </div>
         {isMobile && mobileDrawerOpen && (
@@ -1760,29 +1779,6 @@ function AppContent() {
               onAddObject={addCanvasObject}
               onUploadFiles={uploadFiles}
             >
-              <div
-                className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
-                style={{ bottom: isMobile ? WORKSPACE_BOTTOM_RESERVE + 12 : WORKSPACE_DOCK_BOTTOM_OFFSET }}
-              >
-                <WorkspacePresenceAvatars
-                  users={workspacePresenceUsers}
-                  getMode={getPresenceMode}
-                  onModeChange={setPresenceMode}
-                  favoriteIds={presenceFavorites}
-                  focusedUserId={focusedPresenceUserId}
-                  onToggleFavorite={togglePresenceFavorite}
-                  onFocusUser={setFocusedPresenceUserId}
-                  onOpenRemoteWindow={handleOpenPresenceWindow}
-                  onCopyInviteLink={handleCopyInviteLink}
-                  onMessageAgent={person => handleAgentDirectMessage({
-                    id: person.agentId || person.id,
-                    agentId: person.agentId,
-                    name: person.name,
-                    handle: person.handle ?? null,
-                  })}
-                />
-              </div>
-
               <CursorOverlay cursors={cursors} getMode={getPresenceMode} />
 
               <div

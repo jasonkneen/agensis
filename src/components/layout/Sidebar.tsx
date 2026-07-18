@@ -230,6 +230,7 @@ interface SidebarProps {
  onOpenSettings: () => void;
  getStartedSlot?: React.ReactNode;
  notificationsSlot?: React.ReactNode;
+ presenceSlot?: React.ReactNode;
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -279,6 +280,7 @@ export const Sidebar = React.memo(function Sidebar({
  onSignOut,
  getStartedSlot,
  notificationsSlot,
+ presenceSlot,
 }: SidebarProps) {
  const [accountDialogOpen, setAccountDialogOpen] = React.useState(false);
  const [accountDialogTab, setAccountDialogTab] = React.useState<'profile' | 'billing'>('profile');
@@ -785,6 +787,7 @@ export const Sidebar = React.memo(function Sidebar({
         </DropdownMenuItem>
        </DropdownMenuContent>
       </DropdownMenu>
+      {presenceSlot}
       <ThemeToggle mode={themeMode} onModeChange={onThemeChange} />
       <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="App settings">
        <Settings className="size-4" />
