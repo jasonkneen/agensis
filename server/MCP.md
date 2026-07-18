@@ -106,7 +106,7 @@ Re-run `scripts/gen-skill.cjs` and commit after adding/renaming an MCP tool.
 > calls a tool, unlike the daemon which is pushed jobs over WebSocket. An agent
 > configured for MCP-only will not auto-respond to an @mention/DM until its host
 > next polls the workspace (e.g. the prompt above tells it to check
-> `list_mentions`). Factor this into "why didn't the bot answer" debugging.
+> `search_messages`). Factor this into "why didn't the bot answer" debugging.
 
 ## Verifying
 
