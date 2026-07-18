@@ -8,6 +8,13 @@ import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
+// NET-05: a chat window loads the newest MESSAGE_PAGE_SIZE on open and pages
+// backwards on demand via /backend/sessions/:id/messages, instead of pulling a
+// whole (possibly multi-thousand-row) transcript per open window. Agent CONTEXT
+// is fetched independently at dispatch time, so this display cap never truncates
+// what an agent sees.
+const MESSAGE_PAGE_SIZE = 200;
+
 export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     if (!seedSessions?.length) return [];
@@ -18,11 +25,18 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
 
   // Aborts the in-flight AI stream fetch if the hook unmounts mid-stream, so a
   // disposed component never keeps the request alive or writes into dead state.
   const streamAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => streamAbortRef.current?.abort(), []);
+
+  // A ref mirror of `messages` so callbacks (loadEarlierMessages, dispatch) can
+  // read the current list synchronously without taking it as a dependency.
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   useEffect(() => {
     if (!seedSessions) return;
@@ -54,19 +68,53 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
   const fetchMessages = useCallback(async (sessionId: string) => {
     setLoading(true);
-    const data = await cachedFetch<Message[]>(`messages_${sessionId}`, async () => {
-      const { data } = await backendClient
-        .from('messages')
-        .select('*')
-        .eq('session_id', sessionId)
-        .order('created_at', { ascending: true });
-      return data;
+    // NET-05: load only the newest page on open. The cache key stays per-session
+    // so offline reads still work; the endpoint returns { messages, hasMore }.
+    const result = await cachedFetch<{ messages: Message[]; hasMore: boolean }>(`messages_page_${sessionId}`, async () => {
+      const res = await fetch(apiUrl(`/backend/sessions/${sessionId}/messages?limit=${MESSAGE_PAGE_SIZE}`), {
+        headers: apiAuthHeaders(),
+      });
+      if (!res.ok) return { messages: [], hasMore: false };
+      const body = await res.json();
+      return body?.data ?? { messages: [], hasMore: false };
     });
+    const rows = result?.messages ?? [];
     // Drop soft-deleted messages (a cleared/closed DM retains its rows in the DB
-    // but they must never re-surface). Server read paths filter too; this covers
-    // the generic table-select the client uses.
-    if (data) setMessages(data.filter(m => !m.deleted_at).map(normalizeMessage));
+    // but they must never re-surface). The server already filters; this is belt.
+    setMessages(rows.filter(m => !m.deleted_at).map(normalizeMessage));
+    setHasMoreMessages(Boolean(result?.hasMore));
     setLoading(false);
+  }, []);
+
+  // NET-05: page backwards. Fetches the page of messages older than the oldest
+  // currently-loaded row (compound (created_at,id) cursor) and prepends them.
+  const loadEarlierMessages = useCallback(async (sessionId: string) => {
+    const oldest = messagesRef.current[0];
+    if (!oldest) return;
+    setLoadingEarlier(true);
+    try {
+      const params = new URLSearchParams({
+        limit: String(MESSAGE_PAGE_SIZE),
+        before: String(oldest.created_at ?? ''),
+        beforeId: String(oldest.id ?? ''),
+      });
+      const res = await fetch(apiUrl(`/backend/sessions/${sessionId}/messages?${params.toString()}`), {
+        headers: apiAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      const older = (body?.data?.messages ?? []).filter((m: Message) => !m.deleted_at).map(normalizeMessage);
+      setHasMoreMessages(Boolean(body?.data?.hasMore));
+      if (older.length > 0) {
+        setMessages(prev => {
+          const seen = new Set(prev.map(m => m.id));
+          const deduped = older.filter((m: Message) => !seen.has(m.id));
+          return deduped.length > 0 ? [...deduped, ...prev] : prev;
+        });
+      }
+    } finally {
+      setLoadingEarlier(false);
+    }
   }, []);
 
   // Drop the previous workspace's active session when the workspace changes.
@@ -561,25 +609,24 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     const userMsg = await insertUserMessage(session, content, threadParentId);
     await autoTitleSession(session, content, threadParentId);
 
+    // NET-05: the on-screen `messages` state is a PAGINATED window (newest page
+    // only), so it must NOT be used as agent context — that would silently
+    // truncate history for both thread and top-level dispatch. Load the session's
+    // FULL history from the DB once, then derive the right context from it.
+    // Exclude the just-inserted user message (dispatch appends it) and deleted rows.
+    const { data: fullHistory } = await backendClient
+      .from('messages')
+      .select('*')
+      .eq('session_id', session.id)
+      .order('created_at', { ascending: true });
+    const sessionMessages: Message[] = (fullHistory || [])
+      .filter((m: Message) => !m.deleted_at && m.id !== userMsg.id)
+      .map(normalizeMessage);
     let contextMessages: Message[];
     if (threadParentId) {
-      contextMessages = messages.filter(m => m.thread_parent_id === threadParentId || m.id === threadParentId);
-    } else if (activeSession?.id === session.id) {
-      contextMessages = messages;
+      contextMessages = sessionMessages.filter((m: Message) => m.thread_parent_id === threadParentId || m.id === threadParentId);
     } else {
-      // Sending to a session other than the one on screen (e.g. a split window):
-      // the `messages` state only holds the active session, so load the target's
-      // own top-level history rather than sending the agent empty context (L5,
-      // 2026-07 review). Don't touch `messages` state (it belongs to the active
-      // session); exclude the just-inserted message since dispatch appends it.
-      const { data } = await backendClient
-        .from('messages')
-        .select('*')
-        .eq('session_id', session.id)
-        .order('created_at', { ascending: true });
-      contextMessages = (data || [])
-        .filter((m: Message) => !m.deleted_at && !m.thread_parent_id && m.id !== userMsg.id)
-        .map(normalizeMessage);
+      contextMessages = sessionMessages.filter((m: Message) => !m.thread_parent_id);
     }
 
     const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
@@ -639,7 +686,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       directParticipant,
       threadParentId,
     );
-  }, [activeSession, messages, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
+  }, [activeSession, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
   // Merge a split fork back into its parent. "What changed" = the messages
   // created after split_at on BOTH branches — the parent kept talking while the
@@ -761,6 +808,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     closeThread,
     loading,
     streaming,
+    hasMoreMessages,
+    loadingEarlier,
+    loadEarlierMessages,
     createSession,
     splitSession,
     updateSession,

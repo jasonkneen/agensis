@@ -158,6 +158,12 @@ import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModel
 interface ChatWindowContentProps {
   messages: ChatMessage[];
   topLevelMessages?: ChatMessage[];
+  // NET-05: paginated history. hasMoreMessages gates a "Load earlier" affordance
+  // at the top of the transcript; onLoadEarlier pages backwards (session bound by
+  // the caller). Absent on read-only/inactive windows.
+  hasMoreMessages?: boolean;
+  loadingEarlier?: boolean;
+  onLoadEarlier?: () => void;
   threadMessages?: ChatMessage[];
   threadReplyCounts?: Record<string, number>;
   activeThreadId?: string | null;
@@ -226,6 +232,9 @@ type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 's
 export const ChatWindowContent = React.memo(function ChatWindowContent({
   messages,
   topLevelMessages,
+  hasMoreMessages = false,
+  loadingEarlier = false,
+  onLoadEarlier,
   threadMessages = [],
   threadReplyCounts = {},
   activeThreadId,
@@ -1417,6 +1426,20 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                   </Empty>
                 ) : (
                   <div className="flex min-w-0 flex-col">
+                    {hasMoreMessages && !clearedAt && onLoadEarlier && (
+                      <div className="flex justify-center py-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground"
+                          disabled={loadingEarlier}
+                          onClick={onLoadEarlier}
+                        >
+                          {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
+                        </Button>
+                      </div>
+                    )}
                     {shownMessages.map((msg, idx) => (
                       <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={idx === shownMessages.length - 1}>
                         <ChatMessageBubble

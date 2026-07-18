@@ -616,6 +616,7 @@ function AppContent() {
 
   const {
     sessions, activeSession, setActiveSession, messages, streaming,
+    hasMoreMessages, loadingEarlier, loadEarlierMessages,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
     createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
@@ -1795,6 +1796,9 @@ function AppContent() {
                   sessions={sessions}
                   activeSession={activeSession}
                   messages={messages}
+                  hasMoreMessages={hasMoreMessages}
+                  loadingEarlier={loadingEarlier}
+                  onLoadEarlier={loadEarlierMessages}
                   streaming={streaming}
                   workspaceName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
                   workspaceId={activeWorkspaceId || ''}
@@ -2079,6 +2083,9 @@ function CanvasLayerScene({
   sessions,
   activeSession,
   messages,
+  hasMoreMessages,
+  loadingEarlier,
+  onLoadEarlier,
   streaming,
   workspaceName,
   workspaceId,
@@ -2161,6 +2168,9 @@ function CanvasLayerScene({
   sessions: ChatSession[];
   activeSession: ChatSession | null;
   messages: Array<{ id: string; role: 'user' | 'assistant'; content: string }>;
+  hasMoreMessages: boolean;
+  loadingEarlier: boolean;
+  onLoadEarlier: (sessionId: string) => void;
   streaming: boolean;
   workspaceName: string;
   workspaceId: string;
@@ -2342,6 +2352,9 @@ function CanvasLayerScene({
                     onSetActiveSession={onSetActiveSession}
                     onAppSplitThread={onSplitThread}
                     messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
+                    hasMoreMessages={winSession && activeSession?.id === win.sessionId ? hasMoreMessages : false}
+                    loadingEarlier={loadingEarlier}
+                    onLoadEarlier={winSession ? () => onLoadEarlier(winSession.id) : undefined}
                     topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
                     threadMessages={threadMessages}
                     threadReplyCounts={threadReplyCounts}

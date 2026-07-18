@@ -6850,6 +6850,51 @@ function createApp() {
   }
  });
 
+ // Paginated message history for a session. The client loads the newest page on
+ // open (bounded) and calls this with `before=<oldest loaded created_at>` to page
+ // backwards on demand — so opening a channel with thousands of messages no longer
+ // pulls the entire transcript at once (NET-05). Returns rows ASCENDING (oldest
+ // first within the page) plus `hasMore` so the UI can show a "Load earlier" affordance.
+ app.get('/backend/sessions/:id/messages', requireAuth, async (req, res) => {
+  try {
+   const sessionId = String(req.params.id || '').trim();
+   if (!sessionId) return jsonError(res, 400, new Error('sessionId is required'));
+   const workspaceId = await resolveWorkspaceIdForSession(sessionId);
+   if (!workspaceId) return jsonError(res, 404, new Error('Session not found'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const limit = Math.min(500, Math.max(1, Math.trunc(Number(req.query.limit)) || 200));
+   const before = String(req.query.before || '').trim();
+   const beforeId = String(req.query.beforeId || '').trim();
+   // Compound cursor on (created_at, id): messages can share a millisecond, so a
+   // bare `created_at < before` would skip same-timestamp rows at the page
+   // boundary. Ordering + cursor on (created_at, id) is total and stable.
+   // Fetch limit+1 (DESC) to detect hasMore, then reverse to ascending.
+   const params = [sessionId];
+   let beforeClause = '';
+   if (before) {
+    if (beforeId) {
+     params.push(before, beforeId);
+     beforeClause = ' and (created_at < $2 or (created_at = $2 and id < $3))';
+    } else {
+     params.push(before);
+     beforeClause = ' and created_at < $2';
+    }
+   }
+   const rows = await getDb().unsafe(
+    `select * from messages
+       where session_id = $1 and deleted_at is null${beforeClause}
+       order by created_at desc, id desc
+       limit ${limit + 1}`,
+    params,
+   );
+   const hasMore = rows.length > limit;
+   const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+   res.json({ data: { messages: page, hasMore }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.post('/backend/agensis/setup/connect', requireAuth, async (req, res) => {
   try {
    const workspaceId = await resolveSetupWorkspace(req.userId, req.body?.workspaceId || req.body?.workspace_id);
