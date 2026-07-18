@@ -3419,7 +3419,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
   // eslint-disable-next-line no-constant-condition
   while (true) {
    const sessionRows = await getDb().unsafe(
-    'select id, workspace_id, participants, conversation_mode, max_agent_turns from chat_sessions where id = $1 limit 1',
+    'select id, workspace_id, participants, conversation_mode, max_agent_turns, folder from chat_sessions where id = $1 limit 1',
     [sessionId],
    );
    const session = sessionRows[0];
@@ -3463,7 +3463,9 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    // A true 1:1 DM (a participant flagged direct:true) is isolated: ONLY that
    // agent ever responds. Agents routinely @mention teammates to collaborate, but
    // a private DM must not pull those others in. Channels keep full routing below.
-   const isDirectMessage = Boolean(directTarget && directTarget.direct);
+   // Legacy DM sessions (created before the participant `direct` flag) are
+   // identified by their folder, so an agent DM always responds without an @.
+   const isDirectMessage = Boolean(directTarget && (directTarget.direct || session.folder === 'Direct messages'));
    let nextAgent = null;
    if (isDirectMessage) {
     if (agentTurns === 0) {
