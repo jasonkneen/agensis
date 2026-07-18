@@ -594,29 +594,29 @@ export function FloatingWindowShell({
 
   const shellStyle: React.CSSProperties = fullViewport
     ? {
-        position: 'absolute',
-        left: MAXIMIZED_EDGE_INSET - bleedLeft,
-        top: MAXIMIZED_TOP_RESERVE - bleedTop,
-        width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px + ${bleedLeft + bleedRight}px)`,
-        height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + (isMobile ? MOBILE_BOTTOM_RESERVE : MAXIMIZED_BOTTOM_RESERVE) + MAXIMIZED_EDGE_INSET}px + ${bleedTop + bleedBottom}px)`,
-        zIndex: win.zIndex,
-        opacity: isDimmed ? dimmedOpacity : 1,
-        filter: isDimmed ? 'saturate(0.55)' : undefined,
-        userSelect: isDragging || isResizing ? 'none' : 'auto',
-        transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
-      }
+      position: 'absolute',
+      left: MAXIMIZED_EDGE_INSET - bleedLeft,
+      top: MAXIMIZED_TOP_RESERVE - bleedTop,
+      width: `calc(100% - ${MAXIMIZED_EDGE_INSET * 2}px + ${bleedLeft + bleedRight}px)`,
+      height: `calc(100% - ${MAXIMIZED_TOP_RESERVE + (isMobile ? MOBILE_BOTTOM_RESERVE : MAXIMIZED_BOTTOM_RESERVE) + MAXIMIZED_EDGE_INSET}px + ${bleedTop + bleedBottom}px)`,
+      zIndex: win.zIndex,
+      opacity: isDimmed ? dimmedOpacity : 1,
+      filter: isDimmed ? 'saturate(0.55)' : undefined,
+      userSelect: isDragging || isResizing ? 'none' : 'auto',
+      transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+    }
     : {
-        position: 'absolute',
-        left: displayBounds.x - bleedLeft,
-        top: displayBounds.y - bleedTop,
-        width: displayBounds.width + bleedLeft + bleedRight,
-        height: displayBounds.height + bleedTop + bleedBottom,
-        zIndex: win.zIndex,
-        opacity: isDimmed ? dimmedOpacity : 1,
-        filter: isDimmed ? 'saturate(0.55)' : undefined,
-        userSelect: isDragging || isResizing ? 'none' : 'auto',
-        transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
-      };
+      position: 'absolute',
+      left: displayBounds.x - bleedLeft,
+      top: displayBounds.y - bleedTop,
+      width: displayBounds.width + bleedLeft + bleedRight,
+      height: displayBounds.height + bleedTop + bleedBottom,
+      zIndex: win.zIndex,
+      opacity: isDimmed ? dimmedOpacity : 1,
+      filter: isDimmed ? 'saturate(0.55)' : undefined,
+      userSelect: isDragging || isResizing ? 'none' : 'auto',
+      transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+    };
 
   // Corner rounding via Tailwind CLASSES, not an inline `var(--radius-xl)`.
   // The inline-var approach (commit 061650c) put the ONLY reference to
@@ -663,7 +663,7 @@ export function FloatingWindowShell({
         onDrop={e => e.stopPropagation()}
         className={cn('flex flex-col overflow-visible text-card-foreground', cornerClass)}
         style={shellStyle}
-        >
+      >
         <div
           data-window-surface
           className={cn(
@@ -679,153 +679,141 @@ export function FloatingWindowShell({
             isSelected ? 'border-primary/70 ring-2 ring-primary/40' : 'border-border',
           )}
         >
-        <div
-          data-window-titlebar
-          onPointerDown={handleDragStart}
-          className={cn(
-            'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
-            canControl && !isMobile ? 'cursor-grab' : 'cursor-default',
-          )}
-        >
-        {titleIcon && (
-          <span className="flex shrink-0 items-center text-muted-foreground">
-            {titleIcon}
-          </span>
-        )}
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          {breadcrumb && (
-            <>
-              <span className="truncate text-xs text-muted-foreground">{breadcrumb}</span>
-              <span className="text-xs text-muted-foreground">{'>'}</span>
-            </>
-          )}
-          <span className="truncate text-xs font-medium">{win.title}</span>
-        </div>
-
-        <div className="flex shrink-0 flex-nowrap items-center gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuGroup>
-                <DropdownMenuItem
-                  disabled={!onShare}
-                  onSelect={() => onShare?.()}
-                >
-                  <Share2 />
-                  Share
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Copy />
-                  Duplicate
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!canControl}
-                  onSelect={() => onUpdate(win.id, { shared: !win.shared })}
-                >
-                  <Share2 />
-                  {win.shared ? 'Stop sharing this window' : 'Share this window'}
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
-                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
-                  {isMaximized ? 'Restore' : 'Maximize'}
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuItem
-                  variant="destructive"
-                  disabled={!canControl}
-                  onSelect={() => onClose(win.id)}
-                >
-                  <Trash2 />
-                  Close window
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <Button
-            type="button"
-            variant={win.isPrivate ? 'secondary' : 'outline'}
-            size="icon-xs"
-            onClick={() => {
-              if (canTogglePrivacy) onUpdate(win.id, { isPrivate: !win.isPrivate });
-            }}
-            disabled={!canTogglePrivacy}
-            aria-label={win.isPrivate ? 'Window privacy on' : 'Window privacy off'}
-            title={win.isPrivate ? 'Privacy on' : 'Privacy off'}
+          <div
+            data-window-titlebar
+            onPointerDown={handleDragStart}
+            className={cn(
+              'flex h-10 shrink-0 flex-nowrap items-center gap-2 border-b border-border bg-transparent px-3 backdrop-blur-xl touch-none',
+              canControl && !isMobile ? 'cursor-grab' : 'cursor-default',
+            )}
           >
-            {win.isPrivate ? <EyeOff /> : <Eye />}
-          </Button>
-
-          <Button
-            type="button"
-            variant={win.locked ? 'secondary' : 'outline'}
-            size="icon-xs"
-            onClick={() => {
-              if (canToggleLock) onUpdate(win.id, { locked: !win.locked });
-            }}
-            disabled={!canToggleLock}
-            aria-label={win.locked ? 'Window locked' : 'Window unlocked'}
-            title={win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
-          >
-            {win.locked ? <Lock /> : <Unlock />}
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            onClick={() => onMinimize(win.id)}
-            disabled={!canControl}
-            aria-label="Minimize"
-          >
-            <Minus />
-          </Button>
-
-          {!isMobile && (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-xs"
-              onClick={handleMaximize}
-              disabled={!canControl}
-              aria-label={isMaximized ? 'Restore' : 'Maximize'}
-            >
-              {isMaximized ? <Minimize2 /> : <Maximize2 />}
-            </Button>
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            onClick={() => onClose(win.id)}
-            disabled={!canControl}
-            aria-label="Close"
-          >
-            <X />
-          </Button>
-        </div>
-      </div>
-
-        <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
-          {privacyBlanked ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
-              <EyeOff className="size-6 text-muted-foreground" />
-              <div className="text-sm font-medium">Private window</div>
-              <div className="max-w-64 text-xs text-muted-foreground">
-                This user has blanked the contents of this window.
-              </div>
+            {titleIcon && (
+              <span className="flex shrink-0 items-center text-muted-foreground">
+                {titleIcon}
+              </span>
+            )}
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              {breadcrumb && (
+                <>
+                  <span className="truncate text-xs text-muted-foreground">{breadcrumb}</span>
+                  <span className="text-xs text-muted-foreground">{'>'}</span>
+                </>
+              )}
+              <span className="truncate text-xs font-medium">{win.title}</span>
             </div>
-          ) : children}
-        </div>
+
+            <div className="flex shrink-0 flex-nowrap items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-40">
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      disabled={!onShare}
+                      onSelect={() => onShare?.()}
+                    >
+                      <Share2 />
+                      Share
+                    </DropdownMenuItem>
+                    <DropdownMenuItem>
+                      <Copy />
+                      Duplicate
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!canControl}
+                      onSelect={() => onUpdate(win.id, { shared: !win.shared })}
+                    >
+                      <Share2 />
+                      {win.shared ? 'Stop sharing this window' : 'Share this window'}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
+                      {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                      {isMaximized ? 'Restore' : 'Maximize'}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      disabled={!canTogglePrivacy}
+                      onSelect={() => onUpdate(win.id, { isPrivate: !win.isPrivate })}
+                    >
+                      {win.isPrivate ? <EyeOff /> : <Eye />}
+                      {win.isPrivate ? 'Privacy on' : 'Privacy off'}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!canToggleLock}
+                      onSelect={() => onUpdate(win.id, { locked: !win.locked })}
+                    >
+                      {win.locked ? <Lock /> : <Unlock />}
+                      {win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={!canControl}
+                      onSelect={() => onClose(win.id)}
+                    >
+                      <Trash2 />
+                      Close window
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-xs"
+                onClick={() => onMinimize(win.id)}
+                disabled={!canControl}
+                aria-label="Minimize"
+              >
+                <Minus />
+              </Button>
+
+              {!isMobile && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-xs"
+                  onClick={handleMaximize}
+                  disabled={!canControl}
+                  aria-label={isMaximized ? 'Restore' : 'Maximize'}
+                >
+                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-xs"
+                onClick={() => onClose(win.id)}
+                disabled={!canControl}
+                aria-label="Close"
+              >
+                <X />
+              </Button>
+            </div>
+          </div>
+
+          <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
+            {privacyBlanked ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
+                <EyeOff className="size-6 text-muted-foreground" />
+                <div className="text-sm font-medium">Private window</div>
+                <div className="max-w-64 text-xs text-muted-foreground">
+                  This user has blanked the contents of this window.
+                </div>
+              </div>
+            ) : children}
+          </div>
         </div>
 
         {!fullViewport && (
