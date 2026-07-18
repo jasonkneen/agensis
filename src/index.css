@@ -1248,12 +1248,11 @@
 /* Two reserved right-hand columns per row: a count column, then a far-right
    gutter for a future per-row menu icon. Labels clear both. A shared min-height
    keeps section, folder, and action rows on one tight vertical rhythm. */
-padding-right: 4.25rem !important;
-
+.sidebar-section-trigger,
 .sidebar-action-row,
 .sidebar-folder-trigger {
  position: relative;
- padding-right: 3.5rem !important;
+ padding-right: 4.25rem !important;
 }
 
 .sidebar-section-trigger,
