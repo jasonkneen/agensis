@@ -1278,13 +1278,20 @@
  gap: 0.25rem;
  min-width: 0;
  width: 100%;
+ /* Positioning context for the count badge so it anchors to the full-width
+    header (panel edge), NOT the trigger — which narrows when a header action
+    (e.g. the DM filter funnel) is present, which used to stagger that badge. */
+ position: relative;
 }
 
 .sidebar-section-header .sidebar-section-trigger {
  flex: 1 1 0%;
  min-width: 0;
  width: auto !important;
+ /* Static so the absolutely-positioned count resolves against the header. */
+ position: static;
 }
+
 
 .sidebar-section-action {
  display: inline-flex;
