@@ -1227,13 +1227,17 @@
 
 .sidebar-section-count,
 .sidebar-action-count {
- min-width: 1.35rem;
+ /* Fixed width (not min-width) so every count pill is identical regardless of
+    digit count — with the shared absolute right anchor this lines up both the
+    right AND left edges into one clean column. Sized for the widest value the
+    formatter emits ("99+"). */
+ width: 1.9rem;
  height: 1.25rem;
  display: inline-flex;
  align-items: center;
  justify-content: center;
  margin-left: auto;
- padding-inline: 0.4rem;
+ padding-inline: 0;
  text-align: center;
  font-size: 0.72rem !important;
  font-weight: 700;
@@ -1244,7 +1248,8 @@
 /* Two reserved right-hand columns per row: a count column, then a far-right
    gutter for a future per-row menu icon. Labels clear both. A shared min-height
    keeps section, folder, and action rows on one tight vertical rhythm. */
-.sidebar-section-trigger,
+padding-right: 4.25rem !important;
+
 .sidebar-action-row,
 .sidebar-folder-trigger {
  position: relative;
