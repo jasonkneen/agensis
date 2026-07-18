@@ -7178,6 +7178,27 @@ function createApp() {
   }
  });
 
+ app.post('/backend/schedules/:id/run', requireAuth, async (req, res) => {
+  try {
+   const scheduleId = String(req.params.id || '').trim();
+   const scheduleRows = await getDb().unsafe('select * from agent_schedules where id = $1 limit 1', [scheduleId]);
+   const schedule = scheduleRows[0];
+   if (!schedule) return jsonError(res, 404, new Error('Schedule not found'));
+   await enforceWorkspaceRole(req.userId, schedule.workspace_id, 'run_agents');
+   const rows = await getDb().unsafe(
+    `update agent_schedules set next_run_at = now(), enabled = true, updated_at = now() where id = $1 returning *`,
+    [scheduleId],
+   );
+   notifyDbSubscribers('agent_schedules', 'UPDATE', rows);
+   // Kick the runner now so the user gets immediate feedback instead of waiting
+   // out the 30s tick. The runner's atomic claim keeps this safe against overlap.
+   void runDueSchedules();
+   res.json({ data: rows[0], error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.delete('/backend/agents/connections/:id', requireAuth, async (req, res) => {
   try {
    const connectionId = String(req.params.id || '').trim();
