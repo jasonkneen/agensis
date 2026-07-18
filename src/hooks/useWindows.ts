@@ -8,8 +8,8 @@ const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
 const TILE_TOLERANCE = 12;
 
-type WindowBounds = { x: number; y: number; width: number; height: number };
-type TileEdge = 'left' | 'right' | 'top' | 'bottom';
+export type WindowBounds = { x: number; y: number; width: number; height: number };
+export type TileEdge = 'left' | 'right' | 'top' | 'bottom';
 type WindowUpdateOptions = { interaction?: 'drag' | 'resize' | 'programmatic' };
 
 type WindowIdentity = {
@@ -179,7 +179,7 @@ function getVisibleBounds(win: FloatingWindow): WindowBounds {
   });
 }
 
-function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
+export function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
   const fullWidth = Math.round(container.width);
   const fullHeight = Math.round(container.height);
   const halfWidth = Math.max(MIN_WINDOW_WIDTH, Math.round(fullWidth / 2));
@@ -195,7 +195,7 @@ function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
   return { x: container.x, y: container.y + Math.max(0, fullHeight - height), width: fullWidth, height };
 }
 
-function getComplementaryTile(container: WindowBounds, edge: TileEdge): WindowBounds {
+export function getComplementaryTile(container: WindowBounds, edge: TileEdge): WindowBounds {
   const fullWidth = Math.round(container.width);
   const fullHeight = Math.round(container.height);
   const halfWidth = Math.max(MIN_WINDOW_WIDTH, Math.round(fullWidth / 2));
@@ -207,14 +207,14 @@ function getComplementaryTile(container: WindowBounds, edge: TileEdge): WindowBo
   return { x: container.x, y: container.y, width: fullWidth, height: Math.max(1, fullHeight - Math.min(halfHeight, fullHeight)) };
 }
 
-function boundsMatch(a: WindowBounds, b: WindowBounds): boolean {
+export function boundsMatch(a: WindowBounds, b: WindowBounds): boolean {
   return Math.abs(a.x - b.x) <= TILE_TOLERANCE
     && Math.abs(a.y - b.y) <= TILE_TOLERANCE
     && Math.abs(a.width - b.width) <= TILE_TOLERANCE
     && Math.abs(a.height - b.height) <= TILE_TOLERANCE;
 }
 
-function getTileEdge(bounds: WindowBounds, container: WindowBounds = getFullViewportBounds()): TileEdge | null {
+export function getTileEdge(bounds: WindowBounds, container: WindowBounds): TileEdge | null {
   for (const edge of ['left', 'right', 'top', 'bottom'] as const) {
     if (boundsMatch(bounds, getSplitTile(container, edge))) return edge;
   }
@@ -400,10 +400,10 @@ function fillSoleVisibleWindow(windows: FloatingWindow[]): FloatingWindow[] {
   return windows.map(w => (
     fillIds.has(w.id)
       ? {
-          ...w,
-          ...fullBounds,
-          maximized: false,
-        }
+        ...w,
+        ...fullBounds,
+        maximized: false,
+      }
       : w
   ));
 }
@@ -593,8 +593,8 @@ export function useWindows() {
 
       const withSource = source
         ? prev.map(w => w.id === source.id
-            ? { ...w, ...leftBounds, minimized: false, maximized: false, restoreBounds: leftBounds, groupId }
-            : w)
+          ? { ...w, ...leftBounds, minimized: false, maximized: false, restoreBounds: leftBounds, groupId }
+          : w)
         : prev;
 
       return [...withSource, fork];
