@@ -379,7 +379,7 @@ export function HomeCanvas({
               type="button"
               variant="outline"
               size="sm"
-              className={cn('home-suggestion-pill rounded-full bg-card/90 text-muted-foreground backdrop-blur')}
+              className={cn('home-suggestion-pill rounded-lg bg-card/90 text-muted-foreground backdrop-blur')}
               onClick={() => {
                 setInput(suggestion);
                 inputRef.current?.focus();

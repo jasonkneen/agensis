@@ -217,7 +217,7 @@ export function SubThreadPanel({
             <button
               key={p.id}
               type="button"
-              className="inline-flex h-5 items-center gap-1 rounded-full bg-muted px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-2 text-[11px] text-muted-foreground hover:text-foreground"
               onClick={() => onAgentProfile?.(p.agent_id || p.handle || p.name || '')}
             >
               <Bot className="size-3" />

@@ -482,7 +482,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     type="button"
                     onClick={() => setTemplateCategory(cat)}
                     className={cn(
-                      'rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                      'rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                       templateCategory === cat
                         ? 'border-primary/60 bg-primary/15 text-foreground'
                         : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -610,13 +610,13 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         ) : (
           <div className="flex h-full min-h-0 flex-col">
             {agents.length > 0 && mineCount > 0 && (
-              <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-full border border-border bg-card/40 p-0.5 text-xs font-medium">
+              <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
                 <button
                   type="button"
                   onClick={() => setOwnerFilter('mine')}
                   aria-pressed={ownerFilter === 'mine'}
                   className={cn(
-                    'rounded-full px-3 py-1 transition',
+                    'rounded-md px-3 py-1 transition',
                     ownerFilter === 'mine' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
@@ -627,7 +627,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={() => setOwnerFilter('all')}
                   aria-pressed={ownerFilter === 'all'}
                   className={cn(
-                    'rounded-full px-3 py-1 transition',
+                    'rounded-md px-3 py-1 transition',
                     ownerFilter === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
                   )}
                 >
@@ -642,7 +642,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={() => setStatusFilter(new Set())}
                   aria-pressed={statusFilter.size === 0}
                   className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                    'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                     statusFilter.size === 0
                       ? 'border-primary/60 bg-primary/15 text-foreground'
                       : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -660,7 +660,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
                       aria-pressed={isActiveFilter}
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                         isActiveFilter
                           ? 'border-primary/60 bg-primary/15 text-foreground'
                           : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -681,7 +681,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => toggleStatusFilter(filter.key)}
                       aria-pressed={active}
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                         active
                           ? 'border-primary/60 bg-primary/15 text-foreground'
                           : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',

@@ -3154,7 +3154,7 @@ function WorkspacePresenceAvatars({
               type="button"
               variant={focusedUserId ? 'outline' : 'default'}
               size="sm"
-              className="h-8 rounded-full px-3 text-xs"
+              className="h-8 rounded-md px-3 text-xs"
               onClick={() => onFocusUser(null)}
             >
               All
@@ -3165,7 +3165,7 @@ function WorkspacePresenceAvatars({
                 type="button"
                 variant={focusedUserId === person.id ? 'default' : 'outline'}
                 size="sm"
-                className="h-8 max-w-40 rounded-full px-2 text-xs"
+                className="h-8 max-w-40 rounded-md px-2 text-xs"
                 onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
                 onDoubleClick={() => onToggleFavorite(person.id)}
                 title="Double-click to remove from favorites"
