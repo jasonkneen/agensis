@@ -1,15 +1,20 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
-import type { Document, MemoryFact } from '../../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
+import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
 import { cn } from '@/lib/utils';
 import { WORKSPACE_BACKGROUND_IMAGES } from '@/lib/backgrounds';
+import { agentHandle } from '../../lib/agentAccent';
+import { getSlashCommands } from '../../lib/backendClient';
+import { matchSlashItems, slashInsertText, type SlashItem } from '../../lib/slashCommands';
 
 interface HomeCanvasProps {
   documents: Document[];
+  agents?: WorkspaceAgent[];
+  workspaceId?: string;
   memoryFacts: MemoryFact[];
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
   onOpenNewDocument: () => void;
@@ -28,6 +33,8 @@ const suggestions = [
 
 export function HomeCanvas({
   documents,
+  agents = [],
+  workspaceId,
   memoryFacts,
   onSendMessage,
   workspaceName,
@@ -44,10 +51,27 @@ export function HomeCanvas({
     setBriefDismissed(true);
   };
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
-  const [showDocPicker, setShowDocPicker] = useState(false);
-  const [docPickerQuery, setDocPickerQuery] = useState('');
-  const [atStartPos, setAtStartPos] = useState(-1);
+  const [mentionedAgents, setMentionedAgents] = useState<WorkspaceAgent[]>([]);
+  // '@' opens the mention picker (agents + documents); '/' opens the command
+  // picker (built-in actions + daemon-enumerated commands/skills).
+  const [picker, setPicker] = useState<'mention' | 'slash' | null>(null);
+  const [pickerQuery, setPickerQuery] = useState('');
+  const [tokenStartPos, setTokenStartPos] = useState(-1);
+  const [remoteSlashItems, setRemoteSlashItems] = useState<SlashItem[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Daemon-enumerated commands/skills, same source the chat composer uses. The
+  // home composer only inserts text (no client-side app actions exist here), so
+  // built-ins are filtered to insert-kind + the remote commands/skills.
+  useEffect(() => {
+    if (!workspaceId) { setRemoteSlashItems([]); return; }
+    let cancelled = false;
+    getSlashCommands(workspaceId)
+      .then(items => { if (!cancelled) setRemoteSlashItems(items); })
+      .catch(() => { if (!cancelled) setRemoteSlashItems([]); });
+    return () => { cancelled = true; };
+  }, [workspaceId]);
+
   const fallbackBackgroundImage = useMemo(() => {
     let hash = 0;
     for (let index = 0; index < workspaceName.length; index++) {
@@ -59,27 +83,75 @@ export function HomeCanvas({
   const clampedBackgroundOpacity = Math.min(1, Math.max(0, backgroundOpacity));
   const overlayOpacity = Math.max(0, 1 - clampedBackgroundOpacity);
 
-  const filteredDocs = documents.filter(d => d.title.toLowerCase().includes(docPickerQuery.toLowerCase()));
-  const canSend = input.trim().length > 0;
+  const filteredDocs = useMemo(
+    () => (picker === 'mention' ? documents.filter(d => d.title.toLowerCase().includes(pickerQuery.toLowerCase())).slice(0, 6) : []),
+    [picker, documents, pickerQuery],
+  );
+  const filteredAgents = useMemo(() => {
+    if (picker !== 'mention') return [];
+    const q = pickerQuery.toLowerCase();
+    return agents.filter(a => a.enabled !== false && (a.name.toLowerCase().includes(q) || agentHandle(a).includes(q))).slice(0, 6);
+  }, [picker, agents, pickerQuery]);
+  // Daemon-enumerated commands/skills, plus each enabled agent's advertised
+  // skills as a fallback (deduped by id) so `/` still surfaces skills when no
+  // daemon is connected. Built-ins are all client actions the home composer
+  // doesn't have, so only insert-kind items appear here.
+  const slashItems = useMemo<SlashItem[]>(() => {
+    const items: SlashItem[] = [];
+    const seen = new Set<string>();
+    for (const item of remoteSlashItems) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      items.push(item);
+    }
+    for (const name of new Set(agents.flatMap(a => (a.enabled === false ? [] : a.skills ?? [])))) {
+      const id = `skill:${name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push({ id, name, kind: 'skill', run: 'insert', detail: 'Skill' });
+    }
+    return items;
+  }, [remoteSlashItems, agents]);
+  const filteredSlash = useMemo(
+    () => (picker === 'slash' ? matchSlashItems(slashItems, pickerQuery).slice(0, 8) : []),
+    [picker, slashItems, pickerQuery],
+  );
+  const canSend = input.trim().length > 0 || mentionedAgents.length > 0;
+
+  const closePicker = () => {
+    setPicker(null);
+    setPickerQuery('');
+    setTokenStartPos(-1);
+  };
+
+  // Strip the active @/ token (from its start to the caret) out of the draft.
+  const stripToken = () => {
+    const before = input.slice(0, Math.max(0, tokenStartPos));
+    const after = input.slice(inputRef.current?.selectionStart ?? input.length);
+    setInput(before + after);
+  };
 
   const handleSend = () => {
     if (!canSend) return;
-    onSendMessage(input.trim(), 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    // Rebuild @handle tokens from the agent chips so the backend (which routes
+    // agents by parsing @mentions in the text) still notifies + runs them.
+    const mentionPrefix = mentionedAgents.map(a => `@${agentHandle(a)}`).join(' ');
+    const body = input.trim();
+    const content = [mentionPrefix, body].filter(Boolean).join(' ').trim();
+    if (!content) return;
+    onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
     setInput('');
     setLinkedDocs([]);
+    setMentionedAgents([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (showDocPicker) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setShowDocPicker(false);
-        return;
-      }
-      if (e.key === 'Enter' && filteredDocs.length > 0) {
-        e.preventDefault();
-        handleDocSelect(filteredDocs[0]);
-        return;
+    if (picker) {
+      if (e.key === 'Escape') { e.preventDefault(); closePicker(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (picker === 'mention' && filteredAgents.length > 0) { e.preventDefault(); handleAgentSelect(filteredAgents[0]); return; }
+        if (picker === 'mention' && filteredDocs.length > 0) { e.preventDefault(); handleDocSelect(filteredDocs[0]); return; }
+        if (picker === 'slash' && filteredSlash.length > 0) { e.preventDefault(); handleSlashSelect(filteredSlash[0]); return; }
       }
     }
 
@@ -89,40 +161,73 @@ export function HomeCanvas({
     }
   };
 
+  const handleAgentSelect = (agent: WorkspaceAgent) => {
+    if (!mentionedAgents.some(a => a.id === agent.id)) setMentionedAgents(prev => [...prev, agent]);
+    stripToken();
+    closePicker();
+    inputRef.current?.focus();
+  };
+
   const handleDocSelect = (doc: Document) => {
-    if (!linkedDocs.find(d => d.id === doc.id)) {
-      setLinkedDocs(prev => [...prev, doc]);
-    }
-    const before = input.slice(0, atStartPos);
-    const after = input.slice(inputRef.current?.selectionStart || input.length);
-    setInput(before + after);
-    setShowDocPicker(false);
-    setDocPickerQuery('');
-    setAtStartPos(-1);
+    if (!linkedDocs.some(d => d.id === doc.id)) setLinkedDocs(prev => [...prev, doc]);
+    stripToken();
+    closePicker();
+    inputRef.current?.focus();
+  };
+
+  const handleSlashSelect = (item: SlashItem) => {
+    const token = slashInsertText(item);
+    const before = input.slice(0, Math.max(0, tokenStartPos));
+    const after = input.slice(inputRef.current?.selectionStart ?? input.length);
+    const needsSpace = after.length === 0 || !/^\s/.test(after);
+    setInput(`${before}${token}${needsSpace ? ' ' : ''}${after}`);
+    closePicker();
     inputRef.current?.focus();
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
+    const cursor = e.target.selectionStart || 0;
 
-    if (showDocPicker && atStartPos >= 0) {
-      const afterAt = val.slice(atStartPos + 1);
-      const spaceIdx = afterAt.indexOf(' ');
-      if (spaceIdx === -1) {
-        setDocPickerQuery(afterAt);
+    // Update the active picker as the token grows. When the token is broken by a
+    // space we first try to auto-commit an exact @agent/@doc match to a chip
+    // ("@handle " becomes a chip even without clicking the picker), then close.
+    if (picker && tokenStartPos >= 0) {
+      const afterToken = val.slice(tokenStartPos + 1, cursor);
+      if (/\s/.test(afterToken) || cursor <= tokenStartPos) {
+        if (picker === 'mention') {
+          const q = afterToken.trim().toLowerCase();
+          const agentHit = q ? agents.find(a => a.enabled !== false && (agentHandle(a).toLowerCase() === q || a.name.toLowerCase() === q)) : undefined;
+          const docHit = q && !agentHit ? documents.find(d => d.title.toLowerCase() === q) : undefined;
+          if (agentHit) {
+            if (!mentionedAgents.some(a => a.id === agentHit.id)) setMentionedAgents(prev => [...prev, agentHit]);
+            setInput(val.slice(0, tokenStartPos) + val.slice(cursor));
+            closePicker();
+            return;
+          }
+          if (docHit) {
+            if (!linkedDocs.some(d => d.id === docHit.id)) setLinkedDocs(prev => [...prev, docHit]);
+            setInput(val.slice(0, tokenStartPos) + val.slice(cursor));
+            closePicker();
+            return;
+          }
+        }
+        closePicker();
       } else {
-        setShowDocPicker(false);
-        setDocPickerQuery('');
-        setAtStartPos(-1);
+        setPickerQuery(afterToken);
+        return;
       }
     }
 
-    const cursor = e.target.selectionStart || 0;
-    if (val[cursor - 1] === '@' && !showDocPicker) {
-      setShowDocPicker(true);
-      setDocPickerQuery('');
-      setAtStartPos(cursor - 1);
+    // Open a picker when @ or / is typed at the start or after whitespace.
+    const prev = val[cursor - 1];
+    const beforePrev = cursor >= 2 ? val[cursor - 2] : '';
+    const atBoundary = cursor === 1 || /\s/.test(beforePrev);
+    if (atBoundary && prev === '@') {
+      setPicker('mention'); setPickerQuery(''); setTokenStartPos(cursor - 1);
+    } else if (atBoundary && prev === '/') {
+      setPicker('slash'); setPickerQuery(''); setTokenStartPos(cursor - 1);
     }
   };
 
@@ -153,14 +258,43 @@ export function HomeCanvas({
         <h1 className="text-center text-3xl font-semibold leading-tight text-white [text-shadow:0_2px_16px_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.65)]">What's on your mind?</h1>
 
         <div className="relative w-full">
-          {showDocPicker && filteredDocs.length > 0 && (
+          {picker === 'mention' && (filteredAgents.length > 0 || filteredDocs.length > 0) && (
             <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-64 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
               <CommandList className="max-h-52">
-                <CommandGroup heading="Link a document">
-                  {filteredDocs.map(doc => (
-                    <CommandItem key={doc.id} value={doc.title} onSelect={() => handleDocSelect(doc)}>
-                      <FileText data-icon="inline-start" className="size-3.5 text-muted-foreground" />
-                      <span className="truncate">{doc.title}</span>
+                <CommandEmpty>No agents or documents match.</CommandEmpty>
+                {filteredAgents.length > 0 && (
+                  <CommandGroup heading="Mention an agent">
+                    {filteredAgents.map(agent => (
+                      <CommandItem key={agent.id} value={`${agent.name} ${agentHandle(agent)}`} onSelect={() => handleAgentSelect(agent)}>
+                        <Bot data-icon="inline-start" className="size-3.5 text-muted-foreground" />
+                        <span className="truncate">{agent.name}</span>
+                        <span className="ml-1 truncate text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+                {filteredDocs.length > 0 && (
+                  <CommandGroup heading="Link a document">
+                    {filteredDocs.map(doc => (
+                      <CommandItem key={doc.id} value={doc.title} onSelect={() => handleDocSelect(doc)}>
+                        <FileText data-icon="inline-start" className="size-3.5 text-muted-foreground" />
+                        <span className="truncate">{doc.title}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+          )}
+
+          {picker === 'slash' && filteredSlash.length > 0 && (
+            <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-64 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+              <CommandList className="max-h-52">
+                <CommandGroup heading="Commands & skills">
+                  {filteredSlash.map(item => (
+                    <CommandItem key={item.id} value={item.parent ? `${item.parent}:${item.name}` : item.name} onSelect={() => handleSlashSelect(item)}>
+                      <span className="font-mono text-xs text-muted-foreground">/{item.parent ? `${item.parent}:` : ''}{item.name}</span>
+                      {item.detail && <span className="ml-1 truncate text-xs text-muted-foreground">{item.detail}</span>}
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -168,8 +302,24 @@ export function HomeCanvas({
             </Command>
           )}
 
-          {linkedDocs.length > 0 && (
+          {(mentionedAgents.length > 0 || linkedDocs.length > 0) && (
             <div className="mb-2 flex flex-wrap gap-1.5">
+              {mentionedAgents.map(agent => (
+                <Badge key={agent.id} variant="secondary" className="gap-1">
+                  <Bot data-icon="inline-start" className="size-3" />
+                  <span className="max-w-48 truncate">@{agentHandle(agent)}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="ml-0.5 size-4 rounded-full p-0"
+                    onClick={() => setMentionedAgents(prev => prev.filter(a => a.id !== agent.id))}
+                    title="Remove mention"
+                  >
+                    <X className="size-2.5" />
+                  </Button>
+                </Badge>
+              ))}
               {linkedDocs.map(doc => (
                 <Badge key={doc.id} variant="secondary" className="gap-1">
                   <FileText data-icon="inline-start" className="size-3" />
