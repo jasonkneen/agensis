@@ -67,6 +67,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
 
@@ -151,6 +152,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [newAssignee, setNewAssignee] = useState<string>('');
   const [filter, setFilter] = useState<AssignmentFilter>('all');
   const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('list');
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const childrenMap = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -213,6 +215,30 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   };
 
   const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+
+  // The right-hand editor panel (Kanban/Gantt) is driven by a selected task id.
+  // Resolving against live `tasks` means a deleted selection auto-closes the panel.
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? tasks.find(task => task.id === selectedTaskId) ?? null : null),
+    [selectedTaskId, tasks],
+  );
+
+  // Drag-to-subtask: reparent `draggedId` under `targetId`. Guards self-drop and
+  // cycles (can't nest a task under one of its own descendants).
+  const handleReparent = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    // Walk up from the target; if the dragged task is an ancestor of the target,
+    // nesting would create a cycle.
+    let cursor: Task | undefined = tasks.find(task => task.id === targetId);
+    const seen = new Set<string>();
+    while (cursor && cursor.parent_id) {
+      if (cursor.parent_id === draggedId) return;
+      if (seen.has(cursor.parent_id)) break;
+      seen.add(cursor.parent_id);
+      cursor = tasks.find(task => task.id === cursor!.parent_id);
+    }
+    onUpdateTask(draggedId, { parent_id: targetId });
+  };
 
   // A focused task may be a subtask (rendered inside its parent's expanded
   // row, not as its own top-level row) — resolve to the row that actually
@@ -372,18 +398,52 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             )}
           </div>
         </ScrollArea>
-      ) : view === 'kanban' ? (
-        <TaskKanban
-          columns={grouped}
-          memberLabel={memberLabel}
-          onChangeStatus={(id, status) => onUpdateTask(id, { status })}
-        />
       ) : (
-        <TaskGantt
-          tasks={filteredTopLevel}
-          memberLabel={memberLabel}
-          onReschedule={(id, updates) => onUpdateTask(id, updates)}
-        />
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            {view === 'kanban' ? (
+              <TaskKanban
+                columns={grouped}
+                memberLabel={memberLabel}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+                onChangeStatus={(id, status) => onUpdateTask(id, { status })}
+                onReparent={handleReparent}
+              />
+            ) : (
+              <TaskGantt
+                tasks={filteredTopLevel}
+                memberLabel={memberLabel}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+                onReschedule={(id, updates) => onUpdateTask(id, updates)}
+              />
+            )}
+          </div>
+          {selectedTask && (
+            <TaskEditPanel
+              task={selectedTask}
+              subtasks={childrenMap[selectedTask.id] || []}
+              allTasks={allTopLevel}
+              members={members}
+              agents={agents}
+              onUpdateAgent={onUpdateAgent}
+              workspaceId={workspaceId}
+              currentUserId={currentUserId}
+              currentUserEmail={currentUserEmail}
+              onClose={() => setSelectedTaskId(null)}
+              onChangeTitle={title => onUpdateTask(selectedTask.id, { title })}
+              onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
+              onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
+              onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
+              onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
+              onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
+              onAddSubtask={title => onCreateTask({ title, parent_id: selectedTask.id, source_type: 'manual' })}
+              onToggleSubtask={sub => onToggleStatus(sub)}
+              onDeleteSubtask={id => onDeleteTask(id)}
+            />
+          )}
+        </div>
       )}
     </div>
   );
@@ -925,6 +985,168 @@ function TaskDetail({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Right-hand editor panel used by the Kanban board and Gantt timeline. The
+// board/timeline stays visible on the left; this panel edits the selected
+// task's core fields (title/description/status/priority/assignee) and then
+// reuses <TaskDetail> for depends_on / subtasks / comments.
+// ---------------------------------------------------------------------------
+function TaskEditPanel({
+  task,
+  subtasks,
+  allTasks,
+  members,
+  agents,
+  onUpdateAgent,
+  workspaceId,
+  currentUserId,
+  currentUserEmail,
+  onClose,
+  onChangeTitle,
+  onChangeDescription,
+  onChangeStatus,
+  onChangePriority,
+  onChangeAssignee,
+  onChangeDependsOn,
+  onAddSubtask,
+  onToggleSubtask,
+  onDeleteSubtask,
+}: {
+  task: Task;
+  subtasks: Task[];
+  allTasks: Task[];
+  members: WorkspaceMember[];
+  agents: WorkspaceAgent[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  workspaceId: string;
+  currentUserId?: string;
+  currentUserEmail: string;
+  onClose: () => void;
+  onChangeTitle: (title: string) => void;
+  onChangeDescription: (description: string) => void;
+  onChangeStatus: (status: TaskStatus) => void;
+  onChangePriority: (priority: TaskPriority) => void;
+  onChangeAssignee: (assigneeId: string | null) => void;
+  onChangeDependsOn: (next: string[]) => void;
+  onAddSubtask: (title: string) => void;
+  onToggleSubtask: (sub: Task) => void;
+  onDeleteSubtask: (id: string) => void;
+}) {
+  // Local draft for the free-text fields so typing doesn't round-trip through
+  // the backend on every keystroke; commit on blur. Reset when the selection
+  // changes (keyed by task.id).
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description || '');
+
+  useEffect(() => {
+    setTitle(task.title);
+    setDescription(task.description || '');
+  }, [task.id, task.title, task.description]);
+
+  const commitTitle = () => {
+    const next = title.trim();
+    if (next && next !== task.title) onChangeTitle(next);
+    else if (!next) setTitle(task.title);
+  };
+
+  const commitDescription = () => {
+    if (description !== (task.description || '')) onChangeDescription(description);
+  };
+
+  return (
+    <aside className="task-edit-panel flex w-80 shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+        <span className="text-xs font-semibold tracking-tight text-muted-foreground">Edit task</span>
+        <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close editor">
+          <X />
+        </Button>
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-4 p-3">
+          <div className="flex flex-col gap-2">
+            <Input
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitTitle();
+                }
+              }}
+              placeholder="Task title"
+              aria-label="Task title"
+            />
+            <Textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              onBlur={commitDescription}
+              placeholder="Add a description..."
+              aria-label="Task description"
+              className="min-h-20 resize-y"
+            />
+            <div className="flex gap-2">
+              <NativeSelect
+                value={task.status}
+                onChange={e => onChangeStatus(e.target.value as TaskStatus)}
+                size="sm"
+                className="flex-1"
+                aria-label="Task status"
+              >
+                {(Object.keys(STATUS_LABELS) as TaskStatus[]).map(status => (
+                  <NativeSelectOption key={status} value={status}>{STATUS_LABELS[status]}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={task.priority}
+                onChange={e => onChangePriority(e.target.value as TaskPriority)}
+                size="sm"
+                className="flex-1"
+                aria-label="Task priority"
+              >
+                {(Object.keys(PRIORITY_LABELS) as TaskPriority[]).map(priority => (
+                  <NativeSelectOption key={priority} value={priority}>{PRIORITY_LABELS[priority]}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            {members.length > 0 && (
+              <NativeSelect
+                value={task.assignee_id || ''}
+                onChange={e => onChangeAssignee(e.target.value || null)}
+                size="sm"
+                aria-label="Assign task"
+              >
+                <NativeSelectOption value="">Unassigned</NativeSelectOption>
+                {members.map(member => (
+                  <NativeSelectOption key={member.user_id} value={member.user_id}>
+                    {member.email?.split('@')[0] || 'Member'}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            )}
+          </div>
+          <TaskDetail
+            task={task}
+            subtasks={subtasks}
+            allTasks={allTasks}
+            members={members}
+            agents={agents}
+            onUpdateAgent={onUpdateAgent}
+            onChangeAssignee={onChangeAssignee}
+            onChangeDependsOn={onChangeDependsOn}
+            workspaceId={workspaceId}
+            currentUserId={currentUserId}
+            currentUserEmail={currentUserEmail}
+            onAddSubtask={onAddSubtask}
+            onToggleSubtask={onToggleSubtask}
+            onDeleteSubtask={onDeleteSubtask}
+          />
+        </div>
+      </ScrollArea>
+    </aside>
+  );
+}
+
 function TaskCommentItem({
   comment,
   members,
@@ -1021,23 +1243,44 @@ const KANBAN_COLUMNS: TaskStatus[] = ['todo', 'in_progress', 'done', 'cancelled'
 function TaskKanban({
   columns,
   memberLabel,
+  selectedTaskId,
+  onSelectTask,
   onChangeStatus,
+  onReparent,
 }: {
   columns: Record<TaskStatus, Task[]>;
   memberLabel: (assigneeId: string | null) => string | null;
+  selectedTaskId: string | null;
+  onSelectTask: (id: string | null) => void;
   onChangeStatus: (id: string, status: TaskStatus) => void;
+  onReparent: (draggedId: string, targetId: string) => void;
 }) {
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<TaskStatus | null>(null);
+  // A card the dragged task is hovering over — dropping here nests as a subtask
+  // instead of changing status.
+  const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
 
-  const drop = (status: TaskStatus) => {
-    const id = dragTaskId;
+  const resetDrag = () => {
     setDragTaskId(null);
     setDragOver(null);
+    setDragOverCardId(null);
+  };
+
+  const dropOnColumn = (status: TaskStatus) => {
+    const id = dragTaskId;
+    resetDrag();
     if (!id) return;
     const from = KANBAN_COLUMNS.find(col => columns[col].some(task => task.id === id));
     if (from === status) return;
     onChangeStatus(id, status);
+  };
+
+  const dropOnCard = (targetId: string) => {
+    const id = dragTaskId;
+    resetDrag();
+    if (!id) return;
+    onReparent(id, targetId);
   };
 
   return (
@@ -1056,6 +1299,9 @@ function TaskKanban({
                 if (!dragTaskId) return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
+                // Card handlers stopPropagation, so reaching here means the pointer
+                // is over the column background — a status drop, not a nest.
+                setDragOverCardId(null);
                 setDragOver(status);
               }}
               onDragLeave={e => {
@@ -1067,7 +1313,7 @@ function TaskKanban({
               }}
               onDrop={e => {
                 e.preventDefault();
-                drop(status);
+                dropOnColumn(status);
               }}
             >
               <div className="flex items-center justify-between px-1 pt-0.5">
@@ -1086,16 +1332,40 @@ function TaskKanban({
                   <div
                     key={task.id}
                     draggable
+                    onClick={() => onSelectTask(task.id)}
                     onDragStart={e => {
                       setDragTaskId(task.id);
                       // Some browsers refuse to start an HTML5 drag with no payload.
                       e.dataTransfer.effectAllowed = 'move';
                       e.dataTransfer.setData('text/plain', task.id);
                     }}
-                    onDragEnd={() => { setDragTaskId(null); setDragOver(null); }}
+                    onDragEnd={resetDrag}
+                    onDragOver={e => {
+                      // Hovering a different card = nest-as-subtask intent. Stop the
+                      // event reaching the column so its status-drop highlight clears.
+                      if (!dragTaskId || dragTaskId === task.id) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = 'move';
+                      setDragOver(null);
+                      setDragOverCardId(task.id);
+                    }}
+                    onDragLeave={e => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        setDragOverCardId(prev => (prev === task.id ? null : prev));
+                      }
+                    }}
+                    onDrop={e => {
+                      if (!dragTaskId || dragTaskId === task.id) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      dropOnCard(task.id);
+                    }}
                     className={cn(
                       'flex cursor-grab flex-col gap-1.5 rounded-md border border-border bg-card p-2 shadow-sm active:cursor-grabbing',
                       dragTaskId === task.id && 'opacity-50',
+                      dragOverCardId === task.id && 'border-primary bg-primary/10 ring-1 ring-primary/50',
+                      selectedTaskId === task.id && 'border-primary/70 ring-1 ring-primary/40',
                     )}
                   >
                     <span className={cn('text-sm', task.status === 'done' && 'text-muted-foreground line-through')}>
@@ -1179,10 +1449,14 @@ interface GanttDrag {
 function TaskGantt({
   tasks,
   memberLabel,
+  selectedTaskId,
+  onSelectTask,
   onReschedule,
 }: {
   tasks: Task[];
   memberLabel: (assigneeId: string | null) => string | null;
+  selectedTaskId: string | null;
+  onSelectTask: (id: string | null) => void;
   onReschedule: (id: string, updates: Partial<Task>) => void;
 }) {
   const [drag, setDrag] = useState<GanttDrag | null>(null);
@@ -1219,20 +1493,22 @@ function TaskGantt({
     };
     const onUp = (e: PointerEvent) => {
       const deltaDays = Math.round((e.clientX - drag.originX) / GANTT_DAY_WIDTH);
-      if (deltaDays !== 0) {
-        if (drag.mode === 'move') {
-          // Materialize both dates so the update shape is always {start_date, due_date}.
-          const nextStart = drag.startMs + deltaDays * DAY_MS;
-          const nextEnd = drag.endMs + deltaDays * DAY_MS;
-          onReschedule(drag.taskId, {
-            start_date: new Date(nextStart).toISOString(),
-            due_date: new Date(nextEnd).toISOString(),
-          });
-        } else {
-          // Resize the right edge: due_date only, floored to at least one day wide.
-          const nextEnd = Math.max(drag.startMs + DAY_MS, drag.endMs + deltaDays * DAY_MS);
-          onReschedule(drag.taskId, { due_date: new Date(nextEnd).toISOString() });
-        }
+      if (deltaDays === 0) {
+        // No movement — treat a plain (non-resize) press as a click that opens
+        // the editor. The resize handle should never open the panel.
+        if (drag.mode === 'move') onSelectTask(drag.taskId);
+      } else if (drag.mode === 'move') {
+        // Materialize both dates so the update shape is always {start_date, due_date}.
+        const nextStart = drag.startMs + deltaDays * DAY_MS;
+        const nextEnd = drag.endMs + deltaDays * DAY_MS;
+        onReschedule(drag.taskId, {
+          start_date: new Date(nextStart).toISOString(),
+          due_date: new Date(nextEnd).toISOString(),
+        });
+      } else {
+        // Resize the right edge: due_date only, floored to at least one day wide.
+        const nextEnd = Math.max(drag.startMs + DAY_MS, drag.endMs + deltaDays * DAY_MS);
+        onReschedule(drag.taskId, { due_date: new Date(nextEnd).toISOString() });
       }
       setDrag(null);
       setPreviewDays(0);
@@ -1243,7 +1519,7 @@ function TaskGantt({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, onReschedule]);
+  }, [drag, onReschedule, onSelectTask]);
 
   if (tasks.length === 0) {
     return (
@@ -1380,13 +1656,14 @@ function TaskGantt({
                 <div
                   key={task.id}
                   className={cn(
-                    'absolute flex items-center rounded-md border text-[10px] shadow-sm',
+                    'absolute flex cursor-pointer items-center rounded-md border text-[10px] shadow-sm',
                     task.status === 'done'
                       ? 'border-emerald-500/40 bg-emerald-500/25'
                       : task.status === 'cancelled'
                         ? 'border-border bg-muted'
                         : 'border-primary/40 bg-primary/25',
                     violation && 'ring-1 ring-destructive/60',
+                    selectedTaskId === task.id && 'ring-2 ring-primary',
                     isDragging && 'z-20 opacity-80',
                   )}
                   style={{
