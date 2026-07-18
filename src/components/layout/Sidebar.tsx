@@ -229,6 +229,7 @@ interface SidebarProps {
  onSignOut: () => void;
  onOpenSettings: () => void;
  getStartedSlot?: React.ReactNode;
+ notificationsSlot?: React.ReactNode;
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -277,6 +278,7 @@ export const Sidebar = React.memo(function Sidebar({
  userId,
  onSignOut,
  getStartedSlot,
+ notificationsSlot,
 }: SidebarProps) {
  const [accountDialogOpen, setAccountDialogOpen] = React.useState(false);
  const [accountDialogTab, setAccountDialogTab] = React.useState<'profile' | 'billing'>('profile');
@@ -525,6 +527,7 @@ export const Sidebar = React.memo(function Sidebar({
       >
        <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
       </button>
+      {notificationsSlot}
       <Button type="button" variant="ghost" size="icon-sm" onClick={onCreateWorkspace} aria-label="Create workspace">
        <Plus />
       </Button>
