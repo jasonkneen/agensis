@@ -8,14 +8,32 @@ import { cn } from '@/lib/utils';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
 import { useActivity } from '../../hooks/useActivity';
 
-// A notification item is either a pending agent-registration request (needs the
-// owner's decision) or a single timestamped agent connect/disconnect event.
-// Approvals are surfaced read-only here — the forced-choice RegistrationApprovalPopup
-// is what actually collects the decision. Connection events are a true history
-// (one row per connect/disconnect), sourced from the activity feed.
+// A notification is one of:
+//  - approval: a pending agent-registration request (needs the owner's decision;
+//    the forced-choice RegistrationApprovalPopup collects it, this is read-only)
+//  - connection: an agent connect/disconnect event
+//  - activity: any other important workspace event (new chat/doc/task, task done,
+//    memory added, comment, agent message) sourced from the activity feed.
 type NotificationItem =
   | { kind: 'approval'; id: string; handle: string; label: string; isNew: boolean; at: string }
-  | { kind: 'connection'; id: string; handle: string; connected: boolean; at: string };
+  | { kind: 'connection'; id: string; handle: string; connected: boolean; at: string }
+  | { kind: 'activity'; id: string; title: string; tone: NotificationTone; at: string };
+
+type NotificationTone = 'online' | 'offline' | 'pending' | 'info';
+
+// Event types worth surfacing in the bell, mapped to a dot tone. Anything not
+// listed (e.g. low-signal internal events) is skipped. `message_sent` is
+// intentionally omitted — agent chatter would flood the bell; the chat window
+// and sidebar status feed already surface those.
+const NOTIFIABLE_ACTIVITY: Record<string, NotificationTone> = {
+  chat_created: 'info',
+  document_created: 'info',
+  document_deleted: 'offline',
+  task_created: 'info',
+  task_completed: 'online',
+  memory_added: 'info',
+  comment_created: 'info',
+};
 
 function relative(at: string): string {
   const ms = new Date(at).getTime();
@@ -27,7 +45,7 @@ function relative(at: string): string {
   }
 }
 
-function StatusDot({ tone }: { tone: 'online' | 'offline' | 'pending' }) {
+function StatusDot({ tone }: { tone: NotificationTone }) {
   return (
     <span
       aria-hidden
@@ -36,6 +54,7 @@ function StatusDot({ tone }: { tone: 'online' | 'offline' | 'pending' }) {
         tone === 'online' && 'bg-emerald-500',
         tone === 'offline' && 'bg-muted-foreground/40',
         tone === 'pending' && 'bg-amber-500',
+        tone === 'info' && 'bg-sky-500',
       )}
     />
   );
@@ -55,11 +74,9 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
       at: req.created_at,
     }));
 
-    // Connect/disconnect history — events arrive newest-first from useActivity.
-    // Capped so a chatty workspace doesn't make the list unbounded.
+    // Agent connect/disconnect history — events arrive newest-first.
     const connections: NotificationItem[] = events
       .filter((e) => e.event_type === 'agent_connected' || e.event_type === 'agent_disconnected')
-      .slice(0, 30)
       .map((e) => {
         const meta = (e.metadata ?? {}) as { handle?: unknown; name?: unknown };
         const handle =
@@ -68,7 +85,7 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
           e.title.replace(/^@/, '').replace(/\s+(connected|disconnected)$/i, '') ||
           'agent';
         return {
-          kind: 'connection',
+          kind: 'connection' as const,
           id: `connection:${e.id}`,
           handle,
           connected: e.event_type === 'agent_connected',
@@ -76,7 +93,23 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
         };
       });
 
-    return [...approvals, ...connections];
+    // Other important workspace activity (new docs/tasks/chats, task completions,
+    // memory, comments). The activity feed already carries a human-readable title.
+    const activity: NotificationItem[] = events
+      .filter((e) => e.event_type in NOTIFIABLE_ACTIVITY)
+      .map((e) => ({
+        kind: 'activity' as const,
+        id: `activity:${e.id}`,
+        title: e.title,
+        tone: NOTIFIABLE_ACTIVITY[e.event_type],
+        at: e.created_at,
+      }));
+
+    // Approvals first (they need a decision), then everything else newest-first.
+    const feed = [...connections, ...activity].sort(
+      (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
+    );
+    return [...approvals, ...feed.slice(0, 40)];
   }, [pending, events]);
 
   // The badge counts only things that need attention — pending approvals.
@@ -85,14 +118,15 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
   // pulse ring (visually distinct from the approvals badge).
   const badgeCount = pending.length;
 
-  // "Unseen" = the newest connect/disconnect event is newer than the last time
-  // this workspace's bell was opened. Keyed per workspace so it never bleeds
-  // across workspaces.
+  // "Unseen" = the newest surfaced event (connection or important activity) is
+  // newer than the last time this workspace's bell was opened. Keyed per
+  // workspace so it never bleeds across workspaces.
   const lastSeenKey = workspaceId ? `notif:lastSeen:${workspaceId}` : null;
   const newestActivityAt = useMemo(() => {
     let newest = 0;
     for (const e of events) {
-      if (e.event_type !== 'agent_connected' && e.event_type !== 'agent_disconnected') continue;
+      const shown = e.event_type === 'agent_connected' || e.event_type === 'agent_disconnected' || e.event_type in NOTIFIABLE_ACTIVITY;
+      if (!shown) continue;
       const t = new Date(e.created_at).getTime();
       if (Number.isFinite(t) && t > newest) newest = t;
     }
@@ -176,7 +210,15 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
           ) : (
             items.map((item) => (
               <div key={item.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
-                <StatusDot tone={item.kind === 'approval' ? 'pending' : item.connected ? 'online' : 'offline'} />
+                <StatusDot
+                  tone={
+                    item.kind === 'approval'
+                      ? 'pending'
+                      : item.kind === 'connection'
+                        ? (item.connected ? 'online' : 'offline')
+                        : item.tone
+                  }
+                />
                 <div className="min-w-0 flex-1">
                   {item.kind === 'approval' ? (
                     <p className="leading-snug">
@@ -187,11 +229,13 @@ export function NotificationsBell({ workspaceId }: { workspaceId: string | null 
                         Approval pending
                       </span>
                     </p>
-                  ) : (
+                  ) : item.kind === 'connection' ? (
                     <p className="leading-snug">
                       <span className="font-medium">@{item.handle}</span>{' '}
                       <span className="text-muted-foreground">{item.connected ? 'connected' : 'disconnected'}</span>
                     </p>
+                  ) : (
+                    <p className="leading-snug">{item.title}</p>
                   )}
                   {item.at && <p className="mt-0.5 text-[11px] text-muted-foreground">{relative(item.at)}</p>}
                 </div>
