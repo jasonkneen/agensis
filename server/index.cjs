@@ -33,6 +33,7 @@ const {
  getTokenTtlSec,
  DEFAULT_TOKEN_TTL_SEC,
  createRateLimiter,
+ createDbRateLimiter,
  evaluatePasswordServerSide,
  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
 } = require('../shared/backend-core.cjs');
@@ -831,6 +832,15 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
  await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      bucket text NOT NULL,
+      window_start timestamptz NOT NULL,
+      count integer NOT NULL DEFAULT 0,
+      PRIMARY KEY (bucket, window_start)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rate_limits_window_start ON rate_limits (window_start);
+  `);
+ await db.unsafe(`
     ALTER TABLE workspace_members DROP CONSTRAINT IF EXISTS workspace_members_role_check;
     ALTER TABLE workspace_members
       ADD CONSTRAINT workspace_members_role_check
@@ -1373,6 +1383,30 @@ const farmDeviceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below.
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+
+// H4 follow-up — cross-instance layer. The in-memory limiters above bound a
+// single warm process (fast, and enough on single-machine Fly); these DB-backed
+// limiters add a shared counter so a horizontally-scaled deploy (or Netlify
+// lambdas) enforces ONE budget. Layered: the in-memory check runs first (cheap
+// burst protection), then the DB check (cross-instance quota). DB errors fail
+// open (see createDbRateLimiter), so the in-memory layer is always a floor.
+const dbQuery = (sql, params) => getDb().unsafe(sql, params);
+const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'ai-chat' });
+const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'dispatch' });
+
+// Async layered gate: returns true (and writes 429) when EITHER layer blocks.
+// Callers MUST `await` this — an un-awaited call returns a truthy Promise and
+// would 429 every request.
+async function dbRateLimitBlocked(res, memLimiter, dbLimiter, key) {
+ const k = String(key || 'unknown');
+ const mem = memLimiter.check(k);
+ const result = mem.allowed ? await dbLimiter.check(k) : mem;
+ if (result.allowed) return false;
+ const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
+ res.setHeader('Retry-After', String(retryAfter));
+ res.status(429).json({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } });
+ return true;
+}
 
 // Returns true (and writes a 429 with Retry-After) when the key is over budget.
 function rateLimitBlocked(res, limiter, key) {
@@ -7335,7 +7369,7 @@ function createApp() {
 
  app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
   try {
-   if (rateLimitBlocked(res, dispatchRateLimiter, req.userId || clientIpFromReq(req))) return;
+   if (await dbRateLimitBlocked(res, dispatchRateLimiter, dispatchDbRateLimiter, req.userId || clientIpFromReq(req))) return;
    const { workspaceId, sessionId, content, threadParentId } = req.body || {};
    if (!workspaceId || !sessionId || !content) {
     return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
@@ -8296,7 +8330,7 @@ function createApp() {
 
  app.post('/backend/ai-chat', requireAuth, async (req, res) => {
   try {
-   if (rateLimitBlocked(res, aiChatRateLimiter, req.userId || clientIpFromReq(req))) return;
+   if (await dbRateLimitBlocked(res, aiChatRateLimiter, aiChatDbRateLimiter, req.userId || clientIpFromReq(req))) return;
    const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = req.body || {};
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');

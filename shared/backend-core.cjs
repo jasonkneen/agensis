@@ -680,6 +680,66 @@ function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
 }
 
 // ----------------------------------------------------------------------------
+// Cross-instance rate limiter backed by Postgres (H4 follow-up). The in-memory
+// createRateLimiter above only bounds a single warm process — useless across
+// Fly machines or Netlify lambdas. This variant does an atomic fixed-window
+// upsert so every instance shares one counter.
+//
+// Requires a `rate_limits` table:
+//   create table rate_limits (
+//     bucket text not null, window_start timestamptz not null,
+//     count int not null default 0, primary key (bucket, window_start));
+//
+// `check(key)` is ASYNC. It FAILS OPEN on any DB error (returns allowed) — a
+// limiter that hard-fails would take down the very routes it protects; the
+// in-memory limiter in front of it still provides a first bound.
+// ----------------------------------------------------------------------------
+
+function createDbRateLimiter({ windowMs = 60_000, max = 60, db, namespace = 'rl' } = {}) {
+ async function check(key) {
+  const now = Date.now();
+  const windowStart = new Date(Math.floor(now / windowMs) * windowMs);
+  const bucket = `${namespace}:${key}`;
+  try {
+   // Atomic increment of the current window's counter. The composite PK on
+   // (bucket, window_start) means concurrent requests across instances all
+   // land on the same row and the RETURNING count is the post-increment total.
+   const rows = await db(
+    `insert into rate_limits (bucket, window_start, count)
+           values ($1, $2, 1)
+           on conflict (bucket, window_start)
+           do update set count = rate_limits.count + 1
+           returning count`,
+    [bucket, windowStart],
+   );
+   // Opportunistic cleanup (~0.5% of calls) so serverless callers with no timer
+   // still bound table growth. The long-lived Express server also runs sweep()
+   // on an interval; both are best-effort and never block the check.
+   if (Math.random() < 0.005) { void sweep(); }
+   const count = Number(rows?.[0]?.count || 1);
+   const allowed = count <= max;
+   const resetAt = windowStart.getTime() + windowMs;
+   return {
+    allowed,
+    blocked: !allowed,
+    remaining: Math.max(0, max - count),
+    retryAfterMs: allowed ? 0 : Math.max(0, resetAt - now),
+   };
+  } catch {
+   // Fail open: never let a limiter DB hiccup 500 a protected route.
+   return { allowed: true, blocked: false, remaining: max, retryAfterMs: 0 };
+  }
+ }
+ // Best-effort cleanup of windows older than now — callers may run this on a timer.
+ async function sweep() {
+  try {
+   await db('delete from rate_limits where window_start < $1', [new Date(Date.now() - windowMs * 2)]);
+  } catch { /* ignore */ }
+ }
+ return { check, sweep };
+}
+
+// ----------------------------------------------------------------------------
 // Server-side password policy (plan 004 — auth hardening).
 // Mirrors src/lib/passwordPolicy.ts's `evaluatePassword` rule (min length +
 // character-class count) as a plain-JS, framework-free re-implementation so it
@@ -728,6 +788,7 @@ module.exports = {
  appendWorkspaceAccessClause,
  logMessageActivityIdempotent,
  createRateLimiter,
+ createDbRateLimiter,
  evaluatePasswordServerSide,
  findFilterValue,
  resolveOperationWorkspace,
