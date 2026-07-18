@@ -19,6 +19,7 @@ import {
   Rocket,
   Save,
   ShieldCheck,
+  Search,
   Sparkles,
   Terminal,
   Trash2,
@@ -145,6 +146,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
   const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
@@ -162,9 +164,14 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     return acc;
   }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
   presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
-  const visibleAgents = statusFilter.size === 0
+  const statusVisibleAgents = statusFilter.size === 0
     ? agents
     : agents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
+  const searchQuery = searchTerm.trim().toLowerCase();
+  const visibleAgents = searchQuery === ''
+    ? statusVisibleAgents
+    : statusVisibleAgents.filter(agent =>
+      `${agent.name} ${agent.handle || ''} ${agent.description || ''}`.toLowerCase().includes(searchQuery));
 
   const toggleStatusFilter = (key: AgentPresence) => {
     setStatusFilter(prev => {
@@ -237,25 +244,37 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={onOpenConnections}
-        >
-          <Plug data-icon="inline-start" />
-          Connect a client
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={showCreate ? 'outline' : 'default'}
-          onClick={() => setShowCreate(!showCreate)}
-        >
-          <Plus data-icon="inline-start" />
-          Create Agent
-        </Button>
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
+        <div className="relative min-w-0 max-w-xs flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Search agents"
+            className="h-8 pl-8 text-sm"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onOpenConnections}
+          >
+            <Plug data-icon="inline-start" />
+            Connect a client
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={showCreate ? 'outline' : 'default'}
+            onClick={() => setShowCreate(!showCreate)}
+          >
+            <Plus data-icon="inline-start" />
+            Create Agent
+          </Button>
+        </div>
       </div>
       <AgentConnectDialog
         agent={connectAgent}
@@ -391,7 +410,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     <Bot />
                   </EmptyMedia>
                   <EmptyTitle>No agents match</EmptyTitle>
-                  <EmptyDescription>No agents are {AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.</EmptyDescription>
+                  <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (
@@ -1390,58 +1409,58 @@ function AgentDetailPane({
                   const capSharedModels = Array.isArray(caps?.sharedModels) ? caps.sharedModels : [];
                   const hasCapabilities = capSkills.length > 0 || capClis.length > 0 || capMcpServers.length > 0 || capSharedModels.length > 0;
                   return (
-                  <div key={connection.id} className="rounded-md border bg-muted/35 px-2 py-1.5 text-xs">
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <Monitor className="size-3 shrink-0" />
-                      <span className="font-medium text-foreground">{connection.status}</span>
-                      <span className="min-w-0 flex-1 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
-                      {connection.last_seen_at && (
-                        <span className="shrink-0 text-muted-foreground/70" title={`Last heartbeat: ${formatAgentDate(connection.last_seen_at)}`}>
-                          HB {formatRelativeTime(connection.last_seen_at)}
-                        </span>
-                      )}
-                    </div>
-                    {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
-                    {hasCapabilities && (
-                      <div className="mt-1.5 space-y-1">
-                        {capSkills.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            <span className="shrink-0 text-muted-foreground/60">Skills:</span>
-                            {capSkills.slice(0, 8).map(s => (
-                              <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{s}</span>
-                            ))}
-                            {capSkills.length > 8 && <span className="text-muted-foreground/60">+{capSkills.length - 8}</span>}
-                          </div>
-                        )}
-                        {capClis.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
-                            {capClis.map(c => (
-                              <span key={c} className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">{c}</span>
-                            ))}
-                          </div>
-                        )}
-                        {capMcpServers.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            <span className="shrink-0 text-muted-foreground/60">MCP:</span>
-                            {capMcpServers.slice(0, 6).map(m => (
-                              <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
-                            ))}
-                            {capMcpServers.length > 6 && <span className="text-muted-foreground/60">+{capMcpServers.length - 6}</span>}
-                          </div>
-                        )}
-                        {capSharedModels.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
-                            {capSharedModels.slice(0, 6).map(model => (
-                              <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{model.name || model.id}</span>
-                            ))}
-                            {capSharedModels.length > 6 && <span className="text-muted-foreground/60">+{capSharedModels.length - 6}</span>}
-                          </div>
+                    <div key={connection.id} className="rounded-md border bg-muted/35 px-2 py-1.5 text-xs">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Monitor className="size-3 shrink-0" />
+                        <span className="font-medium text-foreground">{connection.status}</span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
+                        {connection.last_seen_at && (
+                          <span className="shrink-0 text-muted-foreground/70" title={`Last heartbeat: ${formatAgentDate(connection.last_seen_at)}`}>
+                            HB {formatRelativeTime(connection.last_seen_at)}
+                          </span>
                         )}
                       </div>
-                    )}
-                  </div>
+                      {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
+                      {hasCapabilities && (
+                        <div className="mt-1.5 space-y-1">
+                          {capSkills.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className="shrink-0 text-muted-foreground/60">Skills:</span>
+                              {capSkills.slice(0, 8).map(s => (
+                                <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{s}</span>
+                              ))}
+                              {capSkills.length > 8 && <span className="text-muted-foreground/60">+{capSkills.length - 8}</span>}
+                            </div>
+                          )}
+                          {capClis.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
+                              {capClis.map(c => (
+                                <span key={c} className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">{c}</span>
+                              ))}
+                            </div>
+                          )}
+                          {capMcpServers.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className="shrink-0 text-muted-foreground/60">MCP:</span>
+                              {capMcpServers.slice(0, 6).map(m => (
+                                <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
+                              ))}
+                              {capMcpServers.length > 6 && <span className="text-muted-foreground/60">+{capMcpServers.length - 6}</span>}
+                            </div>
+                          )}
+                          {capSharedModels.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
+                              {capSharedModels.slice(0, 6).map(model => (
+                                <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{model.name || model.id}</span>
+                              ))}
+                              {capSharedModels.length > 6 && <span className="text-muted-foreground/60">+{capSharedModels.length - 6}</span>}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
