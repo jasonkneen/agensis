@@ -2294,6 +2294,9 @@ function CanvasLayerScene({
     <>
       <HomeCanvas
         documents={documents}
+        agents={agents}
+        agentConnections={agentConnections}
+        workspaceId={workspaceId}
         memoryFacts={facts}
         onSendMessage={onHomeSendMessage}
         onOpenNewDocument={onNewDocument}
