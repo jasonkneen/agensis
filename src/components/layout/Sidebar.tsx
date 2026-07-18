@@ -528,9 +528,6 @@ export const Sidebar = React.memo(function Sidebar({
       <Button type="button" variant="ghost" size="icon-sm" onClick={onCreateWorkspace} aria-label="Create workspace">
        <Plus />
       </Button>
-      <Button type="button" variant="ghost" size="icon-sm" onClick={onOpenSettings} aria-label="Workspace settings">
-       <Settings />
-      </Button>
      </div>
     </div>
 
@@ -1327,7 +1324,7 @@ function SidebarSection({
        onAction?.();
       }}
      >
-      <Plus className="size-3.5" />
+      <Plus className="size-4" />
      </button>
     )}
     {headerActions}

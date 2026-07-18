@@ -404,7 +404,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
             onClick={onOpenConnections}
           >
             <Plug data-icon="inline-start" />
-            Connect a client
+            Invite an Agent
           </Button>
           <Button
             type="button"
