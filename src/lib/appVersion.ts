@@ -13,6 +13,10 @@
 export const BUILD_ID: string =
   typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
 
+// Injected by Vite `define` from package.json. `typeof` guard as above.
+export const APP_VERSION: string =
+  typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0';
+
 export interface RemoteVersion {
   buildId: string;
   commit: string | null;

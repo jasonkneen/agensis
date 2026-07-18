@@ -3,7 +3,10 @@ import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { createRequire } from 'node:module';
 
+const require = createRequire(import.meta.url);
+const pkgVersion: string = require('./package.json').version || '0.0.0';
 // A build identity baked into the bundle (`__BUILD_ID__`) AND emitted as a
 // static `version.json`. The running client compares its baked id against the
 // freshly-fetched version.json to detect that a newer frontend has published —
@@ -34,6 +37,7 @@ function emitVersionJson() {
 export default defineConfig({
   define: {
     __BUILD_ID__: JSON.stringify(BUILD_ID),
+    __APP_VERSION__: JSON.stringify(pkgVersion),
   },
   // Use relative asset URLs so the same bundle works when served from a web
   // root and when loaded from disk inside the Electron desktop wrapper.

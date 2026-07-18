@@ -58,6 +58,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentStatusFeed } from './AgentStatusFeed';
+import { APP_VERSION, BUILD_ID } from '../../lib/appVersion';
 import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 
 /**
@@ -785,6 +786,10 @@ export const Sidebar = React.memo(function Sidebar({
          <LogOut className="size-4" />
          Sign out
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <div className="px-2 py-1.5 text-[11px] text-muted-foreground/70">
+         agensis v{APP_VERSION} · build {BUILD_ID.slice(0, 7)}
+        </div>
        </DropdownMenuContent>
       </DropdownMenu>
       {presenceSlot}

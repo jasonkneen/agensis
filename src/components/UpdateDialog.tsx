@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import type { ReleaseNote } from '@/lib/releaseNotes';
+import { APP_VERSION, BUILD_ID } from '@/lib/appVersion';
 
 // The "larger panel" behind the update toast. Presentational only — open state,
 // notes, and the reload action are owned by useAppUpdate/AppUpdateManager.
@@ -39,6 +40,9 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
               <SparklesIcon className="size-4 text-primary" />
             )}
             <DialogTitle>{available ? 'A new version is available' : "What's new"}</DialogTitle>
+            <span className="ml-auto text-xs font-normal text-muted-foreground/70">
+              v{APP_VERSION} · {BUILD_ID.slice(0, 7)}
+            </span>
           </div>
           <DialogDescription>
             {available
