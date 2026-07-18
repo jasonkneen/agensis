@@ -28,11 +28,15 @@ type NotificationTone = 'online' | 'offline' | 'pending' | 'info';
 const NOTIFIABLE_ACTIVITY: Record<string, NotificationTone> = {
   chat_created: 'info',
   document_created: 'info',
+  document_updated: 'info',
   document_deleted: 'offline',
   task_created: 'info',
+  task_updated: 'info',
   task_completed: 'online',
+  canvas_updated: 'info',
   memory_added: 'info',
   comment_created: 'info',
+  member_joined: 'online',
 };
 
 function relative(at: string): string {
