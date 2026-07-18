@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
@@ -9,10 +9,6 @@ import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher'
 import { pickActiveWindowId } from './lib/mobileWindows';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
-import { ActivityWindowContent } from './components/windows/ActivityWindowContent';
-import { AgentsWindowContent } from './components/windows/AgentsWindowContent';
-import { UsersWindow } from './components/windows/UsersWindow';
-import { SchedulesWindow } from './components/windows/SchedulesWindow';
 import { MemorySection } from './components/memory/MemorySection';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
@@ -108,6 +104,15 @@ import { CursorOverlay } from './components/cursors/CursorOverlay';
 import type { ChannelParticipant, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
+
+// BUNDLE-03: lazy-load the less-frequently-opened window surfaces so their code
+// (and heavy deps) splits out of the main chunk and loads only when a window of
+// that type is first opened. ChatWindowContent stays eager — it is the hot path.
+// Named exports are adapted to the default-export shape React.lazy expects.
+const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWindowContent').then(m => ({ default: m.ActivityWindowContent })));
+const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
+const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
+const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
 
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
@@ -2525,10 +2530,12 @@ function CanvasLayerScene({
               titleIcon={<Activity size={13} />}
               breadcrumb={workspaceName}
             >
-              <ActivityWindowContent
-                events={activityEvents}
-                loading={activityLoading}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <ActivityWindowContent
+                  events={activityEvents}
+                  loading={activityLoading}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
@@ -2552,19 +2559,21 @@ function CanvasLayerScene({
               titleIcon={<Bot size={13} />}
               breadcrumb={workspaceName}
             >
-              <AgentsWindowContent
-                agents={agents}
-                webhooks={agentWebhooks}
-                connections={agentConnections}
-                currentUserId={userId}
-                focusedAgentKey={focusedAgentKey}
-                onCreateAgent={onCreateAgent}
-                onUpdateAgent={onUpdateAgent}
-                onDeleteAgent={onDeleteAgent}
-                onCreateWebhook={onCreateAgentWebhook}
-                onUpdateWebhook={onUpdateAgentWebhook}
-                onOpenConnections={onOpenConnections}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <AgentsWindowContent
+                  agents={agents}
+                  webhooks={agentWebhooks}
+                  connections={agentConnections}
+                  currentUserId={userId}
+                  focusedAgentKey={focusedAgentKey}
+                  onCreateAgent={onCreateAgent}
+                  onUpdateAgent={onUpdateAgent}
+                  onDeleteAgent={onDeleteAgent}
+                  onCreateWebhook={onCreateAgentWebhook}
+                  onUpdateWebhook={onUpdateAgentWebhook}
+                  onOpenConnections={onOpenConnections}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
@@ -2588,12 +2597,14 @@ function CanvasLayerScene({
               titleIcon={<Users size={13} />}
               breadcrumb={workspaceName}
             >
-              <UsersWindow
-                workspaceId={workspaceId}
-                workspaceName={workspaceName}
-                currentUserId={userId}
-                currentUserEmail={userEmail}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <UsersWindow
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
+                  currentUserId={userId}
+                  currentUserEmail={userEmail}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
@@ -2617,11 +2628,13 @@ function CanvasLayerScene({
               titleIcon={<Clock size={13} />}
               breadcrumb={workspaceName}
             >
-              <SchedulesWindow
-                workspaceId={workspaceId}
-                agents={agents}
-                sessions={sessions}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <SchedulesWindow
+                  workspaceId={workspaceId}
+                  agents={agents}
+                  sessions={sessions}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
