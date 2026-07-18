@@ -19,7 +19,10 @@
     "Do not invent builder or live-agent path routes; this app exposes the workspace shell and a /#showcase gallery."
   ],
   "actions": [
-    { "label": "Show workspace tour", "tour": true },
+    {
+      "label": "Show workspace tour",
+      "tour": true
+    },
     {
       "label": "Explain agents",
       "task": "Explain how to open Agents from the sidebar, create or edit an agent, and copy a connection command. Mention that live daemon connections depend on backend configuration."
@@ -28,7 +31,10 @@
       "label": "Explain the canvas",
       "task": "Explain the shared canvas, floating windows, the bottom dock, realtime presence, and the workspace composer in a short practical overview."
     },
-    { "label": "Open showcase", "href": "/#showcase" }
+    {
+      "label": "Open showcase",
+      "href": "/#showcase"
+    }
   ],
   "tour": [
     {
@@ -57,8 +63,8 @@
       "holdMs": 4300
     },
     {
-      "selector": ".workspace-bottom-controls",
-      "say": "Presence and notifications sit in the lower-right workspace controls.",
+      "selector": "[data-sidebar-panel]",
+      "say": "Presence, notifications, your account, theme, and settings live in the sidebar — the notification bell sits by the workspace switcher up top, and presence + account controls are in the footer.",
       "holdMs": 3600
     },
     {
@@ -75,12 +81,18 @@
         "The component gallery is reached by the /#showcase hash, not by a pathname route."
       ],
       "actions": [
-        { "label": "Show workspace tour", "tour": true },
+        {
+          "label": "Show workspace tour",
+          "tour": true
+        },
         {
           "label": "Where do agents live?",
           "task": "Tell the user to open Agents from the sidebar, then explain Create Agent, Connect a client, connection commands, and daemon backend requirements."
         },
-        { "label": "Open showcase", "href": "/#showcase" }
+        {
+          "label": "Open showcase",
+          "href": "/#showcase"
+        }
       ]
     }
   }

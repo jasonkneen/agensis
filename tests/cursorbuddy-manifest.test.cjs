@@ -79,7 +79,6 @@ test('root app CursorBuddy tour selectors are backed by source selectors', () =>
     ['.home-workspace-composer', 'home-workspace-composer'],
     ['[data-workspace-viewport]', 'data-workspace-viewport'],
     ['.workspace-window-dock', 'workspace-window-dock'],
-    ['.workspace-bottom-controls', 'workspace-bottom-controls'],
     ['.agents-window-body', 'agents-window-body'],
   ]);
 

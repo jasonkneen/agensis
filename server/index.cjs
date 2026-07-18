@@ -23,6 +23,8 @@ const {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
+ arrayColumnElemType,
+ toPgArrayLiteral,
  WORKSPACE_SCOPED_TABLES: SHARED_WORKSPACE_SCOPED_TABLES,
  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
@@ -770,6 +772,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE canvas_groups ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE canvas_objects ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
@@ -1295,8 +1299,17 @@ function normalizeJsonParam(table, column, value) {
 
 function bindDbParam(params, table, column, value) {
  const jsonColumn = isJsonColumn(table, column);
- params.push(jsonColumn ? normalizeJsonParam(table, column, value) : (value ?? null));
- return `$${params.length}${jsonColumn ? '::jsonb' : ''}`;
+ if (jsonColumn) {
+  params.push(normalizeJsonParam(table, column, value));
+  return `$${params.length}::jsonb`;
+ }
+ const elemType = arrayColumnElemType(table, column);
+ if (elemType) {
+  params.push(toPgArrayLiteral(value));
+  return `$${params.length}::${elemType}[]`;
+ }
+ params.push(value ?? null);
+ return `$${params.length}`;
 }
 
 function buildWhereClause(filters = [], params = []) {
@@ -2429,7 +2442,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, description, status, priority, due_date, assignee_id, parent_id, source_type, source_id, created_at, updated_at
+   `select id, workspace_id, title, description, status, priority, due_date, start_date, depends_on, assignee_id, parent_id, source_type, source_id, created_at, updated_at
        from tasks
        where workspace_id = $1
        order by created_at desc
@@ -3242,8 +3255,46 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   );
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  // Insert a 'Thinking' placeholder first, then stream the built-in reply into it
+  // token-by-token (message UPDATE broadcasts) so it renders live in the channel
+  // like a daemon agent — instead of popping in complete when the call finishes.
+  const responseMessageId = crypto.randomUUID();
+  const placeholderRows = await getDb().unsafe(
+   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+        values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
+        returning *`,
+   [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+  );
+  notifyDbSubscribers('messages', 'INSERT', placeholderRows);
+  let writeChain = Promise.resolve();
+  let writing = false;
   try {
-   const responseText = await runAnthropicCompletion({
+   // Throttle + serialize DB writes: at most one update in flight at a time and
+   // no more than ~4x/sec, always writing the LATEST accumulated text. Because
+   // each delta carries the full text so far, awaiting the in-flight write (in
+   // both the success and error paths) prevents a late partial from clobbering
+   // the final content.
+   let latest = '';
+   let lastFlush = 0;
+   const flush = () => {
+    if (writing) return;
+    const now = Date.now();
+    if (now - lastFlush < 250) return;
+    writing = true;
+    lastFlush = now;
+    writeChain = (async () => {
+     try {
+      const rows = await getDb().unsafe(
+       `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+       [responseMessageId, latest || 'Thinking…', sessionId],
+      );
+      if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+     } finally {
+      writing = false;
+     }
+    })();
+   };
+   const responseText = await runAnthropicCompletionStreaming({
     model: resolveAnthropicModel(agent.model),
     messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
     memory: null,
@@ -3251,22 +3302,28 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     workspaceContext: null,
     agentContext,
     workspaceId,
-   });
+   }, (partial) => { latest = partial; flush(); });
    const updatedRows = await getDb().unsafe(
     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
     [jobRows[0].id, responseText],
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+   // Wait for any in-flight throttled write to finish, THEN write the complete
+   // text last so it can never be clobbered by a late-landing partial update.
+   await writeChain.catch(() => { });
    const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-         values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-         returning *`,
-    [sessionId, responseText || `@${handle} finished without output.`, threadParentId || null, String(agent.id), agent.name],
+    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+    [responseMessageId, responseText || `@${handle} finished without output.`, sessionId],
    );
-   notifyDbSubscribers('messages', 'INSERT', messageRows);
-   void mirrorAgentReplyToTaskComment(messageRows[0]);
+   if (messageRows.length > 0) {
+    notifyDbSubscribers('messages', 'UPDATE', messageRows);
+    void logMessageActivity(messageRows);
+    void mirrorAgentReplyToTaskComment(messageRows[0]);
+   }
    return { ok: true, pending: false };
   } catch (error) {
+   // Let any in-flight partial write settle so it can't clobber the error text.
+   await writeChain.catch(() => { });
    const errorText = error?.message || 'Built-in agent failed';
    const updatedRows = await getDb().unsafe(
     `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
@@ -3274,12 +3331,10 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
    const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-         values ($1, 'assistant', $2, $3, 'agent', $4, $5)
-         returning *`,
-    [sessionId, `@${handle} failed: ${errorText}`, threadParentId || null, String(agent.id), agent.name],
+    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+    [responseMessageId, `@${handle} failed: ${errorText}`, sessionId],
    );
-   notifyDbSubscribers('messages', 'INSERT', messageRows);
+   if (messageRows.length > 0) notifyDbSubscribers('messages', 'UPDATE', messageRows);
    return { ok: false, pending: false };
   }
  }
@@ -4576,6 +4631,61 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
   .map((part) => part?.type === 'text' ? part.text : '')
   .filter(Boolean)
   .join('\n');
+}
+
+// Streaming variant of runAnthropicCompletion. Streams the Anthropic SSE response
+// and invokes onDelta(fullTextSoFar) as text accumulates (throttled by the caller
+// via the returned cadence). Returns the final text. Used by built-in agents so
+// their replies stream into the channel token-by-token like daemon agents do,
+// instead of popping in complete.
+async function runAnthropicCompletionStreaming({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }, onDelta) {
+ const apiKey = await getAnthropicApiKey(workspaceId);
+ if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
+
+ const response = await fetch('https://api.anthropic.com/v1/messages', {
+  method: 'POST',
+  headers: {
+   'Content-Type': 'application/json',
+   'x-api-key': apiKey,
+   'anthropic-version': '2023-06-01',
+  },
+  body: JSON.stringify({
+   model: resolveAnthropicModel(model),
+   max_tokens: 4096,
+   stream: true,
+   messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
+   system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+  }),
+ });
+
+ if (!response.ok || !response.body) {
+  throw new Error(await response.text().catch(() => 'Anthropic stream failed'));
+ }
+
+ let full = '';
+ let buffer = '';
+ const decoder = new TextDecoder();
+ for await (const chunk of response.body) {
+  buffer += decoder.decode(chunk, { stream: true });
+  // SSE frames are separated by a blank line; each frame has a `data:` line.
+  let sep;
+  while ((sep = buffer.indexOf('\n\n')) !== -1) {
+   const frame = buffer.slice(0, sep);
+   buffer = buffer.slice(sep + 2);
+   const line = frame.split('\n').find((l) => l.startsWith('data:'));
+   if (!line) continue;
+   const data = line.slice(5).trim();
+   if (!data || data === '[DONE]') continue;
+   try {
+    const parsed = JSON.parse(data);
+    if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+     full += parsed.delta.text || '';
+     if (onDelta) onDelta(full);
+    }
+   } catch { /* ignore malformed chunk */ }
+  }
+ }
+ return full;
 }
 
 function safeFileName(name) {
