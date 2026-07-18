@@ -7516,6 +7516,54 @@ function createApp() {
   }
  });
 
+ // Threads the signed-in user is involved in (authored at least one message in),
+ // across the whole workspace — quick-access list. A "thread" here is a sub-thread
+ // session (parent_message_id set) or any session the user has posted a threaded
+ // reply in. Scoped by the user's own sends (sender_kind='user', sender_id=me).
+ app.get('/backend/workspaces/:id/my-threads', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const limit = Math.min(100, Math.max(1, Math.trunc(Number(req.query.limit)) || 50));
+   const rows = await getDb().unsafe(
+    `select s.id, s.workspace_id, s.title, s.folder, s.participants, s.parent_message_id,
+            s.updated_at, s.created_at,
+            (select count(*) from messages m2 where m2.session_id = s.id and m2.deleted_at is null) as message_count,
+            greatest(s.updated_at, coalesce((select max(m3.created_at) from messages m3 where m3.session_id = s.id), s.updated_at)) as last_activity
+       from chat_sessions s
+      where s.workspace_id = $1
+        and s.deleted_at is null
+        -- "Threads involving the user": either a dedicated sub-thread session
+        -- (parent_message_id set) in which the user posted, OR any session where
+        -- the user themself authored a threaded reply. The user-authorship is
+        -- checked INSIDE each case so a plain channel message never qualifies.
+        and (
+          (
+            s.parent_message_id is not null
+            and exists (
+              select 1 from messages m
+               where m.session_id = s.id and m.deleted_at is null
+                 and m.sender_kind = 'user' and m.sender_id = $2
+            )
+          )
+          or exists (
+            select 1 from messages mt
+             where mt.session_id = s.id and mt.deleted_at is null
+               and mt.thread_parent_id is not null
+               and mt.sender_kind = 'user' and mt.sender_id = $2
+          )
+        )
+      order by last_activity desc nulls last
+      limit $3`,
+    [workspaceId, String(req.userId), limit],
+   );
+   res.json({ data: rows, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.get('/backend/schedules/:id/runs', requireAuth, async (req, res) => {
   try {
    const scheduleId = String(req.params.id || '').trim();
