@@ -144,6 +144,17 @@ const AGENT_TEMPLATES: AgentTemplate[] = [
   },
 ];
 
+// Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
+// documented as coming soon so the picker reflects reality, not aspiration.
+const CODING_AGENT_PROVIDERS: Array<{ id: string; name: string; note: string; available: boolean }> = [
+  { id: 'claude', name: 'Claude Code CLI', note: 'Anthropic', available: true },
+  { id: 'codex', name: 'Codex CLI', note: 'OpenAI', available: true },
+  { id: 'gemini', name: 'Gemini CLI', note: 'Coming soon', available: false },
+  { id: 'cursor', name: 'Cursor CLI', note: 'Coming soon', available: false },
+  { id: 'opencode', name: 'OpenCode', note: 'Coming soon', available: false },
+  { id: 'aider', name: 'Aider', note: 'Coming soon', available: false },
+];
+
 const DEFAULT_AGENT_AVATAR = 'AI';
 const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon }> = [
   { value: 'icon:bot', label: 'Bot', icon: Bot },
@@ -1536,6 +1547,28 @@ function AgentConnectDialog({
                 benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
                 note="Needs the agensis CLI installed, and the agent only runs while your daemon is up."
               />
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">Supported coding agents your daemon can run</p>
+                <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(140px,1fr))]">
+                  {CODING_AGENT_PROVIDERS.map(provider => (
+                    <div
+                      key={provider.id}
+                      className={cn(
+                        'flex flex-col gap-1 rounded-lg border p-2.5',
+                        provider.available ? 'border-border bg-card/50' : 'border-dashed border-border/60 bg-card/20 opacity-70',
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate text-xs font-semibold">{provider.name}</span>
+                      </div>
+                      <span className={cn('text-[10px]', provider.available ? 'text-emerald-500' : 'text-muted-foreground')}>
+                        {provider.available ? 'Available' : provider.note}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <McpDialogSection icon={Terminal} title="Daemon connect command">
                 <p className="text-xs text-muted-foreground">
                   Generate a one-line command, then run it where the daemon should execute. It&apos;s copied to your clipboard.
