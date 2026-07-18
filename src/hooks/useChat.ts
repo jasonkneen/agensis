@@ -635,12 +635,18 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
+    // A "Direct messages" session is always agent-routable, even if its participant
+    // record is degraded/missing (legacy DMs) — the server resolves the target
+    // agent by folder + title. Without this, a DM with a null direct participant
+    // would hit neither directAgentChannel nor autoChannel (autoChannel excludes
+    // DMs) and silently never dispatch, so the agent never replies.
+    const folderDm = session.folder === 'Direct messages';
     // AUTO is always on for channels now (no per-channel toggle): any non-DM
-    // channel lets participant agents chime in on new messages. DMs still route
-    // via their direct participant. Legacy conversation_mode is treated as auto.
+    // channel lets participant agents chime in on new messages. DMs route via
+    // their direct participant or the folder fallback above.
     const autoChannel = session.folder !== 'Direct messages';
     const sharedModelRoute = isSharedModelRoute(model);
-    const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
+    const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || folderDm || autoChannel));
 
     if (shouldRouteToAgent) {
       const dispatched = await dispatchToAgent(
