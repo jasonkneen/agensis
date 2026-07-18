@@ -125,25 +125,6 @@ async function setSettingValue(key, value) {
  );
 }
 
-async function getWorkspaceSecretValue(workspaceId, key) {
- if (!workspaceId) return '';
- const rows = await getDb().unsafe(
-  'select value from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
-  [workspaceId, key],
- );
- return rows[0]?.value || '';
-}
-
-async function setWorkspaceSecretValue(workspaceId, key, value, userId) {
- await getDb().unsafe(
-  `insert into workspace_secrets (workspace_id, key, value, updated_by, updated_at)
-     values ($1, $2, $3, $4, now())
-     on conflict (workspace_id, key)
-     do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-  [workspaceId, key, value, userId || null],
- );
-}
-
 // Resolve a managed secret: DB value first, then env var as a fallback (so an
 // ANTHROPIC_API_KEY set via the host environment still works out of the box).
 async function resolveSecret(key, workspaceId = null) {
@@ -846,6 +827,8 @@ async function ensureRuntimeSchema() {
       PRIMARY KEY (workspace_id, key)
     );
     CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
  await db.unsafe(`
     ALTER TABLE workspace_members DROP CONSTRAINT IF EXISTS workspace_members_role_check;
@@ -1123,10 +1106,59 @@ function flowConnectionRecord(row) {
   createdAt: Date.parse(row.created_at),
  };
 }
+async function getWorkspaceSecretValue(workspaceId, key) {
+ if (!workspaceId) return '';
+ const rows = await getDb().unsafe(
+  'select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
+  [workspaceId, key],
+ );
+ if (!rows[0]) return '';
+ // Prefer the encrypted column; fall back to the legacy plaintext value for rows
+ // written before encryption-at-rest landed (they get re-encrypted on next write).
+ if (rows[0].secret_cipher) {
+  try { return await decryptVaultSecret(rows[0].secret_cipher); } catch { return ''; }
+ }
+ return rows[0].value || '';
+}
 
+async function setWorkspaceSecretValue(workspaceId, key, value, userId, description) {
+ const cipher = value ? await encryptVaultSecret(value) : '';
+ await getDb().unsafe(
+  `insert into workspace_secrets (workspace_id, key, value, secret_cipher, description, updated_by, updated_at)
+     values ($1, $2, '', $3, coalesce($4, ''), $5, now())
+     on conflict (workspace_id, key)
+     do update set value = '', secret_cipher = excluded.secret_cipher,
+       description = coalesce($4, workspace_secrets.description),
+       updated_by = excluded.updated_by, updated_at = now()`,
+  [workspaceId, key, cipher, description ?? null, userId || null],
+ );
+}
 async function flowSecretKey() {
  const authSecret = await getAuthSecret();
  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
+}
+// Generic AES-256-GCM key for workspace vault secrets. Prefers a dedicated
+// SECRETS_ENCRYPTION_KEY so secrets survive an AUTH_SECRET rotation; falls back to
+// AUTH_SECRET only when unset. Rotating whichever key is in use re-locks stored
+// secrets, which must then be re-entered.
+async function vaultSecretKey() {
+ loadEnvFile();
+ const dedicated = String(process.env.SECRETS_ENCRYPTION_KEY || '').trim();
+ const material = dedicated || `auth-fallback:${await getAuthSecret()}`;
+ return crypto.createHash('sha256').update(`agensis-workspace-vault:${material}`).digest();
+}
+async function encryptVaultSecret(value) {
+ const iv = crypto.randomBytes(12);
+ const cipher = crypto.createCipheriv('aes-256-gcm', await vaultSecretKey(), iv);
+ const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+ return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString('base64url')).join('.');
+}
+async function decryptVaultSecret(value) {
+ const [iv, tag, encrypted] = String(value || '').split('.').map(part => Buffer.from(part, 'base64url'));
+ if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted vault secret');
+ const decipher = crypto.createDecipheriv('aes-256-gcm', await vaultSecretKey(), iv);
+ decipher.setAuthTag(tag);
+ return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
 async function encryptFlowSecret(value) {
@@ -8170,6 +8202,69 @@ function createApp() {
    }
    const keys = await listManagedSecrets(workspaceId);
    res.json({ data: { keys }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Workspace vault: arbitrary encrypted shared secrets --------------------
+ // Values are AES-256-GCM encrypted at rest and NEVER returned in full — reads
+ // return only a masked preview. Manage-role only, per workspace.
+ app.get('/backend/workspaces/:id/vault', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `select key, description, secret_cipher, value, updated_at, updated_by
+           from workspace_secrets where workspace_id = $1 order by key asc`,
+    [workspaceId],
+   );
+   // Exclude the platform-managed keys (surfaced via /settings/secrets) so the
+   // vault UI only shows user-defined shared secrets.
+   const managed = new Set(MANAGED_SECRET_KEYS);
+   const data = [];
+   for (const row of rows) {
+    if (managed.has(row.key)) continue;
+    let plain = '';
+    if (row.secret_cipher) { try { plain = await decryptVaultSecret(row.secret_cipher); } catch { plain = ''; } }
+    else plain = row.value || '';
+    data.push({ key: row.key, description: row.description || '', preview: maskSecret(plain), configured: !!plain, updated_at: row.updated_at });
+   }
+   res.json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.put('/backend/workspaces/:id/vault/:key', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const key = String(req.params.key || '').trim();
+   if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
+   if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) return jsonError(res, 400, new Error('key must be 1-128 chars of letters, digits, _ . -'));
+   if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const value = typeof req.body?.value === 'string' ? req.body.value : '';
+   const description = typeof req.body?.description === 'string' ? req.body.description.slice(0, 300) : undefined;
+   await setWorkspaceSecretValue(workspaceId, key, value, req.userId, description);
+   notifyDbSubscribers('workspace_secrets', 'UPDATE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key, configured: !!value }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/vault/:key', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const key = String(req.params.key || '').trim();
+   if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
+   if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
+   notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
