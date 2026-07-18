@@ -195,7 +195,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (fileHeartbeatTimer) clearInterval(fileHeartbeatTimer);
     if (cursorBuddyBridge) {
-      void cursorBuddyBridge.close().catch(() => {});
+      void cursorBuddyBridge.close().catch(() => { });
       cursorBuddyBridge = null;
     }
     stopLanListener();
@@ -325,10 +325,10 @@ export async function runAgensisDaemon(rawConfig = {}) {
             log(`Profile save failed: ${error?.message || error}`);
           });
         }
-        void writeAgentMirror(config, message.agent).catch(() => {});
+        void writeAgentMirror(config, message.agent).catch(() => { });
         // Seed heartbeat.md (what to do on each beat) if it doesn't exist yet; never
         // clobbers an existing file, so human/agent edits persist across restarts.
-        void ensureHeartbeatMd(config).catch(() => {});
+        void ensureHeartbeatMd(config).catch(() => { });
         void pushMemorySnapshot(ws, config);
         // The listener persists across reconnects (only the ws reconnects), so this is
         // idempotent — a no-op once it's already running.
@@ -339,7 +339,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
       if (message.type === "agent_config") {
         applyAgentConfig(config, message.agent);
         log(`Updated config for @${config.handle || "agent"}: model=${config.model}, permission=${config.permissionMode}`);
-        void writeAgentMirror(config, message.agent).catch(() => {});
+        void writeAgentMirror(config, message.agent).catch(() => { });
         return;
       }
       if (message.type === "agent_memory_refresh") {
@@ -500,7 +500,7 @@ export async function runAgensisDaemon(rawConfig = {}) {
       connected: ws?.readyState === WebSocket.OPEN,
       agentStatus: agentStatus?.status,
       agentNote: agentStatus?.note,
-    }).catch(() => {});
+    }).catch(() => { });
   };
   void writeFileBeat();
   fileHeartbeatTimer = setInterval(() => { void writeFileBeat(); }, config.heartbeatMs);
@@ -1064,10 +1064,10 @@ function resolveModel(value) {
 function resolveJobPermissionMode(config, job) {
   return normalizePermissionMode(
     job?.agent?.permissionMode ||
-      job?.agent?.permission_mode ||
-      job?.permissionMode ||
-      job?.permission_mode ||
-      config.permissionMode,
+    job?.agent?.permission_mode ||
+    job?.permissionMode ||
+    job?.permission_mode ||
+    config.permissionMode,
   );
 }
 
@@ -1430,4 +1430,5 @@ export const __test = {
   normalizeConfig,
   heartbeatMetadata,
   abortInferenceRequests,
+  createStreamJsonParser,
 };
