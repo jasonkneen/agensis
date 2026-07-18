@@ -23,29 +23,29 @@ const crypto = require('node:crypto');
 // ----------------------------------------------------------------------------
 
 const ALLOWED_TABLES = new Set([
-  'app_users',
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'messages',
-  'memory_facts',
-  'uploaded_files',
-  'workspace_members',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'document_versions',
-  'workspace_agents',
-  'agent_webhooks',
-  'agent_connections',
-  'agent_jobs',
-  'agent_registrations',
-  'activity_events',
-  'agent_memory_files',
-  'memory_file_comments',
-  'thread_items',
+ 'app_users',
+ 'workspaces',
+ 'documents',
+ 'chat_sessions',
+ 'messages',
+ 'memory_facts',
+ 'uploaded_files',
+ 'workspace_members',
+ 'canvas_groups',
+ 'canvas_objects',
+ 'tasks',
+ 'document_comments',
+ 'task_comments',
+ 'document_versions',
+ 'workspace_agents',
+ 'agent_webhooks',
+ 'agent_connections',
+ 'agent_jobs',
+ 'agent_registrations',
+ 'activity_events',
+ 'agent_memory_files',
+ 'memory_file_comments',
+ 'thread_items',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -54,112 +54,118 @@ const ALLOWED_TABLES = new Set([
 // -> capability writes not cast ::jsonb). VERSIONED_TABLES + JSON_COLUMNS_BY_TABLE are
 // new core exports, added to module.exports (P11b).
 const VERSIONED_TABLES = new Set([
-  'workspaces',
-  'documents',
-  'chat_sessions',
-  'memory_facts',
-  'uploaded_files',
-  'canvas_groups',
-  'canvas_objects',
-  'tasks',
-  'document_comments',
-  'task_comments',
-  'workspace_agents',
-  'agent_webhooks',
-  'agent_memory_files',
-  'memory_file_comments',
+ 'workspaces',
+ 'documents',
+ 'chat_sessions',
+ 'memory_facts',
+ 'uploaded_files',
+ 'canvas_groups',
+ 'canvas_objects',
+ 'tasks',
+ 'document_comments',
+ 'task_comments',
+ 'workspace_agents',
+ 'agent_webhooks',
+ 'agent_memory_files',
+ 'memory_file_comments',
 ]);
 
 const JSON_COLUMNS_BY_TABLE = {
-  chat_sessions: new Set(['participants']),
-  canvas_objects: new Set(['points']),
-  workspace_agents: new Set(['tools', 'skills', 'metadata']),
-  agent_connections: new Set(['metadata', 'capabilities']),
-  agent_jobs: new Set(['metadata']),
-  activity_events: new Set(['metadata']),
-  messages: new Set(['reactions']),
+ chat_sessions: new Set(['participants']),
+ canvas_objects: new Set(['points']),
+ workspace_agents: new Set(['tools', 'skills', 'metadata']),
+ agent_connections: new Set(['metadata', 'capabilities']),
+ agent_jobs: new Set(['metadata']),
+ activity_events: new Set(['metadata']),
+ messages: new Set(['reactions']),
 };
 
 // Tables whose rows are scoped to a workspace and therefore subject to
 // membership/role checks. Maps table -> how to find its workspace id.
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
-  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
-  'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
-  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
-  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
-  'activity_events', 'workspace_members',
-  'agent_memory_files', 'memory_file_comments', 'thread_items',
+ 'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
+ 'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
+ 'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
+ 'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
+ 'activity_events', 'workspace_members',
+ 'agent_memory_files', 'memory_file_comments', 'thread_items',
+ 'agent_schedules', 'agent_schedule_runs',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
-  owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
-  admin: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
-  editor: new Set(['read', 'write', 'comment', 'run_agents']),
-  commenter: new Set(['read', 'comment']),
-  viewer: new Set(['read']),
+ owner: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
+ admin: new Set(['read', 'write', 'comment', 'run_agents', 'manage']),
+ editor: new Set(['read', 'write', 'comment', 'run_agents']),
+ commenter: new Set(['read', 'comment']),
+ viewer: new Set(['read']),
 };
 
 const DEFAULT_TABLE_ACCESS = {
-  select: 'read',
-  insert: 'write',
-  update: 'write',
-  delete: 'write',
+ select: 'read',
+ insert: 'write',
+ update: 'write',
+ delete: 'write',
 };
 
 const DB_TABLE_ACCESS = {
-  documents: DEFAULT_TABLE_ACCESS,
-  chat_sessions: DEFAULT_TABLE_ACCESS,
-  messages: DEFAULT_TABLE_ACCESS,
-  memory_facts: DEFAULT_TABLE_ACCESS,
-  uploaded_files: DEFAULT_TABLE_ACCESS,
-  canvas_groups: DEFAULT_TABLE_ACCESS,
-  canvas_objects: DEFAULT_TABLE_ACCESS,
-  tasks: DEFAULT_TABLE_ACCESS,
-  document_versions: DEFAULT_TABLE_ACCESS,
-  workspace_agents: DEFAULT_TABLE_ACCESS,
-  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
-  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
-  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
-  activity_events: DEFAULT_TABLE_ACCESS,
-  document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
-  // Kept in sync with server/index.cjs DB_TABLE_ACCESS so a table added to this
-  // runtime's ALLOWED_TABLES can't silently fall through to the default
-  // read/write mapping (L1, 2026-07 review).
-  agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
-  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
-  thread_items: DEFAULT_TABLE_ACCESS,
+ documents: DEFAULT_TABLE_ACCESS,
+ chat_sessions: DEFAULT_TABLE_ACCESS,
+ messages: DEFAULT_TABLE_ACCESS,
+ memory_facts: DEFAULT_TABLE_ACCESS,
+ uploaded_files: DEFAULT_TABLE_ACCESS,
+ canvas_groups: DEFAULT_TABLE_ACCESS,
+ canvas_objects: DEFAULT_TABLE_ACCESS,
+ tasks: DEFAULT_TABLE_ACCESS,
+ document_versions: DEFAULT_TABLE_ACCESS,
+ workspace_agents: DEFAULT_TABLE_ACCESS,
+ agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+ cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+ agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
+ activity_events: DEFAULT_TABLE_ACCESS,
+ document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+ task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+ workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ agent_webhooks: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Kept in sync with server/index.cjs DB_TABLE_ACCESS so a table added to this
+ // runtime's ALLOWED_TABLES can't silently fall through to the default
+ // read/write mapping (L1, 2026-07 review).
+ agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Writes go through dedicated /backend/.../schedules endpoints (workspace/session
+ // validation + interval clamps). Generic /db writes are gated to 'manage' so the
+ // run_agents path can't bypass that validation; runs are written by the runner only.
+ agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+ thread_items: DEFAULT_TABLE_ACCESS,
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
 // routes (editors could otherwise approve MCP agents, rewrite storage paths, etc.).
 const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
-  workspace_agents: new Set([
-    'mcp_approved',
-    'connect_token_hash',
-    'connect_token',
-    'permission_mode',
-  ]),
-  uploaded_files: new Set([
-    'storage_path',
-    'content_sha256',
-    'type',
-  ]),
+ workspace_agents: new Set([
+  'mcp_approved',
+  'connect_token_hash',
+  'connect_token',
+  'permission_mode',
+ ]),
+ uploaded_files: new Set([
+  'storage_path',
+  'content_sha256',
+  'type',
+ ]),
 };
 
 function stripPrivilegedDbValues(table, values) {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
-  const privileged = PRIVILEGED_DB_COLUMNS_BY_TABLE[table];
-  if (!privileged) return values;
-  const next = { ...values };
-  for (const key of privileged) {
-    if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
-  }
-  return next;
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
+ const privileged = PRIVILEGED_DB_COLUMNS_BY_TABLE[table];
+ if (!privileged) return values;
+ const next = { ...values };
+ for (const key of privileged) {
+  if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
+ }
+ return next;
 }
 
 /**
@@ -168,29 +174,29 @@ function stripPrivilegedDbValues(table, values) {
  * (e.g. `ws-1/../ws-2/secret.txt` must NOT pass for workspace ws-1).
  */
 function storagePathBelongsToWorkspace(workspaceId, storagePath) {
-  const ws = String(workspaceId || '').trim();
-  if (!ws || ws.includes('/') || ws.includes('\\') || ws === '.' || ws === '..') return false;
+ const ws = String(workspaceId || '').trim();
+ if (!ws || ws.includes('/') || ws.includes('\\') || ws === '.' || ws === '..') return false;
 
-  // Normalize separators; do not strip leading slashes yet so we can reject absolutes.
-  let sp = String(storagePath || '').replace(/\\/g, '/');
-  if (!sp || sp.startsWith('/') || /^[a-zA-Z]:/.test(sp)) return false;
+ // Normalize separators; do not strip leading slashes yet so we can reject absolutes.
+ let sp = String(storagePath || '').replace(/\\/g, '/');
+ if (!sp || sp.startsWith('/') || /^[a-zA-Z]:/.test(sp)) return false;
 
-  // Explicitly reject any parent-directory segment before trusting normalize.
-  // path.posix.normalize("ws-1/../ws-2/x") => "ws-2/x" which would otherwise
-  // look "fine" for a different workspace check if we only prefix-matched
-  // the pre-normalized string (or worse, pass a broken prefix check).
-  const rawSegments = sp.split('/');
-  if (rawSegments.some((seg) => seg === '..')) return false;
+ // Explicitly reject any parent-directory segment before trusting normalize.
+ // path.posix.normalize("ws-1/../ws-2/x") => "ws-2/x" which would otherwise
+ // look "fine" for a different workspace check if we only prefix-matched
+ // the pre-normalized string (or worse, pass a broken prefix check).
+ const rawSegments = sp.split('/');
+ if (rawSegments.some((seg) => seg === '..')) return false;
 
-  // Collapse "." and empty segments; no ".." remains after the check above.
-  const normalized = rawSegments
-    .filter((seg) => seg && seg !== '.')
-    .join('/');
-  if (!normalized) return false;
-  // Belt-and-suspenders after join.
-  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) return false;
+ // Collapse "." and empty segments; no ".." remains after the check above.
+ const normalized = rawSegments
+  .filter((seg) => seg && seg !== '.')
+  .join('/');
+ if (!normalized) return false;
+ // Belt-and-suspenders after join.
+ if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) return false;
 
-  return normalized === ws || normalized.startsWith(`${ws}/`);
+ return normalized === ws || normalized.startsWith(`${ws}/`);
 }
 
 // ----------------------------------------------------------------------------
@@ -199,9 +205,9 @@ function storagePathBelongsToWorkspace(workspaceId, storagePath) {
 // ----------------------------------------------------------------------------
 
 function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
+ const err = new Error(message);
+ err.status = status;
+ return err;
 }
 function unauthorized(message = 'Authentication required') { return httpError(401, message); }
 function forbidden(message) { return httpError(403, message); }
@@ -234,9 +240,9 @@ function badRequest(message) { return httpError(400, message); }
 const DEFAULT_TOKEN_TTL_SEC = 14 * 24 * 60 * 60; // 14 days
 
 function getTokenTtlSec() {
-  const raw = Number(process.env.AGENSIS_TOKEN_TTL_SEC);
-  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
-  return DEFAULT_TOKEN_TTL_SEC;
+ const raw = Number(process.env.AGENSIS_TOKEN_TTL_SEC);
+ if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+ return DEFAULT_TOKEN_TTL_SEC;
 }
 
 /**
@@ -244,44 +250,44 @@ function getTokenTtlSec() {
  * expiry can be exercised without sleeping.
  */
 function issueAuthToken(userId, tokenVersion, secret, options = {}) {
-  if (!secret) throw new Error('issueAuthToken requires a signing secret');
-  const issuedAt = Number.isFinite(options.issuedAt)
-    ? Math.floor(options.issuedAt)
-    : Math.floor(Date.now() / 1000);
-  const payload = `${userId}.${tokenVersion}.${issuedAt}`;
-  const sig = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+ if (!secret) throw new Error('issueAuthToken requires a signing secret');
+ const issuedAt = Number.isFinite(options.issuedAt)
+  ? Math.floor(options.issuedAt)
+  : Math.floor(Date.now() / 1000);
+ const payload = `${userId}.${tokenVersion}.${issuedAt}`;
+ const sig = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
+ return `${payload}.${sig}`;
 }
 
 async function verifyAuthToken(authHeader, secret, getTokenVersion, options = {}) {
-  const header = String(authHeader || '');
-  const token = header.startsWith('Bearer ') ? header.slice(7) : header;
-  if (!token || typeof token !== 'string') return null;
-  const dot = token.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  // Require userId.tokenVersion.issuedAt (legacy 2-part payloads no longer verify).
-  const parts = payload.split('.');
-  if (parts.length !== 3) return null;
-  const [userId, tokenVersionStr, issuedAtStr] = parts;
-  if (!userId || !tokenVersionStr || !issuedAtStr) return null;
-  const issuedAt = Number(issuedAtStr);
-  if (!Number.isFinite(issuedAt) || issuedAt < 0) return null;
-  if (!secret) return null;
-  const expected = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  const nowSec = Number.isFinite(options.nowSec) ? Math.floor(options.nowSec) : Math.floor(Date.now() / 1000);
-  const ttl = Number.isFinite(options.ttlSec) ? options.ttlSec : getTokenTtlSec();
-  if (nowSec - issuedAt > ttl) return null;
-  if (typeof getTokenVersion !== 'function') {
-    throw new Error('verifyAuthToken requires a getTokenVersion(userId) function to check revocation');
-  }
-  const currentVersion = await getTokenVersion(userId);
-  if (currentVersion === null || currentVersion === undefined || String(currentVersion) !== tokenVersionStr) return null;
-  return userId;
+ const header = String(authHeader || '');
+ const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+ if (!token || typeof token !== 'string') return null;
+ const dot = token.lastIndexOf('.');
+ if (dot <= 0) return null;
+ const payload = token.slice(0, dot);
+ const sig = token.slice(dot + 1);
+ // Require userId.tokenVersion.issuedAt (legacy 2-part payloads no longer verify).
+ const parts = payload.split('.');
+ if (parts.length !== 3) return null;
+ const [userId, tokenVersionStr, issuedAtStr] = parts;
+ if (!userId || !tokenVersionStr || !issuedAtStr) return null;
+ const issuedAt = Number(issuedAtStr);
+ if (!Number.isFinite(issuedAt) || issuedAt < 0) return null;
+ if (!secret) return null;
+ const expected = crypto.createHmac('sha256', String(secret)).update(payload).digest('base64url');
+ const a = Buffer.from(sig);
+ const b = Buffer.from(expected);
+ if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+ const nowSec = Number.isFinite(options.nowSec) ? Math.floor(options.nowSec) : Math.floor(Date.now() / 1000);
+ const ttl = Number.isFinite(options.ttlSec) ? options.ttlSec : getTokenTtlSec();
+ if (nowSec - issuedAt > ttl) return null;
+ if (typeof getTokenVersion !== 'function') {
+  throw new Error('verifyAuthToken requires a getTokenVersion(userId) function to check revocation');
+ }
+ const currentVersion = await getTokenVersion(userId);
+ if (currentVersion === null || currentVersion === undefined || String(currentVersion) !== tokenVersionStr) return null;
+ return userId;
 }
 
 // Short-TTL in-process cache for token_version lookups, so verifyAuthToken's
@@ -296,26 +302,26 @@ async function verifyAuthToken(authHeader, secret, getTokenVersion, options = {}
 // instances; the instance that performs a sign-out/password-change bump should
 // update its own cache entry immediately (see netlify/functions/backend.mjs).
 function createTokenVersionCache({ ttlMs = 10_000 } = {}) {
-  const cache = new Map(); // userId -> { version, expiresAt }
-  return {
-    async get(userId, db) {
-      const now = Date.now();
-      const cached = cache.get(userId);
-      if (cached && cached.expiresAt > now) return cached.version;
-      const rows = await db('select token_version from app_users where id = $1 limit 1', [userId]);
-      const version = rows[0] ? String(rows[0].token_version) : null;
-      cache.set(userId, { version, expiresAt: now + ttlMs });
-      return version;
-    },
-    // Called right after THIS instance bumps a user's token_version, so
-    // revocation is instant here instead of waiting out the stale entry's TTL.
-    set(userId, version) {
-      cache.set(userId, { version: String(version), expiresAt: Date.now() + ttlMs });
-    },
-    clear() {
-      cache.clear();
-    },
-  };
+ const cache = new Map(); // userId -> { version, expiresAt }
+ return {
+  async get(userId, db) {
+   const now = Date.now();
+   const cached = cache.get(userId);
+   if (cached && cached.expiresAt > now) return cached.version;
+   const rows = await db('select token_version from app_users where id = $1 limit 1', [userId]);
+   const version = rows[0] ? String(rows[0].token_version) : null;
+   cache.set(userId, { version, expiresAt: now + ttlMs });
+   return version;
+  },
+  // Called right after THIS instance bumps a user's token_version, so
+  // revocation is instant here instead of waiting out the stale entry's TTL.
+  set(userId, version) {
+   cache.set(userId, { version: String(version), expiresAt: Date.now() + ttlMs });
+  },
+  clear() {
+   cache.clear();
+  },
+ };
 }
 
 // ----------------------------------------------------------------------------
@@ -323,10 +329,10 @@ function createTokenVersionCache({ ttlMs = 10_000 } = {}) {
 // ----------------------------------------------------------------------------
 
 function quoteIdent(value) {
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
-    throw new Error(`Invalid identifier: ${value}`);
-  }
-  return `"${value}"`;
+ if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
+  throw new Error(`Invalid identifier: ${value}`);
+ }
+ return `"${value}"`;
 }
 
 // ----------------------------------------------------------------------------
@@ -334,14 +340,14 @@ function quoteIdent(value) {
 // ----------------------------------------------------------------------------
 
 function findFilterValue(filters, column) {
-  if (!Array.isArray(filters)) return undefined;
-  const f = filters.find((x) => x && x.column === column && x.operator === 'eq');
-  return f ? f.value : undefined;
+ if (!Array.isArray(filters)) return undefined;
+ const f = filters.find((x) => x && x.column === column && x.operator === 'eq');
+ return f ? f.value : undefined;
 }
 
 function operationRows(values) {
-  if (!values) return [];
-  return Array.isArray(values) ? values : [values];
+ if (!values) return [];
+ return Array.isArray(values) ? values : [values];
 }
 
 // Resolve the workspace id a db operation targets, looking through parent rows
@@ -349,69 +355,69 @@ function operationRows(values) {
 // { workspaceId } when determinable, or { unscoped: true } when access can't be
 // constrained to a single workspace (caller decides how strict to be).
 async function resolveOperationWorkspace(table, { values, filters }, db) {
-  // Insert: workspace id (or a parent that has one) comes from the row values.
-  if (values) {
-    if (values.workspace_id) return { workspaceId: values.workspace_id };
-    if (table === 'messages' && values.session_id) {
-      const rows = await db('select workspace_id from chat_sessions where id = $1 limit 1', [values.session_id]);
-      if (rows[0]) return { workspaceId: rows[0].workspace_id };
-    }
-    return { unscoped: true };
-  }
-  // Select/update/delete: derive from filters.
-  const directWs = findFilterValue(filters, 'workspace_id');
-  if (directWs) return { workspaceId: directWs };
-
-  const parentLookups = [
-    { col: 'document_id', sql: 'select workspace_id from documents where id = $1 limit 1' },
-    { col: 'task_id', sql: 'select workspace_id from tasks where id = $1 limit 1' },
-    { col: 'session_id', sql: 'select workspace_id from chat_sessions where id = $1 limit 1' },
-    { col: 'group_id', sql: 'select workspace_id from canvas_groups where id = $1 limit 1' },
-  ];
-  for (const lookup of parentLookups) {
-    const v = findFilterValue(filters, lookup.col);
-    if (v) {
-      const rows = await db(lookup.sql, [v]);
-      if (rows[0]) return { workspaceId: rows[0].workspace_id };
-    }
-  }
-  // Row id filter on a workspace-scoped table -> look up that row's workspace.
-  const idVal = findFilterValue(filters, 'id');
-  if (idVal && WORKSPACE_SCOPED_TABLES.has(table)) {
-    const rows = await db(`select workspace_id from ${quoteIdent(table)} where id = $1 limit 1`, [idVal]);
-    if (rows[0]) return { workspaceId: rows[0].workspace_id };
+ // Insert: workspace id (or a parent that has one) comes from the row values.
+ if (values) {
+  if (values.workspace_id) return { workspaceId: values.workspace_id };
+  if (table === 'messages' && values.session_id) {
+   const rows = await db('select workspace_id from chat_sessions where id = $1 limit 1', [values.session_id]);
+   if (rows[0]) return { workspaceId: rows[0].workspace_id };
   }
   return { unscoped: true };
+ }
+ // Select/update/delete: derive from filters.
+ const directWs = findFilterValue(filters, 'workspace_id');
+ if (directWs) return { workspaceId: directWs };
+
+ const parentLookups = [
+  { col: 'document_id', sql: 'select workspace_id from documents where id = $1 limit 1' },
+  { col: 'task_id', sql: 'select workspace_id from tasks where id = $1 limit 1' },
+  { col: 'session_id', sql: 'select workspace_id from chat_sessions where id = $1 limit 1' },
+  { col: 'group_id', sql: 'select workspace_id from canvas_groups where id = $1 limit 1' },
+ ];
+ for (const lookup of parentLookups) {
+  const v = findFilterValue(filters, lookup.col);
+  if (v) {
+   const rows = await db(lookup.sql, [v]);
+   if (rows[0]) return { workspaceId: rows[0].workspace_id };
+  }
+ }
+ // Row id filter on a workspace-scoped table -> look up that row's workspace.
+ const idVal = findFilterValue(filters, 'id');
+ if (idVal && WORKSPACE_SCOPED_TABLES.has(table)) {
+  const rows = await db(`select workspace_id from ${quoteIdent(table)} where id = $1 limit 1`, [idVal]);
+  if (rows[0]) return { workspaceId: rows[0].workspace_id };
+ }
+ return { unscoped: true };
 }
 
 // True if the user owns the workspace or is a member of it.
 async function userCanAccessWorkspace(userId, workspaceId, db) {
-  if (!userId || !workspaceId) return false;
-  const rows = await db(
-    `select 1 from workspaces where id = $1 and user_id = $2
+ if (!userId || !workspaceId) return false;
+ const rows = await db(
+  `select 1 from workspaces where id = $1 and user_id = $2
      union all
      select 1 from workspace_members where workspace_id = $1 and user_id = $2
      limit 1`,
-    [workspaceId, userId],
-  );
-  return rows.length > 0;
+  [workspaceId, userId],
+ );
+ return rows.length > 0;
 }
 
 async function getWorkspaceRole(userId, workspaceId, db) {
-  if (!userId || !workspaceId) return null;
-  const ownerRows = await db('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
-  if (ownerRows.length > 0) return 'owner';
-  const memberRows = await db('select role from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
-  return memberRows[0]?.role || null;
+ if (!userId || !workspaceId) return null;
+ const ownerRows = await db('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
+ if (ownerRows.length > 0) return 'owner';
+ const memberRows = await db('select role from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
+ return memberRows[0]?.role || null;
 }
 
 function roleHasWorkspaceCapability(role, capability) {
-  return Boolean(WORKSPACE_ROLE_CAPABILITIES[role]?.has(capability));
+ return Boolean(WORKSPACE_ROLE_CAPABILITIES[role]?.has(capability));
 }
 
 function capabilityForDbOperation(table, action) {
-  const access = DB_TABLE_ACCESS[table];
-  return access?.[action] || (action === 'select' ? 'read' : 'write');
+ const access = DB_TABLE_ACCESS[table];
+ return access?.[action] || (action === 'select' ? 'read' : 'write');
 }
 
 // Enforce that `userId` has the required capability in `workspaceId`. Throws 403
@@ -420,32 +426,32 @@ function capabilityForDbOperation(table, action) {
 // as the same capability strings (matches server's capability-based model — it
 // does NOT rank roles, it checks capability membership).
 async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, mode, db }) {
-  const need = capability || mode || minRole;
-  const role = await getWorkspaceRole(userId, workspaceId, db);
-  if (!role) throw forbidden('You do not have access to this workspace');
-  if (!roleHasWorkspaceCapability(role, need)) {
-    if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
-    if (need === 'write') throw forbidden('You do not have permission to change this workspace');
-    if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
-    if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
-    throw forbidden('You do not have permission to access this workspace');
-  }
+ const need = capability || mode || minRole;
+ const role = await getWorkspaceRole(userId, workspaceId, db);
+ if (!role) throw forbidden('You do not have access to this workspace');
+ if (!roleHasWorkspaceCapability(role, need)) {
+  if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
+  if (need === 'write') throw forbidden('You do not have permission to change this workspace');
+  if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
+  if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
+  throw forbidden('You do not have permission to access this workspace');
+ }
 }
 
 async function resolveWorkspaceRowById(id, db) {
-  if (!id) return null;
-  const rows = await db('select id from workspaces where id = $1 limit 1', [id]);
-  return rows[0]?.id || null;
+ if (!id) return null;
+ const rows = await db('select id from workspaces where id = $1 limit 1', [id]);
+ return rows[0]?.id || null;
 }
 
 // Parent-reference columns that define a child row's tenancy. An UPDATE may set
 // these (e.g. moving a canvas object between groups) but only to a parent that
 // lives in the SAME workspace as the source row.
 const UPDATE_PARENT_REF_LOOKUPS = {
-  session_id: 'select workspace_id from chat_sessions where id = $1 limit 1',
-  document_id: 'select workspace_id from documents where id = $1 limit 1',
-  task_id: 'select workspace_id from tasks where id = $1 limit 1',
-  group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
+ session_id: 'select workspace_id from chat_sessions where id = $1 limit 1',
+ document_id: 'select workspace_id from documents where id = $1 limit 1',
+ task_id: 'select workspace_id from tasks where id = $1 limit 1',
+ group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
 };
 
 // H1 (2026-07 review): reject an UPDATE whose `values` would move/inject the row
@@ -454,20 +460,20 @@ const UPDATE_PARENT_REF_LOOKUPS = {
 // workspace_id or a cross-tenant parent reference. `sourceWorkspaceId` is the
 // row's current workspace (already resolved + authorized by the caller).
 async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }) {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) return;
-  const src = String(sourceWorkspaceId);
-  if (values.workspace_id != null && String(values.workspace_id) !== src) {
-    throw forbidden('Cannot move a row to another workspace');
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return;
+ const src = String(sourceWorkspaceId);
+ if (values.workspace_id != null && String(values.workspace_id) !== src) {
+  throw forbidden('Cannot move a row to another workspace');
+ }
+ for (const [col, sql] of Object.entries(UPDATE_PARENT_REF_LOOKUPS)) {
+  const v = values[col];
+  if (v == null) continue; // absent, or explicitly cleared to null, is fine
+  const rows = await db(sql, [v]);
+  const targetWs = rows[0]?.workspace_id;
+  if (!targetWs || String(targetWs) !== src) {
+   throw forbidden('Cannot reassign a row to another workspace');
   }
-  for (const [col, sql] of Object.entries(UPDATE_PARENT_REF_LOOKUPS)) {
-    const v = values[col];
-    if (v == null) continue; // absent, or explicitly cleared to null, is fine
-    const rows = await db(sql, [v]);
-    const targetWs = rows[0]?.workspace_id;
-    if (!targetWs || String(targetWs) !== src) {
-      throw forbidden('Cannot reassign a row to another workspace');
-    }
-  }
+ }
 }
 
 // ----------------------------------------------------------------------------
@@ -485,88 +491,88 @@ async function assertUpdateKeepsTenancy({ sourceWorkspaceId, values, db }) {
 // ----------------------------------------------------------------------------
 
 async function enforceDbOperationAccess({ userId, table, op, filters, payload, db }) {
-  if (!userId) throw unauthorized();
-  if (typeof db !== 'function') throw new Error('enforceDbOperationAccess requires a db function');
+ if (!userId) throw unauthorized();
+ if (typeof db !== 'function') throw new Error('enforceDbOperationAccess requires a db function');
 
-  const pl = payload || {};
-  const flt = filters != null ? filters : (Array.isArray(pl.filters) ? pl.filters : []);
-  const values = pl.values;
+ const pl = payload || {};
+ const flt = filters != null ? filters : (Array.isArray(pl.filters) ? pl.filters : []);
+ const values = pl.values;
 
-  // --- C1: refuse an unfiltered update/delete — it would wipe the whole table.
-  if (op === 'update' || op === 'delete') {
-    if (!Array.isArray(flt) || flt.length === 0) {
-      throw badRequest(`${op === 'delete' ? 'Delete' : 'Update'} requires at least one filter`);
+ // --- C1: refuse an unfiltered update/delete — it would wipe the whole table.
+ if (op === 'update' || op === 'delete') {
+  if (!Array.isArray(flt) || flt.length === 0) {
+   throw badRequest(`${op === 'delete' ? 'Delete' : 'Update'} requires at least one filter`);
+  }
+ }
+
+ if (table === 'app_users') {
+  const idFilter = findFilterValue(flt, 'id');
+  if (op === 'select' && idFilter && String(idFilter) === String(userId)) return;
+  throw forbidden('Direct user table access is not allowed');
+ }
+
+ if (table === 'workspaces') {
+  if (op === 'select') return;
+  if (op === 'insert') {
+   for (const row of operationRows(values)) {
+    if (row && row.user_id && String(row.user_id) !== String(userId)) {
+     throw forbidden('Cannot create a workspace for another user');
     }
+   }
+   return;
   }
+  const workspaceId = findFilterValue(flt, 'id')
+   || await resolveWorkspaceRowById(findFilterValue(flt, 'workspace_id'), db);
+  if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db });
+  return;
+ }
 
-  if (table === 'app_users') {
-    const idFilter = findFilterValue(flt, 'id');
-    if (op === 'select' && idFilter && String(idFilter) === String(userId)) return;
-    throw forbidden('Direct user table access is not allowed');
-  }
+ if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
-  if (table === 'workspaces') {
-    if (op === 'select') return;
-    if (op === 'insert') {
-      for (const row of operationRows(values)) {
-        if (row && row.user_id && String(row.user_id) !== String(userId)) {
-          throw forbidden('Cannot create a workspace for another user');
-        }
-      }
-      return;
-    }
-    const workspaceId = findFilterValue(flt, 'id')
-      || await resolveWorkspaceRowById(findFilterValue(flt, 'workspace_id'), db);
-    if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
-    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db });
-    return;
-  }
+ const mode = capabilityForDbOperation(table, op);
 
-  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
+ // UPDATE: authorize the SOURCE row's workspace (resolved from filters), then
+ // verify `values` can't move the row into a different workspace (H1).
+ if (op === 'update') {
+  const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
+  if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
+  await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
+  return;
+ }
 
-  const mode = capabilityForDbOperation(table, op);
+ for (const row of operationRows(values)) {
+  if (!row || typeof row !== 'object') continue;
+  const resolved = await resolveOperationWorkspace(table, { values: row }, db);
+  if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
+  await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  // H1-insert (F7 review): a child INSERT may carry a cross-tenant parent ref
+  // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
+  // reuse the UPDATE tenancy guard so the parent must live in this workspace.
+  await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values: row, db });
+ }
 
-  // UPDATE: authorize the SOURCE row's workspace (resolved from filters), then
-  // verify `values` can't move the row into a different workspace (H1).
-  if (op === 'update') {
-    const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
-    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
-    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
-    await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
-    return;
-  }
-
-  for (const row of operationRows(values)) {
-    if (!row || typeof row !== 'object') continue;
-    const resolved = await resolveOperationWorkspace(table, { values: row }, db);
-    if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
-    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
-    // H1-insert (F7 review): a child INSERT may carry a cross-tenant parent ref
-    // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
-    // reuse the UPDATE tenancy guard so the parent must live in this workspace.
-    await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values: row, db });
-  }
-
-  if (operationRows(values).length === 0) {
-    const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
-    if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
-    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
-  }
+ if (operationRows(values).length === 0) {
+  const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
+  if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
+  await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+ }
 }
 
 // Constrain a SELECT on `workspaces` to rows the user owns or is a member of.
 // Pure string/param builder — appended onto buildWhereClause output by callers.
 function appendWorkspaceAccessClause(where, userId) {
-  const params = where.params || [];
-  params.push(userId);
-  const ownerParam = `$${params.length}`;
-  params.push(userId);
-  const memberParam = `$${params.length}`;
-  const accessClause = `("workspaces"."user_id" = ${ownerParam} OR EXISTS (SELECT 1 FROM "workspace_members" wm WHERE wm.workspace_id = "workspaces"."id" AND wm.user_id = ${memberParam}))`;
-  return {
-    clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
-    params,
-  };
+ const params = where.params || [];
+ params.push(userId);
+ const ownerParam = `$${params.length}`;
+ params.push(userId);
+ const memberParam = `$${params.length}`;
+ const accessClause = `("workspaces"."user_id" = ${ownerParam} OR EXISTS (SELECT 1 FROM "workspace_members" wm WHERE wm.workspace_id = "workspaces"."id" AND wm.user_id = ${memberParam}))`;
+ return {
+  clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+  params,
+ };
 }
 
 // ----------------------------------------------------------------------------
@@ -592,42 +598,42 @@ function appendWorkspaceAccessClause(where, userId) {
 const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function logMessageActivityIdempotent(rows, { db }) {
-  if (typeof db !== 'function') return;
-  for (const message of rows || []) {
-    if (!message || typeof message !== 'object') continue;
-    try {
-      const sessionId = message.session_id;
-      if (!sessionId) continue;
+ if (typeof db !== 'function') return;
+ for (const message of rows || []) {
+  if (!message || typeof message !== 'object') continue;
+  try {
+   const sessionId = message.session_id;
+   if (!sessionId) continue;
 
-      const messageId = message.id != null ? String(message.id) : null;
+   const messageId = message.id != null ? String(message.id) : null;
 
-      const sessionRows = await db('select workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
-      const workspaceId = sessionRows[0]?.workspace_id || null;
-      if (!workspaceId) continue;
+   const sessionRows = await db('select workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
+   const workspaceId = sessionRows[0]?.workspace_id || null;
+   if (!workspaceId) continue;
 
-      const role = message.role || '';
-      const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
-      const content = typeof message.content === 'string' ? message.content : '';
-      const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
-      const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
-      const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
-      const metadata = {
-        session_id: sessionId,
-        role,
-        sender_kind: message.sender_kind || '',
-        sender_name: message.sender_name || '',
-        content,
-      };
-      await db(
-        `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+   const role = message.role || '';
+   const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
+   const content = typeof message.content === 'string' ? message.content : '';
+   const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
+   const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
+   const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+   const metadata = {
+    session_id: sessionId,
+    role,
+    sender_kind: message.sender_kind || '',
+    sender_name: message.sender_name || '',
+    content,
+   };
+   await db(
+    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
          values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
          on conflict do nothing`,
-        [workspaceId, userId, messageId, title, JSON.stringify(metadata)],
-      );
-    } catch (error) {
-      console.error('logMessageActivityIdempotent failed', error);
-    }
+    [workspaceId, userId, messageId, title, JSON.stringify(metadata)],
+   );
+  } catch (error) {
+   console.error('logMessageActivityIdempotent failed', error);
   }
+ }
 }
 
 // ----------------------------------------------------------------------------
@@ -639,38 +645,38 @@ async function logMessageActivityIdempotent(rows, { db }) {
 // ----------------------------------------------------------------------------
 
 function createRateLimiter({ windowMs = 60_000, max = 60 } = {}) {
-  const hits = new Map(); // key -> { count, resetAt }
-  let lastSweep = 0;
-  // Evict expired entries so distinct keys cannot grow the Map without bound.
-  function sweep(now) {
-    if (now - lastSweep < windowMs) return;
-    lastSweep = now;
-    for (const [key, entry] of hits) {
-      if (now >= entry.resetAt) hits.delete(key);
-    }
+ const hits = new Map(); // key -> { count, resetAt }
+ let lastSweep = 0;
+ // Evict expired entries so distinct keys cannot grow the Map without bound.
+ function sweep(now) {
+  if (now - lastSweep < windowMs) return;
+  lastSweep = now;
+  for (const [key, entry] of hits) {
+   if (now >= entry.resetAt) hits.delete(key);
   }
-  function check(key) {
-    const now = Date.now();
-    sweep(now);
-    let entry = hits.get(key);
-    if (!entry || now >= entry.resetAt) {
-      entry = { count: 0, resetAt: now + windowMs };
-      hits.set(key, entry);
-    }
-    entry.count += 1;
-    const allowed = entry.count <= max;
-    return {
-      allowed,
-      blocked: !allowed,
-      remaining: Math.max(0, max - entry.count),
-      retryAfterMs: allowed ? 0 : Math.max(0, entry.resetAt - now),
-    };
+ }
+ function check(key) {
+  const now = Date.now();
+  sweep(now);
+  let entry = hits.get(key);
+  if (!entry || now >= entry.resetAt) {
+   entry = { count: 0, resetAt: now + windowMs };
+   hits.set(key, entry);
   }
-  function reset(key) {
-    if (key === undefined) hits.clear();
-    else hits.delete(key);
-  }
-  return { check, reset };
+  entry.count += 1;
+  const allowed = entry.count <= max;
+  return {
+   allowed,
+   blocked: !allowed,
+   remaining: Math.max(0, max - entry.count),
+   retryAfterMs: allowed ? 0 : Math.max(0, entry.resetAt - now),
+  };
+ }
+ function reset(key) {
+  if (key === undefined) hits.clear();
+  else hits.delete(key);
+ }
+ return { check, reset };
 }
 
 // ----------------------------------------------------------------------------
@@ -686,53 +692,53 @@ const PASSWORD_MIN_LENGTH = 10;
 const PASSWORD_MIN_CLASSES = 3; // at least 3 of: lowercase, uppercase, digit, symbol
 
 function evaluatePasswordServerSide(password) {
-  const value = String(password || '');
-  const classesMet =
-    (/[a-z]/.test(value) ? 1 : 0) +
-    (/[A-Z]/.test(value) ? 1 : 0) +
-    (/[0-9]/.test(value) ? 1 : 0) +
-    (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
-  const longEnough = value.length >= PASSWORD_MIN_LENGTH;
-  const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
-  const message = valid
-    ? ''
-    : !longEnough
-      ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
-      : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
-  return { valid, classesMet, longEnough, message };
+ const value = String(password || '');
+ const classesMet =
+  (/[a-z]/.test(value) ? 1 : 0) +
+  (/[A-Z]/.test(value) ? 1 : 0) +
+  (/[0-9]/.test(value) ? 1 : 0) +
+  (/[^A-Za-z0-9]/.test(value) ? 1 : 0);
+ const longEnough = value.length >= PASSWORD_MIN_LENGTH;
+ const valid = longEnough && classesMet >= PASSWORD_MIN_CLASSES;
+ const message = valid
+  ? ''
+  : !longEnough
+   ? `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`
+   : `Password must include at least ${PASSWORD_MIN_CLASSES} of: lowercase, uppercase, number, symbol.`;
+ return { valid, classesMet, longEnough, message };
 }
 
 module.exports = {
-  verifyAuthToken,
-  issueAuthToken,
-  getTokenTtlSec,
-  DEFAULT_TOKEN_TTL_SEC,
-  enforceDbOperationAccess,
-  assertWorkspaceRole,
-  ALLOWED_TABLES,
-  VERSIONED_TABLES,
-  JSON_COLUMNS_BY_TABLE,
-  WORKSPACE_SCOPED_TABLES,
-  WORKSPACE_ROLE_CAPABILITIES,
-  DB_TABLE_ACCESS,
-  PRIVILEGED_DB_COLUMNS_BY_TABLE,
-  stripPrivilegedDbValues,
-  storagePathBelongsToWorkspace,
-  createTokenVersionCache,
-  appendWorkspaceAccessClause,
-  logMessageActivityIdempotent,
-  createRateLimiter,
-  evaluatePasswordServerSide,
-  findFilterValue,
-  resolveOperationWorkspace,
-  userCanAccessWorkspace,
-  getWorkspaceRole,
-  roleHasWorkspaceCapability,
-  assertUpdateKeepsTenancy,
-  httpError,
-  unauthorized,
-  forbidden,
-  badRequest,
-  PASSWORD_MIN_LENGTH,
-  PASSWORD_MIN_CLASSES,
+ verifyAuthToken,
+ issueAuthToken,
+ getTokenTtlSec,
+ DEFAULT_TOKEN_TTL_SEC,
+ enforceDbOperationAccess,
+ assertWorkspaceRole,
+ ALLOWED_TABLES,
+ VERSIONED_TABLES,
+ JSON_COLUMNS_BY_TABLE,
+ WORKSPACE_SCOPED_TABLES,
+ WORKSPACE_ROLE_CAPABILITIES,
+ DB_TABLE_ACCESS,
+ PRIVILEGED_DB_COLUMNS_BY_TABLE,
+ stripPrivilegedDbValues,
+ storagePathBelongsToWorkspace,
+ createTokenVersionCache,
+ appendWorkspaceAccessClause,
+ logMessageActivityIdempotent,
+ createRateLimiter,
+ evaluatePasswordServerSide,
+ findFilterValue,
+ resolveOperationWorkspace,
+ userCanAccessWorkspace,
+ getWorkspaceRole,
+ roleHasWorkspaceCapability,
+ assertUpdateKeepsTenancy,
+ httpError,
+ unauthorized,
+ forbidden,
+ badRequest,
+ PASSWORD_MIN_LENGTH,
+ PASSWORD_MIN_CLASSES,
 };
