@@ -31,7 +31,10 @@ const result = await build({
   platform: 'node',
   format: 'esm',
   target: 'node18',
-  external: ['ws'],
+  // ws and e2b stay external — normal runtime deps installed alongside the
+  // published package. e2b in particular is a large SDK with its own transitive
+  // deps that must not be inlined (only loaded when a sandbox agent runs).
+  external: ['ws', 'e2b'],
   legalComments: 'none',
   write: false,
 });
