@@ -1,4 +1,4 @@
-import { SparklesIcon, RocketIcon } from 'lucide-react';
+import { SparklesIcon, RocketIcon, ChevronRight } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -54,34 +54,62 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
             </p>
           ) : (
             <ol className="flex flex-col gap-4">
-              {notes.map((note, i) => (
-                <li key={`${note.version}-${i}`} className="flex flex-col gap-1.5 rounded-md p-2 transition-colors hover:bg-muted/45 focus-within:bg-muted/45">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{note.title}</span>
-                    {i === 0 && available && (
-                      <Badge variant="secondary" className="text-[0.65rem]">
-                        Latest
-                      </Badge>
+              {notes.map((note, i) => {
+                const isLatest = i === 0;
+                const body = (
+                  <>
+                    <p className="text-sm text-foreground/85">{note.summary}</p>
+                    {note.highlights && note.highlights.length > 0 && (
+                      <ul className="mt-0.5 flex flex-col gap-1 pl-4">
+                        {note.highlights.map((h, j) => (
+                          <li
+                            key={j}
+                            className="list-disc text-sm text-foreground/80 marker:text-primary/70"
+                          >
+                            {h}
+                          </li>
+                        ))}
+                      </ul>
                     )}
-                  </div>
-                  <p className="text-sm text-foreground/85">{note.summary}</p>
-                  {note.highlights && note.highlights.length > 0 && (
-                    <ul className="mt-0.5 flex flex-col gap-1 pl-4">
-                      {note.highlights.map((h, j) => (
-                        <li
-                          key={j}
-                          className="list-disc text-sm text-foreground/80 marker:text-primary/70"
-                        >
-                          {h}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <span className="text-xs text-muted-foreground/70">
-                    {note.version} · {note.date}
-                  </span>
-                </li>
-              ))}
+                    <span className="text-xs text-muted-foreground/70">
+                      {note.version} · {note.date}
+                    </span>
+                  </>
+                );
+
+                // The newest note is shown expanded; older ones collapse into a
+                // dimmed <details> the reader can open, so the latest is the focus.
+                if (isLatest) {
+                  return (
+                    <li key={`${note.version}-${i}`} className="flex flex-col gap-1.5 rounded-md p-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{note.title}</span>
+                        {available && (
+                          <Badge variant="secondary" className="text-[0.65rem]">
+                            Latest
+                          </Badge>
+                        )}
+                      </div>
+                      {body}
+                    </li>
+                  );
+                }
+
+                return (
+                  <li key={`${note.version}-${i}`}>
+                    <details className="group flex flex-col gap-1.5 rounded-md p-2 opacity-55 transition-opacity hover:opacity-100 [&[open]]:opacity-100">
+                      <summary className="flex cursor-pointer list-none items-center gap-2">
+                        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                        <span className="text-sm font-medium">{note.title}</span>
+                        <span className="ml-auto text-xs text-muted-foreground/70">{note.date}</span>
+                      </summary>
+                      <div className="mt-1.5 flex flex-col gap-1.5 pl-5">
+                        {body}
+                      </div>
+                    </details>
+                  </li>
+                );
+              })}
             </ol>
           )}
         </div>
