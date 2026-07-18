@@ -11,6 +11,8 @@ import {
   KeyRound,
   Palette,
   Plug,
+  Plus,
+  Trash2,
   Settings as SettingsIcon,
   Sparkles,
   Upload,
@@ -25,6 +27,7 @@ import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getSt
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import { useWorkspaceVault } from '../../hooks/useWorkspaceVault';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +46,7 @@ import {
   FieldLabel,
 } from '@/components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
+import { Input } from '@/components/ui/input';
 import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -843,9 +847,8 @@ function AppearancePanel({
               <button
                 key={background.id}
                 type="button"
-                className={`group relative overflow-hidden rounded-md border p-1 text-left transition-colors ${
-                  selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
-                }`}
+                className={`group relative overflow-hidden rounded-md border p-1 text-left transition-colors ${selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
+                  }`}
                 onClick={() => updateBackgroundImage(background.src)}
                 disabled={!workspace}
               >
@@ -1279,7 +1282,77 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
           </Badge>
         )}
       </div>
+
+      <SharedSecretsSection workspaceId={workspaceId} />
     </FieldGroup>
+  );
+}
+
+// User-defined shared secrets (arbitrary keys), encrypted at rest server-side.
+// Values are write-only: the list shows a masked preview, never the full value.
+function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
+  const { secrets, setSecret, deleteSecret } = useWorkspaceVault(workspaceId);
+  const [newKey, setNewKey] = useState('');
+  const [newValue, setNewValue] = useState('');
+  const [newDesc, setNewDesc] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const add = async () => {
+    const key = newKey.trim();
+    if (!key || !newValue) return;
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) { setErr('Key: letters, digits, _ . - only (max 128)'); return; }
+    setBusy(true); setErr(null);
+    try {
+      const ok = await setSecret(key, newValue, newDesc.trim() || undefined);
+      if (!ok) { setErr('Failed to save — owner/admin only'); return; }
+      setNewKey(''); setNewValue(''); setNewDesc('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 border-t border-border pt-4">
+      <div className="mb-1 text-sm font-semibold">Shared secrets</div>
+      <FieldDescription className="mb-3">
+        Store API keys, tokens, and credentials your agents can use. Encrypted at rest; values are never shown again after saving.
+      </FieldDescription>
+
+      {secrets.length > 0 && (
+        <div className="mb-3 flex flex-col gap-1.5">
+          {secrets.map(secret => (
+            <div key={secret.key} className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5">
+              <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{secret.key}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {secret.preview}{secret.description ? ` · ${secret.description}` : ''}
+                </div>
+              </div>
+              <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete ${secret.key}`} onClick={() => void deleteSecret(secret.key)}>
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2.5">
+        <div className="flex gap-2">
+          <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="KEY_NAME" className="font-mono text-xs" />
+          <Input value={newValue} onChange={e => setNewValue(e.target.value)} type="password" placeholder="value" autoComplete="off" />
+        </div>
+        <Input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Description (optional)" className="text-xs" />
+        {err && <div className="text-xs text-destructive">{err}</div>}
+        <div className="flex justify-end">
+          <Button type="button" size="sm" onClick={() => void add()} disabled={busy || !newKey.trim() || !newValue}>
+            <Plus data-icon="inline-start" />
+            Add secret
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
