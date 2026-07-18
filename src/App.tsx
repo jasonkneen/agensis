@@ -1709,6 +1709,7 @@ function AppContent() {
                 onInvite={handleOpenUsers}
               />
             )}
+            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} />}
           />
         </div>
         {isMobile && mobileDrawerOpen && (
@@ -1763,7 +1764,6 @@ function AppContent() {
                 className="workspace-bottom-controls absolute right-2 z-[11000] flex items-end gap-2"
                 style={{ bottom: isMobile ? WORKSPACE_BOTTOM_RESERVE + 12 : WORKSPACE_DOCK_BOTTOM_OFFSET }}
               >
-                <NotificationsBell workspaceId={activeWorkspaceId || null} />
                 <WorkspacePresenceAvatars
                   users={workspacePresenceUsers}
                   getMode={getPresenceMode}
