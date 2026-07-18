@@ -2789,7 +2789,7 @@ function InactiveChatWindow({
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
   onOpenThread: (messageId: string) => void;
 }) {
-  const messages = useSessionMessages(session.id);
+  const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
   const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
   const threadReplyCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -2821,6 +2821,9 @@ function InactiveChatWindow({
       messages={messages as never[]}
       topLevelMessages={topLevelMessages}
       threadReplyCounts={threadReplyCounts}
+      hasMoreMessages={hasMore}
+      loadingEarlier={loadingEarlier}
+      onLoadEarlier={loadEarlier}
       streaming={false}
       memoryFacts={facts}
       documents={documents}
