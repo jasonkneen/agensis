@@ -4,7 +4,7 @@ import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import type { AIModel, Message as ChatMessage } from '../../types';
+import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
 import { ModelSelector } from './ModelSelector';
 import { availableChatModelId } from '../../lib/sharedModels';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,8 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { Spinner } from '@/components/ui/spinner';
+import { useComposerMentions } from '../../hooks/useComposerMentions';
+import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 
 interface ChatThreadPanelProps {
   parentMessage: ChatMessage;
@@ -39,6 +41,9 @@ interface ChatThreadPanelProps {
   onClose: () => void;
   embedded?: boolean;
   models?: AIModel[];
+  agents?: WorkspaceAgent[];
+  documents?: Document[];
+  workspaceId?: string | null;
 }
 
 export function ChatThreadPanel({
@@ -51,21 +56,26 @@ export function ChatThreadPanel({
   onClose,
   embedded = false,
   models,
+  agents,
+  documents,
+  workspaceId,
 }: ChatThreadPanelProps) {
-  const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
   const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const replies = threadMessages.filter(m => m.id !== parentMessage.id);
+  const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
 
   useEffect(() => {
     if (models) setModel(current => availableChatModelId(current, models));
   }, [models]);
 
   const handleSend = () => {
-    if (!input.trim() || streaming) return;
-    onSendReply(input.trim(), model);
-    setInput('');
+    if (streaming) return;
+    const content = m.buildContent();
+    if (!content) return;
+    onSendReply(content, model);
+    m.clear();
     inputRef.current?.focus();
   };
 
@@ -124,40 +134,48 @@ export function ChatThreadPanel({
       </MessageScrollerProvider>
 
       <div className="channel-composer shrink-0 border-t border-border p-3">
-        <InputGroup className="h-auto flex-col items-stretch">
-          <InputGroupTextarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Reply in thread..."
-            disabled={streaming}
-            rows={1}
-            className="max-h-24 min-h-12"
-            onInput={e => {
-              const el = e.currentTarget;
-              el.style.height = 'auto';
-              el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
-            }}
-          />
-          <InputGroupAddon align="block-end" className="min-h-10 justify-between gap-2 border-t px-2 py-1.5">
-            <ModelSelector value={model} onChange={setModel} models={models} />
-            <Button
-              type="button"
-              size="icon-sm"
-              onClick={handleSend}
-              disabled={!input.trim() || streaming}
-              aria-label="Send reply"
-            >
-              {streaming ? <Spinner /> : <Send />}
-            </Button>
-          </InputGroupAddon>
-        </InputGroup>
+        <div className="relative">
+          <ComposerMentionPicker m={m} />
+          <ComposerMentionChips m={m} />
+          <InputGroup className="h-auto flex-col items-stretch">
+            <InputGroupTextarea
+              ref={inputRef}
+              value={m.input}
+              onChange={m.onInputChange}
+              onKeyDown={e => {
+                if ((e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') && m.handleNavKey(e.key)) {
+                  e.preventDefault();
+                  return;
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Reply in thread... @agent, / commands"
+              disabled={streaming}
+              rows={1}
+              className="max-h-24 min-h-12"
+              onInput={e => {
+                const el = e.currentTarget;
+                el.style.height = 'auto';
+                el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+              }}
+            />
+            <InputGroupAddon align="block-end" className="min-h-10 justify-between gap-2 border-t px-2 py-1.5">
+              <ModelSelector value={model} onChange={setModel} models={models} />
+              <Button
+                type="button"
+                size="icon-sm"
+                onClick={handleSend}
+                disabled={(!m.input.trim() && m.mentionedAgents.length === 0) || streaming}
+                aria-label="Send reply"
+              >
+                {streaming ? <Spinner /> : <Send />}
+              </Button>
+            </InputGroupAddon>
+          </InputGroup>
+        </div>
       </div>
     </aside>
   );

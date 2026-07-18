@@ -1783,6 +1783,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
               models={modelOptions}
+              agents={agents}
+              workspaceId={workspaceId}
               onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded

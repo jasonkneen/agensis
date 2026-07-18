@@ -14,7 +14,7 @@ import {
   type ProjectFileSource,
 } from './ComposerAddContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
-import { agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
+import { validAgentAccentColor } from '../../lib/agentAccent';
 import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,8 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Spinner } from '@/components/ui/spinner';
+import { useComposerMentions } from '../../hooks/useComposerMentions';
+import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 
 interface SubThreadPanelProps {
   session: ChatSession;
@@ -82,14 +84,14 @@ export function SubThreadPanel({
   skillOptions = [],
   toolOptions = [],
 }: SubThreadPanelProps) {
-  const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const mentions = useComposerMentions({ agents, workspaceId: session.workspace_id, inputRef });
   const [autoScroll, setAutoScroll] = useState(true);
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [addContextOpen, setAddContextOpen] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -148,15 +150,16 @@ export function SubThreadPanel({
   };
 
   const handleSend = () => {
-    if (!input.trim() || streaming) return;
-    let content = input.trim();
+    if (streaming) return;
+    let content = mentions.buildContent();
+    if (!content) return;
     if (linkedFiles.length > 0) content = `${buildFileContext(linkedFiles)}\n\n${content}`;
     if (linkedGroups.length > 0) {
       const groupContext = linkedGroups.map(g => `[Canvas Group "${g.name}"]`).join('\n');
       content = `${groupContext}\n\n${content}`;
     }
     onSendMessage(content);
-    setInput('');
+    mentions.clear();
     setLinkedFiles([]);
     setLinkedDocs([]);
     setLinkedGroups([]);
@@ -309,12 +312,18 @@ export function SubThreadPanel({
         )}
 
         <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+          <ComposerMentionPicker m={mentions} />
+          <ComposerMentionChips m={mentions} />
           <InputGroup className="h-auto flex-col items-stretch">
             <InputGroupTextarea
               ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
+              value={mentions.input}
+              onChange={mentions.onInputChange}
               onKeyDown={e => {
+                if ((e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape') && mentions.handleNavKey(e.key)) {
+                  e.preventDefault();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   handleSend();
@@ -362,17 +371,17 @@ export function SubThreadPanel({
                       onAddDocument={addLinkedDoc}
                       onAddGroup={addLinkedGroup}
                       onAddAgent={(agent) => {
-                        setInput(prev => `${prev}@${agentHandle(agent)} `);
+                        mentions.selectAgent(agent);
                         setAddContextOpen(false);
                         inputRef.current?.focus();
                       }}
                       onAddSkill={(skill) => {
-                        setInput(prev => `${prev}Use skill: ${skill.label}. `);
+                        mentions.setInput(`${mentions.input}Use skill: ${skill.label}. `);
                         setAddContextOpen(false);
                         inputRef.current?.focus();
                       }}
                       onAddTool={(tool) => {
-                        setInput(prev => `${prev}Use tool: ${tool.label}. `);
+                        mentions.setInput(`${mentions.input}Use tool: ${tool.label}. `);
                         setAddContextOpen(false);
                         inputRef.current?.focus();
                       }}
@@ -388,7 +397,7 @@ export function SubThreadPanel({
                   type="button"
                   size="icon-sm"
                   onClick={handleSend}
-                  disabled={!input.trim() || streaming}
+                  disabled={(!mentions.input.trim() && mentions.mentionedAgents.length === 0) || streaming}
                   aria-label="Send message"
                 >
                   {streaming ? <Spinner /> : <Send />}
