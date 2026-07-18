@@ -65,7 +65,8 @@ export function CreateWorkspaceDialog({
             </div>
             <div className="min-w-0">
               <DialogTitle>Create workspace</DialogTitle>
-              <DialogDescription>
+              {/* Kept for a11y (Radix aria-describedby) but visually hidden per design. */}
+              <DialogDescription className="sr-only">
                 Create a shared place for docs, chat, files, and canvas.
               </DialogDescription>
             </div>
