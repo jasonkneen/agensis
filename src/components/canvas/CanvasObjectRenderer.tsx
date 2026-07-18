@@ -3,7 +3,7 @@ import { AlertTriangle, FileText, RotateCw, X } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent } from '../../lib/canvasApps';
-import { apiAuthHeaders } from '../../lib/backendClient';
+import { apiAuthHeaders, backendClient } from '../../lib/backendClient';
 import { filterAppletTaskUpdates } from '../../lib/appletBridge';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import { Button } from '@/components/ui/button';
@@ -178,9 +178,25 @@ function AppletObject({
   const appId = parsed.appId || obj.file_name || 'applet';
   const appDefinition = CANVAS_APPS.find(app => app.id === appId);
   const appletTitle = obj.file_name || appDefinition?.name || 'Canvas applet';
-  const docBackedHtml = parsed.docId
-    ? (() => { const doc = documents?.find(d => d.id === parsed.docId); return doc ? extractHtmlFromDocContent(doc.content) : null; })()
-    : null;
+  // NET-06: the documents list is metadata-only, so a doc-backed applet must
+  // fetch its source doc's body on demand instead of reading it off the list.
+  const [docBackedHtml, setDocBackedHtml] = useState<string | null>(null);
+  useEffect(() => {
+    if (!parsed.docId) { setDocBackedHtml(null); return; }
+    let cancelled = false;
+    // A list row may still carry content in rare paths; use it if present, else fetch.
+    const listed = documents?.find(d => d.id === parsed.docId);
+    if (listed?.content !== undefined) {
+      setDocBackedHtml(extractHtmlFromDocContent(listed.content));
+      return;
+    }
+    backendClient.from('documents').select('id, content').eq('id', parsed.docId).then(({ data }) => {
+      if (cancelled) return;
+      const body = (Array.isArray(data) ? data[0]?.content : (data as { content?: string } | null)?.content) || '';
+      setDocBackedHtml(extractHtmlFromDocContent(body));
+    });
+    return () => { cancelled = true; };
+  }, [parsed.docId, documents]);
   const appletHtml = docBackedHtml || appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
   const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 

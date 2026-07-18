@@ -20,7 +20,10 @@ export interface Document {
  id: string;
  workspace_id: string;
  title: string;
- content: string;
+ // NET-06: content is lazy-loaded. The documents LIST holds metadata only; a
+ // doc's body is fetched on demand (editor open, search, applet render) via
+ // useDocuments().fetchDocumentContent(id). Absent on list rows.
+ content?: string;
  is_favorite: boolean;
  folder?: string | null;
  version?: number;

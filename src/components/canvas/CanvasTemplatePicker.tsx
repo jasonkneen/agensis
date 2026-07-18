@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import { LayoutTemplate, Plus } from 'lucide-react';
 import type { CanvasAppDefinition } from '../../lib/canvasApps';
 import { CANVAS_APPS, APPLETS_FOLDER, extractHtmlFromDocContent } from '../../lib/canvasApps';
 import type { Document } from '../../types';
+import { backendClient } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -17,7 +19,33 @@ interface CanvasTemplatePickerProps {
 }
 
 const CanvasTemplatePicker = ({ open, onClose, onCreateApp, onCreateDocApp, onCreateCustomApp, documents = [] }: CanvasTemplatePickerProps) => {
-  const appletDocs = documents.filter(d => d.folder === APPLETS_FOLDER && !!extractHtmlFromDocContent(d.content ?? ''));
+  // NET-06: the documents list is metadata-only, so we can't read applet HTML off
+  // it. Candidate applet docs are identified by folder; when the picker opens we
+  // fetch just those docs' bodies to confirm they carry applet HTML and to pass a
+  // content-bearing Document to onCreateDocApp.
+  const folderDocs = documents.filter(d => d.folder === APPLETS_FOLDER);
+  const [bodies, setBodies] = useState<Record<string, string>>({});
+  const folderSignature = folderDocs.map(d => `${d.id}:${d.updated_at}`).join(',');
+  useEffect(() => {
+    if (!open || folderDocs.length === 0) return;
+    let cancelled = false;
+    const workspaceId = folderDocs[0].workspace_id;
+    const wanted = new Set(folderDocs.map(d => d.id));
+    // NET-06: one batched fetch scoped to the workspace's applet folder (the
+    // query builder only supports eq), then client-filter to the docs we show.
+    backendClient.from('documents').select('id, content').eq('workspace_id', workspaceId).eq('folder', APPLETS_FOLDER).then(({ data }) => {
+      if (cancelled) return;
+      const rows = Array.isArray(data) ? data as { id: string; content?: string }[] : [];
+      const next: Record<string, string> = {};
+      for (const row of rows) if (wanted.has(row.id)) next[row.id] = row.content || '';
+      setBodies(next);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- folderSignature captures the docs to fetch; open gates it
+  }, [open, folderSignature]);
+  const appletDocs = folderDocs
+    .filter(d => !!extractHtmlFromDocContent(bodies[d.id] ?? ''))
+    .map(d => ({ ...d, content: bodies[d.id] ?? '' }));
 
   const handleCreateApp = (app: CanvasAppDefinition) => {
     onCreateApp(app);

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { ActiveView, ChatSession, Document, MemoryFact, Task } from '../../types';
 import { stripHtml } from '../../lib/utils';
+import { backendClient } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import {
   Command,
@@ -72,6 +73,29 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   onViewChange,
 }) => {
   const [query, setQuery] = useState('');
+
+  // NET-06: the documents list is metadata-only, so full-content search fetches
+  // bodies ONLY while the palette is open (not on every workspace load). Keyed on
+  // the doc id+updated_at signature so an edited doc's body is refetched.
+  const [docBodies, setDocBodies] = useState<Record<string, string>>({});
+  const docSignature = documents.map(d => `${d.id}:${d.updated_at}`).join(',');
+  useEffect(() => {
+    if (!open || documents.length === 0) return;
+    let cancelled = false;
+    const workspaceId = documents[0].workspace_id;
+    const wanted = new Set(documents.map(d => d.id));
+    // NET-06: one batched fetch scoped to the workspace (the query builder only
+    // supports eq), then client-filter to the docs we're showing.
+    backendClient.from('documents').select('id, content').eq('workspace_id', workspaceId).then(({ data }) => {
+      if (cancelled) return;
+      const rows = Array.isArray(data) ? data as { id: string; content?: string }[] : [];
+      const next: Record<string, string> = {};
+      for (const row of rows) if (wanted.has(row.id)) next[row.id] = row.content || '';
+      setDocBodies(next);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- docSignature captures the docs to fetch; open gates it
+  }, [open, docSignature]);
 
   const actions: ResultItem[] = useMemo(
     () => [
@@ -147,7 +171,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   const catalog = useMemo(() => {
     const docs = documents.map(doc => {
-      const plainContent = stripHtml(doc.content || '');
+      const plainContent = stripHtml(docBodies[doc.id] ?? doc.content ?? '');
       return {
         item: {
           id: `doc-${doc.id}`,
@@ -215,7 +239,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     const actionItems = actions.map(a => ({ item: a, haystack: a.label }));
 
     return [...docs, ...chats, ...memories, ...taskItems, ...actionItems];
-  }, [documents, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
+  }, [documents, docBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
 
   const filteredResults = useMemo(() => {
     const q = query.trim();
