@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { FileText, Mic, Plus, Send, X } from 'lucide-react';
+import { Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
 import type { Document, MemoryFact } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ interface HomeCanvasProps {
   workspaceName: string;
   backgroundOpacity?: number;
   backgroundImage?: string | null;
+  onOpenSchedules?: () => void;
 }
 
 const suggestions = [
@@ -32,8 +33,16 @@ export function HomeCanvas({
   workspaceName,
   backgroundOpacity = 0.42,
   backgroundImage,
+  onOpenSchedules,
 }: HomeCanvasProps) {
   const [input, setInput] = useState('');
+  const [briefDismissed, setBriefDismissed] = useState(() => {
+    try { return localStorage.getItem('agensis_daily_brief_dismissed') === '1'; } catch { return false; }
+  });
+  const dismissBrief = () => {
+    try { localStorage.setItem('agensis_daily_brief_dismissed', '1'); } catch { /* ignore */ }
+    setBriefDismissed(true);
+  };
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [docPickerQuery, setDocPickerQuery] = useState('');
@@ -230,6 +239,27 @@ export function HomeCanvas({
             </Button>
           ))}
         </div>
+
+        {onOpenSchedules && !briefDismissed && (
+          <div className="pointer-events-auto relative flex w-full max-w-3xl items-center gap-3 rounded-xl border border-border bg-card/90 px-4 py-3 shadow-lg backdrop-blur">
+            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+              <Clock className="size-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 text-sm font-semibold">
+                Set up your daily brief
+                <Sparkles className="size-3.5 text-primary" />
+              </div>
+              <p className="text-xs text-muted-foreground">Have an agent run a task on a schedule — a morning summary, a status check, a recurring report.</p>
+            </div>
+            <Button type="button" size="sm" className="shrink-0" onClick={onOpenSchedules}>
+              Set up
+            </Button>
+            <Button type="button" variant="ghost" size="icon-xs" className="shrink-0" aria-label="Dismiss" onClick={dismissBrief}>
+              <X className="size-4" />
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

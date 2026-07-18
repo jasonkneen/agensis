@@ -1845,6 +1845,7 @@ function AppContent() {
                   onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
                   onHomeSendMessage={handleHomeSendMessage}
                   onNewDocument={handleNewDocument}
+                  onOpenSchedules={handleOpenSchedules}
                   onCloseWindow={handleCloseWindow}
                   onFocusWindow={focusWindow}
                   onUpdateWindow={updateWindow}
@@ -2126,6 +2127,7 @@ function CanvasLayerScene({
   onToggleWorkspaceCtx,
   onHomeSendMessage,
   onNewDocument,
+  onOpenSchedules,
   onCloseWindow,
   onFocusWindow,
   onUpdateWindow,
@@ -2209,6 +2211,7 @@ function CanvasLayerScene({
   onToggleWorkspaceCtx: () => void;
   onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
   onNewDocument: () => void;
+  onOpenSchedules: () => void;
   onCloseWindow: (winId: string) => void;
   onFocusWindow: (winId: string) => void;
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
@@ -2267,6 +2270,7 @@ function CanvasLayerScene({
         memoryFacts={facts}
         onSendMessage={onHomeSendMessage}
         onOpenNewDocument={onNewDocument}
+        onOpenSchedules={onOpenSchedules}
         workspaceName={workspaceName}
         backgroundOpacity={backgroundOpacity}
         backgroundImage={backgroundImage}
