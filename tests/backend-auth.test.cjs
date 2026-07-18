@@ -84,13 +84,20 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
         return [];
       }
 
-      if (normalized.startsWith('select value from workspace_secrets where workspace_id = $1 and key = $2')) {
-        const value = secretRows[`${params[0]}:${params[1]}`];
-        return value ? [{ value }] : [];
+      if (normalized.startsWith('select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2')) {
+        const entry = secretRows[`${params[0]}:${params[1]}`];
+        if (!entry) return [];
+        // Stored entries may be a plain string (legacy plaintext) or an object
+        // { value, secret_cipher } once encryption-at-rest landed.
+        if (typeof entry === 'string') return [{ value: entry, secret_cipher: '' }];
+        return [{ value: entry.value || '', secret_cipher: entry.secret_cipher || '' }];
       }
 
       if (normalized.startsWith('insert into workspace_secrets')) {
-        secretRows[`${params[0]}:${params[1]}`] = params[2];
+        // Real server writes: (workspace_id, key, value='', secret_cipher, description, updated_by)
+        // with value as a SQL literal '' — so params are [workspaceId, key, cipher, description, userId].
+        // Store the cipher (params[2]) so the read path round-trips; value stays empty (never plaintext).
+        secretRows[`${params[0]}:${params[1]}`] = { value: '', secret_cipher: params[2] || '' };
         return [];
       }
 
@@ -526,11 +533,16 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
 
     assert.equal(response.status, 200);
     assert.equal(body.data.keys[0].scope, 'workspace');
-    assert.ok(fakeDb.calls.some(call => String(call.sql).includes('insert into workspace_secrets')));
-    assert.equal(
-      fakeDb.calls.some(call => call.params?.[0] === 'ws-1' && call.params?.[1] === 'ANTHROPIC_API_KEY' && call.params?.[2] === 'sk-new-workspace-key'),
-      true,
-    );
+    // Round-trips through the read path (preview is masked from the decrypted value).
+    assert.match(body.data.keys[0].preview, /^sk-n/);
+    const insertCall = fakeDb.calls.find(call => String(call.sql).includes('insert into workspace_secrets'));
+    assert.ok(insertCall, 'expected an insert into workspace_secrets');
+    // Encryption-at-rest: the value column is a SQL literal '' (not a param), and
+    // the ciphertext is written at params[2]. The plaintext must never appear.
+    assert.equal(insertCall.params[0], 'ws-1');
+    assert.equal(insertCall.params[1], 'ANTHROPIC_API_KEY');
+    assert.ok(insertCall.params[2] && insertCall.params[2].length > 0, 'ciphertext must be stored at params[2]');
+    assert.ok(!insertCall.params.some(p => typeof p === 'string' && p.includes('sk-new-workspace-key')), 'plaintext secret must not appear in any DB parameter');
   });
 });
 

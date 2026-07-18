@@ -74,6 +74,16 @@ function makeDb({ owners = {}, roles = {}, authSecret = 'test-secret' } = {}) {
         return row ? [row] : [];
       }
 
+      // Per-workspace storage quota check added by the upload hardening — sum the
+      // stored bytes for the workspace. Mirrors the real coalesce(sum(size),0) query.
+      if (normalized.startsWith('select coalesce(sum(size)')) {
+        let total = 0;
+        for (const row of uploadedFiles.values()) {
+          if (row.workspace_id === params[0]) total += Number(row.size) || 0;
+        }
+        return [{ total }];
+      }
+
       // Plan 005 — verifyToken now checks token_version on every authenticated
       // request; every __test.issueToken(...) call in this file uses version
       // '1' (see below), so a fixed answer is enough — revocation isn't under
@@ -457,5 +467,56 @@ test('stripPrivilegedDbValues and inspect-path gate host FS without allowlist', 
     else delete process.env.AGENSIS_ALLOW_PROJECT_FS;
     if (prevRoots !== undefined) process.env.AGENSIS_PROJECT_ROOTS = prevRoots;
     else delete process.env.AGENSIS_PROJECT_ROOTS;
+  }
+});
+
+
+test('an upload with malformed base64 content is rejected 400', async () => {
+  installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor', '1');
+    const res = await authedFetch(baseUrl, token, '/backend/files/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: 'ws-1',
+        name: 'photo.png',
+        contentBase64: 'not valid base64!!! @@@',
+      }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test('an upload that would exceed the workspace storage quota is rejected 413', async () => {
+  const fakeDb = installDb({
+    authSecret: 'fixed-test-secret',
+    roles: { 'ws-1:user-editor': 'editor' },
+  });
+  // Pre-seed the workspace with usage just under a tiny quota so the next byte trips it.
+  const prevQuota = process.env.WORKSPACE_STORAGE_QUOTA_BYTES;
+  process.env.WORKSPACE_STORAGE_QUOTA_BYTES = '100';
+  fakeDb.uploadedFiles.set('seed-1', { id: 'seed-1', workspace_id: 'ws-1', size: 100 });
+  try {
+    await withServer(async (baseUrl) => {
+      const token = await __test.issueToken('user-editor', '1');
+      const res = await authedFetch(baseUrl, token, '/backend/files/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace_id: 'ws-1',
+          name: 'photo.png',
+          contentBase64: Buffer.from('another file body').toString('base64'),
+        }),
+      });
+      assert.equal(res.status, 413);
+    });
+  } finally {
+    if (prevQuota !== undefined) process.env.WORKSPACE_STORAGE_QUOTA_BYTES = prevQuota;
+    else delete process.env.WORKSPACE_STORAGE_QUOTA_BYTES;
   }
 });
