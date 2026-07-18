@@ -377,7 +377,9 @@ export interface WorkspaceAgent {
  metadata?: Record<string, unknown> | null;
  handle?: string | null;
  model: string;
- run_mode?: 'builtin' | 'daemon';
+ run_mode?: 'builtin' | 'daemon' | 'sandbox';
+ sandbox_provider?: string | null;
+ sandbox_config?: Record<string, unknown>;
  enabled?: boolean;
  permission_mode?: AgentPermissionMode;
  version?: number;

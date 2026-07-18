@@ -93,7 +93,7 @@ import { useCanvasObjects } from './hooks/useCanvasObjects';
 import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
-import { useAgents } from './hooks/useAgents';
+import { useAgents, type CreateAgentInput } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
 import { useDockAttention } from './hooks/useDockAttention';
@@ -2184,7 +2184,7 @@ function CanvasLayerScene({
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: { name: string; avatar?: string; openpet_avatar_id?: string | null; accent_color?: string | null; description?: string; system_prompt: string; soul?: string; instructions?: string; tools?: string[]; skills?: string[]; model?: string; run_mode?: 'builtin' | 'daemon' }) => void;
+  onCreateAgent: (input: CreateAgentInput) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
   focusedAgentKey: string | null;

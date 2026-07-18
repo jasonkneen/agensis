@@ -73,7 +73,7 @@ const VERSIONED_TABLES = new Set([
 const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
- workspace_agents: new Set(['tools', 'skills', 'metadata']),
+ workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config']),
  agent_connections: new Set(['metadata', 'capabilities']),
  agent_jobs: new Set(['metadata']),
  activity_events: new Set(['metadata']),

@@ -84,7 +84,9 @@ interface AgentsWindowContentProps {
     skills?: string[];
     handle?: string;
     model?: string;
-    run_mode?: 'builtin' | 'daemon';
+    run_mode?: 'builtin' | 'daemon' | 'sandbox';
+    sandbox_provider?: string | null;
+    sandbox_config?: Record<string, unknown>;
   }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
@@ -102,7 +104,7 @@ interface AgentTemplate {
   systemPrompt: string;
   tools: string[];
   skills: string[];
-  runMode: 'builtin' | 'daemon';
+  runMode: 'builtin' | 'daemon' | 'sandbox';
   icon: LucideIcon;
 }
 
@@ -186,6 +188,12 @@ const AGENT_TEMPLATES: AgentTemplate[] = [
 
 const TEMPLATE_CATEGORIES = ['All', ...Array.from(new Set(AGENT_TEMPLATES.map(t => t.category)))];
 
+// Parse the Advanced sandbox config JSON, tolerating an empty or malformed value
+// (the daemon defaults everything, so a bad draft must not block agent creation).
+function safeParseSandboxConfig(raw: string): Record<string, unknown> {
+  try { const v = JSON.parse(raw || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+}
+
 // Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
 // documented as coming soon so the picker reflects reality, not aspiration.
 const CODING_AGENT_PROVIDERS: Array<{ id: string; name: string; note: string; available: boolean }> = [
@@ -244,7 +252,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newTools, setNewTools] = useState('');
   const [newSkills, setNewSkills] = useState('');
   const [newModel, setNewModel] = useState('auto');
-  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon'>('builtin');
+  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
+  const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
+  const [newSandboxConfig, setNewSandboxConfig] = useState('{}');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -338,6 +348,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
       skills: splitList(newSkills),
       model: newModel,
       run_mode: newRunMode,
+      ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
     });
     resetNewAgentFields();
     setCreateStep(null);
@@ -542,6 +553,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onSkillsChange={setNewSkills}
                 onModelChange={setNewModel}
                 onRunModeChange={setNewRunMode}
+                sandboxProvider={newSandboxProvider}
+                sandboxConfig={newSandboxConfig}
+                onSandboxProviderChange={setNewSandboxProvider}
+                onSandboxConfigChange={setNewSandboxConfig}
                 onCancel={() => setCreateStep(null)}
                 onSubmit={handleCreate}
                 submitLabel="Create"
@@ -768,6 +783,10 @@ function AgentForm({
   onSkillsChange,
   onModelChange,
   onRunModeChange,
+  sandboxProvider,
+  sandboxConfig,
+  onSandboxProviderChange,
+  onSandboxConfigChange,
   onCancel,
   onSubmit,
   submitLabel,
@@ -785,7 +804,9 @@ function AgentForm({
   tools: string;
   skills: string;
   model: string;
-  runMode: 'builtin' | 'daemon';
+  runMode: 'builtin' | 'daemon' | 'sandbox';
+  sandboxProvider: string;
+  sandboxConfig: string;
   capabilities: SystemCapabilities | null;
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
@@ -799,7 +820,9 @@ function AgentForm({
   onToolsChange: (value: string) => void;
   onSkillsChange: (value: string) => void;
   onModelChange: (value: string) => void;
-  onRunModeChange: (value: 'builtin' | 'daemon') => void;
+  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
+  onSandboxProviderChange: (value: string) => void;
+  onSandboxConfigChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
   submitLabel: string;
@@ -1059,13 +1082,14 @@ function AgentForm({
       <div className="flex flex-wrap items-center gap-2">
         <NativeSelect
           value={runMode}
-          onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
+          onChange={e => { const v = e.target.value; onRunModeChange(v === 'daemon' ? 'daemon' : v === 'sandbox' ? 'sandbox' : 'builtin'); }}
           size="sm"
           className="max-w-48"
           aria-label="Agent runtime"
         >
           <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
           <NativeSelectOption value="daemon">Remote daemon</NativeSelectOption>
+          <NativeSelectOption value="sandbox">Sandbox (isolated cloud)</NativeSelectOption>
         </NativeSelect>
         <NativeSelect
           value={model}
@@ -1090,6 +1114,26 @@ function AgentForm({
           {submitLabel}
         </Button>
       </div>
+      {runMode === 'sandbox' && (
+        <details className="rounded-lg border bg-card/40 px-3 py-2 text-sm">
+          <summary className="cursor-pointer select-none font-medium text-muted-foreground">Advanced</summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <Field>
+              <label className="text-xs text-muted-foreground">Sandbox provider</label>
+              <NativeSelect value={sandboxProvider} onChange={e => onSandboxProviderChange(e.target.value)} size="sm" aria-label="Sandbox provider">
+                <NativeSelectOption value="e2b">e2b (default)</NativeSelectOption>
+                <NativeSelectOption value="vercel" disabled>Vercel Sandbox (coming soon)</NativeSelectOption>
+                <NativeSelectOption value="daytona" disabled>Daytona (coming soon)</NativeSelectOption>
+                <NativeSelectOption value="morph" disabled>Morph (coming soon)</NativeSelectOption>
+              </NativeSelect>
+            </Field>
+            <Field>
+              <label className="text-xs text-muted-foreground">Config (JSON)</label>
+              <Textarea value={sandboxConfig} onChange={e => onSandboxConfigChange(e.target.value)} rows={3} placeholder='{"repoUrl":"https://github.com/you/repo.git","template":"base"}' className="font-mono text-xs" />
+            </Field>
+          </div>
+        </details>
+      )}
     </FieldGroup>
   );
 }
@@ -1135,7 +1179,9 @@ function AgentDetailPane({
   const [editTools, setEditTools] = useState('');
   const [editSkills, setEditSkills] = useState('');
   const [editModel, setEditModel] = useState('auto');
-  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>('builtin');
+  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
+  const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
+  const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
 
   useEffect(() => {
     if (!agent) return;
@@ -1151,7 +1197,9 @@ function AgentDetailPane({
     setEditTools(joinList(agent.tools));
     setEditSkills(joinList(agent.skills));
     setEditModel(agent.model || 'auto');
-    setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
+    setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin');
+    setEditSandboxProvider(agent.sandbox_provider || 'e2b');
+    setEditSandboxConfig(JSON.stringify(agent.sandbox_config || {}, null, 2));
   }, [agent?.id]);
 
   if (!agent) {
@@ -1188,6 +1236,7 @@ function AgentDetailPane({
       skills: splitList(editSkills),
       model: editModel,
       run_mode: editRunMode,
+      ...(editRunMode === 'sandbox' ? { sandbox_provider: editSandboxProvider, sandbox_config: safeParseSandboxConfig(editSandboxConfig) } : {}),
     });
   };
 
@@ -1236,6 +1285,10 @@ function AgentDetailPane({
             onSkillsChange={setEditSkills}
             onModelChange={setEditModel}
             onRunModeChange={setEditRunMode}
+            sandboxProvider={editSandboxProvider}
+            sandboxConfig={editSandboxConfig}
+            onSandboxProviderChange={setEditSandboxProvider}
+            onSandboxConfigChange={setEditSandboxConfig}
             onCancel={onCancelEdit}
             onSubmit={handleSave}
             submitLabel="Save"

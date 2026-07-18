@@ -35,3 +35,10 @@ test('resolveRunTarget routes sandbox to the daemon dispatch path', async () => 
   assert.equal(__test.resolveRunTarget({ run_mode: 'sandbox' }), 'daemon');
   assert.equal(__test.resolveRunTarget({}), 'builtin');
 });
+
+test('AgentsWindowContent offers a Sandbox runtime option', async () => {
+  const src = await readFile(path.join(root, 'src/components/windows/AgentsWindowContent.tsx'), 'utf8');
+  assert.match(src, /'builtin' \| 'daemon' \| 'sandbox'/);
+  assert.match(src, /value="sandbox"/);
+  assert.match(src, /Advanced/);
+});

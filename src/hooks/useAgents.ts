@@ -17,7 +17,9 @@ export interface CreateAgentInput {
   skills?: string[];
   handle?: string;
   model?: string;
-  run_mode?: 'builtin' | 'daemon';
+  run_mode?: 'builtin' | 'daemon' | 'sandbox';
+  sandbox_provider?: string | null;
+  sandbox_config?: Record<string, unknown>;
 }
 
 function agentHandle(value: string) {
@@ -106,6 +108,8 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
       run_mode: input.run_mode ?? 'builtin',
+      sandbox_provider: input.sandbox_provider ?? null,
+      sandbox_config: input.sandbox_config ?? {},
       enabled: true,
     }, `agents_${workspaceId}`);
     if (data) {
@@ -122,13 +126,13 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...result } as WorkspaceAgent : a));
     }
     return result;
-    }, [workspaceId]);
+  }, [workspaceId]);
 
   const deleteAgent = useCallback(async (id: string) => {
     await offlineDelete('workspace_agents', id, `agents_${workspaceId}`);
     setAgents(prev => prev.filter(a => a.id !== id));
     return true;
-    }, [workspaceId]);
+  }, [workspaceId]);
 
   return {
     agents,
