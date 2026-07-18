@@ -97,6 +97,7 @@ interface AgentTemplate {
   id: string;
   name: string;
   handle: string;
+  category: string;
   description: string;
   systemPrompt: string;
   tools: string[];
@@ -105,44 +106,85 @@ interface AgentTemplate {
   icon: LucideIcon;
 }
 
-// Starter templates shown in the create picker. Picking one prefills the form —
+// Starter templates shown in the create gallery. Picking one prefills the form —
 // nothing is created until the user reviews and submits, so these are honest
 // starting points, not hidden magic.
 const AGENT_TEMPLATES: AgentTemplate[] = [
   {
-    id: 'researcher',
-    name: 'Researcher',
-    handle: 'researcher',
+    id: 'researcher', name: 'Researcher', handle: 'researcher', category: 'Research',
     description: 'Digs through docs and the web to answer questions with sources.',
     systemPrompt: 'You are a thorough research assistant. Answer questions with concrete evidence, cite the documents or sources you used, and flag anything you are unsure about.',
-    tools: [],
-    skills: [],
-    runMode: 'builtin',
-    icon: Brain,
+    tools: [], skills: [], runMode: 'builtin', icon: Brain,
   },
   {
-    id: 'coder',
-    name: 'Coder',
-    handle: 'coder',
+    id: 'analyst', name: 'Data Analyst', handle: 'analyst', category: 'Research',
+    description: 'Turns raw numbers and tables into clear findings and summaries.',
+    systemPrompt: 'You are a data analyst. Given numbers, tables, or CSV-like data, compute the relevant figures, surface the key trends, and explain them in plain language. Show your working and call out assumptions.',
+    tools: [], skills: [], runMode: 'builtin', icon: Database,
+  },
+  {
+    id: 'coder', name: 'Coder', handle: 'coder', category: 'Engineering',
     description: 'A local coding agent that runs on your machine via the daemon.',
     systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
-    tools: [],
-    skills: [],
-    runMode: 'daemon',
-    icon: Terminal,
+    tools: [], skills: [], runMode: 'daemon', icon: Terminal,
   },
   {
-    id: 'writer',
-    name: 'Writer',
-    handle: 'writer',
+    id: 'reviewer', name: 'Code Reviewer', handle: 'reviewer', category: 'Engineering',
+    description: 'Reviews diffs for bugs, risks, and style — reports only what matters.',
+    systemPrompt: 'You are a senior code reviewer. Review changes for correctness, security, and clarity. Report concrete, high-signal issues with file:line references; skip nitpicks and praise.',
+    tools: [], skills: [], runMode: 'daemon', icon: ShieldCheck,
+  },
+  {
+    id: 'devops', name: 'DevOps', handle: 'devops', category: 'Engineering',
+    description: 'Helps with deploys, CI, infra config, and debugging ops issues.',
+    systemPrompt: 'You are a pragmatic DevOps engineer. Help with CI/CD, deployment, infrastructure, and incident debugging. Prefer boring, reliable solutions and explain the blast radius of any change.',
+    tools: [], skills: [], runMode: 'daemon', icon: Rocket,
+  },
+  {
+    id: 'writer', name: 'Writer', handle: 'writer', category: 'Content',
     description: 'Drafts and edits clear, on-brand copy for the team.',
     systemPrompt: 'You are a sharp writing assistant. Draft and edit clear, concise copy. Match the requested tone, keep structure tight, and prefer plain language.',
-    tools: [],
-    skills: [],
-    runMode: 'builtin',
-    icon: Sparkles,
+    tools: [], skills: [], runMode: 'builtin', icon: Sparkles,
+  },
+  {
+    id: 'editor', name: 'Editor', handle: 'editor', category: 'Content',
+    description: 'Tightens and proofreads writing without changing its voice.',
+    systemPrompt: 'You are a meticulous editor. Improve clarity, flow, grammar, and concision while preserving the author\u2019s voice and intent. Explain notable changes briefly.',
+    tools: [], skills: [], runMode: 'builtin', icon: Pencil,
+  },
+  {
+    id: 'summarizer', name: 'Summarizer', handle: 'summarizer', category: 'Content',
+    description: 'Condenses long threads, docs, or meetings into the key points.',
+    systemPrompt: 'You are a summarizer. Condense long content into the essential points, decisions, and action items. Be faithful to the source and never invent detail.',
+    tools: [], skills: [], runMode: 'builtin', icon: Command,
+  },
+  {
+    id: 'support', name: 'Support Agent', handle: 'support', category: 'Operations',
+    description: 'Answers questions from your docs in a friendly, accurate way.',
+    systemPrompt: 'You are a helpful support agent. Answer questions accurately using the workspace\u2019s documents and memory. Be warm and concise; if you don\u2019t know, say so and point to who might.',
+    tools: [], skills: [], runMode: 'builtin', icon: Bot,
+  },
+  {
+    id: 'pm', name: 'Project Manager', handle: 'pm', category: 'Operations',
+    description: 'Tracks tasks, drafts updates, and keeps work moving.',
+    systemPrompt: 'You are a project manager. Turn discussion into clear tasks (use TASK: <title> lines), draft crisp status updates, and surface blockers early. Keep everyone aligned.',
+    tools: [], skills: [], runMode: 'builtin', icon: Check,
+  },
+  {
+    id: 'qa', name: 'QA Tester', handle: 'qa', category: 'Engineering',
+    description: 'Designs test cases and hunts for edge cases and regressions.',
+    systemPrompt: 'You are a QA engineer. Design thorough test cases, probe edge cases and failure modes, and report reproducible steps. Think adversarially about what could break.',
+    tools: [], skills: [], runMode: 'daemon', icon: Wrench,
+  },
+  {
+    id: 'translator', name: 'Translator', handle: 'translator', category: 'Content',
+    description: 'Translates between languages while preserving tone and meaning.',
+    systemPrompt: 'You are a professional translator. Translate accurately while preserving tone, register, and intent. Note any phrases that don\u2019t translate cleanly.',
+    tools: [], skills: [], runMode: 'builtin', icon: Globe,
   },
 ];
+
+const TEMPLATE_CATEGORIES = ['All', ...Array.from(new Set(AGENT_TEMPLATES.map(t => t.category)))];
 
 // Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
 // documented as coming soon so the picker reflects reality, not aspiration.
@@ -187,6 +229,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
   // 'form' = the full agent form (reached via Custom or after picking a template).
   const [createStep, setCreateStep] = useState<null | 'choose' | 'form'>(null);
+  const [templateQuery, setTemplateQuery] = useState('');
+  const [templateCategory, setTemplateCategory] = useState('All');
   const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
@@ -382,12 +426,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               <span className="text-sm font-semibold">Create an agent</span>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              <p className="mb-3 text-sm text-muted-foreground">Start from a template, build your own, or bring an existing agent by connecting a client.</p>
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
+              <div className="mb-3 grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
                 <button
                   type="button"
                   onClick={startCustom}
-                  className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border-2 border-dashed border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border-2 border-dashed border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plus className="size-5" /></span>
                   <span className="text-sm font-semibold">Custom</span>
                   <span className="text-xs text-muted-foreground">Build your own agent from scratch.</span>
@@ -395,27 +438,64 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 <button
                   type="button"
                   onClick={onOpenConnections}
-                  className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plug className="size-5" /></span>
                   <span className="text-sm font-semibold">Bring your own</span>
                   <span className="text-xs text-muted-foreground">Connect a local CLI or MCP client as an agent.</span>
                 </button>
-                {AGENT_TEMPLATES.map(tpl => {
-                  const TplIcon = tpl.icon;
-                  return (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => applyTemplate(tpl)}
-                      className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
-                      <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
-                      <span className="text-sm font-semibold">{tpl.name}</span>
-                      <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                      <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.runMode === 'daemon' ? 'Remote daemon' : 'Built-in'} · Template</span>
-                    </button>
-                  );
-                })}
               </div>
+
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Templates</div>
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input value={templateQuery} onChange={e => setTemplateQuery(e.target.value)} placeholder="Search templates" className="h-8 pl-8 text-sm" />
+              </div>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {TEMPLATE_CATEGORIES.map(cat => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setTemplateCategory(cat)}
+                    className={cn(
+                      'rounded-full border px-2.5 py-1 text-xs font-medium transition',
+                      templateCategory === cat
+                        ? 'border-primary/60 bg-primary/15 text-foreground'
+                        : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                    )}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {(() => {
+                const q = templateQuery.trim().toLowerCase();
+                const filtered = AGENT_TEMPLATES.filter(tpl =>
+                  (templateCategory === 'All' || tpl.category === templateCategory) &&
+                  (q === '' || `${tpl.name} ${tpl.description} ${tpl.category}`.toLowerCase().includes(q)));
+                if (filtered.length === 0) {
+                  return <div className="py-8 text-center text-sm text-muted-foreground">No templates match. <button type="button" className="text-primary underline" onClick={startCustom}>Build a custom agent</button> instead.</div>;
+                }
+                return (
+                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
+                    {filtered.map(tpl => {
+                      const TplIcon = tpl.icon;
+                      return (
+                        <button
+                          key={tpl.id}
+                          type="button"
+                          onClick={() => applyTemplate(tpl)}
+                          className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                          <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
+                          <span className="text-sm font-semibold">{tpl.name}</span>
+                          <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
+                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.category} · {tpl.runMode === 'daemon' ? 'Remote daemon' : 'Built-in'}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         ) : createStep === 'form' ? (
