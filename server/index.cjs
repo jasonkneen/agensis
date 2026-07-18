@@ -2432,7 +2432,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, kind, parent_message_id, folder, archived_at, deleted_at, created_at, updated_at
+   `select id, workspace_id, title, model, folder, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
        order by updated_at desc nulls last
@@ -2440,7 +2440,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, folder, favorite, created_at, updated_at
+   `select id, workspace_id, title, folder, is_favorite, created_at, updated_at
        from documents
        where workspace_id = $1
        order by updated_at desc nulls last
@@ -2472,7 +2472,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, category, content, created_at, updated_at
+   `select id, workspace_id, fact, category, created_at, updated_at
        from memory_facts
        where workspace_id = $1
        order by updated_at desc nulls last

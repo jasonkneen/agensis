@@ -81,7 +81,14 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   folder text DEFAULT 'General',
   is_favorite boolean NOT NULL DEFAULT false,
   participants jsonb NOT NULL DEFAULT '[]'::jsonb,
+  conversation_mode text NOT NULL DEFAULT 'auto',
+  max_agent_turns integer NOT NULL DEFAULT 10,
+  auto_rounds integer NOT NULL DEFAULT 3,
+  parent_message_id uuid,
+  split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  split_at timestamptz,
   archived_at timestamptz,
+  deleted_at timestamptz,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
@@ -105,6 +112,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 -- Threaded replies: a message may be a reply to another message.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_parent_id uuid REFERENCES messages(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_messages_thread_parent_id ON messages(thread_parent_id);
+
+-- chat_sessions.parent_message_id references messages, but chat_sessions is
+-- created first (messages FK it via session_id), so the FK is added here once
+-- both tables exist. Matches the runtime ALTER in server/index.cjs.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chat_sessions_parent_message_id_fkey') THEN
+    ALTER TABLE chat_sessions ADD CONSTRAINT chat_sessions_parent_message_id_fkey
+      FOREIGN KEY (parent_message_id) REFERENCES messages(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent_message ON chat_sessions(parent_message_id);
 
 -- F6 (2026-07 review): these columns (agent-attributed sends, pin/react, soft
 -- delete) were added via runtime ALTER ... IF NOT EXISTS in server/index.cjs
@@ -556,3 +574,44 @@ CREATE TABLE IF NOT EXISTS activity_events (
 
 CREATE INDEX IF NOT EXISTS idx_activity_events_workspace_created ON activity_events(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_events_entity ON activity_events(entity_type, entity_id);
+
+-- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
+-- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
+-- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.
+CREATE TABLE IF NOT EXISTS agent_schedules (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  created_by uuid,
+  name text NOT NULL DEFAULT '',
+  prompt text NOT NULL DEFAULT '',
+  interval_seconds integer NOT NULL DEFAULT 86400,
+  enabled boolean NOT NULL DEFAULT true,
+  running boolean NOT NULL DEFAULT false,
+  next_run_at timestamptz NOT NULL DEFAULT now(),
+  last_run_at timestamptz,
+  last_status text DEFAULT '',
+  run_count integer NOT NULL DEFAULT 0,
+  fail_count integer NOT NULL DEFAULT 0,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_workspace_id ON agent_schedules(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_schedules_due ON agent_schedules(next_run_at) WHERE enabled;
+
+CREATE TABLE IF NOT EXISTS agent_schedule_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  schedule_id uuid NOT NULL REFERENCES agent_schedules(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'ok',
+  detail text DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_schedule ON agent_schedule_runs(schedule_id, created_at desc);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_schedules_interval_bounds') THEN
+    ALTER TABLE agent_schedules ADD CONSTRAINT agent_schedules_interval_bounds
+      CHECK (interval_seconds >= 60 AND interval_seconds <= 2592000);
+  END IF;
+END $$;

@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 interface SchedulesWindowProps {
   workspaceId: string;
@@ -67,18 +68,37 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
 
   const submit = async () => {
     if (!agentId || !sessionId) return;
-    await createSchedule({ agentId, sessionId, name: name.trim(), prompt: prompt.trim(), intervalSeconds });
-    resetForm();
-    setCreating(false);
+    try {
+      const created = await createSchedule({ agentId, sessionId, name: name.trim(), prompt: prompt.trim(), intervalSeconds });
+      if (!created) throw new Error('The server did not return the new schedule.');
+      toast.success('Schedule created');
+      resetForm();
+      setCreating(false);
+    } catch (err) {
+      toast.error('Could not create schedule', { description: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   const toggleEnabled = async (schedule: AgentSchedule) => {
     setBusyId(schedule.id);
-    try { await updateSchedule(schedule.id, { enabled: !schedule.enabled }); } finally { setBusyId(null); }
+    try {
+      await updateSchedule(schedule.id, { enabled: !schedule.enabled });
+    } catch (err) {
+      toast.error('Could not update schedule', { description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusyId(null);
+    }
   };
   const runNow = async (schedule: AgentSchedule) => {
     setBusyId(schedule.id);
-    try { await runSchedule(schedule.id); } finally { setBusyId(null); }
+    try {
+      await runSchedule(schedule.id);
+      toast.success('Schedule run started');
+    } catch (err) {
+      toast.error('Could not run schedule', { description: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusyId(null);
+    }
   };
 
   return (

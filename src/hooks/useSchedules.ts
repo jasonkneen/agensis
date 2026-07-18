@@ -84,6 +84,9 @@ export function useSchedules(workspaceId: string | null) {
       body: JSON.stringify(input),
     });
     const payload = await res.json().catch(() => null);
+    if (!res.ok || payload?.error) {
+      throw new Error(payload?.error?.message || payload?.error || `Schedule create failed (${res.status})`);
+    }
     const created = payload?.data as AgentSchedule | undefined;
     if (created) setSchedules(prev => prev.some(s => s.id === created.id) ? prev : [created, ...prev]);
     return created ?? null;
@@ -96,12 +99,19 @@ export function useSchedules(workspaceId: string | null) {
       body: JSON.stringify(updates),
     });
     const payload = await res.json().catch(() => null);
+    if (!res.ok || payload?.error) {
+      throw new Error(payload?.error?.message || payload?.error || `Schedule update failed (${res.status})`);
+    }
     const row = payload?.data as AgentSchedule | undefined;
     if (row) setSchedules(prev => prev.map(s => s.id === id ? row : s));
   }, []);
 
   const runSchedule = useCallback(async (id: string): Promise<void> => {
-    await fetch(apiUrl(`/backend/schedules/${encodeURIComponent(id)}/run`), { method: 'POST', headers: apiAuthHeaders() });
+    const res = await fetch(apiUrl(`/backend/schedules/${encodeURIComponent(id)}/run`), { method: 'POST', headers: apiAuthHeaders() });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(payload?.error?.message || payload?.error || `Schedule run failed (${res.status})`);
+    }
   }, []);
 
   const deleteSchedule = useCallback(async (id: string): Promise<void> => {
