@@ -147,6 +147,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
+import { useMyThreads } from '../../hooks/useMyThreads';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
@@ -1794,6 +1795,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
               subThreadsByMessage={subThreadsByMessage}
               onOpenSubThread={openSubThreadPanel}
               onClose={closeSidePanel}
+              workspaceId={workspaceId}
             />
           ) : sidePanel === 'sub-thread' && activeSubThread && onSendSubThreadMessage ? (
             <SubThreadPanel
@@ -2257,14 +2259,51 @@ function ChatMessageBubble({
   );
 }
 
+function SubThreadRow({ session, onOpen, showChannel }: { session: ChatSession; onOpen: (s: ChatSession) => void; showChannel?: boolean }) {
+  const agents = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
+  const ts = new Date(session.updated_at);
+  const diffMins = Math.floor((Date.now() - ts.getTime()) / 60000);
+  const timeLabel =
+    diffMins < 1 ? 'just now'
+      : diffMins < 60 ? `${diffMins}m ago`
+        : diffMins < 1440 ? `${Math.floor(diffMins / 60)}h ago`
+          : ts.toLocaleDateString();
+  return (
+    <button
+      type="button"
+      className="w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+      onClick={() => onOpen(session)}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="min-w-0 truncate text-sm font-medium">{session.title || 'Sub-thread'}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{timeLabel}</span>
+      </div>
+      {showChannel && session.folder && (
+        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/80">{session.folder}</div>
+      )}
+      {agents.length > 0 && (
+        <div className="mt-0.5 flex flex-wrap gap-1">
+          {agents.map(a => (
+            <span key={a.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+              @{a.handle ?? a.name}
+            </span>
+          ))}
+        </div>
+      )}
+    </button>
+  );
+}
+
 function SubThreadListPanel({
   subThreadsByMessage,
   onOpenSubThread,
   onClose,
+  workspaceId,
 }: {
   subThreadsByMessage: Record<string, ChatSession[]>;
   onOpenSubThread: (session: ChatSession) => void;
   onClose: () => void;
+  workspaceId?: string | null;
 }) {
   const allThreads = useMemo(
     () =>
@@ -2273,7 +2312,15 @@ function SubThreadListPanel({
         .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
     [subThreadsByMessage],
   );
-
+  // Cross-channel: every thread the signed-in user is involved in, workspace-wide.
+  const { threads: myThreads } = useMyThreads(workspaceId ?? null);
+  // Threads already shown in this channel's sub-thread list — don't repeat them
+  // in the "involving you" section.
+  const channelThreadIds = useMemo(() => new Set(allThreads.map(t => t.id)), [allThreads]);
+  const otherMyThreads = useMemo(
+    () => myThreads.filter(t => !channelThreadIds.has(t.id)),
+    [myThreads, channelThreadIds],
+  );
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
@@ -2291,55 +2338,34 @@ function SubThreadListPanel({
         </Button>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {allThreads.length === 0 ? (
+        {allThreads.length === 0 && otherMyThreads.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
             <GitBranch className="h-8 w-8 opacity-30" />
             <p className="text-sm">No sub-threads yet</p>
             <p className="text-center text-xs opacity-70">Start one from any message using the + Sub-thread button</p>
           </div>
         ) : (
-          <div className="divide-y divide-border">
-            {allThreads.map(session => {
-              const agents = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
-              const ts = new Date(session.updated_at);
-              const now = new Date();
-              const diffMs = now.getTime() - ts.getTime();
-              const diffMins = Math.floor(diffMs / 60000);
-              const timeLabel =
-                diffMins < 1
-                  ? 'just now'
-                  : diffMins < 60
-                    ? `${diffMins}m ago`
-                    : diffMins < 1440
-                      ? `${Math.floor(diffMins / 60)}h ago`
-                      : ts.toLocaleDateString();
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  className="w-full px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
-                  onClick={() => onOpenSubThread(session)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="min-w-0 truncate text-sm font-medium">{session.title || 'Sub-thread'}</span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">{timeLabel}</span>
-                  </div>
-                  {agents.length > 0 && (
-                    <div className="mt-0.5 flex flex-wrap gap-1">
-                      {agents.map(a => (
-                        <span
-                          key={a.id}
-                          className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground"
-                        >
-                          @{a.handle ?? a.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <>
+            {allThreads.length > 0 && (
+              <div className="divide-y divide-border">
+                {allThreads.map(session => (
+                  <SubThreadRow key={session.id} session={session} onOpen={onOpenSubThread} />
+                ))}
+              </div>
+            )}
+            {otherMyThreads.length > 0 && (
+              <div>
+                <div className="sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-md">
+                  Involving you · other channels
+                </div>
+                <div className="divide-y divide-border">
+                  {otherMyThreads.map(session => (
+                    <SubThreadRow key={session.id} session={session} onOpen={onOpenSubThread} showChannel />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
