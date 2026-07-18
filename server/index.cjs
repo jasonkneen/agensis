@@ -6280,10 +6280,34 @@ function createApp() {
     return jsonError(res, 400, new Error(`Unsupported file type: .${extension || 'unknown'}`));
    }
    const id = crypto.randomUUID();
-   const buffer = Buffer.from(contentBase64, 'base64');
    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25MB; matches the client FileUpload cap
+   // Pre-decode guard: base64 inflates ~4/3, so a decoded 25MB cap ≈ 33.6M encoded chars.
+   // Reject before allocating the Buffer so an oversized payload can't spike memory.
+   if (contentBase64.length > Math.ceil(MAX_UPLOAD_BYTES / 3) * 4 + 4) {
+    return jsonError(res, 413, new Error('File exceeds the 25MB upload limit'));
+   }
+   // Validate base64 shape before decoding — Buffer.from silently drops invalid
+   // chars, so a malformed payload would otherwise write truncated garbage.
+   const b64 = contentBase64.trim();
+   if (b64.length === 0 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) {
+    return jsonError(res, 400, new Error('contentBase64 is not valid base64'));
+   }
+   const buffer = Buffer.from(b64, 'base64');
+   if (buffer.length === 0) {
+    return jsonError(res, 400, new Error('Decoded file is empty'));
+   }
    if (buffer.length > MAX_UPLOAD_BYTES) {
     return jsonError(res, 413, new Error('File exceeds the 25MB upload limit'));
+   }
+   // Per-workspace storage quota (server-side; the client only caps per-batch).
+   const WORKSPACE_STORAGE_QUOTA_BYTES = Number(process.env.WORKSPACE_STORAGE_QUOTA_BYTES) || 2 * 1024 * 1024 * 1024; // 2GB default abuse guard
+   const usageRows = await getDb().unsafe(
+    'select coalesce(sum(size), 0)::bigint as total from uploaded_files where workspace_id = $1',
+    [workspaceId],
+   );
+   if (Number(usageRows[0]?.total || 0) + buffer.length > WORKSPACE_STORAGE_QUOTA_BYTES) {
+    const gb = (WORKSPACE_STORAGE_QUOTA_BYTES / (1024 * 1024 * 1024)).toFixed(1);
+    return jsonError(res, 413, new Error(`Workspace storage quota exceeded (${gb}GB). Delete files to free space.`));
    }
    const storagePath = storagePathFor(workspaceId, id, name);
    const fullPath = resolveStoragePath(storagePath);

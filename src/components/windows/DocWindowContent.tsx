@@ -335,7 +335,9 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const savedTitle = newTitle ?? title;
-      const savedContent = newContent ?? contentRef.current?.innerHTML ?? '';
+      // Sanitize on write (defence-in-depth): the DB stores clean HTML, so a future
+      // reader that forgets to sanitize can't reintroduce stored XSS.
+      const savedContent = sanitizeHtml(newContent ?? contentRef.current?.innerHTML ?? '');
       onAutoSave(doc.id, {
         title: savedTitle,
         content: savedContent,
@@ -724,23 +726,23 @@ export const DocWindowContent = React.memo(function DocWindowContent({
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <ScrollArea className="min-w-0 flex-1">
           <div className="px-6 py-5">
-          <Input
-            type="text"
-            value={title}
-            onChange={handleTitleChange}
-            placeholder="Untitled"
-            className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
-          />
-          <div
-            ref={contentRef}
-            contentEditable
-            suppressContentEditableWarning
-            onInput={handleContentInput}
-            onPaste={handlePaste}
-            onDrop={handleDrop}
-            data-placeholder="Start writing..."
-            className="doc-editor min-h-[200px] text-[13px] leading-[1.7] text-foreground outline-none"
-          />
+            <Input
+              type="text"
+              value={title}
+              onChange={handleTitleChange}
+              placeholder="Untitled"
+              className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
+            />
+            <div
+              ref={contentRef}
+              contentEditable
+              suppressContentEditableWarning
+              onInput={handleContentInput}
+              onPaste={handlePaste}
+              onDrop={handleDrop}
+              data-placeholder="Start writing..."
+              className="doc-editor min-h-[200px] text-[13px] leading-[1.7] text-foreground outline-none"
+            />
           </div>
         </ScrollArea>
         {commentsOpen && canShowComments && workspaceId && currentUserEmail && (

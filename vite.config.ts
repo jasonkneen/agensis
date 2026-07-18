@@ -159,7 +159,7 @@ export default defineConfig({
           },
           {
             urlPattern: /^https:\/\/images\.pexels\.com\/.*/i,
-            handler: 'CacheFirst',
+            handler: 'StaleWhileRevalidate',
             options: {
               cacheName: 'pexels-images-cache',
               expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 },
