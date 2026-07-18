@@ -5652,6 +5652,25 @@ function notifyDbSubscribers(table, eventType, rows) {
   void logMessageActivity(rowList);
  }
 
+ // NET-07: drive the sidebar agent-status feed with a LEAN broadcast instead of
+ // forcing every client to subscribe to the full workspace `messages` db_changes
+ // firehose (which streamed every row — incl. ~1/s "Thinking" heartbeats, full
+ // content — to everyone for one bubble). Emit only the fields the feed needs,
+ // only for agent-authored rows, on the workspace-scoped broadcast channel that
+ // authorizeRealtimeBroadcast already gates (enforceWorkspaceRole read).
+ if (table === 'messages' && (eventType === 'INSERT' || eventType === 'UPDATE')) {
+  for (const row of rowList) {
+   if (!row || row.sender_kind !== 'agent' || !row.sender_id || !row.workspace_id) continue;
+   relayBroadcast(`agent-status:${row.workspace_id}`, 'agent_status', {
+    id: row.id,
+    agentId: row.sender_id,
+    senderName: row.sender_name || null,
+    content: typeof row.content === 'string' ? row.content : '',
+    eventType,
+   });
+  }
+ }
+
  void enqueueFlowWebhookEvents(table, eventType, rowList).catch((error) => {
   console.error('[flows] failed to queue webhook event:', error.message || error);
  });
@@ -5831,7 +5850,7 @@ function workspaceIdFromRealtimeChannel(channel) {
  if (typeof channel !== 'string') return null;
  const [prefix, workspaceId, ...rest] = channel.split(':');
  if (rest.length > 0 || !workspaceId) return null;
- if (!['canvas', 'cursors', 'item-presence', 'agent-presence'].includes(prefix)) return null;
+ if (!['canvas', 'cursors', 'item-presence', 'agent-presence', 'agent-status'].includes(prefix)) return null;
  return workspaceId;
 }
 
@@ -8648,6 +8667,8 @@ module.exports = {
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
   registerTestWebsocketClient,
+  notifyDbSubscribers,
+  relayBroadcast,
   registerTestConnectedAgent,
   insertActiveAgentJob,
   buildWhereClause,
