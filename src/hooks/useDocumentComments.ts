@@ -28,7 +28,7 @@ export function useDocumentComments(
   workspaceId: string | null,
   userId?: string,
 ) {
-  return useRealtimeComments<DocumentComment>(
+  return useRealtimeComments<DocumentComment, CreateCommentInput>(
     docCommentsConfig,
     documentId,
     workspaceId,

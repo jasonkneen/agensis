@@ -15,16 +15,20 @@ interface CommentRow {
   updated_at: string;
 }
 
-export interface UseRealtimeCommentsConfig<T extends CommentRow> {
+export interface UseRealtimeCommentsConfig<T extends CommentRow, I extends { content: string; parent_id?: string | null } = { content: string; parent_id?: string | null }> {
   table: string;
   filterField: string;
   channelPrefix: string;
-  buildInsertPayload: (input: { content: string; parent_id?: string | null }, extra: Record<string, unknown>) => Record<string, unknown>;
+  buildInsertPayload: (input: I, extra: Record<string, unknown>) => Record<string, unknown>;
   castRow: (data: Record<string, unknown>) => T;
+  // Optional second-dimension filter applied client-side. The subscription still
+  // keys on `filterField` (a table can only be filtered server-side by one field),
+  // so e.g. memory-file comments subscribe by agent_id and narrow to a path here.
+  clientFilter?: (row: T) => boolean;
 }
 
-export function useRealtimeComments<T extends CommentRow>(
-  config: UseRealtimeCommentsConfig<T>,
+export function useRealtimeComments<T extends CommentRow, I extends { content: string; parent_id?: string | null } = { content: string; parent_id?: string | null }>(
+  config: UseRealtimeCommentsConfig<T, I>,
   filterValue: string | null,
   workspaceId: string | null,
   userId?: string,
@@ -83,7 +87,7 @@ export function useRealtimeComments<T extends CommentRow>(
     },
   );
 
-  const createComment = useCallback(async (input: { content: string; parent_id?: string | null }) => {
+  const createComment = useCallback(async (input: I) => {
     if (!filterValue || !workspaceId) return null;
     const payload = config.buildInsertPayload(input, {
       [config.filterField]: filterValue,
@@ -106,7 +110,7 @@ export function useRealtimeComments<T extends CommentRow>(
       setComments(prev => prev.map(c => c.id === id ? { ...c, ...result } as T : c));
     }
     return result;
-    }, [config.table, filterValue]);
+  }, [config.table, filterValue]);
 
   const resolveComment = useCallback(async (id: string, resolved: boolean) => {
     return updateComment(id, { resolved } as Partial<T>);
@@ -116,10 +120,11 @@ export function useRealtimeComments<T extends CommentRow>(
     await offlineDelete(config.table, id, `${config.table}_${filterValue}`);
     setComments(prev => prev.filter(c => c.id !== id && c.parent_id !== id));
     return true;
-    }, [config.table, filterValue]);
+  }, [config.table, filterValue]);
 
-  const topLevel = comments.filter(c => !c.parent_id);
-  const replyMap = comments.reduce<Record<string, T[]>>((acc, c) => {
+  const visible = config.clientFilter ? comments.filter(config.clientFilter) : comments;
+  const topLevel = visible.filter(c => !c.parent_id);
+  const replyMap = visible.reduce<Record<string, T[]>>((acc, c) => {
     if (c.parent_id) {
       (acc[c.parent_id] = acc[c.parent_id] || []).push(c);
     }
@@ -127,7 +132,7 @@ export function useRealtimeComments<T extends CommentRow>(
   }, {});
 
   return {
-    comments,
+    comments: visible,
     topLevel,
     replyMap,
     loading,

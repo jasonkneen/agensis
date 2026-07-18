@@ -26,7 +26,7 @@ export function useTaskComments(
   workspaceId: string | null,
   userId?: string,
 ) {
-  return useRealtimeComments<TaskComment>(
+  return useRealtimeComments<TaskComment, CreateTaskCommentInput>(
     taskCommentsConfig,
     taskId,
     workspaceId,
