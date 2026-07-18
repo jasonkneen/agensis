@@ -19,7 +19,7 @@
     ".": "./src/agensis.mjs"
   },
   "scripts": {
-    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs && node --check src/memory.mjs && node --check src/setupFlow.mjs && node --check src/cursorbuddyLocalBridge.mjs && node --check src/sharedInference.mjs && node --check src/executor.mjs",
+    "check": "node --check bin/agensis.mjs && node --check src/agensis.mjs && node --check src/cli.mjs && node --check src/queue.mjs && node --check src/memory.mjs && node --check src/setupFlow.mjs && node --check src/cursorbuddyLocalBridge.mjs && node --check src/sharedInference.mjs && node --check src/executor.mjs && node --check src/sandbox/e2b.mjs",
     "link": "npm link && bun link",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm run check",
@@ -31,6 +31,7 @@
     "src/cli.mjs",
     "src/executor.mjs",
     "src/connectProfiles.mjs",
+    "src/sandbox/e2b.mjs",
     "src/cursorbuddyConnect.mjs",
     "src/cursorbuddyLocalBridge.mjs",
     "src/queue.mjs",
@@ -55,6 +56,7 @@
     "coding-agent"
   ],
   "dependencies": {
+    "e2b": "^2.35.0",
     "ws": "^8.20.0"
   },
   "publishConfig": {
