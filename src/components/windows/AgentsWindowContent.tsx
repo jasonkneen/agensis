@@ -69,6 +69,7 @@ interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
   webhooks: AgentWebhook[];
   connections?: AgentConnection[];
+  currentUserId?: string | null;
   focusedAgentKey?: string | null;
   onCreateAgent: (input: {
     name: string;
@@ -112,6 +113,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   agents,
   webhooks,
   connections = [],
+  currentUserId,
   focusedAgentKey,
   onCreateAgent,
   onUpdateAgent,
@@ -140,6 +142,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
   const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
+  const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || null);
@@ -163,9 +166,13 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     return acc;
   }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
   presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
+  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId
+    ? agents.filter(agent => agent.created_by === currentUserId)
+    : agents;
+  const mineCount = currentUserId ? agents.filter(agent => agent.created_by === currentUserId).length : 0;
   const statusVisibleAgents = statusFilter.size === 0
-    ? agents
-    : agents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
+    ? ownerVisibleAgents
+    : ownerVisibleAgents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
   const searchQuery = searchTerm.trim().toLowerCase();
   const visibleAgents = searchQuery === ''
     ? statusVisibleAgents
@@ -367,6 +374,32 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           </div>
         ) : (
           <div className="flex h-full min-h-0 flex-col">
+            {agents.length > 0 && mineCount > 0 && (
+              <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-full border border-border bg-card/40 p-0.5 text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => setOwnerFilter('mine')}
+                  aria-pressed={ownerFilter === 'mine'}
+                  className={cn(
+                    'rounded-full px-3 py-1 transition',
+                    ownerFilter === 'mine' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  Yours <span className="tabular-nums opacity-70">{mineCount}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOwnerFilter('all')}
+                  aria-pressed={ownerFilter === 'all'}
+                  className={cn(
+                    'rounded-full px-3 py-1 transition',
+                    ownerFilter === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  All <span className="tabular-nums opacity-70">{agents.length}</span>
+                </button>
+              </div>
+            )}
             {agents.length > 0 && (
               <div className="agents-status-filter mb-3 flex flex-wrap items-center gap-1.5">
                 <button
@@ -445,7 +478,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     <Bot />
                   </EmptyMedia>
                   <EmptyTitle>No agents match</EmptyTitle>
-                  <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
+                  <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : ownerFilter === 'mine' && statusFilter.size === 0 ? "You haven't created any agents yet." : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : (

@@ -2535,6 +2535,7 @@ function CanvasLayerScene({
                 agents={agents}
                 webhooks={agentWebhooks}
                 connections={agentConnections}
+                currentUserId={userId}
                 focusedAgentKey={focusedAgentKey}
                 onCreateAgent={onCreateAgent}
                 onUpdateAgent={onUpdateAgent}
