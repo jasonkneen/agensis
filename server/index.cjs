@@ -7534,25 +7534,16 @@ function createApp() {
        from chat_sessions s
       where s.workspace_id = $1
         and s.deleted_at is null
-        -- "Threads involving the user": either a dedicated sub-thread session
-        -- (parent_message_id set) in which the user posted, OR any session where
-        -- the user themself authored a threaded reply. The user-authorship is
-        -- checked INSIDE each case so a plain channel message never qualifies.
-        and (
-          (
-            s.parent_message_id is not null
-            and exists (
-              select 1 from messages m
-               where m.session_id = s.id and m.deleted_at is null
-                 and m.sender_kind = 'user' and m.sender_id = $2
-            )
-          )
-          or exists (
-            select 1 from messages mt
-             where mt.session_id = s.id and mt.deleted_at is null
-               and mt.thread_parent_id is not null
-               and mt.sender_kind = 'user' and mt.sender_id = $2
-          )
+        -- "Threads involving the user": a dedicated sub-thread session
+        -- (parent_message_id set) the user has posted in. Restricted to sub-thread
+        -- sessions because the UI opens each row via the sub-thread panel, which
+        -- loads a whole session by id — an inline thread_parent_id reply lives in
+        -- a normal channel session and needs a different opener, so it's excluded.
+        and s.parent_message_id is not null
+        and exists (
+          select 1 from messages m
+           where m.session_id = s.id and m.deleted_at is null
+             and m.sender_kind = 'user' and m.sender_id = $2
         )
       order by last_activity desc nulls last
       limit $3`,
