@@ -7529,9 +7529,9 @@ function createApp() {
    const rows = await getDb().unsafe(
     `insert into agent_schedules
            (workspace_id, agent_id, session_id, created_by, name, prompt, interval_seconds, enabled, next_run_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, now() + ($7 || ' seconds')::interval)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, now() + ($9 || ' seconds')::interval)
          returning *`,
-    [workspaceId, agentId, sessionId, req.userId, String(name || '').slice(0, 200), String(prompt || '').slice(0, 4000), interval, enabled !== false],
+    [workspaceId, agentId, sessionId, req.userId, String(name || '').slice(0, 200), String(prompt || '').slice(0, 4000), interval, enabled !== false, String(interval)],
    );
    notifyDbSubscribers('agent_schedules', 'INSERT', rows);
    res.json({ data: rows[0], error: null });
@@ -7555,9 +7555,9 @@ function createApp() {
    const rows = await getDb().unsafe(
     `update agent_schedules
             set name = $2, prompt = $3, interval_seconds = $4, enabled = $5, updated_at = now(),
-                next_run_at = case when $5 = true and $6 = false then now() + ($4 || ' seconds')::interval else next_run_at end
+                next_run_at = case when $5 = true and $6 = false then now() + ($7 || ' seconds')::interval else next_run_at end
           where id = $1 returning *`,
-    [scheduleId, nextName, nextPrompt, nextInterval, nextEnabled, schedule.enabled],
+    [scheduleId, nextName, nextPrompt, nextInterval, nextEnabled, schedule.enabled, String(nextInterval)],
    );
    notifyDbSubscribers('agent_schedules', 'UPDATE', rows);
    res.json({ data: rows[0], error: null });
