@@ -3469,14 +3469,32 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    // A true 1:1 DM (a participant flagged direct:true) is isolated: ONLY that
    // agent ever responds. Agents routinely @mention teammates to collaborate, but
    // a private DM must not pull those others in. Channels keep full routing below.
-   // Legacy DM sessions (created before the participant `direct` flag) are
-   // identified by their folder, so an agent DM always responds without an @.
-   const isDirectMessage = Boolean(directTarget && (directTarget.direct || session.folder === 'Direct messages'));
+   // A DM is identified by a direct-flagged participant OR the 'Direct messages'
+   // folder (legacy DMs created before the flag). Either way the agent must
+   // respond without an @mention.
+   const isFolderDm = session.folder === 'Direct messages';
+   const isDirectMessage = Boolean(directTarget && (directTarget.direct || isFolderDm)) || isFolderDm;
    let nextAgent = null;
    if (isDirectMessage) {
     if (agentTurns === 0) {
-     nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
-      || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
+     // Prefer the explicit direct participant; fall back to matching the DM
+     // session's title against an enabled agent (legacy DMs whose participant
+     // row lost its agent_id/handle), then to the sole enabled participant.
+     nextAgent = (directTarget && agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
+      || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))))) || null;
+     if (!nextAgent && isFolderDm) {
+      const titleSlug = slugHandle(String(session.title || '').replace(/^@+/, ''));
+      if (titleSlug) {
+       nextAgent = agents.find((agent) => isAgentEnabled(agent) && (slugHandle(agent.handle || agent.name) === titleSlug || slugHandle(agent.name) === titleSlug)) || null;
+      }
+      if (!nextAgent) {
+       const enabledParticipants = agents.filter((agent) => isAgentEnabled(agent) && participantAgentIds.has(String(agent.id)));
+       if (enabledParticipants.length === 1) nextAgent = enabledParticipants[0];
+      }
+      if (!nextAgent) {
+       console.warn(`[dm] no agent resolved for DM session=${sessionId} title=${JSON.stringify(session.title)} directTarget=${JSON.stringify(directTarget)} participantAgentIds=${[...participantAgentIds].join(',')} enabledAgents=${agents.filter(isAgentEnabled).length}`);
+      }
+     }
     }
    } else {
     nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
