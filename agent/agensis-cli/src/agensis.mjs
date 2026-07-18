@@ -4,7 +4,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import process from "node:process";
 import WebSocket from "ws";
-import { runCli } from "./cli.mjs";
+import { createExecutor } from "./executor.mjs";
 import { createQueue } from "./queue.mjs";
 import { startCursorBuddyLocalBridge } from "./cursorbuddyLocalBridge.mjs";
 import { deriveMemoryRoot, snapshotMemory, memoryFingerprint } from "./memory.mjs";
@@ -829,7 +829,8 @@ async function runAgentJob(config, job, { signal }) {
   const progressTimer = setInterval(() => sendDelta(fullContent), 1000);
   if (progressTimer.unref) progressTimer.unref();
 
-  const result = await runCli({
+  const executor = createExecutor(job);
+  const result = await executor.run({
     cmd: command.cmd,
     args: [...command.args, prompt],
     cwd: job.cwd || config.cwd,
@@ -837,6 +838,7 @@ async function runAgentJob(config, job, { signal }) {
     heartbeatMs: config.heartbeatMs,
     label: "agent job",
     signal,
+    job,
     onData: (chunk) => {
       if (parser) {
         parser.feed(chunk);
@@ -1431,4 +1433,5 @@ export const __test = {
   heartbeatMetadata,
   abortInferenceRequests,
   createStreamJsonParser,
+  createExecutor,
 };
