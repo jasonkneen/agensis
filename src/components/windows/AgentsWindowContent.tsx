@@ -93,6 +93,57 @@ interface AgentsWindowContentProps {
   onOpenConnections: () => void;
 }
 
+interface AgentTemplate {
+  id: string;
+  name: string;
+  handle: string;
+  description: string;
+  systemPrompt: string;
+  tools: string[];
+  skills: string[];
+  runMode: 'builtin' | 'daemon';
+  icon: LucideIcon;
+}
+
+// Starter templates shown in the create picker. Picking one prefills the form —
+// nothing is created until the user reviews and submits, so these are honest
+// starting points, not hidden magic.
+const AGENT_TEMPLATES: AgentTemplate[] = [
+  {
+    id: 'researcher',
+    name: 'Researcher',
+    handle: 'researcher',
+    description: 'Digs through docs and the web to answer questions with sources.',
+    systemPrompt: 'You are a thorough research assistant. Answer questions with concrete evidence, cite the documents or sources you used, and flag anything you are unsure about.',
+    tools: [],
+    skills: [],
+    runMode: 'builtin',
+    icon: Brain,
+  },
+  {
+    id: 'coder',
+    name: 'Coder',
+    handle: 'coder',
+    description: 'A local coding agent that runs on your machine via the daemon.',
+    systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
+    tools: [],
+    skills: [],
+    runMode: 'daemon',
+    icon: Terminal,
+  },
+  {
+    id: 'writer',
+    name: 'Writer',
+    handle: 'writer',
+    description: 'Drafts and edits clear, on-brand copy for the team.',
+    systemPrompt: 'You are a sharp writing assistant. Draft and edit clear, concise copy. Match the requested tone, keep structure tight, and prefer plain language.',
+    tools: [],
+    skills: [],
+    runMode: 'builtin',
+    icon: Sparkles,
+  },
+];
+
 const DEFAULT_AGENT_AVATAR = 'AI';
 const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon }> = [
   { value: 'icon:bot', label: 'Bot', icon: Bot },
@@ -122,7 +173,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onUpdateWebhook,
   onOpenConnections,
 }: AgentsWindowContentProps) {
-  const [showCreate, setShowCreate] = useState(false);
+  // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
+  // 'form' = the full agent form (reached via Custom or after picking a template).
+  const [createStep, setCreateStep] = useState<null | 'choose' | 'form'>(null);
   const [connectAgentId, setConnectAgentId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [newAvatar, setNewAvatar] = useState(DEFAULT_AGENT_AVATAR);
@@ -199,6 +252,21 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
   }, []);
 
+  const resetNewAgentFields = () => {
+    setNewName('');
+    setNewAvatar(DEFAULT_AGENT_AVATAR);
+    setNewOpenPetAvatarId('');
+    setNewAccentColor(agentAccentPaletteColor(agents.length + 1));
+    setNewHandle('');
+    setNewDescription('');
+    setNewSystemPrompt('');
+    setNewSoul('');
+    setNewInstructions('');
+    setNewTools('');
+    setNewSkills('');
+    setNewModel('auto');
+    setNewRunMode('builtin');
+  };
   const handleCreate = () => {
     if (!newName.trim()) return;
     onCreateAgent({
@@ -216,20 +284,28 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
       model: newModel,
       run_mode: newRunMode,
     });
-    setNewName('');
+    resetNewAgentFields();
+    setCreateStep(null);
+  };
+  const startCustom = () => {
+    resetNewAgentFields();
+    setCreateStep('form');
+  };
+  const applyTemplate = (tpl: AgentTemplate) => {
+    setNewName(tpl.name);
+    setNewHandle(tpl.handle);
+    setNewDescription(tpl.description);
+    setNewSystemPrompt(tpl.systemPrompt);
+    setNewTools(tpl.tools.join(', '));
+    setNewSkills(tpl.skills.join(', '));
+    setNewModel('auto');
+    setNewRunMode(tpl.runMode);
     setNewAvatar(DEFAULT_AGENT_AVATAR);
     setNewOpenPetAvatarId('');
     setNewAccentColor(agentAccentPaletteColor(agents.length + 1));
-    setNewHandle('');
-    setNewDescription('');
-    setNewSystemPrompt('');
     setNewSoul('');
     setNewInstructions('');
-    setNewTools('');
-    setNewSkills('');
-    setNewModel('auto');
-    setNewRunMode('builtin');
-    setShowCreate(false);
+    setCreateStep('form');
   };
 
   const handleDelete = (id: string) => {
@@ -267,8 +343,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           <Button
             type="button"
             size="sm"
-            variant={showCreate ? 'outline' : 'default'}
-            onClick={() => setShowCreate(!showCreate)}
+            variant={createStep ? 'outline' : 'default'}
+            onClick={() => setCreateStep(createStep ? null : 'choose')}
           >
             <Plus data-icon="inline-start" />
             Create Agent
@@ -285,10 +361,56 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
       />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
-        {showCreate ? (
+        {createStep === 'choose' ? (
           <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card/55 backdrop-blur-md">
             <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-              <Button type="button" variant="ghost" size="icon-xs" onClick={() => setShowCreate(false)} aria-label="Back to agents">
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => setCreateStep(null)} aria-label="Back to agents">
+                <ArrowLeft />
+              </Button>
+              <Plus className="size-4 text-primary" />
+              <span className="text-sm font-semibold">Create an agent</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <p className="mb-3 text-sm text-muted-foreground">Start from a template, build your own, or bring an existing agent by connecting a client.</p>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
+                <button
+                  type="button"
+                  onClick={startCustom}
+                  className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border-2 border-dashed border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plus className="size-5" /></span>
+                  <span className="text-sm font-semibold">Custom</span>
+                  <span className="text-xs text-muted-foreground">Build your own agent from scratch.</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenConnections}
+                  className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plug className="size-5" /></span>
+                  <span className="text-sm font-semibold">Bring your own</span>
+                  <span className="text-xs text-muted-foreground">Connect a local CLI or MCP client as an agent.</span>
+                </button>
+                {AGENT_TEMPLATES.map(tpl => {
+                  const TplIcon = tpl.icon;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => applyTemplate(tpl)}
+                      className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                      <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
+                      <span className="text-sm font-semibold">{tpl.name}</span>
+                      <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
+                      <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.runMode === 'daemon' ? 'Remote daemon' : 'Built-in'} · Template</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : createStep === 'form' ? (
+          <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card/55 backdrop-blur-md">
+            <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => setCreateStep('choose')} aria-label="Back to templates">
                 <ArrowLeft />
               </Button>
               <Plus className="size-4 text-primary" />
@@ -329,7 +451,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onSkillsChange={setNewSkills}
                 onModelChange={setNewModel}
                 onRunModeChange={setNewRunMode}
-                onCancel={() => setShowCreate(false)}
+                onCancel={() => setCreateStep(null)}
                 onSubmit={handleCreate}
                 submitLabel="Create"
                 submitIcon={<Plus data-icon="inline-start" />}
