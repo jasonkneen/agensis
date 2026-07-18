@@ -3383,11 +3383,15 @@ body {
  --radius-4xl: var(--radius-lg);
 }
 
-/* Flatten fully-rounded CONTAINER surfaces (cards, inputs, dialogs, popovers,
-   dropdowns, pills) to `lg`. Buttons are left alone so genuinely circular icon
-   buttons — the notification bell, avatar triggers — stay round; avatars are
-   excluded explicitly too. */
-:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) :is([data-slot="card"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"], .home-suggestion-pill, .sidebar-search):not([class*="avatar"]) {
+/* Flatten fully-rounded control + container surfaces to `lg`: cards, inputs,
+   dialogs, popovers, dropdowns, pills, product badges, and NON-icon buttons.
+   Icon-shaped buttons (data-size="icon*") keep their radius so the round
+   notification bell / avatar triggers stay circular; avatars excluded too. */
+:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) :is([data-slot="card"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="badge"], .home-suggestion-pill, .sidebar-search):not([class*="avatar"]) {
+ border-radius: var(--radius-lg) !important;
+}
+
+:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) [data-slot="button"]:not([data-size^="icon"]) {
  border-radius: var(--radius-lg) !important;
 }
 
