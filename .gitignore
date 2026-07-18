@@ -33,3 +33,6 @@ desktop/third_party/
 .netlify
 /.playwright-mcp
 .gstack/
+
+# Local upload store + test artifacts (runtime-generated, never source)
+.agensis_uploads/
