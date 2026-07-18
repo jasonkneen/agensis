@@ -586,7 +586,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 All agents
               </Button>
             </div>
-            <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
               <AgentDetailPane
                 agent={selectedAgent}
                 isEditing={editingId === selectedAgent.id}

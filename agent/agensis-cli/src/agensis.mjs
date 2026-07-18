@@ -944,13 +944,33 @@ function buildAgentCommand(config, job) {
   const model = resolveJobModel(config, job);
   const permissionMode = resolveJobPermissionMode(config, job);
   const cleanArgs = stripManagedFlags(args);
-  const permissionFlags = permissionFlagsForMode(permissionMode);
+  let permissionFlags = permissionFlagsForMode(permissionMode);
 
   if (isClaudeCommand(cmd)) {
     const nextArgs = [...cleanArgs];
     if (model) nextArgs.push("--model", model);
     if (permissionMode === "accept_edits") nextArgs.push("--permission-mode", "acceptEdits");
-    if (permissionMode === "yolo") nextArgs.push("--dangerously-skip-permissions");
+    if (permissionMode === "yolo") {
+      // Claude Code refuses --dangerously-skip-permissions when the process is
+      // root/sudo ("cannot be used with root/sudo privileges"), which hard-fails
+      // the whole job. A root daemon is the common case (containers, some hosts),
+      // so by default we drop the flag there and let Claude run in its normal
+      // permission mode instead of erroring out. Faking IS_SANDBOX=1 would lie
+      // about sandboxing and defeat a real safety guard, so it's opt-in only:
+      // a user who truly runs inside a sandbox can set
+      // AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 to force the flag.
+      const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+      const forceSkip = process.env.AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS === "1";
+      if (!isRoot || forceSkip) {
+        nextArgs.push("--dangerously-skip-permissions");
+      } else {
+        // The command runs without the skip, so don't advertise the yolo flags
+        // in heartbeat/job metadata — the UI would otherwise claim a permission
+        // level the process isn't actually using.
+        permissionFlags = [];
+        log("running as root: dropping --dangerously-skip-permissions (Claude rejects it as root). Set AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 only if this really is a sandboxed remote host.");
+      }
+    }
 
     // Stream tokens as they arrive instead of one buffered dump at exit.
     // Plain `claude -p` defaults to --output-format text, which buffers the
