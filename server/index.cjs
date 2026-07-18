@@ -5041,7 +5041,53 @@ function mergeSlashCommands(capabilitiesList) {
  return Array.from(byId.values());
 }
 
-async function detectCapabilities(workspacePath = '') {
+// NET-08: a small per-key TTL cache that shares an in-flight PROMISE. Used to
+// stop /system/capabilities from re-running 12 CLI subprocess probes + package
+// resolution + skill-dir scans on EVERY request (the client re-hits it on every
+// workspace/layer switch). Caching the promise means a burst of concurrent
+// requests shares ONE probe instead of each spawning its own ~10s scan. A
+// rejected load is never cached (evicted so the next call retries). Generic +
+// pure so it can be unit-tested without spawning any real probe.
+function createTtlPromiseCache({ ttlMs, loader, keyFn, now = Date.now, maxEntries = 32 }) {
+ const store = new Map(); // key -> { at, promise }
+ function get(input) {
+  const key = keyFn ? keyFn(input) : String(input ?? '');
+  const t = now();
+  const cached = store.get(key);
+  if (cached && (t - cached.at) < ttlMs) return cached.promise;
+  const promise = Promise.resolve()
+   .then(() => loader(input))
+   .catch((error) => {
+    if (store.get(key)?.promise === promise) store.delete(key);
+    throw error;
+   });
+  store.set(key, { at: t, promise });
+  if (store.size > maxEntries) {
+   for (const [k, v] of store) {
+    if (t - v.at > ttlMs * 2) store.delete(k);
+   }
+  }
+  return promise;
+ }
+ return { get, clear: () => store.clear(), size: () => store.size };
+}
+
+const CAPABILITIES_TTL_MS = Number(process.env.AGENSIS_CAPABILITIES_TTL_MS) || 30_000;
+const capabilitiesCache = createTtlPromiseCache({
+ ttlMs: CAPABILITIES_TTL_MS,
+ loader: (workspacePath) => detectCapabilitiesUncached(workspacePath),
+ // Normalize to the effective repo path (matches detectSkillLibraries) so '',
+ // '.', and equivalent relative/absolute forms share one entry.
+ keyFn: (workspacePath) => (workspacePath && path.isAbsolute(String(workspacePath))
+  ? path.resolve(String(workspacePath))
+  : process.cwd()),
+});
+
+function detectCapabilities(workspacePath = '') {
+ return capabilitiesCache.get(workspacePath);
+}
+
+async function detectCapabilitiesUncached(workspacePath = '') {
  const cliDefinitions = [
   { id: 'claude', label: 'Claude Code', command: 'claude' },
   { id: 'codex', label: 'Codex', command: 'codex' },
@@ -8653,6 +8699,7 @@ module.exports = {
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
+  createTtlPromiseCache,
   hasActiveBurstJob,
   capabilitiesShapeValid,
   capabilitiesDriftNudges,
