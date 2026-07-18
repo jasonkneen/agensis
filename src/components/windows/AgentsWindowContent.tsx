@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   Bot,
   Brain,
   Check,
@@ -53,14 +54,6 @@ import {
   FieldLabel,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from '@/components/ui/item';
 import {
   NativeSelect,
   NativeSelectOption,
@@ -149,9 +142,15 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [searchTerm, setSearchTerm] = useState('');
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || agents[0]?.id || null);
-  const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || focusedAgent || agents[0] || null;
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(focusedAgent?.id || null);
+  const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
+  // An external focus request (e.g. opening an agent from elsewhere) drills into it;
+  // otherwise the window opens on the card grid, not a pre-selected agent.
+  const focusedAgentId = focusedAgent?.id || null;
+  useEffect(() => {
+    if (focusedAgentId) setSelectedAgentId(focusedAgentId);
+  }, [focusedAgentId]);
 
   const presenceByAgent = new Map<string, AgentPresence>(
     agents.map(agent => [
@@ -285,55 +284,91 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
       />
 
-      <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-2">
-        <div className="agents-master-detail h-full min-h-0">
-          <div className="agents-list-pane min-h-0 overflow-y-auto pr-2 pb-2">
-            {showCreate && (
-              <div className="agents-inline-create mb-2 rounded-lg border bg-card/55 p-3 backdrop-blur-md">
-                <AgentForm
-                  name={newName}
-                  avatar={newAvatar}
-                  openPetAvatarId={newOpenPetAvatarId}
-                  accentColor={newAccentColor}
-                  handle={newHandle}
-                  description={newDescription}
-                  systemPrompt={newSystemPrompt}
-                  soul={newSoul}
-                  instructions={newInstructions}
-                  tools={newTools}
-                  skills={newSkills}
-                  model={newModel}
-                  runMode={newRunMode}
-                  capabilities={capabilities}
-                  onNameChange={setNewName}
-                  onAvatarChange={(value) => {
-                    setNewAvatar(value);
-                    setNewOpenPetAvatarId('');
-                  }}
-                  onOpenPetAvatarChange={(pet) => {
-                    setNewAvatar(openPetAvatarSrc(pet));
-                    setNewOpenPetAvatarId(pet.id);
-                  }}
-                  onAccentColorChange={setNewAccentColor}
-                  onHandleChange={setNewHandle}
-                  onDescriptionChange={setNewDescription}
-                  onSystemPromptChange={setNewSystemPrompt}
-                  onSoulChange={setNewSoul}
-                  onInstructionsChange={setNewInstructions}
-                  onToolsChange={setNewTools}
-                  onSkillsChange={setNewSkills}
-                  onModelChange={setNewModel}
-                  onRunModeChange={setNewRunMode}
-                  onCancel={() => setShowCreate(false)}
-                  onSubmit={handleCreate}
-                  submitLabel="Create"
-                  submitIcon={<Plus data-icon="inline-start" />}
-                />
-              </div>
-            )}
-
+      <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
+        {showCreate ? (
+          <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card/55 backdrop-blur-md">
+            <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => setShowCreate(false)} aria-label="Back to agents">
+                <ArrowLeft />
+              </Button>
+              <Plus className="size-4 text-primary" />
+              <span className="text-sm font-semibold">Create agent</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <AgentForm
+                name={newName}
+                avatar={newAvatar}
+                openPetAvatarId={newOpenPetAvatarId}
+                accentColor={newAccentColor}
+                handle={newHandle}
+                description={newDescription}
+                systemPrompt={newSystemPrompt}
+                soul={newSoul}
+                instructions={newInstructions}
+                tools={newTools}
+                skills={newSkills}
+                model={newModel}
+                runMode={newRunMode}
+                capabilities={capabilities}
+                onNameChange={setNewName}
+                onAvatarChange={(value) => {
+                  setNewAvatar(value);
+                  setNewOpenPetAvatarId('');
+                }}
+                onOpenPetAvatarChange={(pet) => {
+                  setNewAvatar(openPetAvatarSrc(pet));
+                  setNewOpenPetAvatarId(pet.id);
+                }}
+                onAccentColorChange={setNewAccentColor}
+                onHandleChange={setNewHandle}
+                onDescriptionChange={setNewDescription}
+                onSystemPromptChange={setNewSystemPrompt}
+                onSoulChange={setNewSoul}
+                onInstructionsChange={setNewInstructions}
+                onToolsChange={setNewTools}
+                onSkillsChange={setNewSkills}
+                onModelChange={setNewModel}
+                onRunModeChange={setNewRunMode}
+                onCancel={() => setShowCreate(false)}
+                onSubmit={handleCreate}
+                submitLabel="Create"
+                submitIcon={<Plus data-icon="inline-start" />}
+              />
+            </div>
+          </div>
+        ) : selectedAgent ? (
+          <div className="flex h-full min-h-0 flex-col gap-2">
+            <div className="shrink-0">
+              <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedAgentId(null); setEditingId(null); }}>
+                <ArrowLeft data-icon="inline-start" />
+                All agents
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
+              <AgentDetailPane
+                agent={selectedAgent}
+                isEditing={editingId === selectedAgent.id}
+                confirmDelete={confirmDeleteId === selectedAgent.id}
+                onEdit={() => setEditingId(selectedAgent.id)}
+                onCancelEdit={() => setEditingId(null)}
+                onSave={(updates) => {
+                  onUpdateAgent(selectedAgent.id, updates);
+                  setEditingId(null);
+                }}
+                onDelete={() => handleDelete(selectedAgent.id)}
+                onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
+                capabilities={capabilities}
+                webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
+                connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
+                onConnect={() => setConnectAgentId(selectedAgent.id)}
+                onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-full min-h-0 flex-col">
             {agents.length > 0 && (
-              <div className="agents-status-filter mb-2 flex flex-wrap items-center gap-1.5">
+              <div className="agents-status-filter mb-3 flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setStatusFilter(new Set())}
@@ -414,116 +449,53 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 </EmptyHeader>
               </Empty>
             ) : (
-              <ItemGroup className="gap-1">
-                {visibleAgents.map(agent => (
-                  <AgentRow
-                    key={agent.id}
-                    agent={agent}
-                    focused={agentMatchesKey(agent, normalizedFocusedAgentKey)}
-                    selected={selectedAgent?.id === agent.id}
-                    isEditing={editingId === agent.id}
-                    confirmDelete={confirmDeleteId === agent.id}
-                    onSelect={() => {
-                      setSelectedAgentId(agent.id);
-                      setShowCreate(false);
-                      setEditingId(null);
-                    }}
-                    onEdit={() => {
-                      setSelectedAgentId(agent.id);
-                      setShowCreate(false);
-                      setEditingId(editingId === agent.id ? null : agent.id);
-                    }}
-                    onCancelEdit={() => setEditingId(null)}
-                    onSave={(updates) => {
-                      onUpdateAgent(agent.id, updates);
-                      setEditingId(null);
-                    }}
-                    onDelete={() => handleDelete(agent.id)}
-                    onCancelDelete={() => setConfirmDeleteId(null)}
-                    onToggleEnabled={() => onUpdateAgent(agent.id, { enabled: agent.enabled === false })}
-                    capabilities={capabilities}
-                    webhooks={webhooks.filter(webhook => webhook.agent_id === agent.id)}
-                    connections={connections.filter(connection => connection.agent_id === agent.id)}
-                    onConnect={() => setConnectAgentId(agent.id)}
-                    onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
-                  />
-                ))}
-              </ItemGroup>
-            )}
-          </div>
-
-          <aside className="agents-detail-pane min-h-0 overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
-            {showCreate ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-                  <Plus className="size-4 text-primary" />
-                  <span className="text-sm font-semibold">Create agent</span>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                  <AgentForm
-                    name={newName}
-                    avatar={newAvatar}
-                    openPetAvatarId={newOpenPetAvatarId}
-                    accentColor={newAccentColor}
-                    handle={newHandle}
-                    description={newDescription}
-                    systemPrompt={newSystemPrompt}
-                    soul={newSoul}
-                    instructions={newInstructions}
-                    tools={newTools}
-                    skills={newSkills}
-                    model={newModel}
-                    runMode={newRunMode}
-                    capabilities={capabilities}
-                    onNameChange={setNewName}
-                    onAvatarChange={(value) => {
-                      setNewAvatar(value);
-                      setNewOpenPetAvatarId('');
-                    }}
-                    onOpenPetAvatarChange={(pet) => {
-                      setNewAvatar(openPetAvatarSrc(pet));
-                      setNewOpenPetAvatarId(pet.id);
-                    }}
-                    onAccentColorChange={setNewAccentColor}
-                    onHandleChange={setNewHandle}
-                    onDescriptionChange={setNewDescription}
-                    onSystemPromptChange={setNewSystemPrompt}
-                    onSoulChange={setNewSoul}
-                    onInstructionsChange={setNewInstructions}
-                    onToolsChange={setNewTools}
-                    onSkillsChange={setNewSkills}
-                    onModelChange={setNewModel}
-                    onRunModeChange={setNewRunMode}
-                    onCancel={() => setShowCreate(false)}
-                    onSubmit={handleCreate}
-                    submitLabel="Create"
-                    submitIcon={<Plus data-icon="inline-start" />}
-                  />
+              <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-2">
+                <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))]">
+                  {visibleAgents.map(agent => {
+                    const accent = agentAccentColor(agent);
+                    const presence = presenceByAgent.get(agent.id);
+                    const live = presence === 'busy' || presence === 'idle';
+                    const active = isAgentActive(agent);
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => setSelectedAgentId(agent.id)}
+                        style={agentAccentStyle(agent)}
+                        className={cn(
+                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left backdrop-blur-md transition hover:border-primary/50 hover:bg-card/85',
+                          !active && 'opacity-60',
+                        )}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-muted text-base">
+                            <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
+                              <span className="truncate text-sm font-semibold">{agent.name}</span>
+                            </div>
+                            <span className="block truncate text-xs text-muted-foreground">@{agent.handle || agentHandle(agent.name)}</span>
+                          </div>
+                          {live && <span className="mt-1 size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-hidden />}
+                        </div>
+                        <p className="line-clamp-2 text-xs text-muted-foreground">
+                          {agent.description || 'No description'}
+                        </p>
+                        <div className="mt-auto flex items-center gap-1.5 border-t pt-2 text-[11px] text-muted-foreground">
+                          {agent.run_mode === 'daemon' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
+                          <span className="truncate">{agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in'}</span>
+                          <span className="ml-auto truncate opacity-80">{displayModel(agent.model)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            ) : (
-              <AgentDetailPane
-                agent={selectedAgent}
-                isEditing={Boolean(selectedAgent && editingId === selectedAgent.id)}
-                confirmDelete={Boolean(selectedAgent && confirmDeleteId === selectedAgent.id)}
-                onEdit={() => selectedAgent && setEditingId(selectedAgent.id)}
-                onCancelEdit={() => setEditingId(null)}
-                onSave={(updates) => {
-                  if (!selectedAgent) return;
-                  onUpdateAgent(selectedAgent.id, updates);
-                  setEditingId(null);
-                }}
-                onDelete={() => selectedAgent && handleDelete(selectedAgent.id)}
-                onToggleEnabled={() => selectedAgent && onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
-                capabilities={capabilities}
-                webhooks={selectedAgent ? webhooks.filter(webhook => webhook.agent_id === selectedAgent.id) : []}
-                connections={selectedAgent ? connections.filter(connection => connection.agent_id === selectedAgent.id) : []}
-                onConnect={() => selectedAgent && setConnectAgentId(selectedAgent.id)}
-                onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
-              />
             )}
-          </aside>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -880,298 +852,6 @@ function AgentForm({
         </Button>
       </div>
     </FieldGroup>
-  );
-}
-
-function AgentRow({
-  agent,
-  focused,
-  selected,
-  isEditing,
-  confirmDelete,
-  onEdit,
-  onCancelEdit,
-  onSave,
-  onDelete,
-  onCancelDelete,
-  onToggleEnabled,
-  onSelect,
-  capabilities,
-  webhooks,
-  connections,
-  onConnect,
-  onToggleWebhook,
-}: {
-  agent: WorkspaceAgent;
-  focused: boolean;
-  selected: boolean;
-  isEditing: boolean;
-  confirmDelete: boolean;
-  onEdit: () => void;
-  onCancelEdit: () => void;
-  onSave: (updates: Partial<WorkspaceAgent>) => void;
-  onDelete: () => void;
-  onCancelDelete: () => void;
-  onToggleEnabled: () => void;
-  onSelect: () => void;
-  capabilities: SystemCapabilities | null;
-  webhooks: AgentWebhook[];
-  connections: AgentConnection[];
-  onConnect: () => void;
-  onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
-}) {
-  const [editName, setEditName] = useState(agent.name);
-  const [editAvatar, setEditAvatar] = useState(agent.avatar || DEFAULT_AGENT_AVATAR);
-  const [editOpenPetAvatarId, setEditOpenPetAvatarId] = useState(agent.openpet_avatar_id || '');
-  const [editAccentColor, setEditAccentColor] = useState(agentAccentColor(agent));
-  const [editHandle, setEditHandle] = useState(agent.handle || agentHandle(agent.name));
-  const [editDescription, setEditDescription] = useState(agent.description || '');
-  const [editSystemPrompt, setEditSystemPrompt] = useState(agent.system_prompt || '');
-  const [editSoul, setEditSoul] = useState(agent.soul || '');
-  const [editInstructions, setEditInstructions] = useState(agent.instructions || '');
-  const [editTools, setEditTools] = useState(joinList(agent.tools));
-  const [editSkills, setEditSkills] = useState(joinList(agent.skills));
-  const [editModel, setEditModel] = useState(agent.model || 'auto');
-  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon'>(agent.run_mode === 'daemon' ? 'daemon' : 'builtin');
-  const activeConnections = connections.filter(connection => connection.status !== 'offline');
-  const tools = normalizeList(agent.tools);
-  const skills = normalizeList(agent.skills);
-  const accent = agentAccentColor(agent);
-  const agentActive = isAgentActive(agent);
-  const handleLabel = `@${agent.handle || agentHandle(agent.name)}`;
-  const modelLabel = displayModel(agent.model);
-  const busy = activeConnections.some(connection => connection.status === 'busy');
-  // The agent's self-declared status.json note (folded into heartbeat metadata by the
-  // daemon). Surfaced on hover over the connection dot so the simplified row keeps the
-  // "what is it doing right now" signal without spending row height on it.
-  const selfNote = activeConnections
-    .map(connection => {
-      const status = typeof connection.metadata?.agentStatus === 'string' ? connection.metadata.agentStatus : '';
-      const note = typeof connection.metadata?.agentNote === 'string' ? connection.metadata.agentNote : '';
-      return [status, note].filter(Boolean).join(' — ');
-    })
-    .find(Boolean) || '';
-
-  const handleSave = () => {
-    onSave({
-      name: editName.trim(),
-      avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
-      openpet_avatar_id: editOpenPetAvatarId,
-      accent_color: validAgentAccentColor(editAccentColor),
-      handle: editHandle.trim() || agentHandle(editName),
-      description: editDescription.trim(),
-      system_prompt: editSystemPrompt.trim(),
-      soul: editSoul.trim(),
-      instructions: editInstructions.trim(),
-      tools: splitList(editTools),
-      skills: splitList(editSkills),
-      model: editModel,
-      run_mode: editRunMode,
-    });
-  };
-
-  if (isEditing) {
-    return (
-      <Item variant="outline" className="agents-inline-editor items-stretch" style={agentAccentStyle(agent)}>
-        <ItemContent>
-          <AgentForm
-            name={editName}
-            avatar={editAvatar}
-            openPetAvatarId={editOpenPetAvatarId}
-            accentColor={editAccentColor}
-            handle={editHandle}
-            description={editDescription}
-            systemPrompt={editSystemPrompt}
-            soul={editSoul}
-            instructions={editInstructions}
-            tools={editTools}
-            skills={editSkills}
-            model={editModel}
-            runMode={editRunMode}
-            capabilities={capabilities}
-            onNameChange={setEditName}
-            onAvatarChange={(value) => {
-              setEditAvatar(value);
-              setEditOpenPetAvatarId('');
-            }}
-            onOpenPetAvatarChange={(pet) => {
-              setEditAvatar(openPetAvatarSrc(pet));
-              setEditOpenPetAvatarId(pet.id);
-            }}
-            onAccentColorChange={setEditAccentColor}
-            onHandleChange={setEditHandle}
-            onDescriptionChange={setEditDescription}
-            onSystemPromptChange={setEditSystemPrompt}
-            onSoulChange={setEditSoul}
-            onInstructionsChange={setEditInstructions}
-            onToolsChange={setEditTools}
-            onSkillsChange={setEditSkills}
-            onModelChange={setEditModel}
-            onRunModeChange={setEditRunMode}
-            onCancel={onCancelEdit}
-            onSubmit={handleSave}
-            submitLabel="Save"
-            submitIcon={<Save data-icon="inline-start" />}
-          />
-        </ItemContent>
-      </Item>
-    );
-  }
-
-  return (
-    <Item
-      variant="default"
-      data-agent-selected={selected || focused ? 'true' : undefined}
-      className={cn(
-        'agents-list-card cursor-pointer hover:bg-muted/50',
-        !agentActive && 'opacity-60',
-        focused && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30',
-        selected && 'border-primary/70 bg-primary/10 ring-1 ring-primary/30',
-      )}
-      style={agentAccentStyle(agent)}
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={event => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-      onMouseEnter={onCancelDelete}
-    >
-      <ItemMedia className="size-9 overflow-hidden rounded-full bg-muted text-base">
-        <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="max-w-full truncate">
-          <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
-          {agent.name}
-        </ItemTitle>
-        {/* Compact feature strip: identity + iconised features. Full text detail
-            (description, model name, tool/skill lists, connections, webhooks) lives
-            in the detail pane on the right. Keeps the list row short and scannable. */}
-        <div className="agent-feature-icons mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-          <span className="min-w-0 truncate text-xs opacity-70" title={handleLabel}>{handleLabel}</span>
-          <FeatureIcon
-            icon={agent.run_mode === 'daemon' ? Monitor : Bot}
-            label={agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in agent'}
-          />
-          <FeatureIcon icon={Brain} label={`Model: ${modelLabel}`} />
-          {tools.length > 0 && (
-            <FeatureIcon icon={Wrench} label={`Tools: ${tools.join(', ')}`} count={tools.length} />
-          )}
-          {skills.length > 0 && (
-            <FeatureIcon icon={Sparkles} label={`Skills: ${skills.join(', ')}`} count={skills.length} />
-          )}
-          {webhooks.length > 0 && (
-            <FeatureIcon icon={Link2} label={`${webhooks.length} webhook${webhooks.length === 1 ? '' : 's'}`} count={webhooks.length} />
-          )}
-          <ConnectionDot count={activeConnections.length} busy={busy} title={selfNote || undefined} />
-          {!agentActive && <FeatureIcon icon={Power} label="Deactivated" muted />}
-        </div>
-        {activeConnections.length > 0 && (
-          <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1">
-            {activeConnections.slice(0, 3).map(connection => {
-              // Self-declared status the agent wrote to its status.json, folded into the
-              // heartbeat metadata by the daemon (agentStatus / agentNote).
-              const agentStatus = typeof connection.metadata?.agentStatus === 'string' ? connection.metadata.agentStatus : '';
-              const agentNote = typeof connection.metadata?.agentNote === 'string' ? connection.metadata.agentNote : '';
-              const selfStatus = [agentStatus, agentNote].filter(Boolean).join(' — ');
-              return (
-                <div key={connection.id} className="agent-meta-row flex min-w-0 flex-col gap-0.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground" title={[connection.status, connection.host, connection.cwd].filter(Boolean).join(' - ')}>
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <Monitor className="size-3 shrink-0" />
-                    <span className="shrink-0 font-medium text-foreground">Daemon</span>
-                    <span className="shrink-0">{connection.status}</span>
-                    <span className="min-w-0 flex-1 truncate opacity-75">{connection.host || connection.cwd || 'remote'}</span>
-                  </div>
-                  {selfStatus && (
-                    <div className="min-w-0 truncate pl-[18px] italic opacity-90" title={selfStatus}>{selfStatus}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {webhooks.length > 0 && (
-          <div className="agents-list-expanded-meta mt-2 flex flex-col gap-1.5">
-            {webhooks.map(webhook => {
-              const url = webhookUrl(webhook.token);
-              return (
-                <div
-                  key={webhook.id}
-                  className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1 text-xs text-muted-foreground"
-                >
-                  <Link2 className="size-3 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate" title={url}>Webhook URL</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => void navigator.clipboard?.writeText(url)}
-                    aria-label={`Copy webhook for ${agent.name}`}
-                  >
-                    <Copy />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={webhook.enabled ? 'secondary' : 'ghost'}
-                    size="icon-xs"
-                    onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
-                    aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
-                    title={webhook.enabled ? 'Enabled' : 'Disabled'}
-                  >
-                    <Power />
-                  </Button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </ItemContent>
-      <ItemActions className="agents-list-row-actions ml-11 mt-2 basis-full justify-end pr-1">
-        <Button
-          type="button"
-          variant={agentActive ? 'secondary' : 'ghost'}
-          size="icon-xs"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleEnabled();
-          }}
-          aria-label={agentActive ? `Deactivate ${agent.name}` : `Activate ${agent.name}`}
-          title={agentActive ? 'Deactivate agent' : 'Activate agent'}
-        >
-          <Power />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={(event) => {
-            event.stopPropagation();
-            onConnect();
-          }}
-          disabled={!agentActive}
-          aria-label={`Connect ${agent.name}`}
-        >
-          <Plug data-icon="inline-start" />
-          Connect
-        </Button>
-        <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} aria-label={`Edit ${agent.name}`}>
-          <Pencil />
-        </Button>
-        <Button
-          type="button"
-          variant={confirmDelete ? 'destructive' : 'ghost'}
-          size="icon-xs"
-          onClick={onDelete}
-          aria-label={confirmDelete ? `Confirm delete ${agent.name}` : `Delete ${agent.name}`}
-        >
-          <Trash2 />
-        </Button>
-      </ItemActions>
-    </Item>
   );
 }
 
@@ -1949,31 +1629,6 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
   );
 }
 
-// A single iconised feature in the compact agent-list row: an icon with a hover
-// tooltip and an optional count. The label (full text) is what the detail pane spells
-// out; here it is only a tooltip so the row stays short.
-function FeatureIcon({
-  icon: Icon,
-  label,
-  count,
-  muted = false,
-}: {
-  icon: LucideIcon;
-  label: string;
-  count?: number;
-  muted?: boolean;
-}) {
-  return (
-    <span
-      className={cn('inline-flex shrink-0 items-center gap-1 text-xs', muted && 'opacity-50')}
-      title={label}
-      aria-label={label}
-    >
-      <Icon className="size-3.5 shrink-0" aria-hidden />
-      {typeof count === 'number' && count > 1 ? <span className="tabular-nums">{count}</span> : null}
-    </span>
-  );
-}
 
 function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
