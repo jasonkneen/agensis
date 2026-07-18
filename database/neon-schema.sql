@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS documents (
 
 CREATE INDEX IF NOT EXISTS idx_documents_workspace_id ON documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(workspace_id, folder);
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_documents_title_trgm ON documents USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_documents_content_trgm ON documents USING gin (content gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -119,6 +122,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_
 -- per-task subthread; source_task_id ties the thread root back to its task.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+
+-- Trigram GIN indexes so MCP search_messages / search_docs (leading-wildcard
+-- ILIKE '%q%') are index-backed instead of a full sequential scan. Mirrors the
+-- runtime bootstrap DDL in server/index.cjs.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_messages_content_trgm ON messages USING gin (content gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS flow_connections (
   id uuid PRIMARY KEY,
@@ -310,6 +319,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 -- Sub-tasks / nesting: a task may have a parent task.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) ON DELETE CASCADE;
+-- Gantt scheduling + dependency graph (added with the List/Kanban/Gantt views).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);
