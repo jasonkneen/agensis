@@ -840,6 +840,46 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  return json({ data: rows.map(publicWorkspaceAgent), error: null });
 }
 
+async function handleWorkspaceUsage(workspaceId, userId) {
+ if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+ await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+ const rows = await query(
+  `select
+      (select coalesce(sum(size), 0)::bigint from uploaded_files where workspace_id = $1) as upload_bytes,
+      (select count(*)::bigint from uploaded_files where workspace_id = $1) as file_count,
+      (select coalesce(sum(byte_size), 0)::bigint from agent_memory_files where workspace_id = $1) as memory_bytes,
+      (select count(*)::bigint from agent_memory_files where workspace_id = $1) as memory_file_count,
+      (select count(*)::bigint from documents where workspace_id = $1) as document_count,
+      (select count(*)::bigint from tasks where workspace_id = $1) as task_count,
+      (select count(*)::bigint from workspace_agents where workspace_id = $1) as agent_count,
+      (select count(*)::bigint
+         from messages m
+         join chat_sessions s on s.id = m.session_id
+        where s.workspace_id = $1 and s.deleted_at is null and m.deleted_at is null) as message_count`,
+  [workspaceId],
+ );
+ const row = rows[0] || {};
+ const uploadBytes = Number(row.upload_bytes || 0);
+ const memoryBytes = Number(row.memory_bytes || 0);
+ return json({
+  data: {
+   workspaceId,
+   uploadBytes,
+   memoryBytes,
+   totalBytes: uploadBytes + memoryBytes,
+   counts: {
+    files: Number(row.file_count || 0),
+    memoryFiles: Number(row.memory_file_count || 0),
+    documents: Number(row.document_count || 0),
+    tasks: Number(row.task_count || 0),
+    agents: Number(row.agent_count || 0),
+    messages: Number(row.message_count || 0),
+   },
+  },
+  error: null,
+ });
+}
+
 async function handleSystemCapabilities(req) {
  const url = new URL(req.url);
  const workspacePath = url.searchParams.get('workspacePath') || '';
@@ -1958,6 +1998,10 @@ async function route(req) {
  const workspaceAgentsMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/agents$/);
  if (req.method === 'GET' && workspaceAgentsMatch) {
   return handleWorkspaceAgents(decodeURIComponent(workspaceAgentsMatch[1]), await requireUserId(req));
+ }
+ const workspaceUsageMatch = pathname.match(/^\/backend\/workspace\/([^/]+)\/usage$/);
+ if (req.method === 'GET' && workspaceUsageMatch) {
+  return handleWorkspaceUsage(decodeURIComponent(workspaceUsageMatch[1]), await requireUserId(req));
  }
  if (req.method === 'GET' && pathname === '/backend/cursorbuddy/connection-keys') {
   return handleCursorBuddyConnectionKeys(req, await requireUserId(req));

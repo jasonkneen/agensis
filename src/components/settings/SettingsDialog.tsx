@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Image as ImageIcon,
   Info,
+  Gauge,
   KeyRound,
   Palette,
   Plug,
@@ -73,7 +74,7 @@ interface SettingsDialogProps {
   initialTab?: SettingsTabId;
 }
 
-export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'about';
+export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'usage' | 'about';
 type TabId = SettingsTabId;
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
@@ -84,6 +85,7 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
   { id: 'secrets', label: 'Secret keys', icon: <KeyRound /> },
+  { id: 'usage', label: 'Usage', icon: <Gauge /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
 
@@ -152,6 +154,7 @@ export function SettingsDialog({
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
               {tab === 'connections' && <ConnectionsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
+              {tab === 'usage' && <UsagePanel workspaceId={secretsWorkspaceId} workspaceName={workspaceName} />}
               {tab === 'about' && <AboutPanel />}
             </div>
           </ScrollArea>
@@ -1353,6 +1356,109 @@ function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
         </div>
       </div>
     </div>
+  );
+}
+
+interface WorkspaceUsage {
+  uploadBytes: number;
+  memoryBytes: number;
+  totalBytes: number;
+  counts: {
+    files: number;
+    memoryFiles: number;
+    documents: number;
+    tasks: number;
+    agents: number;
+    messages: number;
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const exponent = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / 1024 ** exponent;
+  const rounded = exponent === 0 ? value : Math.round(value * 10) / 10;
+  return `${rounded} ${units[exponent]}`;
+}
+
+function UsagePanel({ workspaceId, workspaceName }: { workspaceId: string | null; workspaceName: string }) {
+  const [usage, setUsage] = useState<WorkspaceUsage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!workspaceId) {
+      setUsage(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(apiUrl(`/backend/workspace/${encodeURIComponent(workspaceId)}/usage`), { headers: apiAuthHeaders() });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message || 'Failed to load usage');
+      setUsage(json.data as WorkspaceUsage);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load usage');
+    } finally {
+      setLoading(false);
+    }
+  }, [workspaceId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!workspaceId) {
+    return (
+      <FieldGroup>
+        <FieldDescription>Select a workspace to see its usage.</FieldDescription>
+      </FieldGroup>
+    );
+  }
+
+  if (loading) {
+    return (
+      <FieldGroup>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> Loading usage…
+        </div>
+      </FieldGroup>
+    );
+  }
+
+  if (error) {
+    return (
+      <FieldGroup>
+        <FieldDescription className="text-destructive">{error}</FieldDescription>
+        <Button type="button" variant="outline" size="sm" onClick={load}>Retry</Button>
+      </FieldGroup>
+    );
+  }
+
+  const counts: Array<{ label: string; value: number }> = [
+    { label: 'Documents', value: usage?.counts.documents ?? 0 },
+    { label: 'Messages', value: usage?.counts.messages ?? 0 },
+    { label: 'Tasks', value: usage?.counts.tasks ?? 0 },
+    { label: 'Agents', value: usage?.counts.agents ?? 0 },
+    { label: 'Uploaded files', value: usage?.counts.files ?? 0 },
+    { label: 'Memory files', value: usage?.counts.memoryFiles ?? 0 },
+  ];
+
+  return (
+    <FieldGroup>
+      <FieldDescription>Storage and entity counts for {workspaceName || 'this workspace'}.</FieldDescription>
+      <ReadOnlyValue label="Storage used" value={formatBytes(usage?.totalBytes ?? 0)} />
+      <div className="grid grid-cols-2 gap-2">
+        <ReadOnlyValue label="Uploads" value={formatBytes(usage?.uploadBytes ?? 0)} />
+        <ReadOnlyValue label="Agent memory" value={formatBytes(usage?.memoryBytes ?? 0)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {counts.map(item => (
+          <ReadOnlyValue key={item.label} label={item.label} value={item.value.toLocaleString()} />
+        ))}
+      </div>
+    </FieldGroup>
   );
 }
 

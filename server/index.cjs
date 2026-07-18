@@ -7033,6 +7033,55 @@ function createApp() {
   }
  });
 
+ // Per-workspace usage/storage stats in one round-trip. Read-role only. Bytes
+ // come from stored upload sizes (uploaded_files.size) plus agent memory file
+ // content (agent_memory_files.byte_size); counts are workspace-scoped. Messages
+ // have no workspace_id column, so they are scoped via their chat_sessions.
+ app.get('/backend/workspace/:id/usage', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rows = await getDb().unsafe(
+    `select
+        (select coalesce(sum(size), 0)::bigint from uploaded_files where workspace_id = $1) as upload_bytes,
+        (select count(*)::bigint from uploaded_files where workspace_id = $1) as file_count,
+        (select coalesce(sum(byte_size), 0)::bigint from agent_memory_files where workspace_id = $1) as memory_bytes,
+        (select count(*)::bigint from agent_memory_files where workspace_id = $1) as memory_file_count,
+        (select count(*)::bigint from documents where workspace_id = $1) as document_count,
+        (select count(*)::bigint from tasks where workspace_id = $1) as task_count,
+        (select count(*)::bigint from workspace_agents where workspace_id = $1) as agent_count,
+        (select count(*)::bigint
+           from messages m
+           join chat_sessions s on s.id = m.session_id
+          where s.workspace_id = $1 and s.deleted_at is null and m.deleted_at is null) as message_count`,
+    [workspaceId],
+   );
+   const row = rows[0] || {};
+   const uploadBytes = Number(row.upload_bytes || 0);
+   const memoryBytes = Number(row.memory_bytes || 0);
+   res.json({
+    data: {
+     workspaceId,
+     uploadBytes,
+     memoryBytes,
+     totalBytes: uploadBytes + memoryBytes,
+     counts: {
+      files: Number(row.file_count || 0),
+      memoryFiles: Number(row.memory_file_count || 0),
+      documents: Number(row.document_count || 0),
+      tasks: Number(row.task_count || 0),
+      agents: Number(row.agent_count || 0),
+      messages: Number(row.message_count || 0),
+     },
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  // Cold-load snapshot: one round-trip for the heaviest workspace-scoped lists
  // so the SPA does not open ~15 parallel queries before first paint.
  app.get('/backend/workspaces/:id/bootstrap', requireAuth, async (req, res) => {
