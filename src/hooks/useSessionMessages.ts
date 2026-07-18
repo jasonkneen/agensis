@@ -38,10 +38,11 @@ export function useSessionMessages(sessionId: string | null): SessionMessagesRes
  const [loadingEarlier, setLoadingEarlier] = useState(false);
  const messagesRef = useRef<Message[]>([]);
  useEffect(() => { messagesRef.current = messages; }, [messages]);
- // Tracks the session currently shown, so an in-flight loadEarlier from a
- // previous session is ignored when its response lands (stale-response guard).
+ // Tracks the session currently shown, synced DURING render so an in-flight
+ // loadEarlier from a previous session is ignored when its response lands, with
+ // no render→effect window (stale-response guard).
  const currentSessionRef = useRef<string | null>(sessionId);
- useEffect(() => { currentSessionRef.current = sessionId; }, [sessionId]);
+ currentSessionRef.current = sessionId;
 
  useEffect(() => {
   let cancelled = false;
