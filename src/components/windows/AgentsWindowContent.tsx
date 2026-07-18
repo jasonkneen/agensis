@@ -500,7 +500,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
                           <span className="text-sm font-semibold">{tpl.name}</span>
                           <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.category} · {tpl.runMode === 'daemon' ? 'Remote daemon' : 'Built-in'}</span>
+                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.category} · {tpl.runMode === 'daemon' ? 'Remote' : 'Built-in'}</span>
                         </button>
                       );
                     })}
@@ -739,7 +739,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         </p>
                         <div className="mt-auto flex items-center gap-1.5 border-t pt-2 text-[11px] text-muted-foreground">
                           {agent.run_mode === 'daemon' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
-                          <span className="truncate">{agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in'}</span>
+                          <span className="truncate">{agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'}</span>
                           <span className="ml-auto truncate opacity-80">{displayModel(agent.model)}</span>
                         </div>
                       </button>
@@ -1088,7 +1088,7 @@ function AgentForm({
           aria-label="Agent runtime"
         >
           <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
-          <NativeSelectOption value="daemon">Remote daemon</NativeSelectOption>
+          <NativeSelectOption value="daemon">Remote</NativeSelectOption>
           <NativeSelectOption value="sandbox">Sandbox (isolated cloud)</NativeSelectOption>
         </NativeSelect>
         <NativeSelect
@@ -1361,7 +1361,7 @@ function AgentDetailPane({
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote daemon' : 'Built-in'} />
+            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'} />
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
