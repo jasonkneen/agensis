@@ -80,6 +80,32 @@ const JSON_COLUMNS_BY_TABLE = {
  messages: new Set(['reactions']),
 };
 
+// Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
+// insert/update path binds params via node-postgres `.unsafe(sql, params)`,
+// which does NOT array-serialize a raw JS array for an untyped ($n) param — it
+// coerces with `'' + value`, producing `a,b` instead of the required array
+// literal `{a,b}`. So these columns are bound as an explicit PG array literal
+// string with a `::<elemType>[]` cast (see toPgArrayLiteral / bindDbParam).
+const ARRAY_COLUMNS_BY_TABLE = {
+ tasks: { depends_on: 'uuid' },
+};
+
+function arrayColumnElemType(table, column) {
+ return ARRAY_COLUMNS_BY_TABLE[table]?.[column] || null;
+}
+
+// Build a Postgres array literal (e.g. `{a,b,c}`) from a JS array. Elements are
+// double-quoted and escaped so a stray quote/backslash can't break out of the
+// literal. Returns '{}' for null/empty/non-array input.
+function toPgArrayLiteral(value) {
+ const items = Array.isArray(value) ? value : [];
+ if (items.length === 0) return '{}';
+ const parts = items
+  .filter((item) => item != null)
+  .map((item) => `"${String(item).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+ return `{${parts.join(',')}}`;
+}
+
 // Tables whose rows are scoped to a workspace and therefore subject to
 // membership/role checks. Maps table -> how to find its workspace id.
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
@@ -778,6 +804,9 @@ module.exports = {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
+ ARRAY_COLUMNS_BY_TABLE,
+ arrayColumnElemType,
+ toPgArrayLiteral,
  WORKSPACE_SCOPED_TABLES,
  WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS,

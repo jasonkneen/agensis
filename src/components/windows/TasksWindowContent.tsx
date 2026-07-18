@@ -6,8 +6,12 @@ import {
   ChevronRight,
   Circle,
   Clock,
+  Columns3,
   CornerDownRight,
   Flag,
+  GanttChart,
+  Link2,
+  List,
   MessageSquare,
   Plus,
   Send,
@@ -113,6 +117,19 @@ const TASK_COMMENT_AVATAR_COLORS = [
 
 type AssignmentFilter = 'all' | 'mine' | 'others';
 
+// Reads happen against a mix of shapes: the backend returns a JS string[]
+// (postgres.js parses uuid[]), but an offline/cached row or a raw PG array
+// literal could surface as a string. Normalize every read so counts, Set math,
+// and .includes() never operate on characters of a string.
+function taskDependsOn(task: Task): string[] {
+  const raw = task.depends_on as unknown;
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  if (typeof raw === 'string') {
+    return raw.replace(/^\{|\}$/g, '').split(',').map(id => id.replace(/^"|"$/g, '').trim()).filter(Boolean);
+  }
+  return [];
+}
+
 export const TasksWindowContent = memo(function TasksWindowContent({
   tasks,
   members,
@@ -133,6 +150,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
   const [filter, setFilter] = useState<AssignmentFilter>('all');
+  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('list');
 
   const childrenMap = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -144,18 +162,19 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     return map;
   }, [tasks]);
 
+  const allTopLevel = useMemo(() => tasks.filter(task => !task.parent_id), [tasks]);
+
   const filteredTopLevel = useMemo(() => {
-    const topLevel = tasks.filter(task => !task.parent_id);
     const me = currentUserId || members.find(member => member.email === currentUserEmail)?.user_id || '';
     if (filter === 'mine') {
       if (!me) return [];
-      return topLevel.filter(task => task.assignee_id === me);
+      return allTopLevel.filter(task => task.assignee_id === me);
     }
     if (filter === 'others') {
-      return topLevel.filter(task => task.assignee_id && task.assignee_id !== me);
+      return allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
     }
-    return topLevel;
-  }, [tasks, filter, members, currentUserEmail, currentUserId]);
+    return allTopLevel;
+  }, [allTopLevel, filter, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -233,6 +252,20 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
           <ToggleGroupItem value="others" title="Assigned to other workspace members">Others</ToggleGroupItem>
         </ToggleGroup>
+        <div className="mx-1 h-5 w-px bg-border" aria-hidden />
+        <ToggleGroup
+          type="single"
+          size="sm"
+          variant="outline"
+          value={view}
+          onValueChange={value => {
+            if (value) setView(value as 'list' | 'kanban' | 'gantt');
+          }}
+        >
+          <ToggleGroupItem value="list" title="List view"><List />List</ToggleGroupItem>
+          <ToggleGroupItem value="kanban" title="Kanban board"><Columns3 />Board</ToggleGroupItem>
+          <ToggleGroupItem value="gantt" title="Gantt timeline"><GanttChart />Timeline</ToggleGroupItem>
+        </ToggleGroup>
         <div className="flex-1" />
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
@@ -284,58 +317,74 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 p-3">
-          {filteredTopLevel.length === 0 ? (
-            <Empty className="min-h-80 border-0">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <CheckCircle2 />
-                </EmptyMedia>
-                <EmptyTitle>No tasks here</EmptyTitle>
-                <EmptyDescription>Type above to add one.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => {
-              const items = grouped[status];
-              if (items.length === 0) return null;
-              return (
-                <section key={status} className="flex flex-col gap-2">
-                  <Marker variant="separator">
-                    <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
-                  </Marker>
-                  <ItemGroup className="gap-1">
-                    {items.map(task => (
-                      <TaskRow
-                        key={task.id}
-                        task={task}
-                        subtasks={childrenMap[task.id] || []}
-                        assigneeLabel={memberLabel(task.assignee_id)}
-                        assigneeActive={isAssigneeActive(task.assignee_id, agentConnections)}
-                        members={members}
-                        agents={agents}
-                        onUpdateAgent={onUpdateAgent}
-                        workspaceId={workspaceId}
-                        currentUserId={currentUserId}
-                        currentUserEmail={currentUserEmail}
-                        autoExpand={task.id === focusRowId}
-                        onToggle={() => onToggleStatus(task)}
-                        onDelete={() => onDeleteTask(task.id)}
-                        onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
-                        onChangeAssignee={assigneeId => onUpdateTask(task.id, { assignee_id: assigneeId })}
-                        onAddSubtask={title => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
-                        onToggleSubtask={sub => onToggleStatus(sub)}
-                        onDeleteSubtask={id => onDeleteTask(id)}
-                      />
-                    ))}
-                  </ItemGroup>
-                </section>
-              );
-            })
-          )}
-        </div>
-      </ScrollArea>
+      {view === 'list' ? (
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="flex flex-col gap-4 p-3">
+            {filteredTopLevel.length === 0 ? (
+              <Empty className="min-h-80 border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <CheckCircle2 />
+                  </EmptyMedia>
+                  <EmptyTitle>No tasks here</EmptyTitle>
+                  <EmptyDescription>Type above to add one.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => {
+                const items = grouped[status];
+                if (items.length === 0) return null;
+                return (
+                  <section key={status} className="flex flex-col gap-2">
+                    <Marker variant="separator">
+                      <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
+                    </Marker>
+                    <ItemGroup className="gap-1">
+                      {items.map(task => (
+                        <TaskRow
+                          key={task.id}
+                          task={task}
+                          subtasks={childrenMap[task.id] || []}
+                          allTasks={allTopLevel}
+                          assigneeLabel={memberLabel(task.assignee_id)}
+                          assigneeActive={isAssigneeActive(task.assignee_id, agentConnections)}
+                          members={members}
+                          agents={agents}
+                          onUpdateAgent={onUpdateAgent}
+                          workspaceId={workspaceId}
+                          currentUserId={currentUserId}
+                          currentUserEmail={currentUserEmail}
+                          autoExpand={task.id === focusRowId}
+                          onToggle={() => onToggleStatus(task)}
+                          onDelete={() => onDeleteTask(task.id)}
+                          onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
+                          onChangeAssignee={assigneeId => onUpdateTask(task.id, { assignee_id: assigneeId })}
+                          onChangeDependsOn={next => onUpdateTask(task.id, { depends_on: next })}
+                          onAddSubtask={title => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
+                          onToggleSubtask={sub => onToggleStatus(sub)}
+                          onDeleteSubtask={id => onDeleteTask(id)}
+                        />
+                      ))}
+                    </ItemGroup>
+                  </section>
+                );
+              })
+            )}
+          </div>
+        </ScrollArea>
+      ) : view === 'kanban' ? (
+        <TaskKanban
+          columns={grouped}
+          memberLabel={memberLabel}
+          onChangeStatus={(id, status) => onUpdateTask(id, { status })}
+        />
+      ) : (
+        <TaskGantt
+          tasks={filteredTopLevel}
+          memberLabel={memberLabel}
+          onReschedule={(id, updates) => onUpdateTask(id, updates)}
+        />
+      )}
     </div>
   );
 });
@@ -343,6 +392,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 function TaskRow({
   task,
   subtasks,
+  allTasks,
   assigneeLabel,
   assigneeActive,
   members,
@@ -356,12 +406,14 @@ function TaskRow({
   onDelete,
   onChangeStatus,
   onChangeAssignee,
+  onChangeDependsOn,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
 }: {
   task: Task;
   subtasks: Task[];
+  allTasks: Task[];
   assigneeLabel: string | null;
   assigneeActive: boolean;
   members: WorkspaceMember[];
@@ -375,6 +427,7 @@ function TaskRow({
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
+  onChangeDependsOn: (next: string[]) => void;
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
@@ -486,6 +539,8 @@ function TaskRow({
         <TaskDetail
           task={task}
           subtasks={subtasks}
+          allTasks={allTasks}
+          onChangeDependsOn={onChangeDependsOn}
           members={members}
           agents={agents}
           onUpdateAgent={onUpdateAgent}
@@ -505,10 +560,12 @@ function TaskRow({
 function TaskDetail({
   task,
   subtasks,
+  allTasks,
   members,
   agents,
   onUpdateAgent,
   onChangeAssignee,
+  onChangeDependsOn,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -518,10 +575,12 @@ function TaskDetail({
 }: {
   task: Task;
   subtasks: Task[];
+  allTasks: Task[];
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
+  onChangeDependsOn: (next: string[]) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -630,8 +689,60 @@ function TaskDetail({
     setPendingMentionAgent(null);
   };
 
+  // Candidate dependencies: every other top-level task, excluding self and any
+  // task that already depends on THIS one (blocks a direct 2-cycle A<->B).
+  const dependsOn = taskDependsOn(task);
+  const dependencyCandidates = useMemo(
+    () => allTasks.filter(candidate =>
+      candidate.id !== task.id && !taskDependsOn(candidate).includes(task.id),
+    ),
+    [allTasks, task.id],
+  );
+
+  const toggleDependency = (candidateId: string) => {
+    const set = new Set(dependsOn);
+    if (set.has(candidateId)) set.delete(candidateId);
+    else set.add(candidateId);
+    onChangeDependsOn(Array.from(set));
+  };
+
   return (
     <div className="task-detail ml-8 flex flex-col gap-4 border-l py-3 pr-3 pl-5">
+      <section className="flex flex-col gap-2">
+        <Marker>
+          <MarkerIcon>
+            <Link2 />
+          </MarkerIcon>
+          <MarkerContent>Depends on {dependsOn.length > 0 && `(${dependsOn.length})`}</MarkerContent>
+        </Marker>
+        {dependencyCandidates.length === 0 ? (
+          <p className="px-1 text-xs text-muted-foreground">No other tasks to depend on yet.</p>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {dependencyCandidates.map(candidate => {
+              const checked = dependsOn.includes(candidate.id);
+              return (
+                <label
+                  key={candidate.id}
+                  className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/50"
+                >
+                  <input
+                    type="checkbox"
+                    className="size-3.5 accent-primary"
+                    checked={checked}
+                    onChange={() => toggleDependency(candidate.id)}
+                  />
+                  <span className={cn('min-w-0 flex-1 truncate', candidate.status === 'done' && 'text-muted-foreground line-through')}>
+                    {candidate.title}
+                  </span>
+                  <Badge variant="outline" className="shrink-0">{STATUS_LABELS[candidate.status] ?? candidate.status}</Badge>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       <section className="flex flex-col gap-2">
         <Marker>
           <MarkerIcon>
@@ -896,4 +1007,421 @@ function formatRelativeTime(iso: string) {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
   return date.toLocaleDateString();
+}
+
+// ---------------------------------------------------------------------------
+// Kanban board — four status columns; cards drag between them via native HTML5
+// drag-and-drop (the same pattern ThreadWidgetRail uses). Dropping a card on a
+// column calls onChangeStatus(taskId, columnStatus) which persists through
+// onUpdateTask upstream.
+// ---------------------------------------------------------------------------
+
+const KANBAN_COLUMNS: TaskStatus[] = ['todo', 'in_progress', 'done', 'cancelled'];
+
+function TaskKanban({
+  columns,
+  memberLabel,
+  onChangeStatus,
+}: {
+  columns: Record<TaskStatus, Task[]>;
+  memberLabel: (assigneeId: string | null) => string | null;
+  onChangeStatus: (id: string, status: TaskStatus) => void;
+}) {
+  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<TaskStatus | null>(null);
+
+  const drop = (status: TaskStatus) => {
+    const id = dragTaskId;
+    setDragTaskId(null);
+    setDragOver(null);
+    if (!id) return;
+    const from = KANBAN_COLUMNS.find(col => columns[col].some(task => task.id === id));
+    if (from === status) return;
+    onChangeStatus(id, status);
+  };
+
+  return (
+    <ScrollArea className="min-h-0 flex-1">
+      <div className="flex gap-3 p-3">
+        {KANBAN_COLUMNS.map(status => {
+          const items = columns[status];
+          return (
+            <div
+              key={status}
+              className={cn(
+                'flex w-64 shrink-0 flex-col gap-2 rounded-lg border border-border bg-card/40 p-2 transition-colors',
+                dragOver === status && 'border-primary/60 bg-primary/5',
+              )}
+              onDragOver={e => {
+                if (!dragTaskId) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                setDragOver(status);
+              }}
+              onDragLeave={e => {
+                // Only clear when the pointer actually leaves the column, not on
+                // moves between its children.
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setDragOver(prev => (prev === status ? null : prev));
+                }
+              }}
+              onDrop={e => {
+                e.preventDefault();
+                drop(status);
+              }}
+            >
+              <div className="flex items-center justify-between px-1 pt-0.5">
+                <span className="text-xs font-semibold tracking-tight">{STATUS_LABELS[status]}</span>
+                <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium leading-4 text-muted-foreground">
+                  {items.length}
+                </span>
+              </div>
+              {dragOver === status && dragTaskId && (
+                <div className="h-8 rounded-md border border-dashed border-primary/50 bg-primary/5" aria-hidden />
+              )}
+              {items.map(task => {
+                const assignee = memberLabel(task.assignee_id);
+                const deps = taskDependsOn(task);
+                return (
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={e => {
+                      setDragTaskId(task.id);
+                      // Some browsers refuse to start an HTML5 drag with no payload.
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', task.id);
+                    }}
+                    onDragEnd={() => { setDragTaskId(null); setDragOver(null); }}
+                    className={cn(
+                      'flex cursor-grab flex-col gap-1.5 rounded-md border border-border bg-card p-2 shadow-sm active:cursor-grabbing',
+                      dragTaskId === task.id && 'opacity-50',
+                    )}
+                  >
+                    <span className={cn('text-sm', task.status === 'done' && 'text-muted-foreground line-through')}>
+                      {task.title}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {task.priority !== 'normal' && (
+                        <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
+                          <Flag />
+                          {task.priority}
+                        </Badge>
+                      )}
+                      {task.due_date && (
+                        <Badge variant="outline">
+                          <Clock />
+                          {new Date(task.due_date).toLocaleDateString()}
+                        </Badge>
+                      )}
+                      {assignee && (
+                        <Badge variant="outline">
+                          <User />
+                          {assignee}
+                        </Badge>
+                      )}
+                      {deps.length > 0 && (
+                        <Badge variant="outline" title="Depends on other tasks">
+                          <Link2 />
+                          {deps.length}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </ScrollArea>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gantt timeline — rows are tasks, the X axis is days. Bars span start_date (or
+// created_at) to due_date (or start + 1 day). Bars drag horizontally with
+// pointer events (day-snapped) to reschedule; the right edge resizes due_date
+// only. Dependency arrows are drawn as non-interactive SVG lines; a task that
+// starts before a dependency ends gets a violation tint.
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86400000;
+const GANTT_DAY_WIDTH = 32;
+const GANTT_ROW_HEIGHT = 36;
+const GANTT_LABEL_WIDTH = 176;
+
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function taskStartMs(task: Task): number {
+  return startOfDay(new Date(task.start_date || task.created_at).getTime());
+}
+
+function taskEndMs(task: Task): number {
+  const start = taskStartMs(task);
+  if (task.due_date) return Math.max(start, startOfDay(new Date(task.due_date).getTime()));
+  return start + DAY_MS;
+}
+
+interface GanttDrag {
+  taskId: string;
+  mode: 'move' | 'resize';
+  originX: number;
+  startMs: number;
+  endMs: number;
+  offsetDays: number;
+}
+
+function TaskGantt({
+  tasks,
+  memberLabel,
+  onReschedule,
+}: {
+  tasks: Task[];
+  memberLabel: (assigneeId: string | null) => string | null;
+  onReschedule: (id: string, updates: Partial<Task>) => void;
+}) {
+  const [drag, setDrag] = useState<GanttDrag | null>(null);
+  // Preview offset (in snapped days) applied to the dragging bar before commit.
+  const [previewDays, setPreviewDays] = useState(0);
+
+  const { windowStart, dayCount } = useMemo(() => {
+    const today = startOfDay(Date.now());
+    let min = today - 7 * DAY_MS;
+    let max = today + 30 * DAY_MS;
+    for (const task of tasks) {
+      min = Math.min(min, taskStartMs(task));
+      max = Math.max(max, taskEndMs(task));
+    }
+    const days = Math.max(1, Math.round((max - min) / DAY_MS) + 1);
+    return { windowStart: min, dayCount: days };
+  }, [tasks]);
+
+  const rowIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    tasks.forEach((task, i) => map.set(task.id, i));
+    return map;
+  }, [tasks]);
+
+  const dayToX = (ms: number) => ((startOfDay(ms) - windowStart) / DAY_MS) * GANTT_DAY_WIDTH;
+  const gridWidth = dayCount * GANTT_DAY_WIDTH;
+  const gridHeight = tasks.length * GANTT_ROW_HEIGHT;
+
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const deltaDays = Math.round((e.clientX - drag.originX) / GANTT_DAY_WIDTH);
+      setPreviewDays(deltaDays);
+    };
+    const onUp = (e: PointerEvent) => {
+      const deltaDays = Math.round((e.clientX - drag.originX) / GANTT_DAY_WIDTH);
+      if (deltaDays !== 0) {
+        if (drag.mode === 'move') {
+          // Materialize both dates so the update shape is always {start_date, due_date}.
+          const nextStart = drag.startMs + deltaDays * DAY_MS;
+          const nextEnd = drag.endMs + deltaDays * DAY_MS;
+          onReschedule(drag.taskId, {
+            start_date: new Date(nextStart).toISOString(),
+            due_date: new Date(nextEnd).toISOString(),
+          });
+        } else {
+          // Resize the right edge: due_date only, floored to at least one day wide.
+          const nextEnd = Math.max(drag.startMs + DAY_MS, drag.endMs + deltaDays * DAY_MS);
+          onReschedule(drag.taskId, { due_date: new Date(nextEnd).toISOString() });
+        }
+      }
+      setDrag(null);
+      setPreviewDays(0);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [drag, onReschedule]);
+
+  if (tasks.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
+        No tasks to chart. Add one above.
+      </div>
+    );
+  }
+
+  // Dependency arrows: dep bar end -> task bar start, only when both are visible.
+  const arrows: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; violation: boolean }> = [];
+  for (const task of tasks) {
+    const toRow = rowIndex.get(task.id);
+    if (toRow === undefined) continue;
+    const taskStart = taskStartMs(task);
+    for (const depId of taskDependsOn(task)) {
+      const fromRow = rowIndex.get(depId);
+      if (fromRow === undefined) continue;
+      const dep = tasks[fromRow];
+      const depEnd = taskEndMs(dep);
+      arrows.push({
+        key: `${depId}->${task.id}`,
+        x1: dayToX(depEnd),
+        y1: fromRow * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2,
+        x2: dayToX(taskStart),
+        y2: toRow * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2,
+        violation: taskStart < depEnd,
+      });
+    }
+  }
+
+  // Day header ticks — label the 1st of each month plus every 7th day so the
+  // axis stays readable at 32px/day without crowding.
+  const ticks: Array<{ x: number; label: string }> = [];
+  for (let i = 0; i < dayCount; i++) {
+    const ms = windowStart + i * DAY_MS;
+    const d = new Date(ms);
+    if (d.getDate() === 1 || i === 0 || i % 7 === 0) {
+      ticks.push({ x: i * GANTT_DAY_WIDTH, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
+    }
+  }
+  const todayX = dayToX(Date.now());
+  const todayVisible = todayX >= 0 && todayX <= gridWidth;
+
+  return (
+    <ScrollArea className="min-h-0 flex-1">
+      <div className="flex" style={{ width: GANTT_LABEL_WIDTH + gridWidth }}>
+        {/* Sticky task-label column */}
+        <div className="sticky left-0 z-10 shrink-0 border-r border-border bg-background" style={{ width: GANTT_LABEL_WIDTH }}>
+          <div className="h-8 border-b border-border" />
+          {tasks.map(task => {
+            const assignee = memberLabel(task.assignee_id);
+            return (
+              <div
+                key={task.id}
+                className="flex flex-col justify-center overflow-hidden border-b border-border/60 px-2"
+                style={{ height: GANTT_ROW_HEIGHT }}
+              >
+                <span className={cn('truncate text-xs', task.status === 'done' && 'text-muted-foreground line-through')}>
+                  {task.title}
+                </span>
+                {assignee && <span className="truncate text-[10px] text-muted-foreground">{assignee}</span>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Timeline grid */}
+        <div className="relative" style={{ width: gridWidth }}>
+          {/* Day header */}
+          <div className="relative h-8 border-b border-border" style={{ width: gridWidth }}>
+            {ticks.map(tick => (
+              <div
+                key={tick.x}
+                className="absolute top-0 flex h-full items-center border-l border-border/40 pl-1 text-[10px] text-muted-foreground"
+                style={{ left: tick.x }}
+              >
+                {tick.label}
+              </div>
+            ))}
+          </div>
+
+          <div className="relative" style={{ width: gridWidth, height: gridHeight }}>
+            {/* Row backgrounds */}
+            {tasks.map((task, i) => (
+              <div
+                key={task.id}
+                className="absolute left-0 border-b border-border/40"
+                style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: gridWidth }}
+              />
+            ))}
+
+            {/* Today marker */}
+            {todayVisible && (
+              <div className="absolute top-0 z-0 w-px bg-primary/40" style={{ left: todayX, height: gridHeight }} aria-hidden />
+            )}
+
+            {/* Dependency arrows */}
+            <svg className="pointer-events-none absolute inset-0 overflow-visible" width={gridWidth} height={gridHeight} aria-hidden>
+              <defs>
+                <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                  <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
+                </marker>
+              </defs>
+              {arrows.map(arrow => (
+                <path
+                  key={arrow.key}
+                  d={`M${arrow.x1},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y2} L${arrow.x2},${arrow.y2}`}
+                  fill="none"
+                  className={cn('stroke-[1.5]', arrow.violation ? 'stroke-destructive/70' : 'stroke-muted-foreground/40')}
+                  markerEnd="url(#gantt-arrow)"
+                />
+              ))}
+            </svg>
+
+            {/* Bars */}
+            {tasks.map((task, i) => {
+              const isDragging = drag?.taskId === task.id;
+              const shiftDays = isDragging ? previewDays : 0;
+              const startMs = taskStartMs(task);
+              const endMs = taskEndMs(task);
+              const moveShift = isDragging && drag?.mode === 'move' ? shiftDays : 0;
+              const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
+              const left = dayToX(startMs + moveShift * DAY_MS);
+              const rawWidth = ((endMs - startMs) / DAY_MS + resizeShift) * GANTT_DAY_WIDTH;
+              const width = Math.max(GANTT_DAY_WIDTH, rawWidth);
+              const deps = taskDependsOn(task);
+              const violation = deps.some(depId => {
+                const depRow = rowIndex.get(depId);
+                if (depRow === undefined) return false;
+                return startMs < taskEndMs(tasks[depRow]);
+              });
+              return (
+                <div
+                  key={task.id}
+                  className={cn(
+                    'absolute flex items-center rounded-md border text-[10px] shadow-sm',
+                    task.status === 'done'
+                      ? 'border-emerald-500/40 bg-emerald-500/25'
+                      : task.status === 'cancelled'
+                        ? 'border-border bg-muted'
+                        : 'border-primary/40 bg-primary/25',
+                    violation && 'ring-1 ring-destructive/60',
+                    isDragging && 'z-20 opacity-80',
+                  )}
+                  style={{
+                    left,
+                    top: i * GANTT_ROW_HEIGHT + 6,
+                    height: GANTT_ROW_HEIGHT - 12,
+                    width,
+                  }}
+                  title={`${task.title}${violation ? ' — starts before a dependency ends' : ''}`}
+                  onPointerDown={e => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    setDrag({ taskId: task.id, mode: 'move', originX: e.clientX, startMs, endMs, offsetDays: 0 });
+                    setPreviewDays(0);
+                  }}
+                >
+                  <span className="pointer-events-none min-w-0 flex-1 truncate px-1.5">{task.title}</span>
+                  {/* Right-edge resize handle (due_date only) */}
+                  <span
+                    className="h-full w-2 shrink-0 cursor-ew-resize rounded-r-md bg-foreground/10 hover:bg-foreground/25"
+                    onPointerDown={e => {
+                      if (e.button !== 0) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDrag({ taskId: task.id, mode: 'resize', originX: e.clientX, startMs, endMs, offsetDays: 0 });
+                      setPreviewDays(0);
+                    }}
+                    aria-label="Resize due date"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </ScrollArea>
+  );
 }

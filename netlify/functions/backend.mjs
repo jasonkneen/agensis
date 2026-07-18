@@ -18,6 +18,8 @@ import {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
+ arrayColumnElemType,
+ toPgArrayLiteral,
  stripPrivilegedDbValues,
 } from '../../shared/backend-core.cjs';
 
@@ -397,8 +399,17 @@ function normalizeJsonParam(table, column, value) {
 
 function bindDbParam(params, table, column, value) {
  const jsonColumn = isJsonColumn(table, column);
- params.push(jsonColumn ? normalizeJsonParam(table, column, value) : (value ?? null));
- return `$${params.length}${jsonColumn ? '::jsonb' : ''}`;
+ if (jsonColumn) {
+  params.push(normalizeJsonParam(table, column, value));
+  return `$${params.length}::jsonb`;
+ }
+ const elemType = arrayColumnElemType(table, column);
+ if (elemType) {
+  params.push(toPgArrayLiteral(value));
+  return `$${params.length}::${elemType}[]`;
+ }
+ params.push(value ?? null);
+ return `$${params.length}`;
 }
 
 function buildWhereClause(filters = [], params = []) {

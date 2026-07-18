@@ -196,6 +196,10 @@ export interface Task {
  status: TaskStatus;
  priority: TaskPriority;
  due_date: string | null;
+ /** Gantt bar start; falls back to created_at when null. */
+ start_date: string | null;
+ /** Task ids this task depends on (postgres uuid[]). */
+ depends_on?: string[];
  source_type: TaskSourceType | null;
  source_id: string | null;
  completed_at: string | null;
