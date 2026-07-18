@@ -3369,6 +3369,28 @@ body {
  --radius-4xl: 44px;
 }
 
+/* ── Normal-theme roundness cap (Minimal / Developer / Tinted) ──────────────
+   These families asked for a flatter, less pill-like look: no fully-rounded
+   control surfaces, everything capped at the `lg` radius. Colour-only normal
+   themes otherwise inherit the classic radii. Avatars, status dots, and count
+   badges are intentionally excluded — they must stay circular. */
+:root[data-normal-theme-group="Minimal"],
+:root[data-normal-theme-group="Developer"],
+:root[data-normal-theme-group="Tinted"] {
+ --radius: 14px;
+ --radius-xl: 14px;
+ --radius-2xl: 14px;
+ --radius-3xl: 14px;
+ --radius-4xl: 14px;
+}
+
+/* Kill full-rounding on control/card surfaces (buttons, inputs, cards, dialogs,
+   pills) down to `lg`. Circular UI (avatars, status dots, count badges, the
+   notification bell) is excluded so it stays round. */
+:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) :is([data-slot="button"], [data-slot="badge"], [data-slot="card"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"], .home-suggestion-pill, .sidebar-search):not([class*="avatar"]):not(.rounded-full-keep) {
+ border-radius: var(--radius-lg) !important;
+}
+
 :root[data-theme="dark"] {
  --background: oklch(0.145 0 0);
  --foreground: oklch(0.985 0 0);
