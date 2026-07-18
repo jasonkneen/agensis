@@ -63,11 +63,46 @@ function defaultSandboxProviderFactory(job) {
 
 // Defer the e2b import so `import('./executor.mjs')` in unit tests never pulls the
 // e2b SDK — it loads only when a sandbox job actually runs.
+// e2b's engine floor is Node >=20.18.1. Compare the running version numerically
+// so a sandbox run on an unsupported Node fails with a clear message up front.
+// `version` is injectable for tests; defaults to the running Node version.
+export function nodeSupportsE2b(version = process.versions.node) {
+  // e2b engine: >=20.18.1 <21 || >=22 (Node 21 is explicitly excluded).
+  const [maj, min, patch] = String(version).split(".").map((n) => Number(n) || 0);
+  if (maj === 21) return false;
+  if (maj >= 22) return true;
+  if (maj !== 20) return false;
+  if (min > 18) return true;
+  if (min < 18) return false;
+  return patch >= 1;
+}
+
 function createE2bProviderLazy(opts) {
   let real = null;
   const ensureReal = async () => {
     if (!real) {
-      const mod = await import("./sandbox/e2b.mjs");
+      // e2b is an OPTIONAL dependency (it requires Node >=20.18.1, while the
+      // daemon core supports Node >=18). Give a clear, actionable error instead
+      // of a raw MODULE_NOT_FOUND when a sandbox job runs without it installed.
+      // Sandbox mode needs Node >=20.18.1 (e2b's engine floor). npm engine checks
+      // are only warnings, so e2b can install on Node 18 and then fail cryptically
+      // at import — check the runtime version FIRST and fail with a clear message.
+      if (!nodeSupportsE2b()) {
+        throw new Error(`Sandbox execution requires Node >=20.18.1 (you have ${process.versions.node}). Upgrade Node to use Sandbox agents; Built-in and Remote daemon modes still work on Node 18.`);
+      }
+      let mod;
+      try {
+        mod = await import("./sandbox/e2b.mjs");
+      } catch (err) {
+        if (err && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND" || /Cannot find package 'e2b'/.test(String(err.message)))) {
+          const major = Number(process.versions.node.split(".")[0]);
+          const hint = major < 20
+            ? ` Sandbox mode needs Node >=20.18.1 (you have ${process.versions.node}); upgrade Node, then run \`npm i e2b\` in the daemon.`
+            : " Run `npm i e2b` in the daemon to enable Sandbox mode.";
+          throw new Error(`Sandbox execution requires the optional 'e2b' package, which is not installed.${hint}`);
+        }
+        throw err;
+      }
       real = mod.createE2bProvider(opts);
     }
     return real;

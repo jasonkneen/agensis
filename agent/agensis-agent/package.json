@@ -35,8 +35,10 @@
     "coding-agent"
   ],
   "dependencies": {
-    "e2b": "^2.35.0",
     "ws": "^8.20.0"
+  },
+  "optionalDependencies": {
+    "e2b": "^2.35.0"
   },
   "devDependencies": {
     "esbuild": "^0.21.5"

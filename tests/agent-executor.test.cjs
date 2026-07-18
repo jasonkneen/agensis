@@ -78,3 +78,15 @@ test('createExecutor builds a SandboxExecutor for run_mode sandbox using makePro
   assert.equal(built, 1);
   assert.ok(provider.calls.includes('ensureEnv'));
 });
+
+test('nodeSupportsE2b gates on the e2b Node >=20.18.1 engine floor', async () => {
+  const { nodeSupportsE2b } = await load();
+  assert.equal(nodeSupportsE2b('18.19.0'), false);
+  assert.equal(nodeSupportsE2b('20.18.0'), false);
+  assert.equal(nodeSupportsE2b('20.18.1'), true);
+  assert.equal(nodeSupportsE2b('20.19.0'), true);
+  assert.equal(nodeSupportsE2b('22.0.0'), true);
+  assert.equal(nodeSupportsE2b('21.0.0'), false);
+  assert.equal(nodeSupportsE2b('21.7.0'), false);
+  assert.equal(nodeSupportsE2b('24.16.0'), true);
+});
