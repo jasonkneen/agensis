@@ -635,7 +635,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
-    const autoChannel = session.conversation_mode === 'auto';
+    // AUTO is always on for channels now (no per-channel toggle): any non-DM
+    // channel lets participant agents chime in on new messages. DMs still route
+    // via their direct participant. Legacy conversation_mode is treated as auto.
+    const autoChannel = session.folder !== 'Direct messages';
     const sharedModelRoute = isSharedModelRoute(model);
     const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || autoChannel));
 

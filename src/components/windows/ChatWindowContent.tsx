@@ -42,7 +42,6 @@ import {
   Users,
   Wrench,
   X,
-  Zap,
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
@@ -1017,20 +1016,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setFlowConnectOpen(true);
   };
 
-  const conversationMode = channelMeta?.conversation_mode ?? 'auto';
-  const autoInterject = conversationMode === 'auto';
-
-  const handleToggleAutoInterject = async () => {
-    const next: ChatSession['conversation_mode'] = autoInterject ? 'mention' : 'auto';
-    // Optimistically reflect the new mode.
-    setChannelMeta(prev => (prev ? { ...prev, conversation_mode: next } : prev));
-    const saved = await persistChannelUpdates({ conversation_mode: next });
-    if (!saved) {
-      // Revert on failure.
-      setChannelMeta(prev => (prev ? { ...prev, conversation_mode: conversationMode } : prev));
-    }
-  };
-
   const handleOpenParticipantsDialog = () => {
     const selected = new Set<string>();
     const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
@@ -1322,25 +1307,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             )}
             {!isDirectMessage && (
               <>
-                <Button
-                  type="button"
-                  variant={autoInterject ? 'default' : 'outline'}
-                  size="sm"
-                  className={cn(
-                    'h-8 gap-1 px-2.5 font-medium transition-colors',
-                    autoInterject
-                      ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90'
-                      : 'text-muted-foreground',
-                  )}
-                  aria-pressed={autoInterject}
-                  title={autoInterject
-                    ? 'Auto is ON — agents in this channel chime in automatically when a message is relevant to them. Click to switch to mentions-only.'
-                    : 'Auto is OFF — agents only reply when @mentioned. Click to let them chime in automatically.'}
-                  onClick={() => { void handleToggleAutoInterject(); }}
-                >
-                  <Zap data-icon="inline-start" className={autoInterject ? 'fill-current' : undefined} />
-                  {autoInterject ? 'Auto on' : 'Auto off'}
-                </Button>
                 <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
                   <RotateCcw data-icon="inline-start" />
                   Catch up

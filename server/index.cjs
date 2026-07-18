@@ -3370,7 +3370,6 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    const session = sessionRows[0];
    if (!session || String(session.workspace_id) !== String(workspaceId)) return;
    const maxTurns = Number(session.max_agent_turns) > 0 ? Number(session.max_agent_turns) : 10;
-   const conversationMode = String(session.conversation_mode || 'mention');
    const directTarget = directAgentParticipantFromSession(session);
 
    const rows = await loadChannelMessages(sessionId, threadParentId);
@@ -3429,14 +3428,15 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
        || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
      }
     }
-    // Context-aware auto-interject (opt-in: conversation_mode === 'auto'). A pure
-    // fallback when no explicit target exists; fires once per human message
-    // (agentTurns === 0, latest author is the human). The candidate pool is
-    // every enabled agent that is a channel participant UNION every agent that
-    // has recently posted in this channel — so a human replying right after an
-    // agent draws that agent back in to decide "is this for me, or pass it on?".
-    // A single cheap Haiku call picks ONE agent or null (fails CLOSED).
-    if (!nextAgent && conversationMode === 'auto' && agentTurns === 0 && latestAuthorAgentId === '') {
+    // AUTO is always on for channels now (the per-channel toggle was removed).
+    // We're already in the non-DM branch, so any plain human message with no
+    // explicit target enters the context-aware auto-interject. Fires once per
+    // human message (agentTurns === 0, latest author is the human). The candidate
+    // pool is every enabled agent that is a channel participant UNION every agent
+    // that has recently posted here — so a human replying right after an agent
+    // draws that agent back in to decide "is this for me, or pass it on?". A
+    // single cheap Haiku call picks ONE agent or null (fails CLOSED).
+    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '') {
      const candidateIds = new Set();
      for (const id of participantAgentIds) candidateIds.add(String(id));
      // Recent agent authors (newest first): the last one to speak is the
@@ -7541,11 +7541,11 @@ function createApp() {
    const threadTarget = mentions.length === 0 && threadParentId
     ? await inferThreadAgentTarget(sessionId, threadParentId)
     : null;
-   // In 'auto' channels a plain human message (no mention/direct/thread target)
-   // still enters the orchestrator, which runs the context-aware auto-interject
-   // gate. 'mention' channels keep the original behaviour unchanged.
-   const autoMode = String(sessionRows[0].conversation_mode || 'mention') === 'auto';
-   const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget) || autoMode;
+   // AUTO is always on for channels: a plain human message (no mention/direct/
+   // thread target) still enters the orchestrator for non-DM channels. A true
+   // 1:1 DM (a participant flagged direct:true) only routes to its own agent.
+   const isDirectMessage = Boolean(directTarget && directTarget.direct);
+   const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget) || !isDirectMessage;
    if (!willDispatch) {
     return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
    }
