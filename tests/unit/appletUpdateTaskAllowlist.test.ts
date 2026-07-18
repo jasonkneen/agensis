@@ -1,27 +1,13 @@
 import { describe, it, expect } from 'vitest';
+import { filterAppletTaskUpdates, APPLET_TASK_UPDATE_FIELDS } from '../../src/lib/appletBridge';
 
 // Item 4 — applet `agensis:updateTask` field allowlist.
 //
-// The real logic is INLINE inside src/components/canvas/CanvasObjectRenderer.tsx
-// (the `agensis:updateTask` branch, ~line 226-241). It is not exported, and that
-// component is owned by another agent, so this test re-implements the EXACT
-// allowlist filter below. It mirrors the component's mass-assignment guard:
-// only user-editable Task fields may be set by a sandboxed applet.
-//
-// !!! KEEP IN SYNC with CanvasObjectRenderer.tsx APPLET_TASK_UPDATE_FIELDS !!!
-const APPLET_TASK_UPDATE_FIELDS = ['title', 'description', 'status', 'priority', 'due_date'] as const;
+// This test exercises the REAL guard: CanvasObjectRenderer's bridge handler and
+// this test both import `filterAppletTaskUpdates` from src/lib/appletBridge.ts,
+// so there is no drifting copy — a change to the allowlist is caught here.
 
-function filterAppletTaskUpdates(updates: Record<string, unknown>): Record<string, unknown> {
-  const safeUpdates: Record<string, unknown> = {};
-  for (const key of APPLET_TASK_UPDATE_FIELDS) {
-    if (Object.prototype.hasOwnProperty.call(updates, key)) {
-      safeUpdates[key] = updates[key];
-    }
-  }
-  return safeUpdates;
-}
-
-describe('applet updateTask allowlist', () => {
+describe('applet updateTask allowlist (real shared guard)', () => {
   it('passes through every allowlisted field', () => {
     const updates = {
       title: 'New title',
@@ -39,14 +25,16 @@ describe('applet updateTask allowlist', () => {
       workspace_id: 'ws-1',
       created_by: 'user-9',
       assignee_id: 'user-2',
+      version: 7,
+      completed_at: 'now',
+      source_agent_id: 'agent-1',
       title: 'allowed',
     };
     const result = filterAppletTaskUpdates(updates);
     expect(result).toEqual({ title: 'allowed' });
-    expect(result).not.toHaveProperty('id');
-    expect(result).not.toHaveProperty('workspace_id');
-    expect(result).not.toHaveProperty('created_by');
-    expect(result).not.toHaveProperty('assignee_id');
+    for (const priv of ['id', 'workspace_id', 'created_by', 'assignee_id', 'version', 'completed_at', 'source_agent_id']) {
+      expect(result).not.toHaveProperty(priv);
+    }
   });
 
   it('yields an empty (no-op) result when no allowlisted keys are present', () => {
@@ -62,5 +50,19 @@ describe('applet updateTask allowlist', () => {
     const result = filterAppletTaskUpdates({ status: 'done' });
     expect(result).toEqual({ status: 'done' });
     expect(result).not.toHaveProperty('title');
+  });
+
+  it('ignores prototype-inherited keys (only own properties count)', () => {
+    const base = { title: 'proto-title' };
+    const updates = Object.create(base) as Record<string, unknown>;
+    updates.status = 'done';
+    const result = filterAppletTaskUpdates(updates);
+    // title lives on the prototype, not as an own property → must be dropped.
+    expect(result).toEqual({ status: 'done' });
+    expect(result).not.toHaveProperty('title');
+  });
+
+  it('exposes a stable allowlist (guards accidental widening)', () => {
+    expect([...APPLET_TASK_UPDATE_FIELDS]).toEqual(['title', 'description', 'status', 'priority', 'due_date']);
   });
 });
