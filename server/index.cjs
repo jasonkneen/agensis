@@ -765,6 +765,12 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
     CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+    -- Trigram indexes so MCP search_messages / search_docs (leading-wildcard
+    -- ILIKE '%q%') use a GIN index instead of a full sequential scan.
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS idx_messages_content_trgm ON messages USING gin (content gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_documents_title_trgm ON documents USING gin (title gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_documents_content_trgm ON documents USING gin (content gin_trgm_ops);
 
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS content_sha256 text DEFAULT '';
     ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
