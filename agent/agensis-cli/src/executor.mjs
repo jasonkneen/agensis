@@ -90,19 +90,11 @@ function createE2bProviderLazy(opts) {
       if (!nodeSupportsE2b()) {
         throw new Error(`Sandbox execution requires Node >=20.18.1 (you have ${process.versions.node}). Upgrade Node to use Sandbox agents; Built-in and Remote daemon modes still work on Node 18.`);
       }
-      let mod;
-      try {
-        mod = await import("./sandbox/e2b.mjs");
-      } catch (err) {
-        if (err && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND" || /Cannot find package 'e2b'/.test(String(err.message)))) {
-          const major = Number(process.versions.node.split(".")[0]);
-          const hint = major < 20
-            ? ` Sandbox mode needs Node >=20.18.1 (you have ${process.versions.node}); upgrade Node, then run \`npm i e2b\` in the daemon.`
-            : " Run `npm i e2b` in the daemon to enable Sandbox mode.";
-          throw new Error(`Sandbox execution requires the optional 'e2b' package, which is not installed.${hint}`);
-        }
-        throw err;
-      }
+      // The Node-version check above fails fast on an unsupported runtime. The
+      // adapter module itself has no top-level e2b import (e2b loads lazily inside
+      // its ensureEnv, which throws a clear 'optional package not installed'
+      // message), so importing the adapter here is always safe.
+      const mod = await import("./sandbox/e2b.mjs");
       real = mod.createE2bProvider(opts);
     }
     return real;

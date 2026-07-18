@@ -24,7 +24,19 @@ export function createE2bProvider({ apiKey, anthropicApiKey, gitToken = "", repo
         apiKey,
         envs: anthropicApiKey ? { ANTHROPIC_API_KEY: anthropicApiKey } : {},
       };
-      const { Sandbox } = await import("e2b");
+      let Sandbox;
+      try {
+        ({ Sandbox } = await import("e2b"));
+      } catch (err) {
+        if (err && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND" || /Cannot find package 'e2b'/.test(String(err && err.message)))) {
+          const major = Number(String(process.versions.node).split(".")[0]) || 0;
+          const hint = major < 20 || major === 21
+            ? ` Sandbox mode needs Node >=20.18.1 (<21 or >=22); you have ${process.versions.node}. Upgrade Node, then run \`npm i e2b\` in the daemon.`
+            : " Run `npm i e2b` in the daemon to enable Sandbox mode.";
+          throw new Error(`Sandbox execution requires the optional 'e2b' package, which is not installed.${hint}`);
+        }
+        throw err;
+      }
       const sbx = template ? await Sandbox.create(template, opts) : await Sandbox.create(opts);
       // Ensure the claude CLI exists (MVP: install-on-boot, no baked template).
       await sbx.commands.run("bash -lc 'command -v claude >/dev/null || npm i -g @anthropic-ai/claude-code'");
