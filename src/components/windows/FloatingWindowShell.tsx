@@ -474,7 +474,7 @@ export function FloatingWindowShell({
   }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand]);
 
   const handleResizeStart = useCallback((e: React.PointerEvent) => {
-    if (!canControl || isMaximized || isMobile) return;
+    if (!canControl || isMaximized || isMobile || isFullExpand) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus(win.id);
@@ -542,7 +542,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile]);
+  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
