@@ -1,5 +1,38 @@
 [
   {
+    "version": "agent-0.1.24",
+    "date": "2026-07-19",
+    "title": "Agents can start conversations + reliability fixes",
+    "summary": "Agents can now message a channel and wake a teammate on their own, and the daemon no longer trips over host API keys.",
+    "highlights": [
+      "An agent can post and @mention teammates directly, not just reply",
+      "Fixed agents failing silently when a host had an Anthropic API key set",
+      "Container and root hosts run the coding agent without permission errors"
+    ]
+  },
+  {
+    "version": "network-3d",
+    "date": "2026-07-19",
+    "title": "3D agent network view",
+    "summary": "The agents window now has a 2D / 3D toggle — see your agents and their providers as a rotating 3D map.",
+    "highlights": [
+      "Switch between the flat diagram and an interactive 3D scene",
+      "Drag to orbit; it auto-rotates and respects reduced-motion",
+      "Both views share the same hub → agents → providers layout"
+    ]
+  },
+  {
+    "version": "ui-polish",
+    "date": "2026-07-19",
+    "title": "Interface fixes",
+    "summary": "A round of visual fixes across popovers, dialogs and the update panel.",
+    "highlights": [
+      "The share panel no longer clips names when it opens near a screen edge",
+      "The channel catch-up summary is wider and formats headings and lists",
+      "Release dates in this panel no longer show twice"
+    ]
+  },
+  {
     "version": "2026.07.04",
     "date": "2026-07-04",
     "title": "“What’s new” update notifications",
