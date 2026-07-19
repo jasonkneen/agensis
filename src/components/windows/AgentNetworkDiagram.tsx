@@ -1,8 +1,8 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
-import type { WorkspaceAgent } from '../../types';
+import type { WorkspaceAgent, AgentConnection } from '../../types';
 import { agentAccentColor } from '../../lib/agentAccent';
 import { cn } from '../../lib/utils';
-import { KIND_META, CX, CY, initials, buildNetworkModel, type ConnKind } from './agentNetworkModel';
+import { KIND_META, STATUS_META, CX, CY, initials, buildNetworkModel, type NodeStatus } from './agentNetworkModel';
 
 // three.js scene is heavy — load it only when the user opens the 3D tab so it
 // never lands in the agents-window chunk.
@@ -10,16 +10,34 @@ const AgentNetworkDiagram3D = lazy(() => import('./AgentNetworkDiagram3D'));
 
 interface AgentNetworkDiagramProps {
   agents: WorkspaceAgent[];
+  connections?: AgentConnection[];
   onSelectAgent?: (id: string) => void;
 }
 
-export function AgentNetworkDiagram({ agents, onSelectAgent }: AgentNetworkDiagramProps) {
+const REDUCED =
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+// Quadratic Bézier from hub to a node, bowed perpendicular to the spoke so the
+// graph reads as an organic mesh rather than a compass rose.
+function curve(x1: number, y1: number, x2: number, y2: number, bow = 0.12) {
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const cx = mx - dy * bow;
+  const cy = my + dx * bow;
+  return `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
+}
+
+export function AgentNetworkDiagram({ agents, connections = [], onSelectAgent }: AgentNetworkDiagramProps) {
   const enabled = useMemo(() => agents.filter(a => a.enabled !== false), [agents]);
   const [view, setView] = useState<'2d' | '3d'>('2d');
+  const [hover, setHover] = useState<string | null>(null);
 
-  const model = useMemo(() => buildNetworkModel(enabled), [enabled]);
+  // Include disabled agents so "inactive" nodes still appear (ghosted).
+  const model = useMemo(() => buildNetworkModel(agents, connections), [agents, connections]);
 
-  if (enabled.length === 0) {
+  if (agents.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         No agents to visualize yet.
@@ -53,39 +71,69 @@ export function AgentNetworkDiagram({ agents, onSelectAgent }: AgentNetworkDiagr
         {view === '2d' ? (
           <svg viewBox="0 0 1000 840" className="size-full" role="img" aria-label="Agent network diagram (2D)">
             <defs>
-              <radialGradient id="agensis-hub-glow" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.35" />
+              <radialGradient id="hub-glow" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.30" />
+                <stop offset="70%" stopColor="var(--primary)" stopOpacity="0.06" />
                 <stop offset="100%" stopColor="var(--primary)" stopOpacity="0" />
               </radialGradient>
+              {(Object.keys(STATUS_META) as NodeStatus[]).map(s => (
+                <radialGradient key={s} id={`node-glow-${s}`} cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stopColor={STATUS_META[s].color} stopOpacity="0.45" />
+                  <stop offset="100%" stopColor={STATUS_META[s].color} stopOpacity="0" />
+                </radialGradient>
+              ))}
             </defs>
 
-            {/* Level-2 spokes: agent -> its provider node. */}
+            {/* Level-2 spokes: agent -> its provider node (dashed, behind). */}
             {model.agentNodes.map(node => {
               const provider = model.providerNodes.get(node.provider)!;
+              const dim = STATUS_META[node.status].dim * (hover && hover !== node.agent.id ? 0.3 : 1);
               return (
-                <line
+                <path
                   key={`p-${node.agent.id}`}
-                  x1={node.x} y1={node.y} x2={provider.x} y2={provider.y}
-                  stroke={KIND_META[node.kind].color} strokeOpacity={0.25} strokeWidth={1.5} strokeDasharray="4 4"
+                  d={curve(node.x, node.y, provider.x, provider.y, 0.06)}
+                  fill="none"
+                  stroke={KIND_META[node.kind].color}
+                  strokeOpacity={0.22 * dim}
+                  strokeWidth={1.5}
+                  strokeDasharray="4 5"
                 />
               );
             })}
 
-            {/* Level-1 spokes: hub -> each agent. */}
-            {model.agentNodes.map(node => (
-              <line
-                key={`a-${node.agent.id}`}
-                x1={CX} y1={CY} x2={node.x} y2={node.y}
-                stroke={KIND_META[node.kind].color} strokeOpacity={0.45} strokeWidth={2}
-              />
-            ))}
+            {/* Level-1 spokes: hub -> each agent (curved, status-colored). */}
+            {model.agentNodes.map(node => {
+              const meta = STATUS_META[node.status];
+              const focused = hover === node.agent.id;
+              const dim = meta.dim * (hover && !focused ? 0.28 : 1);
+              const d = curve(CX, CY, node.x, node.y);
+              return (
+                <g key={`a-${node.agent.id}`}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={meta.color}
+                    strokeOpacity={(focused ? 0.9 : 0.5) * dim}
+                    strokeWidth={focused ? 3 : 2}
+                    strokeLinecap="round"
+                  />
+                  {/* Traveling flow dot for busy agents. */}
+                  {meta.flow && !REDUCED && (
+                    <circle r={4} fill={meta.color}>
+                      <animateMotion dur="1.4s" repeatCount="indefinite" path={d} />
+                      <animate attributeName="opacity" values="0;1;1;0" dur="1.4s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                </g>
+              );
+            })}
 
             {/* Provider nodes (outer ring). */}
             {[...model.providerNodes.values()].map(provider => (
               <g key={`prov-${provider.label}`} transform={`translate(${provider.x}, ${provider.y})`}>
-                <rect x={-70} y={-18} width={140} height={36} rx={18}
-                  fill={KIND_META[provider.kind].color} fillOpacity={0.14}
-                  stroke={KIND_META[provider.kind].color} strokeOpacity={0.6} strokeWidth={1.5} />
+                <rect x={-72} y={-18} width={144} height={36} rx={18}
+                  fill={KIND_META[provider.kind].color} fillOpacity={0.12}
+                  stroke={KIND_META[provider.kind].color} strokeOpacity={0.55} strokeWidth={1.5} />
                 <text textAnchor="middle" y={5} fontSize={13} fontWeight={600} fill={KIND_META[provider.kind].color}>
                   {provider.label}
                 </text>
@@ -93,25 +141,61 @@ export function AgentNetworkDiagram({ agents, onSelectAgent }: AgentNetworkDiagr
             ))}
 
             {/* Hub. */}
-            <circle cx={CX} cy={CY} r={130} fill="url(#agensis-hub-glow)" />
+            <circle cx={CX} cy={CY} r={150} fill="url(#hub-glow)" />
+            {!REDUCED && (
+              <circle cx={CX} cy={CY} r={72} fill="none" stroke="var(--primary)" strokeOpacity={0.25}
+                strokeWidth={1.5} strokeDasharray="3 7">
+                <animateTransform attributeName="transform" type="rotate" from={`0 ${CX} ${CY}`}
+                  to={`360 ${CX} ${CY}`} dur="24s" repeatCount="indefinite" />
+              </circle>
+            )}
             <circle cx={CX} cy={CY} r={58} fill="var(--card)" stroke="var(--primary)" strokeWidth={2.5} />
-            <text x={CX} y={CY - 2} textAnchor="middle" className="fill-foreground" fontSize={22} fontWeight={700}>agensis</text>
-            <text x={CX} y={CY + 20} textAnchor="middle" className="fill-muted-foreground" fontSize={12}>{enabled.length} agent{enabled.length === 1 ? '' : 's'}</text>
+            <text x={CX} y={CY - 4} textAnchor="middle" className="fill-foreground" fontSize={22} fontWeight={700}>agensis</text>
+            <text x={CX} y={CY + 16} textAnchor="middle" className="fill-muted-foreground" fontSize={11}>
+              {enabled.length} agent{enabled.length === 1 ? '' : 's'}
+            </text>
+            {model.busyCount > 0 && (
+              <text x={CX} y={CY + 32} textAnchor="middle" fontSize={10} fontWeight={600} fill={STATUS_META.busy.color}>
+                {model.busyCount} working
+              </text>
+            )}
 
             {/* Agent nodes (inner ring). */}
             {model.agentNodes.map(node => {
               const accent = agentAccentColor(node.agent);
+              const meta = STATUS_META[node.status];
+              const focused = hover === node.agent.id;
+              const faded = hover && !focused;
               return (
                 <g
                   key={node.agent.id}
                   transform={`translate(${node.x}, ${node.y})`}
                   className={onSelectAgent ? 'cursor-pointer' : ''}
+                  style={{ opacity: (faded ? 0.4 : 1) * (node.status === 'inactive' ? 0.55 : 1), transition: 'opacity .2s' }}
                   onClick={() => onSelectAgent?.(node.agent.id)}
+                  onMouseEnter={() => setHover(node.agent.id)}
+                  onMouseLeave={() => setHover(null)}
                 >
-                  <circle r={34} fill="var(--card)" stroke={accent} strokeWidth={2.5} />
+                  <circle r={54} fill={`url(#node-glow-${node.status})`} />
+                  {/* Breathing pulse ring for busy agents. */}
+                  {meta.flow && !REDUCED && (
+                    <circle r={34} fill="none" stroke={meta.color} strokeWidth={2}>
+                      <animate attributeName="r" values="34;46;34" dur="1.8s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" values="0.7;0;0.7" dur="1.8s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                  <circle r={focused ? 37 : 34} fill="var(--card)" stroke={accent} strokeWidth={focused ? 3 : 2.5}
+                    style={{ transition: 'stroke-width .15s' }} />
                   <text textAnchor="middle" y={5} fontSize={15} fontWeight={700} fill={accent}>
                     {initials(node.agent.name)}
                   </text>
+                  {/* Status pip. */}
+                  <circle cx={24} cy={-24} r={7} fill="var(--card)" />
+                  <circle cx={24} cy={-24} r={4.5} fill={meta.color}>
+                    {meta.flow && !REDUCED && (
+                      <animate attributeName="opacity" values="1;0.3;1" dur="1s" repeatCount="indefinite" />
+                    )}
+                  </circle>
                   <text textAnchor="middle" y={52} className="fill-foreground" fontSize={13} fontWeight={600}>
                     {node.agent.name.length > 16 ? `${node.agent.name.slice(0, 15)}…` : node.agent.name}
                   </text>
@@ -132,11 +216,12 @@ export function AgentNetworkDiagram({ agents, onSelectAgent }: AgentNetworkDiagr
         )}
       </div>
 
+      {/* Legend now reflects live STATUS, matching the top status bar. */}
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-4 border-t border-border px-3 py-2 text-xs">
-        {(Object.keys(KIND_META) as ConnKind[]).map(kind => (
-          <span key={kind} className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <span className="size-2.5 rounded-full" style={{ backgroundColor: KIND_META[kind].color }} />
-            {KIND_META[kind].label}
+        {(Object.keys(STATUS_META) as NodeStatus[]).map(s => (
+          <span key={s} className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <span className="size-2.5 rounded-full" style={{ backgroundColor: STATUS_META[s].color }} />
+            {STATUS_META[s].label}
           </span>
         ))}
       </div>

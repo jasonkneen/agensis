@@ -720,7 +720,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </Empty>
             ) : layoutView === 'network' ? (
               <div className="min-h-0 flex-1 overflow-hidden">
-                <AgentNetworkDiagram agents={visibleAgents} onSelectAgent={setSelectedAgentId} />
+                <AgentNetworkDiagram agents={visibleAgents} connections={connections} onSelectAgent={setSelectedAgentId} />
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
