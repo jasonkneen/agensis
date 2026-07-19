@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
@@ -2905,6 +2905,7 @@ function WorkspacePresenceAvatars({
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
+  const [alignLeft, setAlignLeft] = useState(false);
   const hoverCloseTimer = useRef<number | null>(null);
   const openOnHover = () => {
     if (hoverCloseTimer.current) {
@@ -2932,6 +2933,22 @@ function WorkspacePresenceAvatars({
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [expanded]);
 
+  // Flip the popover to open rightward when the trigger sits too close to the
+  // left edge for a right-anchored w-96 (384px) panel to fit. Measured before
+  // paint and on resize so it never flashes clipped.
+  useLayoutEffect(() => {
+    if (!expanded) return;
+    const measure = () => {
+      const rect = panelRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      // Right-anchored panel would extend from rect.right leftward by 384px.
+      setAlignLeft(rect.right - 384 < 8);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [expanded]);
+
   if (users.length === 0) return null;
 
   const visibleUsers = users.slice(0, 5);
@@ -2954,7 +2971,7 @@ function WorkspacePresenceAvatars({
       onMouseLeave={closeOnHover}
     >
       {expanded && (
-        <div className="absolute right-0 bottom-full z-10 mb-2 w-96 overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl">
+        <div className={cn('absolute bottom-full z-10 mb-2 w-96 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl', alignLeft ? 'left-0' : 'right-0')}>
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>
