@@ -97,6 +97,52 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `NETLIFY_WEBHOOK_JWS_SECRET` | — | ✓ | Verifies Netlify deploy webhooks that trigger the update banner |
 | `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-4-8`) |
 
+
+## The agent daemon package (third deployable surface)
+
+Besides Netlify (frontend) and Fly (server), there's a **third artifact**: the
+daemon users run on their own hosts to connect a coding CLI as an agent.
+
+- **Source of truth**: `agent/agensis-cli/src/*.mjs` (readable). `bin/agensis.mjs`
+  there imports from `src/`.
+- **Published package**: `@agensis/agensis-agent` — a single minified bundle at
+  `agent/agensis-agent/bin/agensis.mjs`, built from the CLI source by
+  `agent/agensis-agent/build.mjs` (esbuild). Run `npm run build` in
+  `agent/agensis-agent` after editing the CLI source; the `prepack` script also
+  runs it on `npm pack`/`publish`. The build stamps `pkg.version` over the
+  `AGENSIS_CLI_VERSION` token, so bump **all** of: both `package.json`s, the CLI
+  lockfile, the root lockfile's `agent/agensis-cli` entry, the
+  `AGENSIS_CLI_VERSION` constant, and `build.mjs`'s `SOURCE_VERSION`.
+
+### Sandbox / container hosts (zero-setup skip-permissions)
+
+Claude Code refuses `--dangerously-skip-permissions` as root/sudo unless
+`IS_SANDBOX=1`. Agents on containerized remote hosts run as root, so
+`buildAgentCommand` + `isTrustedSandboxHost()` (in `agent/agensis-cli/src/agensis.mjs`)
+auto-detect a container (`/.dockerenv`, `/run/.containerenv`, `/proc/1/cgroup`
+markers, or explicit `AGENSIS_SANDBOX_HOST=1`) and keep the flag; `runCli`
+(`cli.mjs`) then sets `IS_SANDBOX=1` on the Claude child **only when root + the
+flag is present**. Bare-metal root drops the flag instead of hard-failing.
+Opt out of container auto-detect with `AGENSIS_NO_SANDBOX_AUTODETECT=1`.
+`run_mode: 'sandbox'` (e2b) always keeps the flag and sets `IS_SANDBOX=1` in the
+VM exec.
+
+### Releasing the daemon
+
+The repo is **private**, so neither delivery path is zero-auth:
+
+- **npm (preferred)**: add a repo secret `NPM_TOKEN` (npm automation token,
+  publish rights to `@agensis`), then push a matching tag — `git tag
+  agent-v0.1.23 && git push origin agent-v0.1.23` — and
+  `.github/workflows/publish-agent.yml` builds + version-guards + publishes.
+  Hosts then `npm i -g @agensis/agensis-agent@latest`. **Without `NPM_TOKEN` the
+  publish job fails** (the rest of the tag/release still succeeds).
+- **GitHub Release tarball**: the same tag has a Release with the `.tgz`
+  attached, but a **private-repo asset URL needs auth** — install with
+  `gh release download agent-v0.1.23 --repo jasonkneen/open-hatch --dir /tmp &&
+  npm i -g /tmp/agensis-agensis-agent-0.1.23.tgz` (host needs `gh` auth or
+  `GH_TOKEN`), or `scp` the tarball from a checkout. Restart the daemon after.
+
 ## Conventions
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
