@@ -1698,6 +1698,7 @@ function AppContent() {
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
             onOpenMemory={handleOpenMemory}
+            onOpenSkills={handleOpenSkills}
             onOpenTasks={handleOpenTasks}
             onOpenActivity={handleOpenActivity}
             onOpenAgents={handleOpenAgents}
@@ -2512,6 +2513,35 @@ function CanvasLayerScene({
                 onAdd={onAddFact}
                 onUpdate={onUpdateFact}
                 onDelete={onDeleteFact}
+              />
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'skills') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Sparkles size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <SkillsWindowContent
+                agents={agents}
+                systemCapabilities={systemCapabilities}
               />
             </FloatingWindowShell>
           );

@@ -18,6 +18,7 @@ import {
  LayoutTemplate,
  LogOut,
  MessageSquare,
+ Sparkles,
  MoreHorizontal,
  Split,
  Trash2,
@@ -206,6 +207,7 @@ interface SidebarProps {
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
  onOpenMemory: () => void;
+ onOpenSkills?: () => void;
  onOpenTasks?: () => void;
  onOpenActivity?: () => void;
  onOpenAgents?: () => void;
@@ -256,6 +258,7 @@ export const Sidebar = React.memo(function Sidebar({
  onSessionSplit,
  onSessionMerge,
  onOpenMemory,
+ onOpenSkills,
  onOpenTasks,
  onOpenActivity,
  onOpenAgents,
@@ -453,6 +456,7 @@ export const Sidebar = React.memo(function Sidebar({
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
     {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
     <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+    {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
@@ -746,6 +750,7 @@ export const Sidebar = React.memo(function Sidebar({
       </SidebarSection>
       {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
       <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+      {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
