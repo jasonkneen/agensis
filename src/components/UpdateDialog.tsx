@@ -26,6 +26,20 @@ export interface UpdateDialogProps {
   onReload: () => void;
 }
 
+// The per-note footer shows `version · date`, but authors sometimes set the
+// version to a date-restatement (e.g. "2026.07.04" alongside date "2026-07-04"),
+// which renders as the same day twice. The real build identity already lives in
+// the header stamp (APP_VERSION · BUILD_ID), so here we drop a date-like version
+// and keep only genuinely named labels (e.g. "mermaid", "slash-commands").
+function versionLabel(note: ReleaseNote): string {
+  const v = note.version.trim();
+  const normalized = v.replace(/[.]/g, '-');
+  const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(normalized);
+  // Only collapse when the version is a restatement of THIS note's date; a
+  // date-like version that differs stays visible so stale data isn't masked.
+  return isDateLike && normalized === note.date ? note.date : `${v} · ${note.date}`;
+}
+
 export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: UpdateDialogProps) {
   const available = mode === 'available';
 
@@ -76,7 +90,7 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
                       </ul>
                     )}
                     <span className="text-xs text-muted-foreground/70">
-                      {note.version} · {note.date}
+                      {versionLabel(note)}
                     </span>
                   </>
                 );
