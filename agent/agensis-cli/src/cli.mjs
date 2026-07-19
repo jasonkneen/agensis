@@ -109,7 +109,16 @@ export function runCli(opts) {
    // needs this; a normal non-root local yolo run must NOT be marked sandboxed.
    const wantsSkip = args.some((a) => a === "--dangerously-skip-permissions");
    const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
-   const childEnv = wantsSkip && isRoot ? { ...process.env, IS_SANDBOX: "1" } : process.env;
+   // Claude Code disables its claude.ai MCP connectors when ANTHROPIC_API_KEY (or
+   // ANTHROPIC_AUTH_TOKEN) is present — it treats the key as a competing auth
+   // source and refuses to load org connectors. A daemon host almost always has
+   // one of these exported for other tools, which silently breaks every coding
+   // job with a connector-load error. Scrub them from THIS child's env only so
+   // the spawned `claude` uses its own login; the daemon's own env is untouched.
+   const childEnv = { ...process.env };
+   delete childEnv.ANTHROPIC_API_KEY;
+   delete childEnv.ANTHROPIC_AUTH_TOKEN;
+   if (wantsSkip && isRoot) childEnv.IS_SANDBOX = "1";
    child = spawn(cmd, args, { cwd, detached: true, env: childEnv });
   } catch (error) {
    resolve({ status: null, stdout: "", stderr: "", error });
