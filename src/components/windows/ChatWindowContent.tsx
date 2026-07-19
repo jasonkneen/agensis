@@ -1837,13 +1837,15 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
 
       <Dialog open={catchUpOpen} onOpenChange={setCatchUpOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[min(92vw,44rem)] sm:max-w-[44rem]">
           <DialogHeader>
             <DialogTitle>Catch up on #{channelTitle || 'general'}</DialogTitle>
             <DialogDescription>Channel summary based on visible posts.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <p className="text-sm leading-relaxed text-foreground">{catchUpSummary}</p>
+            <div className="max-h-[62vh] overflow-y-auto text-sm leading-relaxed text-foreground">
+              <MarkdownContent content={catchUpSummary} />
+            </div>
             <div className="text-xs text-muted-foreground">May miss nuance. Refresh after new activity.</div>
           </div>
         </DialogContent>
