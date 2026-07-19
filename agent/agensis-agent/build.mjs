@@ -22,7 +22,7 @@ const outfile = join(here, 'bin', 'agensis.mjs');
 
 // The version literal baked into the dev source. We replace exactly this token
 // with the published version (verified to be unique in the source).
-const SOURCE_VERSION = '0.1.24';
+const SOURCE_VERSION = '0.1.25';
 
 const result = await build({
   entryPoints: [entry],

@@ -28,7 +28,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 8;
 const DEFAULT_MODEL = "claude-opus-4-8";
-export const AGENSIS_CLI_VERSION = "0.1.24";
+export const AGENSIS_CLI_VERSION = "0.1.25";
 
 export async function runAgensisDaemon(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
