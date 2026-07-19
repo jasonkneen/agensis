@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
@@ -2949,8 +2950,15 @@ function WorkspacePresenceAvatars({
 }) {
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // The trigger pill (measured anchor) and the portaled popover panel. The
+  // popover is portaled to document.body because the sidebar clips its own
+  // content (overflow-hidden for the rounded corners), so a w-96 panel wider
+  // than the sidebar would otherwise get cut off at the edge — same reason the
+  // agent status feed portals out (see AgentStatusFeedOverlay in Sidebar.tsx).
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
+  const [portalPos, setPortalPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
-  const [alignLeft, setAlignLeft] = useState(false);
   const hoverCloseTimer = useRef<number | null>(null);
   const openOnHover = () => {
     if (hoverCloseTimer.current) {
@@ -2970,7 +2978,12 @@ function WorkspacePresenceAvatars({
   useEffect(() => {
     if (!expanded) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      // The popover is portaled out of panelRef, so check both the trigger
+      // wrapper and the portaled panel before treating a click as "outside".
+      const insideTrigger = panelRef.current?.contains(target);
+      const insidePopover = portalRef.current?.contains(target);
+      if (!insideTrigger && !insidePopover) {
         setExpanded(false);
       }
     };
@@ -2978,20 +2991,37 @@ function WorkspacePresenceAvatars({
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [expanded]);
 
-  // Flip the popover to open rightward when the trigger sits too close to the
-  // left edge for a right-anchored w-96 (384px) panel to fit. Measured before
-  // paint and on resize so it never flashes clipped.
+  // Position the portaled popover off the trigger pill's measured rect. The
+  // panel is fixed-positioned over document.body (it can't render inline — the
+  // sidebar clips it), anchored so its bottom sits just above the pill and it
+  // opens rightward over the canvas, where there's room. Measured before paint
+  // and on resize/scroll so it tracks the pill and never flashes clipped.
   useLayoutEffect(() => {
-    if (!expanded) return;
+    if (!expanded) {
+      setPortalPos(null);
+      return;
+    }
     const measure = () => {
-      const rect = panelRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      // Right-anchored panel would extend from rect.right leftward by 384px.
-      setAlignLeft(rect.right - 384 < 8);
+      const el = triggerRef.current;
+      if (!el) return;
+      const box = el.getBoundingClientRect();
+      const left = box.left;
+      // w-96 (384px), clamped so it never runs off the right of the viewport.
+      const width = Math.min(384, window.innerWidth - left - 16);
+      // Grow upward from just above the pill (8px gap, matching the old mb-2).
+      const bottom = window.innerHeight - box.top + 8;
+      setPortalPos({ left, bottom, width });
     };
     measure();
+    const observer = new ResizeObserver(measure);
+    if (triggerRef.current) observer.observe(triggerRef.current);
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
   }, [expanded]);
 
   if (users.length === 0) return null;
@@ -3015,8 +3045,15 @@ function WorkspacePresenceAvatars({
       onMouseEnter={openOnHover}
       onMouseLeave={closeOnHover}
     >
-      {expanded && (
-        <div className={cn('absolute bottom-full z-10 mb-2 w-96 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl', alignLeft ? 'left-0' : 'right-0')}>
+      {expanded && portalPos && createPortal(
+        <div
+          ref={portalRef}
+          data-presence-popover
+          className="fixed z-[9600] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl"
+          style={{ left: portalPos.left, bottom: portalPos.bottom, width: portalPos.width }}
+          onMouseEnter={openOnHover}
+          onMouseLeave={closeOnHover}
+        >
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>
@@ -3169,9 +3206,10 @@ function WorkspacePresenceAvatars({
               );
             })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
-      <div className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
+      <div ref={triggerRef} className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
         <button
           type="button"
           onClick={() => setExpanded(prev => !prev)}
