@@ -177,9 +177,9 @@ export interface CanvasGroup {
 
 export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow' | 'text' | 'eraser' | 'sticky_note';
 
-export type ActiveView = 'chat' | 'document' | 'memory' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
+export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';

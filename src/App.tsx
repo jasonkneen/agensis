@@ -10,6 +10,7 @@ import { pickActiveWindowId } from './lib/mobileWindows';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
+import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
 import CommandPalette from './components/search/CommandPalette';
@@ -135,6 +136,7 @@ const DESKTOP_TITLEBAR_INSET = IS_DESKTOP_SHELL ? 52 : 0;
 function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'chat') return <MessageSquare className="size-4" />;
   if (type === 'memory') return <Brain className="size-4" />;
+  if (type === 'skills') return <Sparkles className="size-4" />;
   if (type === 'tasks') return <CheckCircle2 className="size-4" />;
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
@@ -1022,6 +1024,16 @@ function AppContent() {
     openWindow('memory', { title: 'Memory', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenSkills = useCallback(() => {
+    const existing = windows.find(w => w.type === 'skills');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('skills', { title: 'Skills', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
   const handleOpenTasks = useCallback((taskId?: string) => {
     const existing = windows.find(w => w.type === 'tasks');
     if (existing) {
@@ -1419,6 +1431,7 @@ function AppContent() {
       return;
     }
     if (win.type === 'memory') handleOpenMemory();
+    else if (win.type === 'skills') handleOpenSkills();
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
