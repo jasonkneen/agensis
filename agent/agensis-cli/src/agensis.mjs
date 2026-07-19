@@ -965,15 +965,21 @@ function buildAgentCommand(config, job) {
       //    about sandboxing and defeat a genuine safety guard.
       const isSandboxJob = job && job.agent && job.agent.run_mode === "sandbox";
       const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+      // A containerized/sandboxed daemon host (the common remote-host deployment)
+      // is a safe place for the skip, so keep the flag there automatically and let
+      // the spawn set IS_SANDBOX=1 (see runCli) — no per-host env setup needed.
+      // AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 remains an explicit override for
+      // hosts our heuristics miss.
+      const trustedSandbox = isSandboxJob || isTrustedSandboxHost();
       const forceSkip = process.env.AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS === "1";
-      if (isSandboxJob || !isRoot || forceSkip) {
+      if (trustedSandbox || !isRoot || forceSkip) {
         nextArgs.push("--dangerously-skip-permissions");
       } else {
-        // The command runs without the skip, so don't advertise the yolo flags
-        // in heartbeat/job metadata — the UI would otherwise claim a permission
-        // level the process isn't actually using.
+        // Bare-metal root with no sandbox signal: Claude rejects the flag, so drop
+        // it (the job runs in normal permission mode instead of hard-failing) and
+        // don't advertise yolo flags the process isn't actually using.
         permissionFlags = [];
-        log("running as root: dropping --dangerously-skip-permissions (Claude rejects it as root). Use run_mode 'sandbox', or set AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 only if this really is a sandboxed host.");
+        log("running as root with no sandbox detected: dropping --dangerously-skip-permissions (Claude rejects it as root). Set AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS=1 if this host really is sandboxed.");
       }
     }
 
@@ -1107,6 +1113,42 @@ function normalizePermissionMode(value) {
 
 function permissionFlagsForMode(permissionMode) {
   return normalizePermissionMode(permissionMode) === "yolo" ? ["--no-sandbox", "--yolo"] : [];
+}
+
+// True when the daemon is running inside a container/sandbox where letting the
+// coding CLI skip permission prompts is safe (the common remote-host deploy).
+// Detected once (the environment can't change mid-process) from, in order:
+//  - explicit opt-in envs (operator asserts a sandbox),
+//  - IS_SANDBOX already set (e.g. the parent orchestrator declared it),
+//  - Docker/Podman markers (/.dockerenv, /run/.containerenv),
+//  - a container hint in /proc/1/cgroup (docker/kubepods/containerd/lxc).
+// Deliberately conservative: a bare-metal root host matches none of these, so it
+// still drops the skip flag rather than falsely claiming to be sandboxed.
+let _trustedSandboxHost;
+function isTrustedSandboxHost() {
+  if (_trustedSandboxHost !== undefined) return _trustedSandboxHost;
+  const env = process.env;
+  if (env.AGENSIS_ALLOW_ROOT_SKIP_PERMISSIONS === "1" || env.AGENSIS_SANDBOX_HOST === "1" || env.IS_SANDBOX === "1") {
+    return (_trustedSandboxHost = true);
+  }
+  // Explicit opt-ins above always win. Generic container auto-detection below can
+  // be disabled for security-sensitive hosts (e.g. a root Docker daemon with host
+  // mounts) that shouldn't be treated as a safe sandbox.
+  if (env.AGENSIS_NO_SANDBOX_AUTODETECT === "1") {
+    return (_trustedSandboxHost = false);
+  }
+  try {
+    if (fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv")) {
+      return (_trustedSandboxHost = true);
+    }
+  } catch { /* fall through */ }
+  try {
+    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
+    if (/docker|kubepods|containerd|lxc|podman/i.test(cgroup)) {
+      return (_trustedSandboxHost = true);
+    }
+  } catch { /* not linux / no procfs */ }
+  return (_trustedSandboxHost = false);
 }
 
 // Build the heartbeat metadata sent to the server, folding in the agent's self-declared
