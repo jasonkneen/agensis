@@ -2528,7 +2528,7 @@ function ChannelSidePanel({
         ) : fileCount > 0 ? (
           <div className="file-tree">
             {uploadedFiles.length > 0 && (
-              <FileTreeSection title="Uploaded" count={uploadedFiles.length}>
+              <FileTreeSection title="Uploaded" count={uploadedFiles.length} defaultOpen={false}>
                 {uploadedFiles.map(file => (
                   <UploadedFileRow
                     key={file.id}
