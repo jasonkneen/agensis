@@ -181,22 +181,28 @@ test('channel-scoped Flows connections discover only granted tools and cannot cr
   assert.equal(names.includes('read_doc'), false);
   assert.equal(names.includes('register_agent'), false);
 
-  const denied = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
-    name: 'read_channel', arguments: { channel_id: 'ch-x' },
-  }) });
+  const denied = await call(handler, {
+    token: 'flow-token', body: rpc('tools/call', {
+      name: 'read_channel', arguments: { channel_id: 'ch-x' },
+    })
+  });
   assert.equal(denied.body.result.isError, true);
   assert.match(denied.body.result.content[0].text, /limited to a different channel/i);
 
-  const posted = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
-    name: 'post_message', arguments: { channel_id: 'ch-1', content: 'workflow reply' },
-  }) });
+  const posted = await call(handler, {
+    token: 'flow-token', body: rpc('tools/call', {
+      name: 'post_message', arguments: { channel_id: 'ch-1', content: 'workflow reply' },
+    })
+  });
   assert.equal(JSON.parse(posted.body.result.content[0].text).posted, true);
   assert.equal(db.inserted[0].sender_kind, 'integration');
   assert.equal(db.inserted[0].sender_name, 'Flows');
 
-  const deniedThreadUpdate = await call(handler, { token: 'flow-token', body: rpc('tools/call', {
-    name: 'update_thread_item', arguments: { item_id: 'item-other', status: 'done' },
-  }) });
+  const deniedThreadUpdate = await call(handler, {
+    token: 'flow-token', body: rpc('tools/call', {
+      name: 'update_thread_item', arguments: { item_id: 'item-other', status: 'done' },
+    })
+  });
   assert.equal(deniedThreadUpdate.body.result.isError, true);
   assert.match(deniedThreadUpdate.body.result.content[0].text, /limited to a different channel/i);
 });
@@ -205,9 +211,11 @@ test('post_message inserts + notifies but does NOT trigger continueConversation'
   const db = makeDb();
   const { deps, continueCalls, notifyCalls } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { body: rpc('tools/call', {
-    name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hello team' },
-  }) });
+  const res = await call(handler, {
+    body: rpc('tools/call', {
+      name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hello team' },
+    })
+  });
   const payload = JSON.parse(res.body.result.content[0].text);
   assert.equal(payload.posted, true);
   assert.equal(payload.message.content, 'hello team');
@@ -220,9 +228,11 @@ test('dispatch_agent inserts AND fires continueConversation (the trigger path)',
   const db = makeDb();
   const { deps, continueCalls } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { body: rpc('tools/call', {
-    name: 'dispatch_agent', arguments: { channel_id: 'ch-1', content: '@scout find the bug' },
-  }) });
+  const res = await call(handler, {
+    body: rpc('tools/call', {
+      name: 'dispatch_agent', arguments: { channel_id: 'ch-1', content: '@scout find the bug' },
+    })
+  });
   const payload = JSON.parse(res.body.result.content[0].text);
   assert.equal(payload.dispatched, true);
   assert.equal(db.inserted.length, 1);
@@ -237,9 +247,11 @@ test('cross-workspace access is blocked (channel scoping)', async () => {
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
   // ch-x lives in OTHER_WS; the agent is scoped to WS, so the lookup misses.
-  const res = await call(handler, { body: rpc('tools/call', {
-    name: 'read_channel', arguments: { channel_id: 'ch-x' },
-  }) });
+  const res = await call(handler, {
+    body: rpc('tools/call', {
+      name: 'read_channel', arguments: { channel_id: 'ch-x' },
+    })
+  });
   assert.equal(res.body.result.isError, true);
   assert.match(res.body.result.content[0].text, /not found in this workspace/i);
 });
@@ -273,11 +285,13 @@ test('batch requests are processed and notifications dropped from the array', as
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { body: [
-    rpc('initialize', {}, 1),
-    { jsonrpc: '2.0', method: 'notifications/initialized' },
-    rpc('tools/list', {}, 2),
-  ] });
+  const res = await call(handler, {
+    body: [
+      rpc('initialize', {}, 1),
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      rpc('tools/list', {}, 2),
+    ]
+  });
   assert.ok(Array.isArray(res.body));
   assert.equal(res.body.length, 2);
   assert.deepEqual(res.body.map((r) => r.id).sort(), [1, 2]);
@@ -338,13 +352,44 @@ test('an invite client gets a clear error for an unknown agent handle', async ()
   assert.match(res.body.result.content[0].text, /No agent "@ghost"/i);
 });
 
-test('an invite client cannot post_message (agent-only)', async () => {
+test('post_message: non-agent client needs `as`; role-gated; posts as the resolved agent', async () => {
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'invite-token', body: rpc('tools/call', { name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hi' } }) });
-  assert.equal(res.body.result.isError, true);
-  assert.match(res.body.result.content[0].text, /not available for a invite token/i);
+  // (a) Without `as`, a workspace/invite client is told which handle to speak as.
+  const noAs = await call(handler, { token: 'invite-token', body: rpc('tools/call', { name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hi' } }) });
+  assert.equal(noAs.body.result.isError, true);
+  assert.match(noAs.body.result.content[0].text, /Pass `as/i);
+  // (b) A read-only (viewer) invite is denied by the run_agents capability, even with `as`.
+  const viewer = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', { name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hi', as: 'coder' } }) });
+  assert.equal(viewer.body.result.isError, true);
+  assert.match(viewer.body.result.content[0].text, /read-only|cannot act as an agent/i);
+  // (c) An editor invite with an approved handle posts, attributed to that agent.
+  const posted = await call(handler, { token: 'invite-token', body: rpc('tools/call', { name: 'post_message', arguments: { channel_id: 'ch-1', content: 'hello team', as: 'coder' } }) });
+  assert.equal(posted.body.result.isError, undefined);
+  const row = db.inserted[db.inserted.length - 1];
+  assert.equal(row.sender_kind, 'agent');
+  assert.equal(row.sender_id, 'agent-1');
+  assert.equal(row.sender_name, 'Coder');
+});
+
+test('workspace token sees post_message/dispatch_agent in tools/list and dispatch advances the convo', async () => {
+  const db = makeDb();
+  const { deps, continueCalls } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  // The original bug: a workspace-token client could not even see these tools.
+  const list = await call(handler, { token: 'ws-token', body: rpc('tools/list', {}) });
+  const names = list.body.result.tools.map((t) => t.name);
+  assert.ok(names.includes('post_message'), 'workspace token must see post_message');
+  assert.ok(names.includes('dispatch_agent'), 'workspace token must see dispatch_agent');
+  // dispatch_agent as a workspace client, speaking as coder, advances the conversation.
+  const res = await call(handler, { token: 'ws-token', body: rpc('tools/call', { name: 'dispatch_agent', arguments: { channel_id: 'ch-1', content: '@scout ping', as: 'coder' } }) });
+  assert.equal(res.body.result.isError, undefined);
+  const row = db.inserted[db.inserted.length - 1];
+  assert.equal(row.sender_id, 'agent-1');
+  assert.equal(row.sender_name, 'Coder');
+  assert.equal(continueCalls.length, 1);
+  assert.equal(continueCalls[0].sessionId, 'ch-1');
 });
 
 test('submit_job_result forwards agentId + response; fail_job forwards errorText', async () => {
@@ -437,9 +482,11 @@ test('a viewer invite cannot write_doc (create path) — rejected before any DB 
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', {
-    name: 'write_doc', arguments: { title: 'Sneaky doc', content: 'hi' },
-  }) });
+  const res = await call(handler, {
+    token: 'viewer-invite-token', body: rpc('tools/call', {
+      name: 'write_doc', arguments: { title: 'Sneaky doc', content: 'hi' },
+    })
+  });
   assert.equal(res.body.result.isError, true);
   assert.match(res.body.result.content[0].text, /read-only/i);
   assert.ok(!db.calls.some((c) => c.n.startsWith('insert into documents')), 'must not reach the insert');
@@ -449,9 +496,11 @@ test('a commenter invite cannot create_task — rejected before any DB write', a
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'commenter-invite-token', body: rpc('tools/call', {
-    name: 'create_task', arguments: { title: 'Sneaky task' },
-  }) });
+  const res = await call(handler, {
+    token: 'commenter-invite-token', body: rpc('tools/call', {
+      name: 'create_task', arguments: { title: 'Sneaky task' },
+    })
+  });
   assert.equal(res.body.result.isError, true);
   assert.match(res.body.result.content[0].text, /read-only/i);
   assert.ok(!db.calls.some((c) => c.n.startsWith('insert into tasks')), 'must not reach the insert');
@@ -461,9 +510,11 @@ test('an editor invite CAN write_doc — no regression for the intended-write ca
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'editor-invite-token', body: rpc('tools/call', {
-    name: 'write_doc', arguments: { title: 'Real doc', content: 'hi' },
-  }) });
+  const res = await call(handler, {
+    token: 'editor-invite-token', body: rpc('tools/call', {
+      name: 'write_doc', arguments: { title: 'Real doc', content: 'hi' },
+    })
+  });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
   assert.ok(db.calls.some((c) => c.n.startsWith('insert into documents')), 'must reach the insert');
 });
@@ -472,9 +523,11 @@ test('an admin invite CAN add_memory — no regression for the intended-write ca
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'admin-invite-token', body: rpc('tools/call', {
-    name: 'add_memory', arguments: { fact: 'the sky is blue' },
-  }) });
+  const res = await call(handler, {
+    token: 'admin-invite-token', body: rpc('tools/call', {
+      name: 'add_memory', arguments: { fact: 'the sky is blue' },
+    })
+  });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
   assert.ok(db.calls.some((c) => c.n.startsWith('insert into memory_facts')), 'must reach the insert');
 });
@@ -483,8 +536,10 @@ test('a viewer invite CAN still read via a read-only tool (fix did not over-broa
   const db = makeDb();
   const { deps } = makeDeps({ db });
   const handler = createMcpHandler(deps);
-  const res = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', {
-    name: 'list_docs', arguments: {},
-  }) });
+  const res = await call(handler, {
+    token: 'viewer-invite-token', body: rpc('tools/call', {
+      name: 'list_docs', arguments: {},
+    })
+  });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
 });
