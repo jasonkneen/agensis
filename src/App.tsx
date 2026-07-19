@@ -2010,7 +2010,13 @@ function AppContent() {
           </main>
         </div>
 
-        {showTour && <OnboardingTour onComplete={handleTourComplete} />}
+        {showTour && (
+          <OnboardingTour
+            onComplete={handleTourComplete}
+            onCreateAgent={handleOpenAgents}
+            onInvite={handleOpenUsers}
+          />
+        )}
 
         <CommandPalette
           open={commandPaletteOpen}
