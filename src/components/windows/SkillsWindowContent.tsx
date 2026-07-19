@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Sparkles, Search, Bot } from 'lucide-react';
-import type { WorkspaceAgent } from '../../types';
+import type { WorkspaceAgent, AgentConnection } from '../../types';
 import type { SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,7 @@ import {
 
 interface SkillsWindowContentProps {
   agents: WorkspaceAgent[];
+  agentConnections: AgentConnection[];
   systemCapabilities: SystemCapabilities | null;
 }
 
@@ -23,19 +24,30 @@ function normalizeSkills(value: unknown): string[] {
   return value.map(v => String(v).trim()).filter(Boolean);
 }
 
-// Consolidated skills view: every skill any agent advertises, grouped by skill
-// name with the agents that use it, plus the daemon-enumerated skill libraries
-// each connected machine exposes. Read-only — this is a browse/reference surface,
-// distinct from the composer `/` menu (which inserts) and per-agent profiles.
-export function SkillsWindowContent({ agents, systemCapabilities }: SkillsWindowContentProps) {
+// Consolidated skills view: every skill any agent exposes, grouped by skill name
+// with the agents that have it. Skills come from the live daemon connection
+// (`capabilities.skills`, auto-refreshed via realtime + poll) with the agent's
+// manually-configured `skills` as a fallback. Read-only browse surface, distinct
+// from the composer `/` menu (which inserts) and per-agent profiles.
+export function SkillsWindowContent({ agents, agentConnections, systemCapabilities }: SkillsWindowContentProps) {
   const [query, setQuery] = useState('');
 
-  // Skill name -> the agents that advertise it.
+  // Skill name -> the agents that expose it. Prefer the live connection
+  // capabilities (the daemon-synced set); fall back to the agent's own skills.
   const agentSkills = useMemo(() => {
+    const connByAgent = new Map<string, AgentConnection>();
+    for (const conn of agentConnections) {
+      const key = String(conn.agent_id || conn.handle || '').toLowerCase();
+      if (key) connByAgent.set(key, conn);
+    }
     const bySkill = new Map<string, WorkspaceAgent[]>();
     for (const agent of agents) {
       if (agent.enabled === false) continue;
-      for (const skill of normalizeSkills(agent.skills)) {
+      const conn = connByAgent.get(String(agent.id).toLowerCase())
+        || connByAgent.get(String(agent.handle || '').toLowerCase());
+      const synced = normalizeSkills(conn?.capabilities?.skills);
+      const skills = synced.length ? synced : normalizeSkills(agent.skills);
+      for (const skill of skills) {
         const list = bySkill.get(skill) || [];
         list.push(agent);
         bySkill.set(skill, list);
@@ -44,7 +56,7 @@ export function SkillsWindowContent({ agents, systemCapabilities }: SkillsWindow
     return [...bySkill.entries()]
       .map(([name, list]) => ({ name, agents: list }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [agents]);
+  }, [agents, agentConnections]);
 
   // Daemon-enumerated skill/agent libraries (from each connected machine).
   const libraries = useMemo(() => {

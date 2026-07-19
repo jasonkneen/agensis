@@ -2541,6 +2541,7 @@ function CanvasLayerScene({
             >
               <SkillsWindowContent
                 agents={agents}
+                agentConnections={agentConnections}
                 systemCapabilities={systemCapabilities}
               />
             </FloatingWindowShell>

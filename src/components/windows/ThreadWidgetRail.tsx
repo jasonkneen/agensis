@@ -205,7 +205,7 @@ export function ThreadWidgetRail({
             </div>
           )}
 
-          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:116px]">
+          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:clamp(116px,26vh,180px)]">
             {widgets.map((w, index) => (
               <WidgetCard
                 key={w.kind}
