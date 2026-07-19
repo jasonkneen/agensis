@@ -38,7 +38,7 @@ export default function AgentNetworkDiagram3D({ model, enabledCount, onSelectAge
   }
 
   return (
-    <Canvas camera={{ position: [0, 7.5, 10], fov: 45 }} className="size-full">
+    <Canvas camera={{ position: [0, 10, 15], fov: 40 }} className="size-full">
       <color attach="background" args={['#0a0a0b']} />
       <ambientLight intensity={0.6} />
       <pointLight position={[0, 8, 4]} intensity={80} />
@@ -129,9 +129,11 @@ export default function AgentNetworkDiagram3D({ model, enabledCount, onSelectAge
         enablePan={false}
         autoRotate={!prefersReduced}
         autoRotateSpeed={0.8}
-        minDistance={6}
-        maxDistance={20}
-        maxPolarAngle={Math.PI / 1.8}
+        target={[0, 0.4, 0]}
+        minDistance={8}
+        maxDistance={22}
+        minPolarAngle={Math.PI / 6}
+        maxPolarAngle={Math.PI / 2.1}
       />
     </Canvas>
   );
