@@ -55,6 +55,22 @@ CREATE TABLE IF NOT EXISTS workspace_secrets (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
 
+CREATE TABLE IF NOT EXISTS gateway_configs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT 'Gateway',
+  base_url text NOT NULL DEFAULT '',
+  api_key_cipher text NOT NULL DEFAULT '',
+  model text NOT NULL DEFAULT '',
+  protocol text NOT NULL DEFAULT 'openai-chat',
+  headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_configs_workspace_id ON gateway_configs(workspace_id);
+
 CREATE TABLE IF NOT EXISTS documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -89,6 +105,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   split_at timestamptz,
   archived_at timestamptz,
   deleted_at timestamptz,
+  canvas_id text,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
@@ -98,6 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace_id ON chat_sessions(works
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

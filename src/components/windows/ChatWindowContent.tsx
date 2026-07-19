@@ -148,6 +148,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
+import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
@@ -352,9 +353,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
     [composerProjectGroups],
   );
+  const { gateways } = useGateways(workspaceId || null);
   const modelOptions = useMemo(
-    () => workspaceChatModels(workspaceId, agentConnections),
-    [workspaceId, agentConnections],
+    () => workspaceChatModels(workspaceId, agentConnections, gateways),
+    [workspaceId, agentConnections, gateways],
   );
 
   useEffect(() => {

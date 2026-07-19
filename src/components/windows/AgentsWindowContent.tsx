@@ -9,6 +9,7 @@ import {
   Copy,
   Database,
   Globe,
+  HardDrive,
   KeyRound,
   Link2,
   LayoutGrid,
@@ -602,6 +603,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 capabilities={capabilities}
                 webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                 connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
+                onUpdateAgent={onUpdateAgent}
                 onConnect={() => setConnectAgentId(selectedAgent.id)}
                 onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
               />
@@ -1168,6 +1170,7 @@ function AgentDetailPane({
   capabilities,
   webhooks,
   connections,
+  onUpdateAgent,
   onConnect,
   onToggleWebhook,
 }: {
@@ -1182,6 +1185,7 @@ function AgentDetailPane({
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onConnect: () => void;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
@@ -1383,6 +1387,10 @@ function AgentDetailPane({
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
+
+          {agent.run_mode === 'daemon' && (
+            <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
+          )}
 
           {activeConnections.length > 0 && (
             <AgentDetailSection title="Connections">
@@ -1961,6 +1969,63 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
   );
 }
 
+
+function HostFoldersSection({
+  agent,
+  onUpdateAgent,
+}: {
+  agent: WorkspaceAgent;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+}) {
+  const stored = normalizeList((agent.metadata as Record<string, unknown> | null)?.host_folders);
+  const [draft, setDraft] = useState('');
+  const persist = (folders: string[]) => {
+    const metadata = { ...(agent.metadata || {}), host_folders: folders };
+    onUpdateAgent(agent.id, { metadata });
+  };
+  const addFolder = () => {
+    const folder = draft.trim();
+    if (!folder || stored.includes(folder)) { setDraft(''); return; }
+    persist([...stored, folder]);
+    setDraft('');
+  };
+  const removeFolder = (folder: string) => persist(stored.filter(f => f !== folder));
+  return (
+    <AgentDetailSection title="Host folders">
+      <p className="mb-2 text-xs text-muted-foreground">
+        Extra folders this silo's coding CLI may read and write beyond its working directory
+        (passed as <code>--add-dir</code> on the next job).
+      </p>
+      {stored.length > 0 ? (
+        <div className="mb-2 space-y-1.5">
+          {stored.map(folder => (
+            <div key={folder} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1 text-sm">
+              <HardDrive className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={folder}>{folder}</span>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => removeFolder(folder)} aria-label={`Remove ${folder}`}>
+                <X />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mb-2 text-xs text-muted-foreground/70">No host folders configured.</p>
+      )}
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFolder(); } }}
+          placeholder="/Users/name/Documents/GitHub/project"
+          className="h-8 font-mono text-xs"
+        />
+        <Button type="button" variant="secondary" size="sm" onClick={addFolder} disabled={!draft.trim()}>
+          <Plus data-icon="inline-start" /> Add
+        </Button>
+      </div>
+    </AgentDetailSection>
+  );
+}
 
 function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (

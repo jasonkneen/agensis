@@ -183,6 +183,8 @@ type SidebarMessageTarget = SidebarAgentTarget & {
 interface SidebarProps {
  workspace: Workspace | null;
  activeLayerName?: string;
+ /** Active canvas layer (project) id. Channel/thread sessions are scoped to it; a null session canvas_id is unassigned and shown in every project. */
+ activeCanvasId?: string | null;
  collapsed: boolean;
  // Phone drawer mode: the sidebar floats as an off-canvas overlay, so it must
  // NOT inset the workspace viewport — the canvas keeps the full screen width.
@@ -239,6 +241,7 @@ interface SidebarProps {
 export const Sidebar = React.memo(function Sidebar({
  workspace,
  activeLayerName,
+ activeCanvasId,
  collapsed,
  overlay = false,
  titlebarInset = 0,
@@ -342,16 +345,25 @@ export const Sidebar = React.memo(function Sidebar({
   () => buildDirectAgents(agents, agentConnections, favoriteAgentKeys),
   [agents, agentConnections, favoriteAgentKeys],
  );
+ const inActiveCanvas = React.useCallback((session: ChatSession) => {
+  // A session with no canvas_id is unassigned and shows in every project.
+  // When no active canvas is known, don't hide anything.
+  if (!activeCanvasId) return true;
+  const canvas = session.canvas_id ?? null;
+  return canvas === null || canvas === activeCanvasId;
+ }, [activeCanvasId]);
  const { activeChannelSessions, directSessions, threadSessions } = React.useMemo(() => {
   const activeSessions = uniqueSessions.filter(session => !session.archived_at);
+  // Channels and threads belong to a project; DMs are agent-keyed and stay
+  // global across projects, so only channels/threads are canvas-scoped.
   const direct = activeSessions.filter(isDirectSession);
-  const threads = activeSessions.filter(session => !isDirectSession(session) && isThreadSession(session));
+  const threads = activeSessions.filter(session => !isDirectSession(session) && isThreadSession(session) && inActiveCanvas(session));
   return {
-   activeChannelSessions: activeSessions.filter(session => !isDirectSession(session) && !isThreadSession(session)),
+   activeChannelSessions: activeSessions.filter(session => !isDirectSession(session) && !isThreadSession(session) && inActiveCanvas(session)),
    directSessions: direct,
    threadSessions: threads,
   };
- }, [uniqueSessions]);
+ }, [uniqueSessions, inActiveCanvas]);
  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
  // A split of a DM is itself a DM session (same agent participant), so the
  // per-agent dedup in buildDirectMessageTargets would otherwise swallow it and

@@ -29,6 +29,7 @@ import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThem
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
 import { useWorkspaceVault } from '../../hooks/useWorkspaceVault';
+import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -908,6 +909,74 @@ function AppearancePanel({
   );
 }
 
+function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
+  const { gateways, createGateway, updateGateway, deleteGateway } = useGateways(workspaceId);
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [gwModel, setGwModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    if (!name.trim() || !baseUrl.trim() || busy) return;
+    setBusy(true);
+    try {
+      const created = await createGateway({ name: name.trim(), base_url: baseUrl.trim(), model: gwModel.trim(), api_key: apiKey });
+      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Field>
+      <FieldLabel>Inference gateways</FieldLabel>
+      <FieldDescription>
+        Route a chat through an external OpenAI-compatible endpoint. The API key is stored
+        encrypted and never shown again. Select a gateway from the model picker in any chat.
+      </FieldDescription>
+      {gateways.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {gateways.map(gateway => (
+            <div key={gateway.id} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{gateway.name}</div>
+                <div className="truncate text-xs text-muted-foreground" title={gateway.base_url}>
+                  {gateway.model || 'no model'} · {gateway.base_url}{gateway.has_key ? '' : ' · no key'}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => { const key = window.prompt(`New API key for ${gateway.name} (leave blank to keep current):`); if (key) void updateGateway(gateway.id, { api_key: key }); }}
+                aria-label={`Rotate key for ${gateway.name}`}
+                title="Rotate API key"
+              >
+                <KeyRound />
+              </Button>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => void deleteGateway(gateway.id)} aria-label={`Delete ${gateway.name}`}>
+                <Trash2 />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 grid gap-2">
+        <Input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. OpenRouter)" className="h-8" />
+        <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="Base URL (e.g. https://openrouter.ai/api/v1)" className="h-8 font-mono text-xs" />
+        <Input value={gwModel} onChange={e => setGwModel(e.target.value)} placeholder="Model id (e.g. openai/gpt-4o-mini)" className="h-8 font-mono text-xs" />
+        <div className="flex items-center gap-2">
+          <Input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder="API key" className="h-8 flex-1 font-mono text-xs" />
+          <Button type="button" variant="secondary" size="sm" onClick={add} disabled={busy || !name.trim() || !baseUrl.trim()}>
+            <Plus data-icon="inline-start" /> Add
+          </Button>
+        </div>
+      </div>
+    </Field>
+  );
+}
+
 function AIPanel({ workspaceId }: { workspaceId: string | null }) {
   const [model, setModel] = useState(getSettings().ai_default_model);
   const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
@@ -976,6 +1045,8 @@ function AIPanel({ workspaceId }: { workspaceId: string | null }) {
           </FieldDescription>
         </div>
       </Field>
+
+      <GatewaysManager workspaceId={workspaceId} />
     </FieldGroup>
   );
 }

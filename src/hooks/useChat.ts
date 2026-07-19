@@ -215,6 +215,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         model: source.model || 'auto',
         conversation_mode: source.conversation_mode ?? 'auto',
         folder: source.folder ?? null,
+        canvas_id: source.canvas_id ?? null,
         participants: source.participants ?? null,
         // Lineage: link the fork to its source so the sidebar can render it
         // indented under the parent, and merge can diff messages after the

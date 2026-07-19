@@ -989,7 +989,7 @@ function AppContent() {
   }, [topWindowId]);
 
   const handleNewChat = useCallback(async () => {
-    const session = await createSession();
+    const session = await createSession('auto', { canvas_id: activeLayerId });
     if (session) {
       openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
       logEvent({
@@ -1486,7 +1486,7 @@ function AppContent() {
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleCreateCustomApplet = useCallback(async () => {
-    const session = await createSession();
+    const session = await createSession('auto', { canvas_id: activeLayerId });
     if (!session) return;
 
     const title = 'Create a canvas applet';
@@ -1514,7 +1514,7 @@ function AppContent() {
     memFacts?: MemoryFact[],
     docs?: Document[]
   ) => {
-    const session = await createSession();
+    const session = await createSession('auto', { canvas_id: activeLayerId });
     if (session) {
       openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
       setTimeout(() => {
@@ -1678,6 +1678,7 @@ function AppContent() {
           <Sidebar
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
+            activeCanvasId={activeLayerId}
             overlay={isMobile}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             collapsed={isMobile ? false : sidebarCollapsed}

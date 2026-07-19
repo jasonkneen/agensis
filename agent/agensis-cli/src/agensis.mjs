@@ -558,6 +558,7 @@ function normalizeConfig(raw) {
     share: Boolean(raw.share || process.env.AGENSIS_SHARE === "1"),
     sharedModelsFile: String(raw.sharedModelsFile || process.env.AGENSIS_SHARED_MODELS_FILE || "").trim(),
     noCoding: codingDisabled,
+    hostFolders: normalizeHostFolders(raw.hostFolders ?? raw.host_folders ?? process.env.AGENSIS_HOST_FOLDERS),
   };
   if (config.sharedModelsFile && !path.isAbsolute(config.sharedModelsFile)) {
     config.sharedModelsFile = path.resolve(config.cwd, config.sharedModelsFile);
@@ -945,6 +946,7 @@ function buildAgentCommand(config, job) {
   const permissionMode = resolveJobPermissionMode(config, job);
   const cleanArgs = stripManagedFlags(args);
   let permissionFlags = permissionFlagsForMode(permissionMode);
+  const hostFolders = resolveHostFolders(config, job);
 
   if (isClaudeCommand(cmd)) {
     const nextArgs = [...cleanArgs];
@@ -1002,6 +1004,9 @@ function buildAgentCommand(config, job) {
     } else if (hasOutputFormat) {
       streamJson = cleanArgs.some((a) => /stream-json/.test(String(a)));
     }
+    // Grant the coding CLI read/write access to the silo's configured host
+    // folders beyond its cwd. Claude Code accepts repeated --add-dir <path>.
+    for (const folder of hostFolders) nextArgs.push("--add-dir", folder);
     return { cmd, args: nextArgs, model, permissionMode, permissionFlags, streamJson };
   }
 
@@ -1113,6 +1118,37 @@ function normalizePermissionMode(value) {
 
 function permissionFlagsForMode(permissionMode) {
   return normalizePermissionMode(permissionMode) === "yolo" ? ["--no-sandbox", "--yolo"] : [];
+}
+
+// Normalize a host-folder list from a comma/newline-separated string or an array
+// into a clean, deduped array of trimmed absolute-ish path strings. These are the
+// extra directories a silo (daemon agent) may read/write beyond its cwd.
+function normalizeHostFolders(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[,\n]/);
+  const seen = new Set();
+  const folders = [];
+  for (const entry of raw) {
+    const folder = String(entry || "").trim();
+    if (!folder || seen.has(folder)) continue;
+    seen.add(folder);
+    folders.push(folder);
+  }
+  return folders;
+}
+
+// Host folders for a job, most specific first: the dispatching server's per-agent
+// metadata.host_folders, then an explicit job override, then the daemon's own
+// --host-folder config. The server stamps agent.metadata.host_folders onto the
+// job payload, so a GUI edit takes effect on the next job without a daemon restart.
+function resolveHostFolders(config, job) {
+  const fromJob = job?.agent?.metadata?.host_folders
+    ?? job?.agent?.hostFolders
+    ?? job?.hostFolders
+    ?? job?.host_folders;
+  const resolved = normalizeHostFolders(fromJob);
+  return resolved.length > 0 ? resolved : (config.hostFolders || []);
 }
 
 // True when the daemon is running inside a container/sandbox where letting the

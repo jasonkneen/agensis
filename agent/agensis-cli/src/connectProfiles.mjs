@@ -26,6 +26,7 @@ const PROFILE_KEYS = [
   "primaryDaemon",
   "cursorBuddyBridge",
   "cursorBuddyPort",
+  "hostFolders",
 ];
 
 export function daemonProfileName(value = DEFAULT_PROFILE) {
@@ -114,7 +115,7 @@ export async function writeDaemonProfile(name = DEFAULT_PROFILE, config = {}, op
   };
   await fs.writeFile(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   await fs.rename(tmpPath, filePath);
-  await fs.chmod(filePath, 0o600).catch(() => {});
+  await fs.chmod(filePath, 0o600).catch(() => { });
   return filePath;
 }
 

@@ -516,6 +516,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_at timestamptz;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS canvas_id text;
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent_message ON chat_sessions(parent_message_id);
@@ -842,6 +844,22 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
+  `);
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS gateway_configs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Gateway',
+      base_url text NOT NULL DEFAULT '',
+      api_key_cipher text NOT NULL DEFAULT '',
+      model text NOT NULL DEFAULT '',
+      protocol text NOT NULL DEFAULT 'openai-chat',
+      headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_configs_workspace_id ON gateway_configs(workspace_id);
   `);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -2424,7 +2442,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -2432,7 +2450,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, model, folder, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, version, created_at, updated_at
+   `select id, workspace_id, title, model, folder, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
        order by updated_at desc nulls last
@@ -2551,7 +2569,7 @@ async function inferThreadAgentTarget(sessionId, threadParentId) {
   `select id, sender_kind, sender_id, sender_name, content, created_at
      from messages
      where session_id = $1
-       and (id = $2 or thread_parent_id = $2)
+       and(id = $2 or thread_parent_id = $2)
      order by created_at desc`,
   [sessionId, threadParentId],
  );
@@ -2630,8 +2648,8 @@ const COMMENT_MENTION_TABLES = {
   sourceTaskId: (row) => row.task_id || null,
   describe: async (row) => {
    const t = await getDb().unsafe('select title from tasks where id = $1 limit 1', [row.task_id]).catch(() => []);
-   const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)}`;
-   return { label: `task ${title}`, link: `agensis://task/${row.task_id}` };
+   const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)} `;
+   return { label: `task ${title} `, link: `agensis://task/${row.task_id}` };
   },
  },
  document_comments: {
@@ -5639,7 +5657,7 @@ function publicFlowEventRecord(table, row) {
   return { id: row.id, title: row.title, folder: row.folder, version: row.version, updatedAt: row.updated_at || null };
  }
  if (table === 'workspace_agents') {
-  return { id: row.id, name: row.name, handle: row.handle, enabled: row.enabled !== false, model: row.model || null, updatedAt: row.updated_at || null };
+  return { id: row.id, name: row.name, handle: row.handle, enabled: row.enabled !== false, model: row.model || null, metadata: parseJsonObject(row.metadata), updatedAt: row.updated_at || null };
  }
  if (table === 'workspace_members') {
   return { userId: row.user_id, role: row.role, updatedAt: row.updated_at || null };
@@ -7039,13 +7057,140 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled
          from workspace_agents
          where workspace_id = $1
          order by created_at asc, name asc`,
     [workspaceId],
    );
    res.json({ data: rows.map(agentRuntimePayload), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Gateway configs: workspace-level named routes to an external OpenAI-compatible
+ // endpoint. The API key is stored encrypted (api_key_cipher) and is NEVER
+ // returned to the client — publicGatewayConfig strips it and reports only whether
+ // a key is configured. Selecting a gateway in chat routes that turn's inference
+ // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
+ function publicGatewayConfig(row) {
+  return {
+   id: row.id,
+   workspace_id: row.workspace_id,
+   name: row.name,
+   base_url: row.base_url,
+   model: row.model,
+   protocol: row.protocol || 'openai-chat',
+   headers: parseJsonObject(row.headers),
+   has_key: Boolean(row.api_key_cipher),
+   created_at: row.created_at,
+   updated_at: row.updated_at,
+  };
+ }
+
+ // Resolve a `gateway:<id>` model to its upstream call config (with the decrypted
+ // key) for server-side inference. Returns null when the id is unknown to the
+ // workspace. Server-only — the plaintext key never leaves this process.
+ async function resolveGatewayRoute(workspaceId, gatewayId) {
+  const rows = await getDb().unsafe(
+   'select * from gateway_configs where id = $1 and workspace_id = $2 limit 1',
+   [String(gatewayId || ''), String(workspaceId || '')],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  let apiKey = '';
+  if (row.api_key_cipher) {
+   try { apiKey = await decryptVaultSecret(row.api_key_cipher); } catch { apiKey = ''; }
+  }
+  return {
+   id: row.id,
+   name: row.name,
+   baseUrl: String(row.base_url || '').replace(/\/+$/, ''),
+   model: row.model,
+   protocol: row.protocol || 'openai-chat',
+   headers: parseJsonObject(row.headers),
+   apiKey,
+  };
+ }
+
+ app.get('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rows = await getDb().unsafe(
+    'select * from gateway_configs where workspace_id = $1 order by created_at asc, name asc',
+    [workspaceId],
+   );
+   res.json({ data: rows.map(publicGatewayConfig), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const name = String(req.body?.name || 'Gateway').trim().slice(0, 120) || 'Gateway';
+   const baseUrl = String(req.body?.base_url || req.body?.baseUrl || '').trim().slice(0, 500);
+   const model = String(req.body?.model || '').trim().slice(0, 200);
+   const apiKey = String(req.body?.api_key || req.body?.apiKey || '');
+   const headers = parseJsonObject(req.body?.headers);
+   if (!baseUrl) return jsonError(res, 400, new Error('base_url is required'));
+   const cipher = apiKey ? await encryptVaultSecret(apiKey) : '';
+   const rows = await getDb().unsafe(
+    `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
+         values ($1, $2, $3, $4, $5, 'openai-chat', $6::jsonb, $7) returning *`,
+    [workspaceId, name, baseUrl, cipher, model, JSON.stringify(headers), req.userId || null],
+   );
+   notifyDbSubscribers('gateway_configs', 'INSERT', rows.map(publicGatewayConfig));
+   res.status(201).json({ data: publicGatewayConfig(rows[0]), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.patch('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const gatewayId = String(req.params.gatewayId || '').trim();
+   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const sets = ['updated_at = now()'];
+   const params = [gatewayId, workspaceId];
+   const push = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
+   if (req.body?.name !== undefined) push('name', String(req.body.name).trim().slice(0, 120) || 'Gateway');
+   if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) push('base_url', String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500));
+   if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
+   if (req.body?.headers !== undefined) { params.push(JSON.stringify(parseJsonObject(req.body.headers))); sets.push(`headers = $${params.length}::jsonb`); }
+   // Only rotate the key when a non-empty api_key is provided; an omitted or empty
+   // field leaves the stored cipher intact so a name/model edit never wipes it.
+   if (req.body?.api_key || req.body?.apiKey) push('api_key_cipher', await encryptVaultSecret(String(req.body.api_key || req.body.apiKey)));
+   const rows = await getDb().unsafe(
+    `update gateway_configs set ${sets.join(', ')} where id = $1 and workspace_id = $2 returning *`,
+    params,
+   );
+   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
+   notifyDbSubscribers('gateway_configs', 'UPDATE', rows.map(publicGatewayConfig));
+   res.json({ data: publicGatewayConfig(rows[0]), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const gatewayId = String(req.params.gatewayId || '').trim();
+   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe('delete from gateway_configs where id = $1 and workspace_id = $2 returning id, workspace_id', [gatewayId, workspaceId]);
+   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
+   notifyDbSubscribers('gateway_configs', 'DELETE', [{ id: gatewayId, workspace_id: workspaceId }]);
+   res.json({ data: { id: gatewayId, deleted: true }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8711,6 +8856,62 @@ function createApp() {
     }
     : agentContext;
    const systemPrompt = buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext);
+
+   // Gateway configs route a chat turn at an external OpenAI-compatible endpoint.
+   // The browser selects the model id `gateway:<id>`; we call the upstream server
+   // directly with the decrypted key and relay its OpenAI SSE chunks unchanged over
+   // the same /backend/ai-chat contract the client already speaks.
+   if (String(model || '').startsWith('gateway:')) {
+    const gatewayId = String(model).slice('gateway:'.length);
+    const route = await resolveGatewayRoute(workspaceId, gatewayId);
+    if (!route) return jsonError(res, 404, new Error('Gateway is not available'));
+    if (!route.baseUrl || !route.model) return jsonError(res, 400, new Error('Gateway is missing a base URL or model'));
+    const controller = new AbortController();
+    let completed = false;
+    bindInferenceAbort(req, res, controller, () => completed);
+    let upstream;
+    try {
+     upstream = await fetch(`${route.baseUrl}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+       'Content-Type': 'application/json',
+       ...(route.apiKey ? { Authorization: `Bearer ${route.apiKey}` } : {}),
+       ...route.headers,
+      },
+      body: JSON.stringify({
+       model: route.model,
+       stream: true,
+       messages: [
+        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+        ...chat.messages,
+       ],
+      }),
+     });
+    } catch (error) {
+     completed = true;
+     if (controller.signal.aborted) { try { res.end(); } catch { /* client gone */ } return; }
+     return jsonError(res, 502, new Error(`Gateway request failed: ${error?.message || error}`));
+    }
+    if (!upstream.ok || !upstream.body) {
+     completed = true;
+     const detail = await upstream.text().catch(() => '');
+     return jsonError(res, upstream.status === 401 ? 401 : 502, new Error(`Gateway returned ${upstream.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`));
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    try {
+     // The upstream already emits OpenAI `data: {chunk}` SSE framing (including the
+     // terminal `data: [DONE]`), so pass its bytes straight through to the client.
+     for await (const bytes of upstream.body) {
+      res.write(bytes);
+     }
+    } finally {
+     completed = true;
+    }
+    return res.end();
+   }
 
    // Workspace-shared inference routes are first-class chat models. Keep
    // the browser on the same /backend/ai-chat SSE contract while the broker

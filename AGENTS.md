@@ -44,6 +44,31 @@ Streaming agent output works by inserting a `Thinking …` placeholder message,
 then `UPDATE`-ing its content (each update broadcasts). Heavy fields are stripped
 from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bodies.
 
+## Recent cross-cutting features (2026-07)
+
+- **Sessions scoped to a project (canvas layer)** — `chat_sessions.canvas_id`
+  (nullable text, mirrors `canvas_objects.layer_id`; **null = unassigned, shown
+  in every project**). New channels stamp the active `activeLayerId`; splits
+  inherit the parent's. DMs stay global (null). The sidebar filters **channels +
+  threads** by `activeCanvasId` but keeps DMs/archive global. The bootstrap
+  sessions select (`server/index.cjs`) lists columns explicitly — add new
+  session columns there or they load blank.
+- **Silo (daemon agent) host folders** — stored on
+  `workspace_agents.metadata.host_folders` (no schema change; `metadata` jsonb
+  already exists). Edited per-agent in the Agents window (daemon agents only).
+  Dispatch forwards them via `agentRuntimePayload`; the daemon
+  (`buildAgentCommand`) injects `--add-dir <path>` per folder for Claude, and a
+  repeatable `--host-folder` CLI flag persists in the connect profile. **The
+  bootstrap + `/agents` selects and `sanitizeRealtimeRow` now include
+  `metadata`** — needed so host_folders survive a realtime update.
+- **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
+  stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
+  returned to the client — only `has_key`). Managed in Settings → AI. Selecting a
+  `gateway:<id>` model in chat routes that turn through `/backend/ai-chat`'s
+  gateway branch, which streams the external OpenAI-compatible endpoint's SSE
+  straight through. NOT in the backendClient allowlists — reached only via the
+  dedicated `/backend/workspaces/:id/gateways` routes (Fly server only).
+
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,

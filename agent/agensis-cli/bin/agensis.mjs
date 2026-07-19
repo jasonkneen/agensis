@@ -73,6 +73,14 @@ function parseArgs(argv) {
       args.permissionMode = "accept_edits";
       continue;
     }
+    if (key === "hostFolder" || key === "hostFolders" || key === "addDir") {
+      const folderValue = inlineValue !== undefined ? inlineValue : rest[++i];
+      if (folderValue == null || folderValue.startsWith("--")) {
+        throw new Error(`Missing value for --${rawKey}`);
+      }
+      args.hostFolders = [...(args.hostFolders || []), folderValue];
+      continue;
+    }
     const value = inlineValue !== undefined ? inlineValue : rest[++i];
     if (value == null || value.startsWith("--")) {
       throw new Error(`Missing value for --${rawKey}`);
@@ -103,6 +111,7 @@ Options:
   --handle <name>         Mention handle used in channels
   --name <name>           Display name
   --cwd <path>            Folder where the coding CLI runs
+  --host-folder <path>    Extra folder the coding CLI may read/write (repeatable; passed as --add-dir)
   --coding-cmd <command>  Command used for jobs, default: claude -p
   --no-coding             Disable coding jobs; keep presence/shared inference only
   --model <id>            Default model to pass to supported coding CLIs

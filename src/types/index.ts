@@ -36,6 +36,8 @@ export interface ChatSession {
  workspace_id: string;
  title: string;
  model: string;
+ /** Canvas layer (project) this session belongs to. Null = unassigned, shown in every project. Mirrors canvas_objects.layer_id (client-generated id, no FK). */
+ canvas_id?: string | null;
  folder?: string | null;
  is_favorite?: boolean;
  participants?: ChannelParticipant[] | null;
@@ -345,6 +347,19 @@ export type SharedAgentModel = {
  maxConcurrency: number;
  shared: true;
 };
+
+export interface GatewayConfig {
+ id: string;
+ workspace_id: string;
+ name: string;
+ base_url: string;
+ model: string;
+ protocol: string;
+ headers?: Record<string, unknown>;
+ has_key?: boolean;
+ created_at?: string;
+ updated_at?: string;
+}
 
 export const AI_MODELS: AIModel[] = [
  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
