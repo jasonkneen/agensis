@@ -43,7 +43,7 @@ function Halo({ tex, color, size, opacity = 0.5 }: { tex: THREE.Texture; color: 
   );
 }
 
-function AgentMesh({ node, tex, onSelect }: { node: AgentNode; tex: THREE.Texture; onSelect?: (id: string) => void }) {
+function AgentMesh({ node, tex, radius, onSelect }: { node: AgentNode; tex: THREE.Texture; radius: number; onSelect?: (id: string) => void }) {
   const accent = agentAccentColor(node.agent);
   const meta = STATUS_META[node.status];
   const busy = meta.flow;
@@ -54,7 +54,7 @@ function AgentMesh({ node, tex, onSelect }: { node: AgentNode; tex: THREE.Textur
     }
   });
   return (
-    <group position={ringPos(node.angle, R_AGENT)}>
+    <group position={ringPos(node.angle, radius)}>
       <Halo tex={tex} color={meta.color} size={busy ? 3.2 : 2.4} opacity={0.22 * meta.dim} />
       <mesh
         ref={ref}
@@ -104,6 +104,11 @@ interface Diagram3DProps {
 function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3DProps & { prefersReduced: boolean }) {
   const tex = useHaloTexture();
 
+  // Breathe the rings outward when crowded so nodes never overlap (mirrors 2D).
+  const spread = 1 + Math.max(0, model.agentNodes.length - 10) * 0.045;
+  const rAgent = R_AGENT * spread;
+  const rProvider = R_PROVIDER * spread;
+
   // Provider angle = circular mean of its agents' angles (same as 2D model).
   const provPos = useMemo(() => {
     const map = new Map<string, [number, number, number]>();
@@ -111,21 +116,22 @@ function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3D
       const angs = model.agentNodes.filter(n => n.provider === label).map(n => n.angle);
       const sx = angs.reduce((s, a) => s + Math.cos(a), 0);
       const sy = angs.reduce((s, a) => s + Math.sin(a), 0);
-      map.set(label, ringPos(Math.atan2(sy, sx), R_PROVIDER));
+      map.set(label, ringPos(Math.atan2(sy, sx), rProvider));
     }
     return map;
-  }, [model]);
+  }, [model, rProvider]);
 
   return (
     <>
-      <color attach="background" args={['#08080a']} />
-      <fog attach="fog" args={['#08080a', 15, 32]} />
-      <ambientLight intensity={0.5} />
-      <pointLight position={[0, 8, 4]} intensity={80} />
-      <pointLight position={[-6, -4, -6]} intensity={30} color="#6366f1" />
+      <color attach="background" args={['#0a0b0d']} />
+      <fog attach="fog" args={['#0a0b0d', 16, 34]} />
+      <ambientLight intensity={0.45} />
+      <pointLight position={[0, 9, 5]} intensity={75} />
+      {/* Cool rim light for depth — steel, not the cliché AI indigo. */}
+      <pointLight position={[-7, -4, -6]} intensity={22} color="#5b7089" />
 
       {/* Ground grid for depth. */}
-      <gridHelper args={[40, 40, '#2a2a35', '#16161c']} position={[0, -1.6, 0]} />
+      <gridHelper args={[44, 44, '#262a33', '#15171c']} position={[0, -1.6, 0]} />
 
       {/* Level-1 spokes: hub -> agent. */}
       {model.agentNodes.map(node => {
@@ -133,11 +139,11 @@ function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3D
         return (
           <Line
             key={`l3-a-${node.agent.id}`}
-            points={[[0, 0, 0], ringPos(node.angle, R_AGENT)]}
+            points={[[0, 0, 0], ringPos(node.angle, rAgent)]}
             color={meta.color}
-            lineWidth={node.status === 'busy' ? 2.5 : 1.8}
+            lineWidth={node.status === 'busy' ? 2.2 : 1.4}
             transparent
-            opacity={0.5 * meta.dim}
+            opacity={0.45 * meta.dim}
           />
         );
       })}
@@ -145,26 +151,26 @@ function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3D
       {model.agentNodes.map(node => (
         <Line
           key={`l3-p-${node.agent.id}`}
-          points={[ringPos(node.angle, R_AGENT), provPos.get(node.provider)!]}
+          points={[ringPos(node.angle, rAgent), provPos.get(node.provider)!]}
           color={KIND_META[node.kind].color}
           lineWidth={1}
           dashed
-          dashScale={4}
+          dashScale={5}
           transparent
-          opacity={0.25 * STATUS_META[node.status].dim}
+          opacity={0.22 * STATUS_META[node.status].dim}
         />
       ))}
       {/* Flow particles on busy spokes. */}
       {!prefersReduced && model.agentNodes.filter(n => n.status === 'busy').map(node => (
-        <FlowParticle key={`fp-${node.agent.id}`} target={ringPos(node.angle, R_AGENT)} color={STATUS_META.busy.color} />
+        <FlowParticle key={`fp-${node.agent.id}`} target={ringPos(node.angle, rAgent)} color={STATUS_META.busy.color} />
       ))}
 
-      {/* Hub. */}
+      {/* Hub — neutral, instrument-like rather than glowing indigo. */}
       <group position={[0, 0, 0]}>
-        <Halo tex={tex} color="#6366f1" size={4.5} opacity={0.3} />
+        <Halo tex={tex} color="#aeb6c6" size={4.2} opacity={0.22} />
         <mesh>
           <sphereGeometry args={[1.05, 48, 48]} />
-          <meshStandardMaterial color="#18181b" emissive="#6366f1" emissiveIntensity={0.5} roughness={0.3} metalness={0.6} />
+          <meshStandardMaterial color="#1a1c22" emissive="#aeb6c6" emissiveIntensity={0.32} roughness={0.35} metalness={0.55} />
         </mesh>
       </group>
       <Billboard position={[0, 0, 0]}>
@@ -185,9 +191,9 @@ function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3D
         return (
           <group key={`n3-prov-${prov.label}`} position={pos}>
             <Halo tex={tex} color={color} size={1.6} opacity={0.18} />
-            <mesh>
+            <mesh rotation={[0, Math.PI / 4, 0]}>
               <boxGeometry args={[0.5, 0.5, 0.5]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.4} roughness={0.4} metalness={0.5} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.28} roughness={0.5} metalness={0.4} />
             </mesh>
             <Billboard position={[0, 0.9, 0]}>
               <Text fontSize={0.32} color={color} anchorX="center" anchorY="middle" outlineWidth={0.015} outlineColor="#000000">
@@ -200,7 +206,7 @@ function Scene({ model, enabledCount, onSelectAgent, prefersReduced }: Diagram3D
 
       {/* Agent nodes. */}
       {model.agentNodes.map(node => (
-        <AgentMesh key={`n3-${node.agent.id}`} node={node} tex={tex} onSelect={onSelectAgent} />
+        <AgentMesh key={`n3-${node.agent.id}`} node={node} tex={tex} radius={rAgent} onSelect={onSelectAgent} />
       ))}
 
       <OrbitControls
