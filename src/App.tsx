@@ -1089,6 +1089,37 @@ function AppContent() {
     openWindow('schedules', { title: 'Schedules', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  // Farm device-code pairing: after sign-in, return to /integrations/farm?code=…
+  // (FarmIntegrationApproval stashes the path before redirecting here).
+  useEffect(() => {
+    if (!user || authLoading) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get('redirect') || '';
+      const fromStore = sessionStorage.getItem('agensis.farm.approvalReturn') || '';
+      const candidate = fromQuery || fromStore;
+      if (!candidate) return;
+      // Only allow the farm approval surface — never open external URLs.
+      const path = candidate.startsWith('/')
+        ? candidate
+        : (() => {
+            try {
+              const url = new URL(candidate, window.location.origin);
+              if (url.origin !== window.location.origin) return '';
+              return `${url.pathname}${url.search}`;
+            } catch {
+              return '';
+            }
+          })();
+      if (!path.startsWith('/integrations/farm')) return;
+      sessionStorage.removeItem('agensis.farm.approvalReturn');
+      if (`${window.location.pathname}${window.location.search}` === path) return;
+      window.location.replace(path);
+    } catch {
+      /* ignore storage / navigation failures */
+    }
+  }, [user, authLoading]);
+
   // CursorBuddy and the Agensis CLI link unauthenticated users here. Once login
   // completes, CursorBuddy opens the agent surface; CLI setup additionally posts
   // a daemon connection payload back to the local setup callback.

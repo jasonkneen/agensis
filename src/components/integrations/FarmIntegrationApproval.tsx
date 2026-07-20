@@ -17,6 +17,14 @@ const FARM_SCOPES = [
   'List and invoke workspace-shared models',
 ];
 
+/** sessionStorage key — App.tsx redirects here after sign-in. */
+export const FARM_APPROVAL_RETURN_KEY = 'agensis.farm.approvalReturn';
+
+function approvalReturnPath(code: string) {
+  const path = `/integrations/farm${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+  return path;
+}
+
 export function FarmIntegrationApproval() {
   const code = new URLSearchParams(window.location.search).get('code')?.trim().toUpperCase() || '';
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -25,6 +33,15 @@ export function FarmIntegrationApproval() {
   const [signedIn, setSignedIn] = useState(false);
   const [status, setStatus] = useState<'ready' | 'approved' | 'denied' | 'error'>('ready');
   const [message, setMessage] = useState('');
+
+  // Persist so login at `/` can send the manager back with the same code.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(FARM_APPROVAL_RETURN_KEY, approvalReturnPath(code));
+    } catch {
+      /* private mode */
+    }
+  }, [code]);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +66,17 @@ export function FarmIntegrationApproval() {
     return () => { cancelled = true; };
   }, []);
 
+  const goSignIn = () => {
+    const returnPath = approvalReturnPath(code);
+    try {
+      sessionStorage.setItem(FARM_APPROVAL_RETURN_KEY, returnPath);
+    } catch {
+      /* private mode */
+    }
+    // App.tsx honors `redirect` after login (and the sessionStorage key).
+    window.location.href = `/?intent=login&redirect=${encodeURIComponent(returnPath)}`;
+  };
+
   const decide = async (decision: 'approve' | 'deny') => {
     if (!code || (decision === 'approve' && !workspaceId)) return;
     setLoading(true);
@@ -62,6 +90,7 @@ export function FarmIntegrationApproval() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error?.message || `Agensis returned HTTP ${response.status}`);
       setStatus(decision === 'approve' ? 'approved' : 'denied');
+      try { sessionStorage.removeItem(FARM_APPROVAL_RETURN_KEY); } catch { /* ignore */ }
     } catch (error) {
       setStatus('error');
       setMessage(error instanceof Error ? error.message : String(error));
@@ -80,7 +109,9 @@ export function FarmIntegrationApproval() {
           </div>
           <div>
             <CardTitle>Connect Farm to Agensis</CardTitle>
-            <CardDescription>Approve this device for one workspace. Provider credentials stay on each agent machine or managed sandbox.</CardDescription>
+            <CardDescription>
+              Sign in as a workspace manager, pick one workspace, and approve. Farm then finishes pairing on its side.
+            </CardDescription>
           </div>
         </CardHeader>
         <CardContent>
@@ -89,14 +120,28 @@ export function FarmIntegrationApproval() {
           ) : status === 'approved' ? (
             <div className="space-y-4 py-4 text-center">
               <div className="mx-auto grid size-10 place-items-center rounded-full bg-primary text-primary-foreground"><Check className="size-5" /></div>
-              <div><h2 className="font-semibold">Farm is connected</h2><p className="mt-1 text-sm text-muted-foreground">Return to Farm to finish the pairing flow.</p></div>
+              <div>
+                <h2 className="font-semibold">Farm is connected</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Return to Farm — it will finish the pairing automatically (or click <strong>I approved it</strong>).
+                </p>
+              </div>
             </div>
           ) : status === 'denied' ? (
             <div className="py-4 text-center"><h2 className="font-semibold">Request denied</h2><p className="mt-1 text-sm text-muted-foreground">You can close this page.</p></div>
           ) : !signedIn ? (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">Sign in to Agensis, then reopen this approval link.</p>
-              <Button className="w-full" onClick={() => { window.location.href = '/'; }}>Sign in</Button>
+              <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
+                <li>Sign in to Agensis (workspace manager).</li>
+                <li>You&apos;ll return here with code <span className="font-mono text-foreground">{code || '…'}</span>.</li>
+                <li>Choose a workspace and approve the connection.</li>
+              </ol>
+              {!code && (
+                <p className="text-sm text-destructive">
+                  Missing device code. Start pairing from Farm again so the link includes <code>?code=FARM-…</code>.
+                </p>
+              )}
+              <Button className="w-full" onClick={goSignIn}>Sign in to continue</Button>
             </div>
           ) : (
             <FieldGroup>
