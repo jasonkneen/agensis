@@ -10,6 +10,13 @@
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
 
+# The marketing landing page (public/landing/index.html) owns the root URL.
+# The SPA itself lives at /app (served by the catch-all below).
+[[redirects]]
+  from = "/"
+  to = "/landing/index.html"
+  status = 200
+
 # Device-authorization links and future app routes are handled by the Vite SPA.
 [[redirects]]
   from = "/*"

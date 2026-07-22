@@ -86,7 +86,9 @@ export default defineConfig({
         background_color: '#0c0c0c',
         display: 'standalone',
         orientation: 'any',
-        start_url: '/',
+        // The marketing landing page owns `/`; the installed PWA should open
+        // straight into the app at /app.
+        start_url: '/app',
         scope: '/',
         icons: [
           // PNG icons first so platforms that don't rasterize SVG (notably iOS
@@ -119,6 +121,9 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
+        // `/` is the static landing page (Netlify rewrite) — never serve the SPA
+        // shell for it from the service worker's navigation fallback.
+        navigateFallbackDenylist: [/^\/$/],
         // Never precache the version manifest or release notes — they must be
         // fetched fresh so the update check reflects the true latest deploy.
         globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],
