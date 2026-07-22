@@ -79,6 +79,10 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   update the tour JSON (`public/.well-known/cursorbuddy.json`) + that test.
 - Known: `npm run lint` has ~6 PRE-EXISTING errors in `server/index.cjs`
   (`_`-prefixed unused vars). Don't claim a clean lint run; verify your own files.
+- Onboarding testing: `npm run reset:test-account` wipes `testing@bouncingfish.com`
+  (user + all their workspaces) so the onboarding tour can be re-run from scratch;
+  also clear the `agensis_tour_complete` / `agensis_getstarted_*` localStorage keys
+  (or use incognito) — onboarding state is client-side only.
 
 ## Verify before you ship (every change)
 

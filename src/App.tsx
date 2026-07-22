@@ -2046,8 +2046,11 @@ function AppContent() {
         {showTour && (
           <OnboardingTour
             onComplete={handleTourComplete}
-            onCreateAgent={handleOpenAgents}
             onInvite={handleOpenUsers}
+            workspaceId={activeWorkspaceId || null}
+            agents={agents}
+            connections={agentConnections}
+            createAgent={createAgent}
           />
         )}
 

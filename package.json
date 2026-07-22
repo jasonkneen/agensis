@@ -19,6 +19,7 @@
     "migrate": "node --env-file=.env scripts/migrate.mjs",
     "dev:full": "node scripts/dev-full.mjs",
     "db:neon:push": "bash scripts/neon-push.sh",
+    "reset:test-account": "node --env-file=.env scripts/reset-test-account.cjs",
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:build": "node scripts/desktop-build.mjs",
     "desktop:dist": "node scripts/desktop-build.mjs",
