@@ -46,7 +46,7 @@ export function GetStartedChecklist({
     const invited = memberCount > 1;
     return [
       { id: 'agent', label: 'Create your first agent', done: createdAgent, action: onCreateAgent },
-      { id: 'room', label: 'Start your first room', done: startedRoom, action: onStartRoom },
+      { id: 'room', label: 'Start your first channel', done: startedRoom, action: onStartRoom },
       { id: 'message', label: 'Message an agent', done: messagedAgent, action: onMessageAgent },
       { id: 'invite', label: 'Invite teammates', done: invited, action: onInvite },
     ];
