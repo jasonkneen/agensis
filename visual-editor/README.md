@@ -52,8 +52,13 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
 ## What you can edit
 
 - **Left panel** — element hierarchy outline (lazy-collapsible, text snippets
-  for leaf elements). Click a row to select. Rows are also draggable: drag a
-  row over the page to reposition that element, with live insertion markers.
+  for leaf elements; selecting an element anywhere expands and scrolls to its
+  row). Rows are draggable both ways: drag a row over the page to drop on the
+  canvas, or drag it onto **other rows** to reorder/reparent without touching
+  the canvas — top ~30% of a row = insert before, bottom ~30% = after, middle
+  40% = drop into as last child, with the same validity rules and markers
+  (red when invalid), tree edge auto-scroll, and auto-expansion after an
+  "into" drop.
 - **Right panel** — for the selected element: id, classes, text content (for
   text-leaf elements), arbitrary attributes, and inline styles, all two-way.
 - **Bottom toolbar** — Select (crosshair click-to-pick), Move up / Move down
