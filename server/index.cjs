@@ -2313,12 +2313,13 @@ function isAgentEnabled(agent) {
  return agent?.enabled !== false;
 }
 
-async function disconnectAgentDaemons(agentId, workspaceId) {
+async function disconnectAgentDaemons(agentId, workspaceId, reason = 'deactivated') {
+ const closeMessage = reason === 'disconnected' ? 'Agent disconnected' : 'Agent deactivated';
  for (const [connectionId, entry] of [...connectedAgents.entries()]) {
   if (String(entry.agentId) !== String(agentId)) continue;
   if (String(entry.workspaceId) !== String(workspaceId)) continue;
-  sendWs(entry.ws, { type: 'agent_disabled', reason: 'deactivated' });
-  try { entry.ws.close(1008, 'Agent deactivated'); } catch { /* already closing */ }
+  sendWs(entry.ws, { type: 'agent_disabled', reason });
+  try { entry.ws.close(1008, closeMessage); } catch { /* already closing */ }
   connectedAgents.delete(connectionId);
   await markAgentConnectionOffline(entry.ws);
  }
@@ -7907,6 +7908,23 @@ function createApp() {
     baseUrl,
    });
    res.json({ data: payload, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/agents/:id/disconnect', requireAuth, async (req, res) => {
+  try {
+   const agentId = String(req.params.id || '').trim();
+   const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+   const agent = rows[0];
+   if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+   await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
+   const disconnectedCount = [...connectedAgents.values()].filter(
+    entry => String(entry.agentId) === String(agent.id) && String(entry.workspaceId) === String(agent.workspace_id),
+   ).length;
+   await disconnectAgentDaemons(agent.id, agent.workspace_id, 'disconnected');
+   res.json({ data: { id: agentId, disconnected: disconnectedCount }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

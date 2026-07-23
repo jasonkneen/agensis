@@ -722,6 +722,7 @@ function AppContent() {
     createAgent,
     updateAgent,
     deleteAgent,
+    disconnectAgent,
   } = useAgents(
     activeWorkspaceId || null,
     user?.id,
@@ -1894,6 +1895,7 @@ function AppContent() {
                   onCreateAgent={createAgent}
                   onUpdateAgent={updateAgent}
                   onDeleteAgent={deleteAgent}
+                  onDisconnectAgent={disconnectAgent}
                   onCreateAgentWebhook={createAgentWebhook}
                   onUpdateAgentWebhook={updateAgentWebhook}
                   onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
@@ -2186,6 +2188,7 @@ function CanvasLayerScene({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onDisconnectAgent,
   focusedAgentKey,
   onAgentProfile,
   onCreateAgentWebhook,
@@ -2273,6 +2276,7 @@ function CanvasLayerScene({
   onCreateAgent: (input: CreateAgentInput) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  onDisconnectAgent: (id: string) => Promise<unknown>;
   focusedAgentKey: string | null;
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
@@ -2703,6 +2707,7 @@ function CanvasLayerScene({
                   onCreateAgent={onCreateAgent}
                   onUpdateAgent={onUpdateAgent}
                   onDeleteAgent={onDeleteAgent}
+                  onDisconnectAgent={onDisconnectAgent}
                   onCreateWebhook={onCreateAgentWebhook}
                   onUpdateWebhook={onUpdateAgentWebhook}
                   onOpenConnections={onOpenConnections}
