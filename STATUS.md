@@ -1,38 +1,97 @@
-# Agent Chat & Daemon — Status Check
+# Status — landing page + visual-dev-editor
 
-**Date:** 2026-06-29
-**Backend:** Fly (`agensis-backend`, Frankfurt `fra`) → Neon (`neondb`, eu-central-1)
-**Frontend:** Netlify (`agensis.io`) — static SPA, points at the Fly backend for HTTP + WebSocket
-**Login:** `jason@bouncingfish.com` (you set your own password; the earlier temp no longer works)
+_Last updated: 2026-07-23 · HEAD `2d00c2a` (pushed, deployed)_
 
-## Shipped & verified this session
+## Live state
 
-| Area | Fix | Verified | Commit |
-|---|---|---|---|
-| **DMs / streaming / threading** | Root cause: `agent_jobs.metadata` stored as corrupted jsonb array → `responseMessageId`/`threadParentId` unreadable. Hardened `parseJsonObject` to recover it. | DM: Coder replies, placeholder finalizes, 0 orphaned "Thinking" | `baf6b2e` area |
-| **Thinking counter** | Client-side `ThinkingIndicator` ticks from `created_at` (independent of realtime/daemon) | Counter animates | frontend |
-| **Anti-hang** | Finalize stuck daemon jobs on disconnect, startup, and 240s timeout reaper → clear "stopped responding" message instead of eternal spinner | Day-old stuck jobs cleared | `baf6b2e` |
-| **Threading** | Reply in a thread implicitly targets that thread's agent (no `@` needed); reply lands in-thread | `reply-in-thread=true` | `baf6b2e` area |
-| **Shared brain** | Inject an agent's recent cross-session (DM+channel) activity into its prompt for continuity | Digest present in dispatched job prompt | `f62b9c0` |
-| **Yolo remote daemons** | Connection-command defaults `default`→`yolo` (`--permission-mode yolo --no-sandbox`) | flags in generated command | `baf6b2e` area |
-| **Dead-connection cleanup** | Auto-prune (dedupe on register + 120s sweep) + manual X per offline row + DELETE endpoint | 14 stale rows → 2 live (coder+scout) | `7a70377` |
-| **DM isolation** | 1:1 DMs are single-agent — only the direct agent responds; its `@`-mentions to others are ignored | `@scout` in a Coder DM → only Coder replied | `0593de4` |
-| **Clear channel** | Per-session view cutoff (eject from view, keep history, "Show earlier" to restore) | typecheck clean | `828709e` |
-| **Dropdown clipping** | Tightened channel `@`-mention dropdown + fixed home composer dropdown zero-padding heading clip | home dropdown verified clean | Netlify |
+- `https://agensis.io/` → **landing page** ("agensis — where agents come to work")
+- `https://agensis.io/app` → **web app** (login / SPA)
+- Login flow: landing CTAs → `/app`; desktop app loads its own bundle and logs in independently (no deep-link between website and desktop app).
 
-## Deploy state
+## Landing page (`public/landing/index.html`)
 
-- **Fly backend:** all server changes live (last: DM isolation `0593de4`), machine healthy in `fra`, WebSocket + agent dispatch working.
-- **Netlify frontend:** last agent-authored deploy `index-CJ77aeOJ.js`. Subsequent frontend commits from worktree merges (agent-list icons, applet auto-focus, etc.) are committed but were not deployed by this session — deploy when ready.
-- **Daemon package:** `@agensis/agensis-agent` unchanged — no rebuild/republish needed. Existing daemons must re-copy the connect command to pick up the yolo default.
+Static, self-contained, no build step; `dist/` is kept in sync by `vite build`.
 
-## Open items
+- Served at root via `netlify.toml` rewrite `/` → `/landing/index.html` with
+  **`force = true`** — required, because `dist/index.html` is a real file and
+  Netlify serves real files ahead of rewrites.
+- Hero: "A place where / _agents work._" + "hub for distributed humans and
+  agents" sub-copy.
+- Section 01: "Agents in a team, / not in a box." + invite-don't-define copy,
+  with the **hub network diagram** on the right (SVG+SMIL, no JS): agensis core,
+  humans / agents / skills / code / knowledge / tools nodes, spokes + ring +
+  cross-links, animated pulses, reduced-motion safe.
+- Sections: ticker, mesh transcript, capabilities, CTA, footer.
+- **Open nit:** `<title>`/og tags still say the old tagline "where agents come
+  to work" (hero is now "A place where agents work").
 
-1. **Streaming (unverified end-to-end):** backend + UI are unblocked (metadata fix) and the daemon already runs `claude -p --output-format stream-json`, but live token-by-token rendering was not observed — only placeholder→final. Quick check: DM an agent a multi-sentence prompt and watch whether it types progressively. If it appears all at once, the daemon needs incremental-delta emission + a `0.0.6` republish.
-2. **Rotate secrets:** the DB password and Anthropic API key were pasted in plaintext during setup — rotate them.
-3. **Deploy pending frontend:** worktree-merged frontend work is committed but not on Netlify via this session.
+## Service worker / caching (the "root keeps going to login" saga)
 
-## Notes
+Root cause chain, all fixed and deployed:
 
-- Every Fly backend deploy restarts the machine and briefly drops daemon WebSocket connections (~30s reconnect). Daemon churn during the session was deploy-driven, not a bug.
-- `workspace_members` / invites, Users window, and the connection cleanup all live and committed.
+1. Old PWA service worker served the cached SPA at `/` → login at the root URL.
+2. `navigateFallbackDenylist: [/^\/$/]` in the Workbox config → `/` always goes
+   to network (landing). Live in `sw.js`.
+3. `skipWaiting` + `clientsClaim` → stale workers self-expire via the browser's
+   routine update check; no user action needed.
+4. `AppUpdateManager` mounted on the auth screen too (was post-auth only), so
+   logged-out users get SW registration + update prompts.
+5. Root-bounce guard in `index.html`: if the SPA shell is ever served at `/` or
+   `/index.html`, it redirects to `/app` preserving query + hash (OAuth/invite
+   callbacks and CLI launch params survive). Login structurally cannot run on
+   the bare origin.
+
+## visual-dev-editor (`visual-editor/`)
+
+Independent package (dev-only), one dep (`parse5`), no build step.
+Run: `node visual-editor/bin/cli.cjs <site-dir> --port 4399`, or middleware, or
+script-tag injection. **34/34 unit tests.**
+
+- Left: element tree outline (auto-expands + scrolls to canvas selections).
+- Right: properties (tag, id, classes, text, attributes, inline CSS).
+- Bottom toolbar: Select, Move up/down, Delete, Undo, save status, close.
+- Edits apply to the live DOM **and** splice the HTML source byte-faithfully
+  (parse5 source-location offsets); rollback on server error keeps DOM and
+  source in sync.
+- Drag-and-drop: on-canvas (selection-first, ghost follows pointer, live
+  before/after/inside markers, content-model validity rules, edge auto-scroll)
+  and tree-to-tree (top 30% = before, bottom 30% = after, middle = into).
+- Undo: Ctrl/Cmd+Z + toolbar button; per-file server snapshot stacks,
+  byte-exact restores.
+- Ops: `setText`, `setAttr`, `setStyle`, `move` (sibling swap), `moveTo`
+  (reparent), `remove`, `undo`.
+
+**Known nits:** tree "into" band is ~6px tall on 16px rows (fiddly); left panel
+overlays the page's left ~240px (no dock mode); server ops are tag-agnostic
+(validity rules are client-advisory only).
+
+## Deploy flow (important)
+
+**`git push` does NOT deploy.** There is no GitHub→Netlify auto-deploy hook.
+Ship with:
+
+```bash
+git push origin main
+netlify deploy --build --prod
+```
+
+## Key commits (this work)
+
+| Commit | What |
+|---|---|
+| `f6b4d03` | Landing at root, app at /app |
+| `5fd75ca` | `force = true` on the root rewrite |
+| `de7d260` | AppUpdateManager on auth screen |
+| `d757224` | SW self-expiry (skipWaiting/clientsClaim) |
+| `13e476e` | SPA root-bounce guard |
+| `12435c4` | Landing copy changes |
+| `3030adf` | visual-dev-editor package |
+| `cdaa6e4` | Move up/down path fix |
+| `f213846` | Drag-drop, undo, moveTo fix (+ diagram swept in) |
+| `dc4d675`–`2d00c2a` | Tree-to-tree drag + docs |
+
+## Not done / open
+
+- Landing `<title>`/og refresh to match new hero.
+- Possible: widen tree "into" band; dock mode for panels; Netlify continuous
+  deployment from GitHub.
