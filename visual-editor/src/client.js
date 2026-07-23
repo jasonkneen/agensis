@@ -792,6 +792,55 @@
     };
   }
 
+  // -- Tree-internal drop candidates (dragging a row onto other rows) -----------
+  function overTreePanel(x, y) {
+    var r = leftPanel.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }
+
+  /** Same candidate shape as computeCandidate, but resolved against tree rows:
+   * top ~30% of a row → before that element, bottom ~30% → after,
+   * middle 40% → into it as last child (when valid). */
+  function computeTreeCandidate(x, y) {
+    var row = shadow.elementFromPoint(x, y);
+    while (row && !(row.classList && row.classList.contains('trow'))) row = row.parentElement;
+    if (!row || !row.__veEl) return null;
+    var target = row.__veEl;
+    var dragged = drag.el;
+    var dtag = dragged.tagName.toLowerCase();
+    var rect = row.getBoundingClientRect();
+    var relY = (y - rect.top) / Math.max(rect.height, 1);
+    // Never onto the dragged element or its descendants.
+    var intoDragged = target === dragged || dragged.contains(target);
+
+    if (relY < 0.3 || relY > 0.7) {
+      var parent = target.parentElement;
+      if (!parent || parent === document.documentElement) return null;
+      var sibs = pageChildren(parent);
+      var idx = sibs.indexOf(target);
+      if (idx === -1) return null;
+      return {
+        parent: parent, refEl: target, inside: false,
+        before: relY < 0.3, horizontal: false,
+        index: relY < 0.3 ? idx : idx + 1,
+        valid: !intoDragged && canContain(parent.tagName.toLowerCase(), dtag),
+        rect: rect,
+      };
+    }
+    // Middle band: drop INTO the row's element as last child. Into an element
+    // with element children is fine; into a text-leaf is not (unless empty
+    // and canContain allows it).
+    var hasKids = pageChildren(target).length > 0;
+    var hasText = (target.textContent || '').trim() !== '';
+    var valid = !intoDragged && canContain(target.tagName.toLowerCase(), dtag) &&
+      (hasKids || !hasText);
+    return {
+      parent: target, refEl: null, inside: true,
+      index: pageChildren(target).length,
+      valid: valid, rect: rect,
+    };
+  }
+
   // -- Insertion markers ----------------------------------------------------------
   function renderDropMarker() {
     var c = drag && drag.active ? drag.candidate : null;
@@ -874,6 +923,8 @@
     sendEdit(opFor(el, { op: 'moveTo', parentPath: parentPath, index: index }),
       { undo: inv.undo, redo: redo });
     redo();
+    // An "into" drop opens the target so the user sees where it landed.
+    if (c.inside) state.expanded.add(c.parent);
     rebuildTree(); rebuildProps(); refreshOverlays();
   }
 
@@ -910,13 +961,20 @@
     ev.preventDefault();
     drag.lastX = ev.clientX; drag.lastY = ev.clientY;
     moveGhost(ev.clientX, ev.clientY);
-    drag.candidate = computeCandidate(ev.clientX, ev.clientY);
+    drag.candidate = computeDragCandidate(ev.clientX, ev.clientY);
     renderDropMarker();
   }
 
+  // Tree-row drags over the tree panel resolve against rows; everything else
+  // resolves against the page canvas as before.
+  function computeDragCandidate(x, y) {
+    if (drag.fromTree && overTreePanel(x, y)) return computeTreeCandidate(x, y);
+    return computeCandidate(x, y);
+  }
+
   // Edge auto-scroll: while dragging near the viewport top/bottom, scroll the
-  // page so long-distance moves (e.g. across sections of a long page) work.
-  // The candidate is recomputed after each scroll because the page moves
+  // page (or the tree panel, for tree-internal drags) so long-distance moves
+  // work. The candidate is recomputed after each scroll because content moves
   // under the (stationary) pointer.
   var DRAG_SCROLL_MARGIN = 56, DRAG_SCROLL_STEP = 18;
   function startDragScroll() {
@@ -924,10 +982,17 @@
     dragScrollTimer = setInterval(function () {
       if (!drag || !drag.active) { stopDragScroll(); return; }
       var y = drag.lastY;
-      if (y < DRAG_SCROLL_MARGIN) window.scrollBy(0, -DRAG_SCROLL_STEP);
-      else if (y > window.innerHeight - DRAG_SCROLL_MARGIN) window.scrollBy(0, DRAG_SCROLL_STEP);
-      else return;
-      drag.candidate = computeCandidate(drag.lastX, drag.lastY);
+      if (drag.fromTree && overTreePanel(drag.lastX, y)) {
+        var r = leftPanel.getBoundingClientRect();
+        if (y < r.top + DRAG_SCROLL_MARGIN) leftPanel.scrollTop -= DRAG_SCROLL_STEP;
+        else if (y > r.bottom - DRAG_SCROLL_MARGIN) leftPanel.scrollTop += DRAG_SCROLL_STEP;
+        else return;
+      } else {
+        if (y < DRAG_SCROLL_MARGIN) window.scrollBy(0, -DRAG_SCROLL_STEP);
+        else if (y > window.innerHeight - DRAG_SCROLL_MARGIN) window.scrollBy(0, DRAG_SCROLL_STEP);
+        else return;
+      }
+      drag.candidate = computeDragCandidate(drag.lastX, drag.lastY);
       renderDropMarker();
     }, 50);
   }
