@@ -1,0 +1,19 @@
+{
+  "name": "visual-dev-editor",
+  "version": "0.1.0",
+  "description": "Dev-time visual editor for static sites: click-to-edit the live page, changes written back to the HTML source files on disk.",
+  "license": "MIT",
+  "main": "src/server.cjs",
+  "bin": {
+    "visual-dev-editor": "bin/cli.cjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "dependencies": {
+    "parse5": "^6.0.1"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
