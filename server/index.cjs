@@ -2606,7 +2606,10 @@ function agentContextFromRow(agent, coParticipants = []) {
 // --- Multi-agent channel orchestration ---------------------------------------
 
 const CHANNEL_CONTEXT_LIMIT = 40;
-const CHANNEL_CONTEXT_MAX_BYTES = 32 * 1024;
+// This is deliberately a byte budget, not a character budget. A tokenizer can
+// emit up to roughly one fallback token per input byte, so staying below 8 KiB
+// also keeps conversation history below the daemon's 10 KiB complete-prompt cap.
+const CHANNEL_CONTEXT_MAX_BYTES = 8 * 1024;
 const conversationLocks = new Set();
 
 function agentContextBytes(messages) {
@@ -2619,28 +2622,22 @@ function agentContextBytes(messages) {
  );
 }
 
-function truncateContextMiddle(value, maxBytes) {
+function truncateContextEnd(value, maxBytes) {
  const text = String(value || '');
  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
- const marker = '\n\n[... earlier conversation context truncated ...]\n\n';
+ const marker = '\n\n[... message truncated at the agent context limit ...]';
  const markerBytes = Buffer.byteLength(marker, 'utf8');
- if (maxBytes <= markerBytes) return marker.slice(0, Math.max(0, maxBytes));
+ if (maxBytes <= markerBytes) return '';
  const codepoints = [...text];
  let low = 0;
  let high = codepoints.length;
  while (low < high) {
   const keep = Math.ceil((low + high) / 2);
-  const headCount = Math.ceil(keep / 2);
-  const candidate = codepoints.slice(0, headCount).join('')
-   + marker
-   + codepoints.slice(codepoints.length - (keep - headCount)).join('');
+  const candidate = codepoints.slice(0, keep).join('') + marker;
   if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) low = keep;
   else high = keep - 1;
  }
- const headCount = Math.ceil(low / 2);
- return codepoints.slice(0, headCount).join('')
-  + marker
-  + codepoints.slice(codepoints.length - (low - headCount)).join('');
+ return codepoints.slice(0, low).join('') + marker;
 }
 
 function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
@@ -2657,11 +2654,18 @@ function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTE
    used += fullBytes;
    continue;
   }
-  const overhead = agentContextBytes([{ ...normalized, content: '' }]);
-  const available = budget - used - overhead;
-  if (available > 128) {
-   const truncated = { ...normalized, content: truncateContextMiddle(normalized.content, available) };
+  // Never rewrite an older boundary message: repeatedly changing that prefix
+  // destroys prompt-cache stability. Only an individually oversized newest
+  // message is clipped, and it carries an explicit marker so the model cannot
+  // mistake the fragment for the complete request.
+  if (selected.length === 0) {
+   const overhead = agentContextBytes([{ ...normalized, content: '' }]);
+   const available = budget - overhead;
+   const content = truncateContextEnd(normalized.content, available);
+   if (content) {
+    const truncated = { ...normalized, content };
    selected.unshift(truncated);
+   }
   }
   break;
  }

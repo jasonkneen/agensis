@@ -27,6 +27,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // serial lane; this caps how many lanes run in parallel so we never spawn an
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
 const DEFAULT_MAX_CONCURRENCY = 2;
+const LEAN_PROMPT_MAX_BYTES = 10 * 1024;
 const DEFAULT_MODEL = "claude-opus-4-8";
 export const AGENSIS_CLI_VERSION = "0.1.25";
 
@@ -932,12 +933,30 @@ async function buildPrompt(config, job) {
     'Thread widgets: this chat has a right-side widget rail the human watches. When you work a multi-step task here, surface it: call create_thread_item (kind "todo", "plan", or "blocker") with the Channel session id above to post your plan steps and to-dos, mark them done with update_thread_item as you finish, and raise a "blocker" when you need the human to answer something (read their reply from the item response via list_thread_items). Keep it to a few real items, not every micro-step; skip it for quick one-off replies.',
     `Status file: you can report your own working status by overwriting the JSON file at ${statusFilePath(config)} with e.g. {"status":"working","note":"short summary of what you're doing"}. Your daemon reads it on its next heartbeat (~${Math.round((config.heartbeatMs || 15000) / 1000)}s) and surfaces it on your agent card. Optional and best-effort — overwrite the whole file, keep note under ~200 chars, and there's no need to clear it.`,
     heartbeatSection,
-    "Identity boundary: answer as the workspace agent named above. Do not adopt the identity of any browser, desktop, avatar, pet, widget, or UI surface.",
-    "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
     "User message:",
     String(job.prompt || ""),
+    "Identity boundary: answer as the workspace agent named above. Do not adopt the identity of any browser, desktop, avatar, pet, widget, or UI surface.",
+    "Respond with a clear channel-ready result. Use markdown for structure — bullets, headers, and code blocks where appropriate. If you changed files, summarize the files and verification. If you cannot complete it, say exactly why.",
   ];
-  return sections.filter(Boolean).join("\n\n");
+  const prompt = sections.filter(Boolean).join("\n\n");
+  return config.leanCli ? truncateUtf8Start(prompt, LEAN_PROMPT_MAX_BYTES) : prompt;
+}
+
+function truncateUtf8Start(value, maxBytes) {
+  const text = String(value || "");
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const marker = "[... older or optional Agensis context omitted ...]\n\n";
+  const available = Math.max(0, maxBytes - Buffer.byteLength(marker, "utf8"));
+  const codepoints = [...text];
+  let low = 0;
+  let high = codepoints.length;
+  while (low < high) {
+    const keep = Math.ceil((low + high) / 2);
+    const candidate = codepoints.slice(codepoints.length - keep).join("");
+    if (Buffer.byteLength(candidate, "utf8") <= available) low = keep;
+    else high = keep - 1;
+  }
+  return marker + codepoints.slice(codepoints.length - low).join("");
 }
 
 function cursorBuddyControlInstructions(config) {
@@ -969,7 +988,7 @@ function buildAgentCommand(config, job) {
       const mcp = leanMcpRuntime(config);
       nextArgs.push(
         "--no-session-persistence",
-        "--setting-sources", "project,local",
+        "--safe-mode",
         "--mcp-config", JSON.stringify({
           mcpServers: {
             agensis: {
@@ -1056,6 +1075,7 @@ function buildAgentCommand(config, job) {
         "--disable", "memories",
         "--disable", "hooks",
         "--disable", "skill_search",
+        "-c", "project_doc_max_bytes=0",
         "-c", `mcp_servers.agensis.url=${JSON.stringify(mcp.url)}`,
         "-c", 'mcp_servers.agensis.bearer_token_env_var="AGENSIS_MCP_TOKEN"',
       );
@@ -1597,4 +1617,6 @@ export const __test = {
   createStreamJsonParser,
   createExecutor,
   buildAgentCommand,
+  buildPrompt,
+  LEAN_PROMPT_MAX_BYTES,
 };

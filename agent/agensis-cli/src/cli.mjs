@@ -118,6 +118,10 @@ export function runCli(opts) {
    // job with a connector-load error. Scrub them from THIS child's env only so
    // the spawned `claude` uses its own login; the daemon's own env is untouched.
    const childEnv = { ...process.env, ...env };
+   // The daemon connection token must never leak incidentally. Lean MCP jobs
+   // receive only the explicit child-only variable required by the CLI's MCP
+   // transport configuration.
+   delete childEnv.AGENSIS_TOKEN;
    delete childEnv.ANTHROPIC_API_KEY;
    delete childEnv.ANTHROPIC_AUTH_TOKEN;
    if (wantsSkip && isRoot) childEnv.IS_SANDBOX = "1";

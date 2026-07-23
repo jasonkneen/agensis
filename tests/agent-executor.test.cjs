@@ -56,6 +56,19 @@ test('SandboxExecutor runs the provider lifecycle in order and folds the diff in
   assert.equal(res.status, 0);
 });
 
+test('SandboxExecutor forwards command environment through the provider seam', async () => {
+  let received;
+  const p = fakeProvider({
+    exec: async (_handle, opts) => {
+      received = opts;
+      return { status: 0, stdout: '', stderr: '', error: null };
+    },
+  });
+  const ex = (await load()).createSandboxExecutor(p);
+  await ex.run({ cmd: 'codex', args: ['exec'], env: { AGENSIS_MCP_TOKEN: 'child-only' } });
+  assert.deepEqual(received.env, { AGENSIS_MCP_TOKEN: 'child-only' });
+});
+
 test('SandboxExecutor always destroys the sandbox, even when exec throws', async () => {
   const { createSandboxExecutor } = await load();
   const p = fakeProvider({ exec: async () => { throw new Error('boom'); } });

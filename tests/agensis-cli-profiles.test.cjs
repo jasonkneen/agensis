@@ -88,6 +88,16 @@ test('daemon profile merge lets one-off flags override the cached profile', asyn
   assert.equal(merged.once, true);
 });
 
+test('full CLI context opt-out survives the saved-profile merge path', async () => {
+  const { mergeDaemonProfile } = await loadModule();
+  const { __test: agentTest } = await import(agentModuleUrl);
+  const merged = mergeDaemonProfile({
+    url: 'https://agensis.test', token: 'aga_secret', workspace: 'workspace-1', agent: 'agent-1', leanCli: true,
+  }, { fullCliContext: true });
+  const normalized = agentTest.normalizeConfig(merged);
+  assert.equal(normalized.leanCli, false);
+});
+
 test('legacy profiles migrate the old persisted concurrency default from eight to two', async () => {
   const { daemonProfilePath, readDaemonProfile } = await loadModule();
   const home = await tempHome();
