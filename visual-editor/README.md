@@ -52,11 +52,26 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
 ## What you can edit
 
 - **Left panel** — element hierarchy outline (lazy-collapsible, text snippets
-  for leaf elements). Click a row to select.
+  for leaf elements). Click a row to select. Rows are also draggable: drag a
+  row over the page to reposition that element, with live insertion markers.
 - **Right panel** — for the selected element: id, classes, text content (for
   text-leaf elements), arbitrary attributes, and inline styles, all two-way.
 - **Bottom toolbar** — Select (crosshair click-to-pick), Move up / Move down
   (reorder among element siblings), Delete (with confirm), save status, close.
+- **Drag-and-drop** — with an element selected, press on it and drag (4px
+  threshold): a semi-transparent ghost of the element follows the pointer and
+  a live insertion marker shows where it would land (2px line for
+  before/after, outline box for dropping into an empty container, red when the
+  target is structurally invalid). Escape cancels. Validity follows a
+  simplified HTML content model (`canContain`): void/embedded elements accept
+  nothing, phrasing parents reject block children, `li` only into list
+  parents, table parts only into their table contexts, `option`/`optgroup`
+  only into `select`/`datalist`, and `html`/`head`/`body` are never draggable.
+- **Undo** — Ctrl/Cmd+Z or the Undo button reverts the last edit in both the
+  DOM and the source file (per-file in-memory stacks, ~50 deep). Redo is not
+  supported.
+- **Consistency** — if the server rejects an edit, the DOM mutation is rolled
+  back automatically, so the page never diverges from the file on disk.
 
 ## How source patching works
 
@@ -70,7 +85,12 @@ re-parsed as a sanity check before the file is written.
 Ops: `setText` (leaf elements only), `setAttr` (double/single/unquoted/
 valueless forms, `value: null` removes), `setStyle` (declaration-level
 add/remove inside the `style` attribute), `move` (swap with previous/next
-element sibling, whitespace preserved), `remove`.
+element sibling, whitespace preserved), `moveTo` (cut the element and
+re-insert it as the `index`-th element child of the element at `parentPath`,
+with indentation matched to the reference sibling / parent; `parentPath` and
+`index` are resolved **after** the cut, so they always describe the
+post-removal tree), `remove`. `POST /__visual-editor/undo` `{ file }` restores
+the file's previous source from the in-memory per-file undo stack.
 
 For single-file pages the edited file is inferred from `location.pathname`.
 If your page is assembled from multiple source files, mark regions with

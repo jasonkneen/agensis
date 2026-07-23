@@ -265,12 +265,17 @@ function opMove(source, doc, op) {
   return source.slice(0, aS) + bText + gap + aText + source.slice(bE);
 }
 
-function opRemove(source, doc, op) {
+/**
+ * Cut the element at op.path out of the source: returns
+ * { node, text, source } where text is the element's full outer span
+ * (whitespace-trimmed) and source is the remainder after removing the span
+ * plus one adjacent whitespace-only gap (prefer the leading indent+newline,
+ * fall back to a trailing one).
+ */
+function cutElement(source, doc, op) {
   const node = findNode(doc, op.path);
   const l = loc(node);
   let start = l.startOffset, end = l.endOffset;
-  // Swallow one adjacent whitespace-only gap: prefer the leading one
-  // (indent + newline), fall back to a trailing one.
   let s = start;
   while (s > 0 && /[ \t]/.test(source[s - 1])) s--;
   if (s > 0 && source[s - 1] === '\n') {
@@ -283,7 +288,88 @@ function opRemove(source, doc, op) {
     while (e < source.length && /[ \t]/.test(source[e])) e++;
     if (source[e] === '\n') end = e + 1;
   }
-  return splice(source, start, end, '');
+  return {
+    node,
+    text: source.slice(l.startOffset, l.endOffset).trim(),
+    source: splice(source, start, end, ''),
+  };
+}
+
+function opRemove(source, doc, op) {
+  return cutElement(source, doc, op).source;
+}
+
+/** Indent of the line a location starts on: the spaces/tabs right before it,
+ * or null when it does not follow a newline (i.e. it's inline/one-liner). */
+function lineIndentBefore(source, offset) {
+  let pos = offset;
+  while (pos > 0 && /[ \t]/.test(source[pos - 1])) pos--;
+  if (source[pos - 1] === '\n') return { pos, indent: source.slice(pos, offset) };
+  return null;
+}
+
+function opMoveTo(source, doc, op) {
+  if (!Array.isArray(op.parentPath)) throw new Error('missing parentPath');
+  if (typeof op.index !== 'number' || op.index < 0) throw new Error('invalid index');
+
+  // parentPath uses POST-removal coordinates (it is resolved after the cut);
+  // post-removal resolution can never land inside the removed subtree, so a
+  // failure there means the caller aimed at the moved element/descendant or
+  // out of range. The only pre-cut step is cutting the element at op.path.
+  const cut = cutElement(source, doc, op);
+  const doc2 = parse5.parse(cut.source, { sourceCodeLocationInfo: true });
+  let parent;
+  try {
+    parent = findNode(doc2, op.parentPath);
+  } catch (e) {
+    // A post-removal path can only fail to resolve if it pointed at (or
+    // through) the removed subtree — i.e. the moved element or a descendant —
+    // or was simply out of range.
+    const movedPath = op.path;
+    const intoMoved = movedPath.length <= op.parentPath.length &&
+      movedPath.every((v, i) => op.parentPath[i] === v);
+    if (intoMoved) {
+      throw new Error('cannot move an element into itself or its descendants');
+    }
+    throw new Error('target parent does not exist after removal: ' + e.message);
+  }
+  const pl = loc(parent);
+  if (!pl.endTag) throw new Error('target parent cannot contain children');
+  const kids = elementChildren(parent);
+  if (op.index > kids.length) {
+    throw new Error('index ' + op.index + ' out of range (parent has ' + kids.length + ' element children)');
+  }
+
+  let out = cut.source;
+  if (op.index < kids.length) {
+    // Insert before reference child R, on its own line at R's indent,
+    // leaving R (including its leading indent) byte-unchanged.
+    const R = kids[op.index];
+    const rl = loc(R);
+    const line = lineIndentBefore(out, rl.startOffset);
+    out = line
+      ? splice(out, rl.startOffset, rl.startOffset, cut.text + '\n' + line.indent)
+      : splice(out, rl.startOffset, rl.startOffset, cut.text);
+  } else {
+    // Append as last child, before the parent's endTag.
+    const endTagStart = pl.endTag.startOffset;
+    const line = lineIndentBefore(out, endTagStart);
+    if (line) {
+      const parentIndent = line.indent;
+      let childIndent = parentIndent + '  ';
+      if (kids.length) {
+        const lastLine = lineIndentBefore(out, loc(kids[kids.length - 1]).startOffset);
+        if (lastLine) childIndent = lastLine.indent;
+      }
+      // Insert right after the newline that starts the endTag's line:
+      // <childIndent><elementText>\n then the existing <parentIndent></tag>.
+      out = splice(out, line.pos, line.pos, childIndent + cut.text + '\n');
+    } else {
+      // One-liner parent: keep it a one-liner.
+      out = splice(out, endTagStart, endTagStart, cut.text);
+    }
+  }
+  return out;
 }
 
 /**
@@ -298,6 +384,7 @@ function applyEdit(source, op) {
     case 'setAttr': out = opSetAttr(source, doc, op); break;
     case 'setStyle': out = opSetStyle(source, doc, op); break;
     case 'move': out = opMove(source, doc, op); break;
+    case 'moveTo': out = opMoveTo(source, doc, op); break;
     case 'remove': out = opRemove(source, doc, op); break;
     default: throw new Error('unknown op: ' + op.op);
   }
@@ -333,9 +420,33 @@ function readBody(req, limit) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Undo — in-memory per-file stack of pre-edit sources (dev tool; not persisted)
+// ---------------------------------------------------------------------------
+
+function createUndoTracker(cap) {
+  const stacks = new Map(); // absPath -> string[] (oldest → newest)
+  return {
+    push(file, source) {
+      let s = stacks.get(file);
+      if (!s) { s = []; stacks.set(file, s); }
+      s.push(source);
+      while (s.length > cap) s.shift();
+    },
+    /** Returns { source, empty } or null when the stack is empty. */
+    pop(file) {
+      const s = stacks.get(file);
+      if (!s || s.length === 0) return null;
+      const source = s.pop();
+      return { source, empty: s.length === 0 };
+    },
+  };
+}
+
 /** connect-style middleware: handles /__visual-editor/*, calls next() otherwise. */
 function createEditorMiddleware({ root }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
+  const undo = createUndoTracker(50);
   return function editorMiddleware(req, res, next) {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/__visual-editor/client.js' && req.method === 'GET') {
@@ -357,8 +468,23 @@ function createEditorMiddleware({ root }) {
           const file = resolveFilePath(root, op.file);
           const source = fs.readFileSync(file, 'utf8');
           const patched = applyEdit(source, op);
+          undo.push(file, source); // only reached when applyEdit succeeded
           fs.writeFileSync(file, patched, 'utf8');
           sendJson(res, 200, { ok: true });
+        })
+        .catch((err) => sendJson(res, 200, { ok: false, error: String(err.message || err) }));
+      return;
+    }
+    if (url.pathname === '/__visual-editor/undo' && req.method === 'POST') {
+      readBody(req, 1024 * 1024)
+        .then((raw) => {
+          let body;
+          try { body = JSON.parse(raw); } catch { throw new Error('invalid JSON body'); }
+          const file = resolveFilePath(root, body.file);
+          const entry = undo.pop(file);
+          if (!entry) { sendJson(res, 200, { ok: false, error: 'nothing to undo' }); return; }
+          fs.writeFileSync(file, entry.source, 'utf8');
+          sendJson(res, 200, { ok: true, empty: entry.empty });
         })
         .catch((err) => sendJson(res, 200, { ok: false, error: String(err.message || err) }));
       return;
@@ -435,5 +561,6 @@ module.exports = {
   startServer,
   applyEdit,
   resolveFilePath,
+  createUndoTracker,
   INJECT,
 };

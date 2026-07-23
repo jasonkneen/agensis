@@ -10,7 +10,7 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { applyEdit, resolveFilePath } = require('../src/server.cjs');
+const { applyEdit, resolveFilePath, createUndoTracker } = require('../src/server.cjs');
 
 const FIXTURE = [
   '<!doctype html>',
@@ -28,6 +28,7 @@ const FIXTURE = [
   '    <li>c</li>',
   '  </ul>',
   '  <footer>foot</footer>',
+  '  <div class="empty"></div>',
   '</body>',
   '</html>',
   '',
@@ -156,6 +157,133 @@ test('remove deletes the element span and an adjacent gap', () => {
   assert.ok(!out.includes('<li>b</li>'));
   // siblings and their whitespace survive cleanly
   assert.ok(out.includes('<li>a</li>\n    <li>c</li>'));
+});
+
+// -- moveTo -----------------------------------------------------------------
+
+test('moveTo within same parent, down past one sibling', () => {
+  // move <li>a</li> to index 1 (post-removal children: b,c) → b,a,c
+  const out = applyEdit(FIXTURE, { op: 'moveTo', path: [1, 1, 0], parentPath: [1, 1], index: 1 });
+  assert.ok(out.indexOf('<li>b</li>') < out.indexOf('<li>a</li>'));
+  assert.ok(out.indexOf('<li>a</li>') < out.indexOf('<li>c</li>'));
+  // indentation preserved: each li on its own line at the same indent
+  assert.ok(out.includes('<li>b</li>\n    <li>a</li>\n    <li>c</li>'));
+});
+
+test('moveTo within same parent, up to first position', () => {
+  // move <li>c</li> to index 0 → c,a,b
+  const out = applyEdit(FIXTURE, { op: 'moveTo', path: [1, 1, 2], parentPath: [1, 1], index: 0 });
+  assert.ok(out.includes('\n    <li>c</li>\n    <li>a</li>\n    <li>b</li>\n'));
+});
+
+test('moveTo a different parent, insert before first child', () => {
+  // move <footer> into div#main at index 0 → before h1, at h1's indent
+  const out = applyEdit(FIXTURE, { op: 'moveTo', path: [1, 2], parentPath: [1, 0], index: 0 });
+  assert.ok(out.includes('hidden>\n    <footer>foot</footer>\n    <h1>Hello'));
+  // and the old spot is gone
+  assert.ok(!out.includes('\n  <footer>foot</footer>'));
+});
+
+test('moveTo append as last child uses sibling indent, endTag stays put', () => {
+  // move span.leaf into ul at index 3 (== childCount) → after li c
+  const out = applyEdit(FIXTURE, { op: 'moveTo', path: [1, 0, 2], parentPath: [1, 1], index: 3 });
+  assert.ok(out.includes(
+    '<li>c</li>\n    <span class="leaf" style="color: red; margin: 0">Leaf text</span>\n  </ul>'
+  ));
+});
+
+test('moveTo into a previously-empty one-liner parent', () => {
+  const out = applyEdit(FIXTURE, { op: 'moveTo', path: [1, 1, 0], parentPath: [1, 3], index: 0 });
+  assert.ok(out.includes('<div class="empty"><li>a</li></div>'));
+});
+
+test('moveTo rejects moving into own descendant', () => {
+  // Under post-removal parentPath semantics, aiming at the moved subtree can
+  // only fail resolution — the error must name the real cause.
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'moveTo', path: [1, 0], parentPath: [1, 0, 1, 0], index: 0 }),
+    /itself or its descendants|does not exist after removal/
+  );
+});
+
+test('moveTo regression: parentPath is resolved POST-removal', () => {
+  // Mirror of the real-world bug: moving body child 2 (".ticker") into
+  // section > .wrap > .cols. After the cut, the section shifts from body
+  // child 3 to body child 2, so the (correct) parentPath [1,2,0,0] passes
+  // THROUGH the removed element's old slot. The server must not mistake that
+  // for "moving into itself".
+  const src = [
+    '<!doctype html>',
+    '<html>',
+    '<body>',
+    '  <div id="a">a</div>',
+    '  <div id="b">b</div>',
+    '  <div class="ticker"><span>t</span></div>',
+    '  <section id="how">',
+    '    <div class="wrap">',
+    '      <div class="cols">',
+    '        <div class="col">1</div>',
+    '        <div class="col">2</div>',
+    '      </div>',
+    '    </div>',
+    '  </section>',
+    '</body>',
+    '</html>',
+    '',
+  ].join('\n');
+  const out = applyEdit(src, { op: 'moveTo', path: [1, 2], parentPath: [1, 2, 0, 0], index: 2 });
+  // ticker is gone from body level…
+  assert.ok(!out.includes('\n  <div class="ticker">'));
+  // …and lands as the last child of .cols, at the cols-child indent
+  assert.ok(out.includes(
+    '<div class="col">2</div>\n        <div class="ticker"><span>t</span></div>\n      </div>'
+  ));
+  // surrounding structure untouched
+  assert.ok(out.includes('<div id="b">b</div>\n  <section id="how">'));
+});
+
+test('moveTo rejects an out-of-range index', () => {
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'moveTo', path: [1, 2], parentPath: [1, 1], index: 99 }),
+    /out of range/
+  );
+});
+
+test('moveTo rejects a missing target parent', () => {
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'moveTo', path: [1, 2], parentPath: [1, 9], index: 0 }),
+    /path|parent/
+  );
+});
+
+// -- undo tracker -------------------------------------------------------------
+
+test('undo tracker: push/pop restores newest-first and reports empty', () => {
+  const undo = createUndoTracker(50);
+  assert.strictEqual(undo.pop('/f.html'), null); // empty → nothing to undo
+  undo.push('/f.html', 'v1');
+  undo.push('/f.html', 'v2');
+  const first = undo.pop('/f.html');
+  assert.strictEqual(first.source, 'v2');
+  assert.strictEqual(first.empty, false);
+  const second = undo.pop('/f.html');
+  assert.strictEqual(second.source, 'v1');
+  assert.strictEqual(second.empty, true);
+  assert.strictEqual(undo.pop('/f.html'), null);
+});
+
+test('undo tracker: stacks are per-file and capped', () => {
+  const undo = createUndoTracker(3);
+  undo.push('/a.html', 'a1');
+  undo.push('/b.html', 'b1');
+  assert.strictEqual(undo.pop('/b.html').source, 'b1');
+  for (let i = 0; i < 10; i++) undo.push('/a.html', 'a' + (i + 2));
+  // cap 3: only the last three survive
+  assert.strictEqual(undo.pop('/a.html').source, 'a11');
+  assert.strictEqual(undo.pop('/a.html').source, 'a10');
+  const last = undo.pop('/a.html');
+  assert.strictEqual(last.source, 'a9');
+  assert.strictEqual(last.empty, true);
 });
 
 // -- path safety ----------------------------------------------------------------

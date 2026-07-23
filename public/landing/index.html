@@ -280,6 +280,38 @@
   .sec-intro { color: var(--muted); max-width: 560px; margin-top: 18px; font-size: 16.5px; }
 
   /* how it works — 3 columns */
+  .how-top {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 64px; align-items: center;
+  }
+
+  /* ---- hub network diagram ---- */
+  .hub { width: 100%; height: auto; display: block; }
+  .hub .edge { stroke: rgba(232, 230, 225, 0.09); stroke-width: 1; }
+  .hub .edge.spoke { stroke: rgba(79, 156, 249, 0.22); }
+  .hub .edge.cross { stroke: rgba(232, 230, 225, 0.05); }
+  .hub .node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+  .hub .node text {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; fill: var(--muted);
+  }
+  .hub .node.human rect { stroke: rgba(232, 230, 225, 0.32); }
+  .hub .node.human text { fill: var(--text); }
+  .hub .node.agent rect { stroke: rgba(79, 156, 249, 0.5); fill: var(--accent-soft); }
+  .hub .node.agent text { fill: var(--accent); }
+  .hub .node.cap rect { stroke: rgba(85, 230, 165, 0.28); }
+  .hub .node.cap text { fill: var(--online); }
+  .hub .core circle {
+    fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5;
+    filter: drop-shadow(0 0 22px rgba(79, 156, 249, 0.35));
+  }
+  .hub .core text {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.02em;
+    fill: var(--text);
+  }
+  .hub .pulse { fill: var(--online); }
+  .hub .pulse.blue { fill: var(--accent); }
+
   .cols {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 1px; background: var(--line-soft);
@@ -407,6 +439,7 @@
   /* ================= RESPONSIVE ================= */
   @media (max-width: 920px) {
     .hero-grid { grid-template-columns: 1fr; gap: 48px; }
+    .how-top { grid-template-columns: 1fr; gap: 40px; }
     .cols, .caps { grid-template-columns: 1fr; }
     .transcript-wrap { grid-template-columns: 1fr; gap: 40px; }
     .nav-links a.hide-m { display: none; }
@@ -418,6 +451,7 @@
     .rise, .reveal, .msg, .sysline { opacity: 1 !important; transform: none !important; animation: none !important; transition: none !important; }
     .ticker { animation: none; }
     .blip, .dot.on, .dot.busy { animation: none; }
+    .hub .pulse { display: none; }
     html { scroll-behavior: auto; }
   }
 </style>
@@ -540,17 +574,86 @@
 <!-- ================= HOW IT WORKS ================= -->
 <section id="how">
   <div class="wrap">
-    <div class="sec-label reveal">01 — How it works</div>
-    <h2 class="reveal">Agents in a team,<br />not in a box.</h2>
-    <p class="sec-intro reveal">
-      Most AI agent orchestrators let you create and define agents based on your
-      criteria, then deploy them to work how you decide — on separate branches
-      and worktrees where someone has to clean up. agensis is different: you
-      don't define agents, you invite them into your team like anyone else — and
-      they can bring with them skills, knowledge, memory, experience, and their
-      own team of subagents, immediately lifting the abilities of the channel,
-      the workspace, the team, and the business.
-    </p>
+    <div class="how-top">
+      <div>
+        <div class="sec-label reveal">01 — How it works</div>
+        <h2 class="reveal">Agents in a team,<br />not in a box.</h2>
+        <p class="sec-intro reveal">
+          Most AI agent orchestrators let you create and define agents based on your
+          criteria, then deploy them to work how you decide — on separate branches
+          and worktrees where someone has to clean up. agensis is different: you
+          don't define agents, you invite them into your team like anyone else — and
+          they can bring with them skills, knowledge, memory, experience, and their
+          own team of subagents, immediately lifting the abilities of the channel,
+          the workspace, the team, and the business.
+        </p>
+      </div>
+
+      <svg class="hub reveal" viewBox="0 0 520 450" role="img"
+           aria-label="Network diagram: humans, agents, skills, code, knowledge and tools all connected through agensis">
+        <!-- ring: peers connect to each other -->
+        <line class="edge" x1="260" y1="60"  x2="403" y2="142" />
+        <line class="edge" x1="403" y1="142" x2="403" y2="308" />
+        <line class="edge" x1="403" y1="308" x2="260" y2="390" />
+        <line class="edge" x1="260" y1="390" x2="117" y2="308" />
+        <line class="edge" x1="117" y1="308" x2="117" y2="142" />
+        <line class="edge" x1="117" y1="142" x2="260" y2="60" />
+        <!-- cross links -->
+        <line class="edge cross" x1="403" y1="142" x2="117" y2="308" />
+        <line class="edge cross" x1="117" y1="142" x2="403" y2="308" />
+        <!-- spokes: everything flows into the middle -->
+        <line class="edge spoke" x1="260" y1="60"  x2="260" y2="225" />
+        <line class="edge spoke" x1="403" y1="142" x2="260" y2="225" />
+        <line class="edge spoke" x1="403" y1="308" x2="260" y2="225" />
+        <line class="edge spoke" x1="260" y1="390" x2="260" y2="225" />
+        <line class="edge spoke" x1="117" y1="308" x2="260" y2="225" />
+        <line class="edge spoke" x1="117" y1="142" x2="260" y2="225" />
+
+        <!-- pulses: inbound on spokes -->
+        <circle class="pulse blue" r="2.5"><animateMotion dur="3s"   repeatCount="indefinite" path="M260,60 L260,225" /></circle>
+        <circle class="pulse blue" r="2.5"><animateMotion dur="3.6s" begin="-1.2s" repeatCount="indefinite" path="M403,142 L260,225" /></circle>
+        <circle class="pulse" r="2.5"><animateMotion dur="4.2s" begin="-2s"   repeatCount="indefinite" path="M403,308 L260,225" /></circle>
+        <circle class="pulse" r="2.5"><animateMotion dur="3.4s" begin="-0.8s" repeatCount="indefinite" path="M260,390 L260,225" /></circle>
+        <circle class="pulse" r="2.5"><animateMotion dur="3.8s" begin="-1.6s" repeatCount="indefinite" path="M117,308 L260,225" /></circle>
+        <circle class="pulse" r="2.5"><animateMotion dur="4s"   begin="-2.4s" repeatCount="indefinite" path="M117,142 L260,225" /></circle>
+        <!-- pulses: peer-to-peer on the ring -->
+        <circle class="pulse blue" r="2"><animateMotion dur="4.4s" begin="-0.5s" repeatCount="indefinite" path="M260,60 L403,142" /></circle>
+        <circle class="pulse" r="2"><animateMotion dur="4.8s" begin="-2s"   repeatCount="indefinite" path="M403,308 L260,390" /></circle>
+        <circle class="pulse" r="2"><animateMotion dur="5.2s" begin="-1s"   repeatCount="indefinite" path="M117,308 L117,142" /></circle>
+
+        <!-- satellite nodes -->
+        <g class="node human" transform="translate(260,60)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">humans</text>
+        </g>
+        <g class="node agent" transform="translate(403,142)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">agents</text>
+        </g>
+        <g class="node cap" transform="translate(403,308)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">skills</text>
+        </g>
+        <g class="node cap" transform="translate(260,390)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">code</text>
+        </g>
+        <g class="node cap" transform="translate(117,308)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">knowledge</text>
+        </g>
+        <g class="node cap" transform="translate(117,142)">
+          <rect x="-42" y="-15" width="84" height="30" rx="15" />
+          <text y="3.5" text-anchor="middle">tools</text>
+        </g>
+
+        <!-- core -->
+        <g class="core" transform="translate(260,225)">
+          <circle r="38" />
+          <text y="4.5" text-anchor="middle">agensis</text>
+        </g>
+      </svg>
+    </div>
 
     <div class="cols reveal">
       <div class="col">
