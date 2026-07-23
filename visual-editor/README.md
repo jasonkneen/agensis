@@ -51,18 +51,47 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
 
 ## What you can edit
 
-- **Left panel** — element hierarchy outline (lazy-collapsible, text snippets
-  for leaf elements; selecting an element anywhere expands and scrolls to its
-  row). Rows are draggable both ways: drag a row over the page to drop on the
-  canvas, or drag it onto **other rows** to reorder/reparent without touching
-  the canvas — top ~30% of a row = insert before, bottom ~30% = after, middle
-  40% = drop into as last child, with the same validity rules and markers
-  (red when invalid), tree edge auto-scroll, and auto-expansion after an
-  "into" drop.
-- **Right panel** — for the selected element: id, classes, text content (for
-  text-leaf elements), arbitrary attributes, and inline styles, all two-way.
-- **Bottom toolbar** — Select (crosshair click-to-pick), Move up / Move down
-  (reorder among element siblings), Delete (with confirm), save status, close.
+- **Navigator (left panel)** — searchable element tree. Rows carry a per-type
+  icon (container / text / media / interactive / table / list), `#id` and
+  `.class` badges, text snippets for leaves, a child-count badge on collapsed
+  parents, and a hover eye button that hides an element (inline
+  `display: none`, written to source and undoable) or shows one that an
+  inline `display: none` is hiding; stylesheet-hidden elements render dimmed.
+  The search field filters by tag, `#id`, `.class`, or leaf text (matches
+  keep their ancestors and are dot-marked; Esc clears). Header buttons
+  expand/collapse the whole tree; hovering any row highlights the element on
+  canvas. Rows are draggable both ways: onto the canvas, or onto **other
+  rows** to reorder/reparent — top ~25% of a row = insert before, bottom ~25%
+  = after, middle 50% = drop into as last child, with validity markers (red
+  when invalid), tree edge auto-scroll, and auto-expansion after an "into"
+  drop.
+- **Inspector (right panel)** — header shows the selected element's tag,
+  `#id`, first class, live W×H, and source file. Two tabs:
+  - **Design** — collapsible sections of style controls that read the
+    *computed* style (muted placeholder) and write *inline* styles via
+    `setStyle` (bright value + blue dot + reset ×): Layout (display
+    segmented control; flex/grid-aware direction / justify / align / wrap /
+    gap sub-controls), Spacing (a click-to-edit, drag-to-scrub margin/padding
+    box-model editor with live W×H core), Size (W/H/min/max/overflow),
+    Position (type + inset + z-index when non-static), Typography (family /
+    size / weight / line-height / letter-spacing / color picker / align /
+    style / transform / decoration), Background (color picker, bg-image
+    note), Border (width/style/color/radius) and Effects (opacity slider,
+    box-shadow, cursor). Numeric inputs step with ↑/↓ (Shift=±10, Alt=±0.1)
+    and scrub by dragging their labels; edits preview live and commit on
+    blur/Enter, Esc cancels.
+  - **Element** — id, classes as removable chips (type + ⏎ to add), text
+    content (leaf elements), arbitrary attributes, and raw inline CSS rows.
+- **Breadcrumbs** — a strip along the bottom of the canvas shows the ancestor
+  chain of the selection; click to select, hover to highlight.
+- **Toolbar** — Select (crosshair pick, also the `V` key), Move up / Move
+  down, Delete, Undo, dock toggle (pushes the page aside via root margins
+  instead of overlapping it — fixed-position page elements may not shift),
+  animated save status, close.
+- **Selecting** — crosshair mode, double-click on the page, click a tree row,
+  a breadcrumb, or keyboard: ↑/↓ walk the visible tree, → expands / first
+  child, ← collapses / parent, Esc deselects, Delete/Backspace removes the
+  selected element (no confirm — undo covers it).
 - **Drag-and-drop** — with an element selected, press on it and drag (4px
   threshold): a semi-transparent ghost of the element follows the pointer and
   a live insertion marker shows where it would land (2px line for
@@ -77,6 +106,10 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
   supported.
 - **Consistency** — if the server rejects an edit, the DOM mutation is rolled
   back automatically, so the page never diverges from the file on disk.
+  Style edits from the Design tab always target the element's inline `style`
+  attribute; stylesheet rules are read (as computed values) but never
+  modified — the reset × on a control removes the inline declaration and
+  falls back to the stylesheet.
 
 ## How source patching works
 
