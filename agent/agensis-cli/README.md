@@ -62,6 +62,9 @@ Optional:
 - `--cwd <path>`: folder where the coding CLI runs
 - `--coding-cmd <command>`: command used for jobs, default `claude -p`
 - `--no-coding`: disable coding jobs while keeping presence or shared inference online
+- `--full-cli-context`: opt out of the default lean launch and load all user-level
+  Claude/Codex skills, plugins, hooks, memory, and MCP servers
+- `--max-concurrency <n>`: simultaneous coding CLI jobs, default `2`
 - `--model <id>`: default model passed to supported coding CLIs
 - `--permission-mode <mode>`: `default`, `accept_edits`, or `yolo`
 - `--yolo`: alias for `--permission-mode yolo`

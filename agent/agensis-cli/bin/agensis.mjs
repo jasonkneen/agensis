@@ -57,6 +57,10 @@ function parseArgs(argv) {
       args.noCoding = true;
       continue;
     }
+    if (key === "fullCliContext") {
+      args.fullCliContext = true;
+      continue;
+    }
     if (key === "cursorbuddyBridge") {
       args.cursorBuddyBridge = true;
       continue;
@@ -114,12 +118,15 @@ Options:
   --host-folder <path>    Extra folder the coding CLI may read/write (repeatable; passed as --add-dir)
   --coding-cmd <command>  Command used for jobs, default: claude -p
   --no-coding             Disable coding jobs; keep presence/shared inference only
+  --full-cli-context      Load all user CLI skills, plugins, hooks, memory, and MCPs
+                          (default isolates Claude/Codex to project + Agensis context)
   --model <id>            Default model to pass to supported coding CLIs
   --permission-mode <m>   default, accept_edits, or yolo
   --yolo                  Alias for --permission-mode yolo
   --no-sandbox            Alias for --permission-mode yolo
   --timeout-ms <ms>       Kill a job after this time, default: 1800000
   --heartbeat-ms <ms>     Local terminal heartbeat interval, default: 15000
+  --max-concurrency <n>   Maximum simultaneous coding CLI jobs, default: 2
   --cursorbuddy-port <n>  Local CursorBuddy discovery/chat port, default: 8787
   --cursorbuddy-bridge    Enable local CursorBuddy discovery/chat bridge
   --no-cursorbuddy-bridge Disable local CursorBuddy discovery/chat bridge

@@ -52,6 +52,7 @@ const MAX_CAPTURE_BYTES = 50 * 1024 * 1024;
  * @typedef {Object} RunCliOptions
  * @property {string} cmd - command to run
  * @property {string[]} [args] - arguments
+ * @property {Record<string, string>} [env] - child-only environment overrides
  * @property {string} [cwd] - working directory
  * @property {number} [timeoutMs] - kill the child after this long (0 = no timeout)
  * @property {string} [label] - verb shown in the heartbeat ("coding"/"thinking")
@@ -79,6 +80,7 @@ export function runCli(opts) {
  const {
   cmd,
   args = [],
+  env = {},
   cwd,
   timeoutMs = 0,
   label = "working",
@@ -115,7 +117,7 @@ export function runCli(opts) {
    // one of these exported for other tools, which silently breaks every coding
    // job with a connector-load error. Scrub them from THIS child's env only so
    // the spawned `claude` uses its own login; the daemon's own env is untouched.
-   const childEnv = { ...process.env };
+   const childEnv = { ...process.env, ...env };
    delete childEnv.ANTHROPIC_API_KEY;
    delete childEnv.ANTHROPIC_AUTH_TOKEN;
    if (wantsSkip && isRoot) childEnv.IS_SANDBOX = "1";

@@ -111,6 +111,7 @@ function mergeCachedDaemonArgs(cached, args, cwd) {
     "share",
     "sharedModelsFile",
     "noCoding",
+    "leanCli",
     "lanListener",
     "once",
   ]) {

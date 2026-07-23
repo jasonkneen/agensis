@@ -2606,7 +2606,68 @@ function agentContextFromRow(agent, coParticipants = []) {
 // --- Multi-agent channel orchestration ---------------------------------------
 
 const CHANNEL_CONTEXT_LIMIT = 40;
+const CHANNEL_CONTEXT_MAX_BYTES = 32 * 1024;
 const conversationLocks = new Set();
+
+function agentContextBytes(messages) {
+ return (Array.isArray(messages) ? messages : []).reduce(
+  (total, message) => total
+   + Buffer.byteLength(String(message?.role || ''), 'utf8')
+   + Buffer.byteLength(String(message?.content || ''), 'utf8')
+   + 4,
+  0,
+ );
+}
+
+function truncateContextMiddle(value, maxBytes) {
+ const text = String(value || '');
+ if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+ const marker = '\n\n[... earlier conversation context truncated ...]\n\n';
+ const markerBytes = Buffer.byteLength(marker, 'utf8');
+ if (maxBytes <= markerBytes) return marker.slice(0, Math.max(0, maxBytes));
+ const codepoints = [...text];
+ let low = 0;
+ let high = codepoints.length;
+ while (low < high) {
+  const keep = Math.ceil((low + high) / 2);
+  const headCount = Math.ceil(keep / 2);
+  const candidate = codepoints.slice(0, headCount).join('')
+   + marker
+   + codepoints.slice(codepoints.length - (keep - headCount)).join('');
+  if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) low = keep;
+  else high = keep - 1;
+ }
+ const headCount = Math.ceil(low / 2);
+ return codepoints.slice(0, headCount).join('')
+  + marker
+  + codepoints.slice(codepoints.length - (low - headCount)).join('');
+}
+
+function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
+ const source = Array.isArray(messages) ? messages : [];
+ const budget = Math.max(256, Number(maxBytes) || CHANNEL_CONTEXT_MAX_BYTES);
+ const selected = [];
+ let used = 0;
+ for (let index = source.length - 1; index >= 0; index -= 1) {
+  const message = source[index];
+  const normalized = { role: message?.role === 'assistant' ? 'assistant' : 'user', content: String(message?.content || '') };
+  const fullBytes = agentContextBytes([normalized]);
+  if (used + fullBytes <= budget) {
+   selected.unshift(normalized);
+   used += fullBytes;
+   continue;
+  }
+  const overhead = agentContextBytes([{ ...normalized, content: '' }]);
+  const available = budget - used - overhead;
+  if (available > 128) {
+   const truncated = { ...normalized, content: truncateContextMiddle(normalized.content, available) };
+   selected.unshift(truncated);
+  }
+  break;
+ }
+ while (selected.length > 1 && selected[0].role !== 'user') selected.shift();
+ return selected;
+}
 
 // eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
 function clampInt(value, min, max, fallback) {
@@ -2943,7 +3004,7 @@ async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = n
   else merged.push({ role: message.role, content: message.content });
  }
  while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
- return merged;
+ return boundAgentContextMessages(merged);
 }
 
 // Cross-session "shared brain": a short digest of what THIS agent has recently
@@ -9160,6 +9221,9 @@ module.exports = {
   BOOTSTRAP_LIMITS,
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
+  CHANNEL_CONTEXT_MAX_BYTES,
+  agentContextBytes,
+  boundAgentContextMessages,
   agentRuntimePayload,
   resolveRunTarget,
   taskStatusOnDispatch,

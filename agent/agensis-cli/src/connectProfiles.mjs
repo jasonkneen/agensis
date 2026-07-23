@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_PROFILE = "default";
+const PROFILE_VERSION = 2;
 const PROFILE_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
 const PROFILE_KEYS = [
   "url",
@@ -22,6 +23,7 @@ const PROFILE_KEYS = [
   "share",
   "sharedModelsFile",
   "noCoding",
+  "leanCli",
   "lanListener",
   "primaryDaemon",
   "cursorBuddyBridge",
@@ -96,7 +98,14 @@ export async function readDaemonProfile(name = DEFAULT_PROFILE, options = {}) {
   }
   const config = parsed?.config;
   if (!config?.url || !config?.token || !config?.workspace || !config?.agent) return null;
-  return pickedDaemonArgs(config);
+  const picked = pickedDaemonArgs(config);
+  // Version 1 persisted the old default of 8 even when the operator never chose
+  // it. Migrate that legacy value to the safer default; version 2 values are
+  // intentional and remain untouched.
+  if (Number(parsed.version || 1) < PROFILE_VERSION && Number(picked.maxConcurrency) === 8) {
+    picked.maxConcurrency = 2;
+  }
+  return picked;
 }
 
 export async function writeDaemonProfile(name = DEFAULT_PROFILE, config = {}, options = {}) {
@@ -107,7 +116,7 @@ export async function writeDaemonProfile(name = DEFAULT_PROFILE, config = {}, op
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   const payload = {
-    version: 1,
+    version: PROFILE_VERSION,
     savedAt: new Date().toISOString(),
     profile: daemonProfileName(name),
     tokenHash: crypto.createHash("sha256").update(picked.token).digest("hex"),

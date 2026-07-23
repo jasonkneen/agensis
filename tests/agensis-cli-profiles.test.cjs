@@ -88,6 +88,29 @@ test('daemon profile merge lets one-off flags override the cached profile', asyn
   assert.equal(merged.once, true);
 });
 
+test('legacy profiles migrate the old persisted concurrency default from eight to two', async () => {
+  const { daemonProfilePath, readDaemonProfile } = await loadModule();
+  const home = await tempHome();
+  try {
+    const filePath = daemonProfilePath('legacy', { homedir: home });
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({
+      version: 1,
+      config: {
+        url: 'https://agensis.test',
+        token: 'aga_secret',
+        workspace: 'workspace-1',
+        agent: 'agent-1',
+        maxConcurrency: 8,
+      },
+    }));
+    const profile = await readDaemonProfile('legacy', { homedir: home });
+    assert.equal(profile.maxConcurrency, 2);
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test('an explicit coding command re-enables a saved no-coding profile', async () => {
   const { mergeDaemonProfile } = await loadModule();
   const merged = mergeDaemonProfile({

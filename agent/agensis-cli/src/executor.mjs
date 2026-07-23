@@ -14,12 +14,12 @@ export function createLocalExecutor({ run = runCli } = {}) {
 // runCli-shaped { status, stdout, stderr, error }.
 export function createSandboxExecutor(provider) {
   return {
-    async run({ cmd, args = [], onData, signal, job }) {
+    async run({ cmd, args = [], env = {}, onData, signal, job }) {
       let handle = null;
       try {
         handle = await provider.ensureEnv({ job, signal });
         await provider.putRepo(handle, { job, signal });
-        const exec = await provider.exec(handle, { cmd, args, onData, signal });
+        const exec = await provider.exec(handle, { cmd, args, env, onData, signal });
         const result = await provider.getResult(handle, { job }).catch(() => ({}));
         const patch = result && result.patch ? String(result.patch).trim() : "";
         const stdout = patch

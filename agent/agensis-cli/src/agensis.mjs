@@ -26,7 +26,7 @@ const DEFAULT_HEARTBEAT_MS = 15 * 1000;
 // How many conversations may run at once. Each DM / channel / thread is its own
 // serial lane; this caps how many lanes run in parallel so we never spawn an
 // unbounded number of coding-CLI subprocesses. Override with --max-concurrency.
-const DEFAULT_MAX_CONCURRENCY = 8;
+const DEFAULT_MAX_CONCURRENCY = 2;
 const DEFAULT_MODEL = "claude-opus-4-8";
 export const AGENSIS_CLI_VERSION = "0.1.25";
 
@@ -529,6 +529,11 @@ export async function runAgensisDaemon(rawConfig = {}) {
 function normalizeConfig(raw) {
   const cursorBuddyBridge = normalizeCursorBuddyBridgeFlag(raw.cursorBuddyBridge);
   const codingDisabled = raw.noCoding === true || process.env.AGENSIS_NO_CODING === "1";
+  const fullCliContext = booleanOption(
+    raw.fullCliContext,
+    booleanOption(process.env.AGENSIS_FULL_CLI_CONTEXT, false),
+  );
+  const leanCli = !fullCliContext && booleanOption(raw.leanCli, true);
   const config = {
     url: String(raw.url || raw.baseUrl || process.env.AGENSIS_URL || "").trim(),
     token: String(raw.token || process.env.AGENSIS_TOKEN || "").trim(),
@@ -558,6 +563,7 @@ function normalizeConfig(raw) {
     share: Boolean(raw.share || process.env.AGENSIS_SHARE === "1"),
     sharedModelsFile: String(raw.sharedModelsFile || process.env.AGENSIS_SHARED_MODELS_FILE || "").trim(),
     noCoding: codingDisabled,
+    leanCli,
     hostFolders: normalizeHostFolders(raw.hostFolders ?? raw.host_folders ?? process.env.AGENSIS_HOST_FOLDERS),
   };
   if (config.sharedModelsFile && !path.isAbsolute(config.sharedModelsFile)) {
@@ -571,6 +577,12 @@ function normalizeConfig(raw) {
   if (config.share && !config.sharedModelsFile) missing.push("--shared-models-file");
   if (missing.length) throw new Error(`Missing required option(s): ${missing.join(", ")}`);
   return config;
+}
+
+function booleanOption(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  return !/^(0|false|off|no)$/i.test(String(value).trim());
 }
 
 function normalizeCursorBuddyBridgeFlag(value) {
@@ -834,6 +846,7 @@ async function runAgentJob(config, job, { signal }) {
   const result = await executor.run({
     cmd: command.cmd,
     args: [...command.args, prompt],
+    env: command.env,
     cwd: job.cwd || config.cwd,
     timeoutMs: config.timeoutMs,
     heartbeatMs: config.heartbeatMs,
@@ -951,6 +964,25 @@ function buildAgentCommand(config, job) {
   if (isClaudeCommand(cmd)) {
     const nextArgs = [...cleanArgs];
     if (model) nextArgs.push("--model", model);
+    let env;
+    if (config.leanCli) {
+      const mcp = leanMcpRuntime(config);
+      nextArgs.push(
+        "--no-session-persistence",
+        "--setting-sources", "project,local",
+        "--mcp-config", JSON.stringify({
+          mcpServers: {
+            agensis: {
+              type: "http",
+              url: mcp.url,
+              headers: { Authorization: "Bearer ${AGENSIS_MCP_TOKEN}" },
+            },
+          },
+        }),
+        "--strict-mcp-config",
+      );
+      env = mcp.env;
+    }
     if (permissionMode === "accept_edits") nextArgs.push("--permission-mode", "acceptEdits");
     if (permissionMode === "yolo") {
       // Claude Code refuses --dangerously-skip-permissions when the process is
@@ -1007,17 +1039,44 @@ function buildAgentCommand(config, job) {
     // Grant the coding CLI read/write access to the silo's configured host
     // folders beyond its cwd. Claude Code accepts repeated --add-dir <path>.
     for (const folder of hostFolders) nextArgs.push("--add-dir", folder);
-    return { cmd, args: nextArgs, model, permissionMode, permissionFlags, streamJson };
+    return { cmd, args: nextArgs, model, permissionMode, permissionFlags, streamJson, env };
   }
 
   if (isCodexCommand(cmd)) {
     const nextArgs = [...cleanArgs];
     if (model) nextArgs.push("--model", model);
+    let env;
+    if (config.leanCli && cleanArgs.includes("exec")) {
+      const mcp = leanMcpRuntime(config);
+      nextArgs.push(
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--disable", "plugins",
+        "--disable", "memories",
+        "--disable", "hooks",
+        "--disable", "skill_search",
+        "-c", `mcp_servers.agensis.url=${JSON.stringify(mcp.url)}`,
+        "-c", 'mcp_servers.agensis.bearer_token_env_var="AGENSIS_MCP_TOKEN"',
+      );
+      env = mcp.env;
+    }
     if (permissionMode === "yolo") nextArgs.push("--sandbox", "danger-full-access", "--ask-for-approval", "never");
-    return { cmd, args: nextArgs, model, permissionMode, permissionFlags };
+    return { cmd, args: nextArgs, model, permissionMode, permissionFlags, env };
   }
 
   return { cmd, args, model, permissionMode, permissionFlags };
+}
+
+function leanMcpRuntime(config) {
+  const url = agentBackendUrl(config.url);
+  url.pathname = "/backend/mcp";
+  url.search = "";
+  url.hash = "";
+  return {
+    url: url.toString(),
+    env: { AGENSIS_MCP_TOKEN: config.token },
+  };
 }
 
 // Incrementally parses Claude's `--output-format stream-json` NDJSON stream.
@@ -1537,4 +1596,5 @@ export const __test = {
   abortInferenceRequests,
   createStreamJsonParser,
   createExecutor,
+  buildAgentCommand,
 };

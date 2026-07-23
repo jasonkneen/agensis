@@ -24,11 +24,13 @@ test.mock.module(e2bSpecifier, {
 
 test('e2b provider clones the repo, runs the CLI with streamed stdout, reads the diff, and kills', async () => {
   const runCalls = [];
+  const runOptions = [];
   let killed = false;
   currentSandbox = {
     commands: {
       run: async (cmd, opts = {}) => {
         runCalls.push(cmd);
+        runOptions.push(opts);
         if (/git add -A && git diff/.test(cmd)) return { exitCode: 0, stdout: 'diff --git a b', stderr: '' };
         if (/git clone/.test(cmd)) return { exitCode: 0, stdout: '', stderr: '' };
         if (opts.onStdout) { opts.onStdout('hello '); opts.onStdout('world'); }
@@ -43,12 +45,18 @@ test('e2b provider clones the repo, runs the CLI with streamed stdout, reads the
   const streamed = [];
   const handle = await provider.ensureEnv({ job: {} });
   await provider.putRepo(handle, { job: {} });
-  const exec = await provider.exec(handle, { cmd: 'claude', args: ['-p', 'go'], onData: (c) => streamed.push(c) });
+  const exec = await provider.exec(handle, {
+    cmd: 'claude',
+    args: ['-p', 'go'],
+    env: { AGENSIS_MCP_TOKEN: 'aga_test' },
+    onData: (c) => streamed.push(c),
+  });
   const result = await provider.getResult(handle, { job: {} });
   await provider.destroy(handle);
 
   assert.ok(runCalls.some((c) => /git clone/.test(c)), 'expected a git clone');
   assert.ok(runCalls.some((c) => /claude/.test(c)), 'expected the coding CLI to run');
+  assert.ok(runOptions.some((opts) => opts.envs?.AGENSIS_MCP_TOKEN === 'aga_test'));
   assert.deepEqual(streamed, ['hello ', 'world']);
   assert.equal(exec.status, 0);
   assert.match(result.patch, /diff --git a b/);
