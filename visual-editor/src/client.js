@@ -223,6 +223,8 @@
       '.phead { flex: none; display: flex; align-items: center; gap: 6px; height: 34px;',
       '  padding: 0 10px; border-bottom: 1px solid var(--line); }',
       '.ptitle { font: 600 9.5px/1 system-ui, sans-serif; letter-spacing: .14em; color: var(--tx2); }',
+      '#treecount { font-size: 9px; color: var(--tx3); background: var(--bg3); border-radius: 7px;',
+      '  padding: 1px 6px; line-height: 13px; }',
       '.pgrow { flex: 1; }',
       '.ibtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;',
       '  background: transparent; color: var(--tx2); border: 1px solid transparent; border-radius: 5px; cursor: pointer; }',
@@ -458,9 +460,11 @@
   var treeBox = h('div', { class: 'pbody', id: 'tree' });
   var expandAllBtn = h('button', { class: 'ibtn', title: 'Expand all' }, [svgIcon('unfold')]);
   var collapseAllBtn = h('button', { class: 'ibtn', title: 'Collapse all' }, [svgIcon('fold')]);
+  var treeCount = h('span', { id: 'treecount' });
   var leftPanel = h('div', { class: 've', id: 'left' }, [
     h('div', { class: 'phead' }, [
       h('span', { class: 'ptitle', text: 'NAVIGATOR' }),
+      treeCount,
       h('span', { class: 'pgrow' }),
       expandAllBtn, collapseAllBtn,
     ]),
@@ -838,16 +842,20 @@
     return false;
   }
 
+  var filterMatchCount = 0;
+
   /** Precompute which elements stay visible under the active filter:
    * keep = matches or has a matching descendant. */
   function computeFilter() {
     filterKeep = null;
+    filterMatchCount = 0;
     var q = state.filter.trim().toLowerCase();
     if (!q) return;
     filterKeep = new WeakMap();
     function walk(el, depth) {
       if (depth > MAX_DEPTH || isOurs(el)) return false;
       var match = matchesFilter(el, q);
+      if (match) filterMatchCount++;
       var childKeep = false;
       pageChildren(el).forEach(function (c) { if (walk(c, depth + 1)) childKeep = true; });
       var keep = match || childKeep;
@@ -855,6 +863,13 @@
       return keep;
     }
     pageChildren(document.body).forEach(function (c) { walk(c, 0); });
+  }
+
+  function countPageElements() {
+    var all = document.body.querySelectorAll('*');
+    var n = 0;
+    for (var i = 0; i < all.length; i++) if (!isOurs(all[i])) n++;
+    return n;
   }
 
   function isElHidden(el) {
@@ -965,6 +980,8 @@
 
   function rebuildTree() {
     computeFilter();
+    var total = countPageElements();
+    treeCount.textContent = filterKeep ? filterMatchCount + '/' + total : String(total);
     state.navOrder = [];
     treeBox.textContent = '';
     var frag = document.createDocumentFragment();
@@ -1273,6 +1290,55 @@
       [h('span', { class: 'plabel nodrag', title: prop, text: label }), swatch, input, resetBtn(el, prop)]);
   }
 
+  /** Shadow preset ladder (borrowed from openpath's inspector): named
+   * box-shadow presets in a select; the raw row below covers custom values. */
+  var SHADOW_PRESETS = [
+    { label: 'none', v: 'none' },
+    { label: 'subtle', v: '0 1px 2px rgba(0,0,0,.05)' },
+    { label: 'soft', v: '0 4px 12px rgba(0,0,0,.1)' },
+    { label: 'elevated', v: '0 12px 30px rgba(0,0,0,.16)' },
+    { label: 'dramatic', v: '0 24px 60px rgba(0,0,0,.22)' },
+    { label: 'inset', v: 'inset 0 2px 4px rgba(0,0,0,.06)' },
+  ];
+
+  var shadowProbe = h('div', {});
+
+  /** Browsers re-serialize box-shadow (rgba first, px units) — normalize a
+   * preset the same way so it still matches the stored inline value. */
+  function normShadow(v) {
+    shadowProbe.style.boxShadow = '';
+    shadowProbe.style.boxShadow = v;
+    return shadowProbe.style.boxShadow || v;
+  }
+
+  function shadowPresetRow(el) {
+    var inline = inlineVal(el, 'box-shadow');
+    var sel = h('select', {});
+    var matched = false;
+    SHADOW_PRESETS.forEach(function (p) {
+      var opt = h('option', { value: p.v, text: p.label });
+      if ((inline && (inline === p.v || inline === normShadow(p.v))) ||
+          (!inline && p.v === 'none' && computedVal(el, 'box-shadow') === 'none')) {
+        opt.selected = true; matched = true;
+      }
+      sel.appendChild(opt);
+    });
+    var custom = h('option', { value: '', text: 'custom…' });
+    if (!matched) custom.selected = true;
+    sel.appendChild(custom);
+    sel.addEventListener('change', function () {
+      if (sel.value === '') return; // "custom…" — edit via the raw row below
+      // Picking "none" with no shadow anywhere is a no-op, not an edit.
+      if (sel.value === 'none' && !inlineVal(el, 'box-shadow') &&
+          computedVal(el, 'box-shadow') === 'none') return;
+      commitStyle(el, 'box-shadow', sel.value, el.getAttribute('style'));
+      rebuildProps();
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: 'box-shadow', text: 'shadow' }), sel,
+        resetBtn(el, 'box-shadow')]);
+  }
+
   // -------------------------------------------------------------------------
   // Inspector — box model editor
   // -------------------------------------------------------------------------
@@ -1523,7 +1589,8 @@
         h('span', { class: 'plabel nodrag', text: 'opacity' }), slider, pct,
         resetBtn(el, 'opacity'),
       ]));
-      body.appendChild(textStyleRow(el, 'shadow', 'box-shadow'));
+      body.appendChild(shadowPresetRow(el));
+      body.appendChild(textStyleRow(el, 'custom', 'box-shadow'));
       body.appendChild(selectRow(el, 'cursor', 'cursor',
         ['auto', 'default', 'pointer', 'text', 'move', 'grab', 'not-allowed']));
     }));
