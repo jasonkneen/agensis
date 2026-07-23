@@ -150,7 +150,7 @@
       '.trow .cls { color: #9ece8a; }',
       '.trow .snip { color: #6b7382; overflow: hidden; text-overflow: ellipsis; }',
       '.kids { margin-left: 12px; }',
-      '.ov { position: fixed; z-index: 2147482999; pointer-events: none; }',
+      '.ov { position: fixed; z-index: 2147483002; pointer-events: none; }',
       '#ov-hover { border: 1px dashed #4a7ac7; background: rgba(74,122,199,.08); display: none; }',
       '#ov-sel { border: 2px solid #4a7ac7; display: none; }',
       '#ov-label { background: #4a7ac7; color: #fff; padding: 0 5px; font-size: 10px;',
@@ -361,6 +361,7 @@
     var row = h('div', { class: 'trow' + (el === state.selected ? ' sel' : '') }, [caret, rowLabel(el)]);
     row.style.paddingLeft = (depth * 12) + 'px';
     treeRows.set(el, row);
+    row.__veEl = el; // reverse lookup for tree-internal drag-and-drop
     row.addEventListener('click', function (ev) {
       ev.stopPropagation();
       select(el);
@@ -745,7 +746,7 @@
   function startPotentialDrag(el, x, y, fromTree) {
     if (!el || isOurs(el) || !canDrag(el)) return;
     if (fromTree) select(el);
-    drag = { el: el, startX: x, startY: y, lastX: x, lastY: y, active: false, candidate: null };
+    drag = { el: el, startX: x, startY: y, lastX: x, lastY: y, active: false, candidate: null, fromTree: !!fromTree };
   }
 
   // -- Insertion candidate under the pointer ------------------------------------
