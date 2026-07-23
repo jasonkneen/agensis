@@ -1683,7 +1683,16 @@ function AppContent() {
   }
 
   if (!user) {
-    return <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />;
+    // Mount AppUpdateManager here too: SW registration + the update prompt live
+    // inside it, and logged-out visitors otherwise never register the service
+    // worker — an outdated SW (e.g. one predating the landing page) would serve
+    // the stale SPA shell forever with no update path to escape it.
+    return (
+      <>
+        <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />
+        <AppUpdateManager />
+      </>
+    );
   }
 
   return (
