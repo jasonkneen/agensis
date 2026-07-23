@@ -733,6 +733,17 @@
     return t;
   }
 
+  /** Draft guard: a non-empty value must be valid CSS for the property before
+   * it is committed to source (half-typed "1." or "#zz" never lands on disk).
+   * Fails open where CSS.supports is unavailable. */
+  function cssValueOk(prop, v) {
+    if (!v) return true;
+    try {
+      if (window.CSS && CSS.supports) return CSS.supports(prop, v);
+    } catch (e) { /* fall through */ }
+    return true;
+  }
+
   function pxNum(v) {
     var n = parseFloat(v);
     return isNaN(n) ? 0 : Math.round(n * 10) / 10;
@@ -1117,6 +1128,12 @@
       // pre-edit value the commit must be compared against.
       session.cancel();
       var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        markSet(input, was !== '');
+        return;
+      }
       if (v !== was) session.commit(prop, v === '' ? null : v);
       markSet(input, v !== '');
       if (opts.after) opts.after();
@@ -1194,6 +1211,12 @@
       var v = input.value.trim();
       session.cancel(); // revert preview before reading the pre-edit value
       var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        markSet(input, was !== '');
+        return;
+      }
       if (v !== was) session.commit(prop, v === '' ? null : v);
       markSet(input, v !== '');
     });
@@ -1283,6 +1306,13 @@
       var v = input.value.trim();
       session.cancel(); // revert preview before reading the pre-edit value
       var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        fill.style.background = was || computed;
+        markSet(input, was !== '');
+        return;
+      }
       if (v !== was) session.commit(prop, v === '' ? null : v);
       markSet(input, v !== '');
     });
@@ -1379,7 +1409,11 @@
           var v = normalizeCss(input.value, true);
           session.cancel(); // revert preview before reading the pre-edit value
           var was = inlineVal(el, prop);
-          if (v !== was) session.commit(prop, v === '' ? null : v);
+          if (!cssValueOk(prop, v)) {
+            setStatus('invalid ' + prop + ': ' + v, 'err');
+          } else if (v !== was) {
+            session.commit(prop, v === '' ? null : v);
+          }
         }
         display();
       }
