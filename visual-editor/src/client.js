@@ -490,10 +490,14 @@
     if (!parent) return;
     var sibs = Array.prototype.filter.call(parent.children, function (c) { return !isOurs(c); });
     var i = sibs.indexOf(el);
-    if (dir === 'up' && i > 0) parent.insertBefore(el, sibs[i - 1]);
-    else if (dir === 'down' && i < sibs.length - 1) parent.insertBefore(sibs[i + 1], el);
-    else return;
-    if (fileFor(el)) sendEdit(opFor(el, { op: 'move', direction: dir }));
+    var canMove = i >= 0 && ((dir === 'up' && i > 0) || (dir === 'down' && i < sibs.length - 1));
+    if (!canMove) return;
+    // Capture the op (and its source path) BEFORE touching the DOM — the path
+    // must describe the source file's current element order, not the new one.
+    var op = fileFor(el) ? opFor(el, { op: 'move', direction: dir }) : null;
+    if (dir === 'up') parent.insertBefore(el, sibs[i - 1]);
+    else parent.insertBefore(sibs[i + 1], el);
+    if (op) sendEdit(op);
     rebuildTree(); refreshOverlays();
   }
   upBtn.addEventListener('click', function () { move('up'); });
