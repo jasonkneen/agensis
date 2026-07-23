@@ -23,20 +23,7 @@
     <meta property="og:image" content="https://agensis.io/icon-512.svg" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://agensis.io/icon-512.svg" />
-    <script>
-      // The marketing landing page owns /. This SPA must never run on the bare
-      // origin — if the shell is ever served at / (stale service-worker
-      // navigation fallback, hand-typed URL, cached HTML), bounce to the
-      // dedicated /app route. Query + hash are preserved: Netlify Identity
-      // OAuth/invite/recovery callbacks arrive on /#… and the CLI/CursorBuddy
-      // launch params ride in /?…, and both must survive the hop.
-      (function () {
-        var p = window.location.pathname;
-        if (p === '/' || p === '/index.html') {
-          window.location.replace('/app' + window.location.search + window.location.hash);
-        }
-      })();
-    </script>
+    <script src="/root-entry.js" data-entry-kind="app"></script>
   </head>
   <body>
     <script>

@@ -133,9 +133,9 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
-        // `/` is the static landing page (Netlify rewrite) — never serve the SPA
-        // shell for it from the service worker's navigation fallback.
-        navigateFallbackDenylist: [/^\/$/],
+        // The public landing routes must always reach their static HTML instead
+        // of being replaced with the SPA shell by a controlling service worker.
+        navigateFallbackDenylist: [/^\/$/, /^\/landing(?:\/|$)/],
         // Never precache the version manifest or release notes — they must be
         // fetched fresh so the update check reflects the true latest deploy.
         globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],

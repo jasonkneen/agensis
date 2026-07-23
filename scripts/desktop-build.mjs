@@ -13,10 +13,12 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveZigGlobalCacheDir } from './desktop-build-env.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktopDir = path.join(root, 'desktop');
 const BACKEND_URL = process.env.VITE_BACKEND_BASE_URL || 'https://agensis-backend.fly.dev';
+const ZIG_GLOBAL_CACHE_DIR = resolveZigGlobalCacheDir(desktopDir);
 
 const isWindows = process.platform === 'win32';
 const npmCmd = isWindows ? 'npm.cmd' : 'npm';
@@ -55,6 +57,7 @@ run(npmCmd, ['run', 'icon']);
 run(npmCmd, ['run', 'build'], { env: { VITE_BACKEND_BASE_URL: BACKEND_URL } });
 run('zig', ['build', 'package', `-Dpackage-target=${target}`, '-Doptimize=ReleaseFast'], {
   cwd: desktopDir,
+  env: { ZIG_GLOBAL_CACHE_DIR },
 });
 
 console.log('\n[desktop:build] done — output in desktop/zig-out/package/');

@@ -100,7 +100,7 @@ export function useWorkspaceUsers(workspaceId: string | null) {
 }
 
 // Build the shareable invite URL the recipient opens. The accept flow reads the
-// ?invite= param on load (see App.tsx).
+// ?invite= param on the app entry point (see App.tsx).
 export function inviteUrl(origin: string, token: string): string {
-  return `${origin.replace(/\/$/, '')}/?invite=${encodeURIComponent(token)}`;
+  return `${origin.replace(/\/$/, '')}/app?invite=${encodeURIComponent(token)}`;
 }

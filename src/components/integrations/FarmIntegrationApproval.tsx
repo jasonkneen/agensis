@@ -25,6 +25,10 @@ function approvalReturnPath(code: string) {
   return path;
 }
 
+export function farmSignInUrl(code: string) {
+  return `/app?intent=login&redirect=${encodeURIComponent(approvalReturnPath(code))}`;
+}
+
 export function FarmIntegrationApproval() {
   const code = new URLSearchParams(window.location.search).get('code')?.trim().toUpperCase() || '';
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -34,7 +38,7 @@ export function FarmIntegrationApproval() {
   const [status, setStatus] = useState<'ready' | 'approved' | 'denied' | 'error'>('ready');
   const [message, setMessage] = useState('');
 
-  // Persist so login at `/` can send the manager back with the same code.
+  // Persist so login can send the manager back with the same code.
   useEffect(() => {
     try {
       sessionStorage.setItem(FARM_APPROVAL_RETURN_KEY, approvalReturnPath(code));
@@ -74,7 +78,7 @@ export function FarmIntegrationApproval() {
       /* private mode */
     }
     // App.tsx honors `redirect` after login (and the sessionStorage key).
-    window.location.href = `/?intent=login&redirect=${encodeURIComponent(returnPath)}`;
+    window.location.href = farmSignInUrl(code);
   };
 
   const decide = async (decision: 'approve' | 'deny') => {
