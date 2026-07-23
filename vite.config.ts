@@ -73,9 +73,11 @@ export default defineConfig({
     tailwindcss(),
     emitVersionJson(),
     VitePWA({
-      // 'prompt' (not 'autoUpdate') so a new frontend WAITS for the user to click
-      // our themed update dialog instead of silently self-reloading — that's what
-      // lets the "what's new" surface exist and lets us bust the cache on demand.
+      // 'prompt' (not 'autoUpdate') so an open tab is never force-reloaded out
+      // from under the user mid-session — the update surface is our themed
+      // dialog/toast instead. Note the SW itself no longer WAITS for that
+      // click: workbox skipWaiting below activates new workers immediately so
+      // stale workers self-expire; the dialog is about when to reload the PAGE.
       registerType: 'prompt',
       includeAssets: ['icon-192.svg', 'icon-512.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
       manifest: {
@@ -120,6 +122,16 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Self-healing takeover: any stale SW still controlling a browser (e.g.
+        // pre-landing-page ones that served the SPA shell at /) gets replaced
+        // without user action — the browser's routine update check fetches the
+        // new sw.js, and skipWaiting/clientsClaim activate + claim immediately.
+        // The next navigation then follows THIS worker's rules (incl. the `/`
+        // denylist below → network → landing page). The running tab keeps its
+        // already-loaded assets; AppUpdateManager's version.json check still
+        // surfaces the "what's new" recap after the swap.
+        skipWaiting: true,
+        clientsClaim: true,
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // `/` is the static landing page (Netlify rewrite) — never serve the SPA
         // shell for it from the service worker's navigation fallback.
