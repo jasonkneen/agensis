@@ -6140,11 +6140,10 @@ function attachRealtime(server) {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  // H3/H5 — two auth paths, both supported for a smooth deploy + the daemon CLI:
-  //  (1) Query-param credentials, verified on connect: `agentToken=` (daemon CLI,
-  //      agent/agensis-cli) and `token=` (legacy browser compat window).
-  //  (2) First-message auth frame `{ type: 'auth', token }` (the browser client
-  //      now sends this so the token never appears in the WS URL / proxy logs).
+  // H3/H5 — two auth paths, retained for backward compatibility:
+  //  (1) Legacy query-param credentials: `agentToken=` or `token=`.
+  //  (2) First-message auth frame `{ type: 'auth', token }`, used by the browser
+  //      and the public agensis-agent daemon so tokens stay out of proxy logs.
   // authReady resolves true on success, false on failure/timeout; the message
   // handler gates every action on it.
   let authSettled = false;

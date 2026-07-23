@@ -1,15 +1,13 @@
 # Agents, silos, and the Farm — how it all connects
 
-> Status: reference / planning. Written to unify the vocabulary and the wiring
-> across three repos before the `open-hatch → agensis` rename and the extraction
-> of an open-source `agensis-agent`. No behaviour is changed by this document.
+> Status: reference. The open-source `agensis-agent` extraction is complete.
 
 ## The three repos
 
 | Repo | Visibility | Role |
 |---|---|---|
-| `jasonkneen/open-hatch` → (rename) `jasonkneen/agensis` | **closed** | The agensis.io web app + server (this repo). The relay, the workspace, the chat, the agent registry. |
-| `jasonkneen/agensis-agent` | **open (NEW, not created yet)** | The daemon a machine runs to connect a coding CLI as an agent. Extracted from this repo's `agent/` subtree. Published to npm as `@agensis/agensis-agent`. |
+| Private Agensis app repository (this repo) | **closed** | The agensis.io web app + server. The relay, workspace, chat, and agent registry. |
+| `jasonkneen/agensis-agent` | **open** | The daemon a machine runs to connect a coding CLI as an agent. Published to npm as `@agensis/agensis-agent`. |
 | `jasonkneen/Agent-Farm-CLI` | **open** | The `farm` CLI: creates/drives *distributed* silos (remote machines, E2B, Daytona) and pairs them into an Agensis workspace. |
 | `jasonkneen/Agent-Farm-web-desktop` | **closed** | The GUI for the Farm CLI (the `desktop/` surface). |
 
@@ -52,8 +50,9 @@ agent; it is a direct server→upstream inference route (see
 
 ## How a machine joins: the daemon
 
-Source of truth: `agent/agensis-cli/src/agensis.mjs` (→ published bundle
-`@agensis/agensis-agent`). The web app **never imports** the daemon — the only
+Source of truth: `../agensis-agent/packages/agensis-cli/src/agensis.mjs` in the
+public repository (→ published bundle `@agensis/agensis-agent`). The web app
+**never imports** the daemon — the only
 references in `src/`/`server/` are string tags (`source: 'agensis-cli'`,
 `runtime: 'agensis-cli'`), so the daemon is a clean leaf, safe to extract.
 
@@ -136,15 +135,9 @@ from a **gateway config** (server-side, external endpoint) — same user-visible
 | Needs a daemon | Yes | No |
 | Key location | On the machine (never sent) | Encrypted in agensis vault |
 
-## The rename + extraction (planned, not done)
+## Repository split
 
-Current drift to resolve when the rename happens:
-
-- Git remote is still `open-hatch`; `package.json` name is already `agensis`;
-  agent `package.json` `repository.url` already points at
-  `github.com/jasonkneen/agensis.git` (**404 today**).
-- `AGENTS.md:167` still says `--repo jasonkneen/open-hatch` for release installs.
-
-When renaming `open-hatch → agensis` and extracting `agent/` → public
-`agensis-agent`, see the companion checklist in
-`docs/rename-and-agent-extraction.md`.
+The split is complete: this repository remains closed and owns Agensis web,
+backend, database, and desktop code. The daemon source and npm release process
+live in the public `jasonkneen/agensis-agent` sibling repository. See the
+completed migration record in `docs/rename-and-agent-extraction.md`.
