@@ -47,23 +47,39 @@ Independent package (dev-only), one dep (`parse5`), no build step.
 Run: `node visual-editor/bin/cli.cjs <site-dir> --port 4399`, or middleware, or
 script-tag injection. **34/34 unit tests.**
 
-- Left: element tree outline (auto-expands + scrolls to canvas selections).
-- Right: properties (tag, id, classes, text, attributes, inline CSS).
-- Bottom toolbar: Select, Move up/down, Delete, Undo, save status, close.
+- Left — **Navigator**: searchable tree (tag/#id/.class/text filter w/ hit
+  marks), per-type SVG icons, child-count badges, hidden-element dimming +
+  hide/show eye (inline `display:none`, undoable), hover→canvas highlight,
+  expand/collapse-all, keyboard nav (↑↓←→, Esc, Delete), agensis-branded
+  dark theme (blue/mint/amber on near-black, frosted panels).
+- Right — **Inspector**: header chip (tag #id .class + live W×H + file),
+  Design tab (computed-aware style controls that write inline styles:
+  display segmented + flex/grid sub-controls, margin/padding **box-model
+  editor** w/ click-to-edit + drag-to-scrub, size, position, typography w/
+  color picker, background, border, effects w/ opacity slider; ↑/↓ stepping,
+  live preview, blur/Enter commit, Esc cancel, reset-× per control) and
+  Element tab (id, class chips, attributes, text, raw inline CSS).
+- **Breadcrumbs** strip along the canvas bottom (click to select ancestors).
+- Bottom toolbar: Select (V), Move up/down, Delete, Undo, dock toggle
+  (pushes page aside via root margins), animated save status, close.
+- Selection: crosshair, dbl-click on page, tree row, breadcrumb, keyboard.
+  Selection overlay shows devtools-style margin/padding rings + label.
 - Edits apply to the live DOM **and** splice the HTML source byte-faithfully
   (parse5 source-location offsets); rollback on server error keeps DOM and
   source in sync.
 - Drag-and-drop: on-canvas (selection-first, ghost follows pointer, live
   before/after/inside markers, content-model validity rules, edge auto-scroll)
-  and tree-to-tree (top 30% = before, bottom 30% = after, middle = into).
+  and tree-to-tree (top 25% = before, bottom 25% = after, middle 50% = into,
+  on 22px rows — the old fiddly 6px band is gone).
 - Undo: Ctrl/Cmd+Z + toolbar button; per-file server snapshot stacks,
-  byte-exact restores.
+  byte-exact restores. Delete no longer confirms (undo covers it).
 - Ops: `setText`, `setAttr`, `setStyle`, `move` (sibling swap), `moveTo`
-  (reparent), `remove`, `undo`.
+  (reparent), `remove`, `undo` — server untouched by the panel overhaul.
 
-**Known nits:** tree "into" band is ~6px tall on 16px rows (fiddly); left panel
-overlays the page's left ~240px (no dock mode); server ops are tag-agnostic
-(validity rules are client-advisory only).
+**Known nits:** server ops are tag-agnostic (validity rules are
+client-advisory only); dock mode shifts the page with root margins, so
+fixed-position page elements don't move; Design-tab edits write inline
+styles only (stylesheets are read, never modified).
 
 ## Deploy flow (important)
 
@@ -93,5 +109,5 @@ netlify deploy --build --prod
 ## Not done / open
 
 - Landing `<title>`/og refresh to match new hero.
-- Possible: widen tree "into" band; dock mode for panels; Netlify continuous
-  deployment from GitHub.
+- Possible: Netlify continuous deployment from GitHub. (Tree "into" band and
+  panel dock mode shipped with the panel overhaul.)

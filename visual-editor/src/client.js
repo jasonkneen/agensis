@@ -5,6 +5,13 @@
  * Edits hit the real DOM first for instant feedback, then POST to
  * /__visual-editor/edit so the server patches the HTML source file on disk.
  *
+ * UI: Navigator (left) — searchable element tree with per-type icons,
+ * keyboard navigation and drag-reordering. Inspector (right) — Design tab
+ * (layout / spacing box-model / size / position / typography / background /
+ * border / effects, all computed-style aware, committed as inline styles via
+ * setStyle) and Element tab (id, class chips, attributes, text, raw inline
+ * CSS). Breadcrumb strip along the bottom. All edits are undoable (Cmd/Ctrl+Z).
+ *
  * Teardown: window.__visualEditor.disable()
  */
 (function () {
@@ -30,9 +37,83 @@
       }
     }
     (children || []).forEach(function (c) {
+      if (c == null) return;
       el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     });
     return el;
+  }
+
+  // -------------------------------------------------------------------------
+  // Inline SVG icons — tiny, stroke-based, inherit currentColor.
+  // -------------------------------------------------------------------------
+  var ICONS = {
+    box: 'M2.5 2.5h11v11h-11z',
+    text: 'M3 4h10M8 4v8.5',
+    image: 'M2.5 3.5h11v9h-11zM3 11l3.2-3 2.6 2.4 2-1.8 2.7 2.4M6 6.6a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8z',
+    pointer: 'M4.5 2.5l7.5 6.5-3.7.6 2.3 3.7-1.7 1-2.2-3.8-2.2 2.5z',
+    table: 'M2.5 3.5h11v9h-11zM2.5 6.5h11M6.5 3.5v9',
+    list: 'M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.8 4.5h.01M2.8 8h.01M2.8 11.5h.01',
+    dot: 'M8 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z',
+    eye: 'M1.5 8s2.5-4.2 6.5-4.2S14.5 8 14.5 8 12 12.2 8 12.2 1.5 8 1.5 8zM8 9.8a1.8 1.8 0 1 0 0-3.6 1.8 1.8 0 0 0 0 3.6z',
+    eyeoff: 'M3 13L13 3M6.2 11.7c.6.3 1.2.5 1.8.5 4 0 6.5-4.2 6.5-4.2a13 13 0 0 0-2.3-2.5M9.9 4.1A6.7 6.7 0 0 0 8 3.8C4 3.8 1.5 8 1.5 8s.9 1.5 2.4 2.7',
+    chevR: 'M6 4l4 4-4 4',
+    chevD: 'M4 6l4 4 4-4',
+    search: 'M11 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM10 10l3.8 3.8',
+    unfold: 'M4 5.5L8 2l4 3.5M4 10.5L8 14l4-3.5',
+    fold: 'M4 2.5L8 6l4-3.5M4 13.5L8 10l4 3.5',
+    crosshair: 'M8 3.4a4.6 4.6 0 1 0 0 9.2 4.6 4.6 0 0 0 0-9.2zM8 1v2.4M8 12.6V15M1 8h2.4M12.6 8H15',
+    arrowUp: 'M8 13V3M4 7l4-4 4 4',
+    arrowDown: 'M8 3v10M4 9l4 4 4-4',
+    trash: 'M3 4.5h10M5.5 4.5V3h5v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5',
+    undo: 'M3.5 6.5h6a3.5 3.5 0 1 1 0 7H6M3.5 6.5l3-3M3.5 6.5l3 3',
+    x: 'M4 4l8 8M12 4l-8 8',
+    dock: 'M2.5 3.5h11v9h-11zM10.5 3.5v9',
+    jStart: 'M3 3v10M5.5 5h2.5v6H5.5zM9.5 5H12v6H9.5z',
+    jCenter: 'M5 5h2.5v6H5zM8.8 5h2.5v6H8.8z',
+    jBetween: 'M2.5 3v10M13.5 3v10M4.5 5H7v6H4.5zM9.3 5h2.5v6H9.3z',
+    jEnd: 'M13 3v10M4 5h2.5v6H4zM8 5h2.5v6H8z',
+    aStart: 'M3 3h10M5 5.5h6V8H5z',
+    aCenter: 'M3 8h2M11 8h2M5 5.5h6v5H5z',
+    aStretch: 'M3 3h10M3 13h10M5 5.5h6v5H5z',
+    aEnd: 'M3 13h10M5 8h6v2.5H5z',
+    alignL: 'M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7',
+    alignC: 'M2.5 3.5h11M4.5 6.5h7M2.5 9.5h11M4.5 12.5h7',
+    alignR: 'M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7',
+    alignJ: 'M2.5 3.5h11M2.5 6.5h11M2.5 9.5h11M2.5 12.5h11',
+    row: 'M2 8h10M9 5l3 3-3 3',
+    col: 'M8 2v10M5 9l3 3 3-3',
+  };
+
+  function svgIcon(name, cls) {
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', ICONS[name] || ICONS.dot);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', 'currentColor');
+    p.setAttribute('stroke-width', '1.4');
+    p.setAttribute('stroke-linecap', 'round');
+    p.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(p);
+    return svg;
+  }
+
+  // Element category → icon + tint, used by the Navigator.
+  var TAG_CATS = [
+    { cls: 'c-media', icon: 'image', tags: 'img svg video audio canvas picture iframe embed object' },
+    { cls: 'c-inter', icon: 'pointer', tags: 'a button select input textarea form option optgroup datalist fieldset' },
+    { cls: 'c-table', icon: 'table', tags: 'table thead tbody tfoot tr td th caption colgroup col' },
+    { cls: 'c-list', icon: 'list', tags: 'ul ol dl menu' },
+    { cls: 'c-text', icon: 'text', tags: 'h1 h2 h3 h4 h5 h6 p span em strong b i u small blockquote pre code label li dt dd figcaption cite abbr mark time sub sup' },
+    { cls: 'c-box', icon: 'box', tags: 'div section article aside header footer nav main figure details summary dialog template hr br' },
+  ];
+  var TAG_CAT = {};
+  TAG_CATS.forEach(function (c) {
+    c.tags.split(' ').forEach(function (t) { TAG_CAT[t] = c; });
+  });
+  function catFor(el) {
+    return TAG_CAT[el.tagName.toLowerCase()] || { cls: 'c-box', icon: 'dot' };
   }
 
   // -------------------------------------------------------------------------
@@ -111,83 +192,331 @@
   host.setAttribute('data-ve-ignore', '');
   var shadow = host.attachShadow({ mode: 'open' });
 
+  var LEFT_W = 264, RIGHT_W = 320, BAR_H = 46, CRUMB_H = 28;
+
   shadow.appendChild(h('style', {
     text: [
       ':host { all: initial; }',
-      '* { box-sizing: border-box; margin: 0; padding: 0; }',
-      '.ve { position: fixed; z-index: 2147483000; background: #16181d; color: #d6dae3;',
+      '*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }',
+      ':host {',
+      '  --bg: rgba(11,13,18,.96); --bg2: #07090c; --bg3: #10151d;',
+      '  --line: #1c212c; --line2: #242b38;',
+      '  --tx: #e8e6e1; --tx2: #8b909c; --tx3: #565d6b;',
+      '  --blue: #4f9cf9; --mint: #55e6a5; --amber: #f2b94b; --red: #ff6b6b; --purple: #b48ef7;',
+      '  --ring: 0 0 0 2px rgba(79,156,249,.28);',
+      '}',
+      '.ve { position: fixed; z-index: 2147483000; background: var(--bg); color: var(--tx);',
+      '  -webkit-backdrop-filter: blur(14px) saturate(1.15); backdrop-filter: blur(14px) saturate(1.15);',
       '  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;',
-      '  border: 1px solid #2c313c; box-shadow: 0 4px 24px rgba(0,0,0,.5); }',
-      '#left { left: 0; top: 0; bottom: 44px; width: 240px; overflow: auto; border-width: 0 1px 0 0; }',
-      '#right { right: 0; top: 0; bottom: 44px; width: 300px; overflow: auto; border-width: 0 0 0 1px; padding: 8px; }',
-      '#bar { left: 0; right: 0; bottom: 0; height: 44px; display: flex; align-items: center;',
-      '  gap: 8px; padding: 0 10px; border-width: 1px 0 0 0; }',
-      'button { background: #22262f; color: #d6dae3; border: 1px solid #3a4150; border-radius: 3px;',
-      '  padding: 3px 9px; font: inherit; cursor: pointer; }',
-      'button:hover { background: #2c323f; }',
-      'button.on { background: #2d4a7a; border-color: #4a7ac7; color: #fff; }',
-      'input, textarea { background: #0f1115; color: #d6dae3; border: 1px solid #333a47;',
-      '  border-radius: 3px; padding: 3px 6px; font: inherit; width: 100%; }',
-      'textarea { resize: vertical; min-height: 48px; }',
-      'label { display: block; color: #8b93a3; margin: 8px 0 3px; text-transform: uppercase;',
-      '  font-size: 9px; letter-spacing: .08em; }',
-      '.row { display: flex; gap: 4px; align-items: center; margin: 2px 0; }',
-      '.row input { flex: 1; min-width: 0; }',
-      '.mini { padding: 1px 6px; flex: none; }',
-      '.sec { border-top: 1px solid #262b34; margin-top: 10px; padding-top: 4px; }',
-      '#status { color: #8b93a3; margin-left: auto; white-space: nowrap; overflow: hidden;',
-      '  text-overflow: ellipsis; max-width: 45%; }',
-      '#status.err { color: #ff7b72; }',
-      '#status.ok { color: #7ee787; }',
-      '.trow { display: flex; align-items: center; white-space: nowrap; cursor: pointer;',
-      '  padding: 0 4px; border-radius: 2px; }',
-      '.trow:hover { background: #20242c; }',
-      '.trow.sel { background: #2d4a7a; color: #fff; }',
-      '.trow .caret { width: 12px; flex: none; color: #6b7382; cursor: pointer; user-select: none; }',
-      '.trow .tag { color: #7aa5f8; }',
-      '.trow.sel .tag { color: #cfe1ff; }',
-      '.trow .id { color: #e0a75e; }',
-      '.trow .cls { color: #9ece8a; }',
-      '.trow .snip { color: #6b7382; overflow: hidden; text-overflow: ellipsis; }',
-      '.kids { margin-left: 12px; }',
+      '  border: 0 solid var(--line); }',
+      '.ve, .ve * { scrollbar-width: thin; scrollbar-color: #232a36 transparent; }',
+      '.ve ::-webkit-scrollbar { width: 8px; height: 8px; }',
+      '.ve ::-webkit-scrollbar-thumb { background: #232a36; border-radius: 4px; }',
+      '.ve ::-webkit-scrollbar-thumb:hover { background: #2e3745; }',
+      '.ic { width: 12px; height: 12px; flex: none; display: block; }',
+      '',
+      '/* ---- panel chrome ---- */',
+      '#left { left: 0; top: 0; bottom: ' + BAR_H + 'px; width: ' + LEFT_W + 'px;',
+      '  border-right-width: 1px; display: flex; flex-direction: column; }',
+      '#right { right: 0; top: 0; bottom: ' + BAR_H + 'px; width: ' + RIGHT_W + 'px;',
+      '  border-left-width: 1px; display: flex; flex-direction: column; }',
+      '.phead { flex: none; display: flex; align-items: center; gap: 6px; height: 34px;',
+      '  padding: 0 10px; border-bottom: 1px solid var(--line); }',
+      '.ptitle { font: 600 9.5px/1 system-ui, sans-serif; letter-spacing: .14em; color: var(--tx2); }',
+      '#treecount { font-size: 9px; color: var(--tx3); background: var(--bg3); border-radius: 7px;',
+      '  padding: 1px 6px; line-height: 13px; }',
+      '.pgrow { flex: 1; }',
+      '.ibtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;',
+      '  background: transparent; color: var(--tx2); border: 1px solid transparent; border-radius: 5px; cursor: pointer; }',
+      '.ibtn:hover { background: var(--bg3); color: var(--tx); border-color: var(--line2); }',
+      '.pbody { flex: 1; overflow: auto; overscroll-behavior: contain; }',
+      '',
+      '/* ---- navigator search ---- */',
+      '#searchwrap { flex: none; position: relative; padding: 7px 8px; border-bottom: 1px solid var(--line); }',
+      '#searchwrap > .ic { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--tx3); pointer-events: none; }',
+      '#search { width: 100%; height: 24px; padding: 0 24px; background: var(--bg2); color: var(--tx);',
+      '  border: 1px solid var(--line); border-radius: 6px; font: inherit; outline: none; transition: border-color .12s, box-shadow .12s; }',
+      '#search::placeholder { color: var(--tx3); }',
+      '#search:focus { border-color: var(--blue); box-shadow: var(--ring); }',
+      '#searchclear { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: none;',
+      '  width: 18px; height: 18px; }',
+      '#searchwrap.has #searchclear { display: inline-flex; }',
+      '',
+      '/* ---- navigator tree ---- */',
+      '#tree { padding: 4px 0 12px; }',
+      '.trow { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer;',
+      '  height: 22px; padding: 0 8px 0 6px; position: relative; }',
+      '.trow:hover { background: #141924; }',
+      '.trow.sel { background: linear-gradient(90deg, rgba(79,156,249,.17), rgba(79,156,249,.03)); }',
+      '.trow.sel::before { content: ""; position: absolute; left: 0; top: 2px; bottom: 2px; width: 2px;',
+      '  background: var(--blue); border-radius: 0 2px 2px 0; }',
+      '.trow.hit::after { content: ""; position: absolute; left: 1px; top: 9px; width: 3px; height: 3px;',
+      '  border-radius: 50%; background: var(--amber); }',
+      '.trow.hid { opacity: .45; }',
+      '.trow .caret { width: 12px; height: 12px; flex: none; display: inline-flex; align-items: center;',
+      '  justify-content: center; color: var(--tx3); border-radius: 3px; }',
+      '.trow .caret:hover { color: var(--tx); background: var(--bg3); }',
+      '.trow .caret .ic { width: 9px; height: 9px; }',
+      '.trow .cat { flex: none; display: inline-flex; }',
+      '.trow .cat.c-box { color: #6f87b3; } .trow .cat.c-text { color: #9aa3b2; }',
+      '.trow .cat.c-media { color: var(--mint); } .trow .cat.c-inter { color: var(--amber); }',
+      '.trow .cat.c-table { color: var(--purple); } .trow .cat.c-list { color: #7fb8c9; }',
+      '.trow .cat .ic { width: 11px; height: 11px; }',
+      '.trow .tag { color: #7ab3fa; }',
+      '.trow.sel .tag { color: #cfe4ff; }',
+      '.trow .id { color: var(--amber); }',
+      '.trow .cls { color: var(--mint); opacity: .85; }',
+      '.trow .snip { color: var(--tx3); overflow: hidden; text-overflow: ellipsis; font-style: italic; }',
+      '.trow .flex1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }',
+      '.trow .nbadge { flex: none; font-size: 9px; color: var(--tx3); background: var(--bg3);',
+      '  border-radius: 7px; padding: 0 5px; line-height: 13px; }',
+      '.trow .rbtn { flex: none; display: none; align-items: center; justify-content: center;',
+      '  width: 16px; height: 16px; color: var(--tx3); border-radius: 4px; }',
+      '.trow:hover .rbtn { display: inline-flex; }',
+      '.trow .rbtn:hover { color: var(--tx); background: #1d2430; }',
+      '.trow .rbtn.on { display: inline-flex; color: var(--tx3); }',
+      '.tmore { color: var(--tx3); padding: 2px 8px 2px 24px; cursor: pointer; font-size: 10px; }',
+      '.tmore:hover { color: var(--blue); }',
+      '.tempty { color: var(--tx3); padding: 18px 14px; text-align: center; font: 11px system-ui, sans-serif; }',
+      '',
+      '/* ---- inspector ---- */',
+      '#eltag { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-size: 12px;',
+      '  white-space: nowrap; overflow: hidden; }',
+      '#eltag .dims { flex: none; }',
+      '#eltag .id, #eltag .cls { overflow: hidden; text-overflow: ellipsis; min-width: 3ch; flex-shrink: 1; }',
+      '#eltag .tag { color: #7ab3fa; font-weight: 600; }',
+      '#eltag .id { color: var(--amber); } #eltag .cls { color: var(--mint); opacity: .8; }',
+      '#eltag .dims { color: var(--tx3); font-size: 10px; margin-left: 2px; white-space: nowrap; }',
+      '#filechip { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;',
+      '  font-size: 9px; color: var(--tx3); background: var(--bg3); border-radius: 4px; padding: 1px 6px; }',
+      '#tabs { flex: none; display: flex; border-bottom: 1px solid var(--line); }',
+      '.tab { flex: 1; height: 28px; background: none; border: none; color: var(--tx2); font: 600 10px/1 system-ui, sans-serif;',
+      '  letter-spacing: .1em; cursor: pointer; position: relative; }',
+      '.tab:hover { color: var(--tx); }',
+      '.tab.on { color: var(--tx); }',
+      '.tab.on::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: -1px; height: 2px;',
+      '  background: var(--blue); border-radius: 2px 2px 0 0; }',
+      '.sec { border-bottom: 1px solid var(--line); }',
+      '.sechead { display: flex; align-items: center; gap: 6px; height: 27px; padding: 0 10px; cursor: pointer;',
+      '  user-select: none; }',
+      '.sechead:hover { background: #12161f; }',
+      '.sechead .ic { width: 9px; height: 9px; color: var(--tx3); transition: transform .12s; }',
+      '.sec.open .sechead .ic { transform: rotate(90deg); }',
+      '.sechead .t { font: 600 9.5px/1 system-ui, sans-serif; letter-spacing: .13em; color: var(--tx2); }',
+      '.sechead:hover .t { color: var(--tx); }',
+      '.secbody { display: none; padding: 2px 10px 12px; }',
+      '.sec.open .secbody { display: block; }',
+      '',
+      '/* ---- inspector controls ---- */',
+      'input, textarea, select { background: var(--bg2); color: var(--tx); border: 1px solid var(--line);',
+      '  border-radius: 5px; padding: 0 7px; font: inherit; width: 100%; height: 24px; outline: none;',
+      '  transition: border-color .12s, box-shadow .12s; }',
+      'input::placeholder, textarea::placeholder { color: var(--tx3); }',
+      'input:focus, textarea:focus, select:focus { border-color: var(--blue); box-shadow: var(--ring); }',
+      'textarea { height: auto; min-height: 52px; padding: 5px 7px; resize: vertical; line-height: 1.45; }',
+      'select { appearance: none; -webkit-appearance: none; padding-right: 18px;',
+      "  background-image: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6'><path d='M1 1l3 3 3-3' fill='none' stroke='%238b909c' stroke-width='1.4' stroke-linecap='round'/></svg>\");",
+      '  background-repeat: no-repeat; background-position: right 6px center; }',
+      '.prow { display: flex; align-items: center; gap: 6px; margin-top: 6px; }',
+      '.plabel { flex: none; width: 58px; color: var(--tx2); font-size: 10px; overflow: hidden;',
+      '  text-overflow: ellipsis; white-space: nowrap; cursor: ew-resize; user-select: none; }',
+      '.plabel.nodrag { cursor: default; }',
+      '.prow.set .plabel { color: var(--blue); }',
+      '.prow.set .plabel::after { content: "•"; margin-left: 3px; }',
+      '.prow .reset { flex: none; display: none; width: 16px; height: 16px; align-items: center;',
+      '  justify-content: center; color: var(--tx3); border-radius: 4px; cursor: pointer; }',
+      '.prow.set .reset { display: inline-flex; }',
+      '.prow .reset:hover { color: var(--red); background: var(--bg3); }',
+      '.prow .reset .ic { width: 8px; height: 8px; }',
+      '.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }',
+      '.grid2 .plabel { width: 34px; }',
+      '',
+      '/* segmented control */',
+      '.seg { display: flex; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px;',
+      '  padding: 2px; gap: 2px; flex: 1; min-width: 0; }',
+      '.seg button { flex: 1; min-width: 0; height: 20px; display: inline-flex; align-items: center;',
+      '  justify-content: center; gap: 3px; background: transparent; border: none; border-radius: 4px;',
+      '  color: var(--tx2); font: 10px ui-monospace, monospace; cursor: pointer; padding: 0 2px; }',
+      '.seg button:hover { color: var(--tx); background: #131924; }',
+      '.seg button.on { color: var(--blue); background: #16233a; box-shadow: inset 0 0 0 1px rgba(79,156,249,.35); }',
+      '.seg button .ic { width: 11px; height: 11px; }',
+      '',
+      '/* color control */',
+      '.swatch { flex: none; width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--line2);',
+      '  position: relative; overflow: hidden; cursor: pointer;',
+      '  background-image: conic-gradient(#3a3f4a 25%, #262b33 0 50%, #3a3f4a 0 75%, #262b33 0); background-size: 8px 8px; }',
+      '.swatch .fill { position: absolute; inset: 0; }',
+      '.swatch input[type=color] { position: absolute; inset: -4px; width: 200%; height: 200%; opacity: 0; cursor: pointer; }',
+      '',
+      '/* slider */',
+      'input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; padding: 0;',
+      '  background: linear-gradient(90deg, var(--blue) var(--fill, 100%), #222835 var(--fill, 100%));',
+      '  border: none; border-radius: 2px; }',
+      'input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px;',
+      '  border-radius: 50%; background: #dfe6f2; border: none; box-shadow: 0 1px 4px rgba(0,0,0,.5); cursor: pointer; }',
+      '',
+      '/* box model */',
+      '.bm { position: relative; margin-top: 8px; border: 1px dashed #3a352a; border-radius: 6px;',
+      '  padding: 20px 40px; background: rgba(242,185,75,.045); }',
+      '.bm-pad { position: relative; border: 1px dashed #24382f; border-radius: 5px; padding: 20px 40px;',
+      '  background: rgba(85,230,165,.05); }',
+      '.bm-core { height: 30px; display: flex; align-items: center; justify-content: center; gap: 4px;',
+      '  background: rgba(79,156,249,.12); border: 1px solid rgba(79,156,249,.35); border-radius: 4px;',
+      '  color: #cfe4ff; font-size: 10px; white-space: nowrap; overflow: hidden; }',
+      '.bm-tag { position: absolute; top: 3px; left: 7px; font: 600 7.5px/1 system-ui, sans-serif;',
+      '  letter-spacing: .12em; color: #8a7748; pointer-events: none; }',
+      '.bm-pad > .bm-tag { color: #4e7a63; }',
+      '.bm-n { position: absolute; color: var(--tx2); font-size: 10px; cursor: ew-resize; user-select: none;',
+      '  padding: 1px 4px; border-radius: 3px; line-height: 1.2; }',
+      '.bm-n:hover { color: var(--tx); background: rgba(255,255,255,.07); }',
+      '.bm-n.set { color: var(--blue); }',
+      '.bm-n.n-top { top: 2px; left: 50%; transform: translateX(-50%); }',
+      '.bm-n.n-bottom { bottom: 2px; left: 50%; transform: translateX(-50%); }',
+      '.bm-n.n-left { left: 2px; top: 50%; transform: translateY(-50%); }',
+      '.bm-n.n-right { right: 2px; top: 50%; transform: translateY(-50%); }',
+      '.bm-n input { width: 42px; height: 16px; padding: 0 3px; font-size: 10px; border-radius: 3px; }',
+      '',
+      '/* class chips */',
+      '.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }',
+      '.chip { display: inline-flex; align-items: center; gap: 4px; background: rgba(85,230,165,.1);',
+      '  border: 1px solid rgba(85,230,165,.28); color: var(--mint); border-radius: 10px;',
+      '  padding: 1px 4px 1px 8px; font-size: 10px; line-height: 16px; }',
+      '.chip .rm { display: inline-flex; width: 13px; height: 13px; align-items: center; justify-content: center;',
+      '  border-radius: 50%; cursor: pointer; color: rgba(85,230,165,.7); }',
+      '.chip .rm:hover { background: rgba(255,107,107,.2); color: var(--red); }',
+      '.chip .rm .ic { width: 7px; height: 7px; }',
+      '.mini { height: 22px; padding: 0 9px; background: var(--bg3); color: var(--tx2); border: 1px solid var(--line2);',
+      '  border-radius: 5px; font: inherit; font-size: 10px; cursor: pointer; width: auto; }',
+      '.mini:hover { color: var(--tx); border-color: #344054; background: #161c26; }',
+      '.hint { color: var(--tx3); font-size: 10px; margin-top: 6px; line-height: 1.4; overflow: hidden;',
+      '  text-overflow: ellipsis; white-space: nowrap; }',
+      '.empty-state { padding: 30px 18px; text-align: center; color: var(--tx3); font: 11px system-ui, sans-serif; line-height: 1.7; }',
+      '.empty-state .ic { width: 22px; height: 22px; margin: 0 auto 8px; color: #2e3646; }',
+      '.empty-state kbd { background: var(--bg3); border: 1px solid var(--line2); border-radius: 4px;',
+      '  padding: 1px 5px; font: 10px ui-monospace, monospace; color: var(--tx2); }',
+      '',
+      '/* ---- breadcrumbs ---- */',
+      '#crumbs { left: ' + LEFT_W + 'px; right: ' + RIGHT_W + 'px; bottom: ' + BAR_H + 'px; height: ' + CRUMB_H + 'px;',
+      '  display: none; align-items: center; gap: 2px; padding: 0 10px; overflow-x: auto; overflow-y: hidden;',
+      '  border-top-width: 1px; scrollbar-width: none; }',
+      '#crumbs::-webkit-scrollbar { display: none; }',
+      '#crumbs.show { display: flex; }',
+      '.crumb { flex: none; display: inline-flex; align-items: baseline; gap: 2px; padding: 2px 6px;',
+      '  border-radius: 4px; cursor: pointer; color: var(--tx2); }',
+      '.crumb:hover { background: var(--bg3); color: var(--tx); }',
+      '.crumb .id { color: var(--amber); font-size: 10px; }',
+      '.crumb.cur { color: #cfe4ff; background: rgba(79,156,249,.14); }',
+      '.crumbsep { flex: none; color: var(--tx3); font-size: 9px; }',
+      '',
+      '/* ---- toolbar ---- */',
+      '#bar { left: 0; right: 0; bottom: 0; height: ' + BAR_H + 'px; display: flex; align-items: center;',
+      '  gap: 6px; padding: 0 10px; border-top-width: 1px; }',
+      '#bar .group { display: flex; align-items: center; gap: 4px; padding-right: 8px; margin-right: 2px;',
+      '  border-right: 1px solid var(--line); }',
+      '#bar button { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;',
+      '  background: transparent; color: var(--tx2); border: 1px solid transparent; border-radius: 6px;',
+      '  font: inherit; cursor: pointer; transition: background .12s, color .12s; }',
+      '#bar button:hover { background: var(--bg3); color: var(--tx); border-color: var(--line2); }',
+      '#bar button.on { background: #16233a; color: var(--blue); border-color: rgba(79,156,249,.4); }',
+      '#status { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--tx2);',
+      '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }',
+      '#status .dotp { width: 6px; height: 6px; border-radius: 50%; background: #3a4150; flex: none; }',
+      '#status.ok { color: var(--mint); } #status.ok .dotp { background: var(--mint); }',
+      '#status.err { color: var(--red); } #status.err .dotp { background: var(--red); }',
+      '#status.saving { color: var(--amber); } #status.saving .dotp { background: var(--amber);',
+      '  animation: vepulse 1s ease-in-out infinite; }',
+      '@keyframes vepulse { 50% { opacity: .3; } }',
+      '',
+      '/* ---- canvas overlays ---- */',
       '.ov { position: fixed; z-index: 2147483002; pointer-events: none; }',
-      '#ov-hover { border: 1px dashed #4a7ac7; background: rgba(74,122,199,.08); display: none; }',
-      '#ov-sel { border: 2px solid #4a7ac7; display: none; }',
-      '#ov-label { background: #4a7ac7; color: #fff; padding: 0 5px; font-size: 10px;',
-      '  border-radius: 2px; display: none; }',
-      '#ov-line { background: #4a7ac7; display: none; }',
-      '#ov-line.bad { background: #ff5c5c; }',
-      '#ov-inside { border: 2px solid #4a7ac7; background: rgba(74,122,199,.10); display: none; }',
-      '#ov-inside.bad { border-color: #ff5c5c; background: rgba(255,92,92,.10); }',
-      '#ov-drop-label { background: #4a7ac7; color: #fff; padding: 0 5px; font-size: 10px;',
-      '  border-radius: 2px; display: none; white-space: nowrap; }',
-      '#ov-drop-label.bad { background: #ff5c5c; }',
+      '#ov-hover { border: 1px dashed rgba(79,156,249,.85); background: rgba(79,156,249,.07);',
+      '  border-radius: 1px; display: none; }',
+      '#ov-hover-label, #ov-label { background: #101623; color: #cfe4ff; border: 1px solid rgba(79,156,249,.5);',
+      '  padding: 1px 7px; font: 10px ui-monospace, monospace; border-radius: 4px; display: none;',
+      '  box-shadow: 0 2px 10px rgba(0,0,0,.5); white-space: nowrap; }',
+      '#ov-sel { border: 1.5px solid var(--blue); border-radius: 1px; display: none;',
+      '  box-shadow: 0 0 0 1px rgba(79,156,249,.25), 0 0 14px rgba(79,156,249,.25); }',
+      '#ov-margin { border-style: solid; border-color: rgba(242,185,75,.22); display: none; }',
+      '#ov-padding { border-style: solid; border-color: rgba(85,230,165,.2); display: none; }',
+      '#ov-line { background: var(--blue); display: none; border-radius: 1px;',
+      '  box-shadow: 0 0 8px rgba(79,156,249,.8); }',
+      '#ov-line.bad { background: var(--red); box-shadow: 0 0 8px rgba(255,92,92,.8); }',
+      '#ov-inside { border: 2px solid var(--blue); background: rgba(79,156,249,.1); display: none; border-radius: 2px; }',
+      '#ov-inside.bad { border-color: var(--red); background: rgba(255,92,92,.1); }',
+      '#ov-drop-label { background: var(--blue); color: #fff; padding: 0 6px; font-size: 10px;',
+      '  border-radius: 3px; display: none; white-space: nowrap; }',
+      '#ov-drop-label.bad { background: var(--red); }',
     ].join('\n'),
   }));
 
   // -------------------------------------------------------------------------
   // Panel skeletons
   // -------------------------------------------------------------------------
-  var leftPanel = h('div', { class: 've', id: 'left' });
-  var rightPanel = h('div', { class: 've', id: 'right' });
-  var statusEl = h('span', { id: 'status', text: 'idle' });
-  var selectBtn = h('button', { text: 'Select', title: 'Click an element on the page' });
-  var upBtn = h('button', { text: 'Move up' });
-  var downBtn = h('button', { text: 'Move down' });
-  var delBtn = h('button', { text: 'Delete' });
-  var undoBtn = h('button', { text: 'Undo', title: 'Ctrl/Cmd+Z' });
-  var closeBtn = h('button', { text: '×', title: 'Close editor' });
-  var bar = h('div', { class: 've', id: 'bar' },
-    [selectBtn, upBtn, downBtn, delBtn, undoBtn, statusEl, closeBtn]);
+
+  // Left — Navigator
+  var searchIn = h('input', { id: 'search', placeholder: 'Find tag, #id, .class, text…', spellcheck: 'false' });
+  var searchClear = h('span', { class: 'ibtn', id: 'searchclear', title: 'Clear (Esc)' }, [svgIcon('x')]);
+  var searchWrap = h('div', { id: 'searchwrap' }, [svgIcon('search'), searchIn, searchClear]);
+  var treeBox = h('div', { class: 'pbody', id: 'tree' });
+  var expandAllBtn = h('button', { class: 'ibtn', title: 'Expand all' }, [svgIcon('unfold')]);
+  var collapseAllBtn = h('button', { class: 'ibtn', title: 'Collapse all' }, [svgIcon('fold')]);
+  var treeCount = h('span', { id: 'treecount' });
+  var leftPanel = h('div', { class: 've', id: 'left' }, [
+    h('div', { class: 'phead' }, [
+      h('span', { class: 'ptitle', text: 'NAVIGATOR' }),
+      treeCount,
+      h('span', { class: 'pgrow' }),
+      expandAllBtn, collapseAllBtn,
+    ]),
+    searchWrap,
+    treeBox,
+  ]);
+
+  // Right — Inspector
+  var elTag = h('div', { id: 'eltag' });
+  var fileChip = h('span', { id: 'filechip' });
+  var designTabBtn = h('button', { class: 'tab on', text: 'DESIGN' });
+  var elementTabBtn = h('button', { class: 'tab', text: 'ELEMENT' });
+  var tabsRow = h('div', { id: 'tabs' }, [designTabBtn, elementTabBtn]);
+  var propsBox = h('div', { class: 'pbody', id: 'props' });
+  var rightPanel = h('div', { class: 've', id: 'right' }, [
+    h('div', { class: 'phead' }, [elTag, h('span', { class: 'pgrow' }), fileChip]),
+    tabsRow,
+    propsBox,
+  ]);
+
+  // Bottom — breadcrumbs + toolbar
+  var crumbsBar = h('div', { class: 've', id: 'crumbs' });
+  var statusTx = h('span', { id: 'statustx', text: 'idle' });
+  var statusEl = h('span', { id: 'status' }, [h('span', { class: 'dotp' }), statusTx]);
+  var selectBtn = h('button', { title: 'Pick an element on the page (V)' }, [svgIcon('crosshair'), 'Select']);
+  var upBtn = h('button', { title: 'Move before previous sibling' }, [svgIcon('arrowUp')]);
+  var downBtn = h('button', { title: 'Move after next sibling' }, [svgIcon('arrowDown')]);
+  var delBtn = h('button', { title: 'Delete element (⌫)' }, [svgIcon('trash')]);
+  var undoBtn = h('button', { title: 'Undo (⌘Z)' }, [svgIcon('undo'), 'Undo']);
+  var dockBtn = h('button', { title: 'Dock: push the page aside instead of overlapping it' }, [svgIcon('dock')]);
+  var closeBtn = h('button', { title: 'Close editor' }, [svgIcon('x')]);
+  var bar = h('div', { class: 've', id: 'bar' }, [
+    h('div', { class: 'group' }, [selectBtn]),
+    h('div', { class: 'group' }, [upBtn, downBtn, delBtn]),
+    h('div', { class: 'group' }, [undoBtn]),
+    dockBtn,
+    statusEl,
+    closeBtn,
+  ]);
 
   var ovHover = h('div', { class: 'ov', id: 'ov-hover' });
+  var ovHoverLabel = h('div', { class: 'ov', id: 'ov-hover-label' });
+  var ovMargin = h('div', { class: 'ov', id: 'ov-margin' });
+  var ovPadding = h('div', { class: 'ov', id: 'ov-padding' });
   var ovSel = h('div', { class: 'ov', id: 'ov-sel' });
   var ovLabel = h('div', { class: 'ov', id: 'ov-label' });
   var ovLine = h('div', { class: 'ov', id: 'ov-line' });
   var ovInside = h('div', { class: 'ov', id: 'ov-inside' });
   var ovDropLabel = h('div', { class: 'ov', id: 'ov-drop-label' });
 
-  [leftPanel, rightPanel, bar, ovHover, ovSel, ovLabel, ovLine, ovInside, ovDropLabel]
+  [leftPanel, rightPanel, crumbsBar, bar,
+    ovMargin, ovPadding, ovHover, ovHoverLabel, ovSel, ovLabel, ovLine, ovInside, ovDropLabel]
     .forEach(function (el) { shadow.appendChild(el); });
   document.body.appendChild(host);
 
@@ -195,11 +524,26 @@
   // State
   // -------------------------------------------------------------------------
   var state = {
-    selected: null,      // currently selected page element
+    selected: null,       // currently selected page element
     selectMode: false,
-    expanded: new WeakSet(),
+    open: new WeakMap(),  // element → explicit expanded/collapsed (default: depth < 2)
+    childLimit: new WeakMap(), // element → raised child render cap
+    filter: '',
+    tab: 'design',
+    sections: {},         // section title → open?
+    navOrder: [],         // elements in rendered tree order (keyboard nav)
     dirty: false,
+    docked: false,
   };
+
+  var DEFAULT_OPEN_SECTIONS = {
+    Layout: true, Spacing: true, Size: true, Typography: true,
+    Identity: true, Classes: true, Text: true, Attributes: true,
+  };
+
+  function isOpen(el, depth) {
+    return state.open.has(el) ? state.open.get(el) : depth < 2;
+  }
 
   // -------------------------------------------------------------------------
   // Save status + server round-trip + undo stack
@@ -209,18 +553,23 @@
   // so page and source never diverge; a success pushes {file, undo, redo}
   // onto the undo stack (mirrored by the server's per-file source stack).
   var undoStack = [];
+  var statusTimer = null;
 
   function setStatus(text, cls) {
-    statusEl.textContent = text;
+    statusTx.textContent = text;
     statusEl.className = cls || '';
+    if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+    if (cls === 'ok') {
+      statusTimer = setTimeout(function () { statusTx.textContent = 'idle'; statusEl.className = ''; }, 2200);
+    }
   }
 
   function refreshAll() {
-    rebuildTree(); rebuildProps(); refreshOverlays();
+    rebuildTree(); rebuildProps(); rebuildCrumbs(); refreshOverlays();
   }
 
   function sendEdit(op, dom) {
-    setStatus('saving…');
+    setStatus('saving…', 'saving');
     state.dirty = true;
     fetch(API, {
       method: 'POST',
@@ -235,7 +584,7 @@
             undoStack.push({ file: op.file, undo: dom.undo, redo: dom.redo });
             if (undoStack.length > 50) undoStack.shift();
           }
-          setStatus('saved ✓', 'ok');
+          setStatus('saved', 'ok');
         } else {
           if (dom) { dom.undo(); refreshAll(); }
           setStatus('error: ' + ((res && res.error) || 'unknown'), 'err');
@@ -253,7 +602,7 @@
     if (!top) { setStatus('nothing to undo'); return; }
     top.undo();
     refreshAll();
-    setStatus('saving…');
+    setStatus('saving…', 'saving');
     fetch('/__visual-editor/undo', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -262,7 +611,7 @@
       .then(function (r) { return r.json(); })
       .then(function (res) {
         if (res && res.ok) {
-          setStatus('undone ✓', 'ok');
+          setStatus('undone', 'ok');
         } else {
           // Server has no matching entry — re-apply the DOM so it stays
           // consistent with the untouched file.
@@ -306,49 +655,246 @@
   }
 
   // -------------------------------------------------------------------------
-  // Highlight overlays
+  // Style helpers — inline vs computed, commit sessions
   // -------------------------------------------------------------------------
-  function placeOverlay(ov, el, labelOv) {
-    if (!el || !el.getBoundingClientRect) { ov.style.display = 'none'; return; }
-    var r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) { ov.style.display = 'none'; return; }
-    ov.style.display = 'block';
-    ov.style.left = r.left + 'px';
-    ov.style.top = r.top + 'px';
-    ov.style.width = r.width + 'px';
-    ov.style.height = r.height + 'px';
-    if (labelOv) {
-      labelOv.style.display = 'block';
-      labelOv.style.left = r.left + 'px';
-      labelOv.style.top = Math.max(0, r.top - 16) + 'px';
-      var name = el.tagName.toLowerCase();
-      if (el.id) name += '#' + el.id;
-      labelOv.textContent = name;
+  function inlineVal(el, prop) { return el.style.getPropertyValue(prop); }
+  function computedVal(el, prop) {
+    try { return getComputedStyle(el).getPropertyValue(prop); } catch (e) { return ''; }
+  }
+
+  /** Commit one declaration as a setStyle op. beforeAttr = style attribute
+   * captured BEFORE any live preview touched it (undo restores it wholesale,
+   * matching the server's whole-file restore). */
+  function commitStyle(el, prop, value, beforeAttr) {
+    var redo = function () {
+      if (value == null || value === '') {
+        el.style.removeProperty(prop);
+        // The server drops an emptied style attribute entirely — mirror that.
+        if (el.style.length === 0) el.removeAttribute('style');
+      } else {
+        el.style.setProperty(prop, value);
+      }
+    };
+    var undo = function () {
+      if (beforeAttr == null) el.removeAttribute('style');
+      else el.setAttribute('style', beforeAttr);
+    };
+    redo();
+    if (fileFor(el)) {
+      sendEdit(opFor(el, { op: 'setStyle', property: prop, value: (value == null || value === '') ? null : value }),
+        { undo: undo, redo: redo });
     }
+    refreshOverlays();
+  }
+
+  /** Per-control edit session: capture pre-state on first touch, preview
+   * freely, then commit exactly once (or cancel back to the captured state). */
+  function styleSession(el) {
+    var before = null, active = false;
+    return {
+      start: function () {
+        if (!active) { before = el.hasAttribute('style') ? el.getAttribute('style') : null; active = true; }
+      },
+      preview: function (prop, v) {
+        this.start();
+        if (v == null || v === '') el.style.removeProperty(prop);
+        else el.style.setProperty(prop, v);
+        refreshOverlays();
+      },
+      commit: function (prop, v) {
+        this.start();
+        commitStyle(el, prop, v, before);
+        active = false;
+      },
+      cancel: function () {
+        if (!active) return;
+        if (before == null) el.removeAttribute('style');
+        else el.setAttribute('style', before);
+        active = false;
+        refreshOverlays();
+      },
+      isActive: function () { return active; },
+    };
+  }
+
+  /** "12px" + delta → "13px"; keeps whatever unit suffix is present. */
+  function stepValue(v, delta) {
+    var m = /^(-?\d*\.?\d+)(.*)$/.exec(String(v).trim());
+    if (!m) return null;
+    var n = parseFloat(m[1]) + delta;
+    n = Math.round(n * 100) / 100;
+    return n + m[2];
+  }
+
+  function normalizeCss(v, addPx) {
+    var t = String(v).trim();
+    if (t === '') return '';
+    if (addPx && /^-?\d*\.?\d+$/.test(t)) return t + 'px';
+    return t;
+  }
+
+  /** Draft guard: a non-empty value must be valid CSS for the property before
+   * it is committed to source (half-typed "1." or "#zz" never lands on disk).
+   * Fails open where CSS.supports is unavailable. */
+  function cssValueOk(prop, v) {
+    if (!v) return true;
+    try {
+      if (window.CSS && CSS.supports) return CSS.supports(prop, v);
+    } catch (e) { /* fall through */ }
+    return true;
+  }
+
+  function pxNum(v) {
+    var n = parseFloat(v);
+    return isNaN(n) ? 0 : Math.round(n * 10) / 10;
+  }
+
+  // rgb()/rgba() → #rrggbb for the native color picker.
+  function toHexColor(v) {
+    var m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(v || '');
+    if (!m) return /^#([0-9a-fA-F]{6})$/.test(v || '') ? v : '#000000';
+    function hx(x) { return ('0' + (+x).toString(16)).slice(-2); }
+    return '#' + hx(m[1]) + hx(m[2]) + hx(m[3]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Highlight overlays (selection gets devtools-style margin/padding rings)
+  // -------------------------------------------------------------------------
+  function elLabel(el, withDims) {
+    var name = el.tagName.toLowerCase();
+    if (el.id) name += '#' + el.id;
+    else {
+      var cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/)[0] : '';
+      if (cls) name += '.' + cls;
+    }
+    if (withDims) {
+      var r = el.getBoundingClientRect();
+      name += '  ' + Math.round(r.width) + '×' + Math.round(r.height);
+    }
+    return name;
+  }
+
+  function placeBox(ov, left, top, width, height) {
+    ov.style.display = 'block';
+    ov.style.left = left + 'px';
+    ov.style.top = top + 'px';
+    ov.style.width = Math.max(0, width) + 'px';
+    ov.style.height = Math.max(0, height) + 'px';
+  }
+
+  function placeLabel(labelOv, rect, text) {
+    labelOv.style.display = 'block';
+    labelOv.textContent = text;
+    // Keep the label inside the canvas strip between the two panels.
+    var minX = LEFT_W + 6, maxX = window.innerWidth - RIGHT_W - 140;
+    labelOv.style.left = Math.min(Math.max(rect.left, minX), Math.max(minX, maxX)) + 'px';
+    var top = rect.top - 22;
+    labelOv.style.top = (top < 2 ? rect.bottom + 4 : top) + 'px';
+  }
+
+  function hideSelOverlays() {
+    [ovSel, ovLabel, ovMargin, ovPadding].forEach(function (o) { o.style.display = 'none'; });
   }
 
   function refreshOverlays() {
-    placeOverlay(ovSel, state.selected, ovLabel);
+    var el = state.selected;
+    if (!el || !el.getBoundingClientRect || !el.isConnected) { hideSelOverlays(); return; }
+    var r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) { hideSelOverlays(); return; }
+    var cs = getComputedStyle(el);
+    var mt = pxNum(cs.marginTop), mr = pxNum(cs.marginRight), mb = pxNum(cs.marginBottom), ml = pxNum(cs.marginLeft);
+    var pt = pxNum(cs.paddingTop), pr = pxNum(cs.paddingRight), pb = pxNum(cs.paddingBottom), pl = pxNum(cs.paddingLeft);
+    var bt = pxNum(cs.borderTopWidth), br = pxNum(cs.borderRightWidth), bb = pxNum(cs.borderBottomWidth), bl = pxNum(cs.borderLeftWidth);
+
+    placeBox(ovSel, r.left, r.top, r.width, r.height);
+    // Margin ring: a border-drawn frame around the margin box.
+    if (mt || mr || mb || ml) {
+      placeBox(ovMargin, r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb);
+      ovMargin.style.borderWidth = mt + 'px ' + mr + 'px ' + mb + 'px ' + ml + 'px';
+    } else ovMargin.style.display = 'none';
+    // Padding ring: drawn inside the border box.
+    if (pt || pr || pb || pl) {
+      placeBox(ovPadding, r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
+      ovPadding.style.borderWidth = pt + 'px ' + pr + 'px ' + pb + 'px ' + pl + 'px';
+    } else ovPadding.style.display = 'none';
+    placeLabel(ovLabel, r, elLabel(el, true));
+    updateDims();
   }
 
+  function hoverHighlight(el) {
+    if (!el || isOurs(el) || !el.getBoundingClientRect) { hoverClear(); return; }
+    var r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) { hoverClear(); return; }
+    placeBox(ovHover, r.left, r.top, r.width, r.height);
+    placeLabel(ovHoverLabel, r, elLabel(el, true));
+  }
+  function hoverClear() { ovHover.style.display = 'none'; ovHoverLabel.style.display = 'none'; }
+
   // -------------------------------------------------------------------------
-  // Tree (left panel)
+  // Tree (left panel — Navigator)
   // -------------------------------------------------------------------------
   var treeRows = new WeakMap(); // element → its rendered row (for scrollIntoView)
+  var filterKeep = null;        // WeakMap el → {keep, match} while filtering
 
   function shortText(el) {
     var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-    return t.length > 28 ? t.slice(0, 28) + '…' : t;
+    return t.length > 26 ? t.slice(0, 26) + '…' : t;
+  }
+
+  function matchesFilter(el, q) {
+    if (el.tagName.toLowerCase().indexOf(q) !== -1) return true;
+    if (el.id && ('#' + el.id).toLowerCase().indexOf(q) !== -1) return true;
+    var cls = typeof el.className === 'string' ? el.className : (el.getAttribute('class') || '');
+    if (cls && ('.' + cls).toLowerCase().indexOf(q) !== -1) return true;
+    if (pageChildren(el).length === 0) {
+      var t = (el.textContent || '').toLowerCase();
+      if (t.indexOf(q) !== -1) return true;
+    }
+    return false;
+  }
+
+  var filterMatchCount = 0;
+
+  /** Precompute which elements stay visible under the active filter:
+   * keep = matches or has a matching descendant. */
+  function computeFilter() {
+    filterKeep = null;
+    filterMatchCount = 0;
+    var q = state.filter.trim().toLowerCase();
+    if (!q) return;
+    filterKeep = new WeakMap();
+    function walk(el, depth) {
+      if (depth > MAX_DEPTH || isOurs(el)) return false;
+      var match = matchesFilter(el, q);
+      if (match) filterMatchCount++;
+      var childKeep = false;
+      pageChildren(el).forEach(function (c) { if (walk(c, depth + 1)) childKeep = true; });
+      var keep = match || childKeep;
+      if (keep) filterKeep.set(el, { keep: true, match: match });
+      return keep;
+    }
+    pageChildren(document.body).forEach(function (c) { walk(c, 0); });
+  }
+
+  function countPageElements() {
+    var all = document.body.querySelectorAll('*');
+    var n = 0;
+    for (var i = 0; i < all.length; i++) if (!isOurs(all[i])) n++;
+    return n;
+  }
+
+  function isElHidden(el) {
+    try { return getComputedStyle(el).display === 'none'; } catch (e) { return false; }
   }
 
   function rowLabel(el) {
     var frag = document.createDocumentFragment();
     frag.appendChild(h('span', { class: 'tag', text: el.tagName.toLowerCase() }));
     if (el.id) frag.appendChild(h('span', { class: 'id', text: '#' + el.id }));
-    var cls = (el.className && typeof el.className === 'string')
+    var cls = (typeof el.className === 'string' && el.className)
       ? el.className.trim().split(/\s+/).slice(0, 2) : [];
     if (cls.length && cls[0]) frag.appendChild(h('span', { class: 'cls', text: '.' + cls.join('.') }));
-    if (el.children.length === 0) {
+    if (pageChildren(el).length === 0) {
       var s = shortText(el);
       if (s) frag.appendChild(h('span', { class: 'snip', text: ' “' + s + '”' }));
     }
@@ -357,155 +903,852 @@
 
   function buildTreeRow(el, depth) {
     if (isOurs(el)) return null;
-    var caret = h('span', { class: 'caret' });
-    var row = h('div', { class: 'trow' + (el === state.selected ? ' sel' : '') }, [caret, rowLabel(el)]);
-    row.style.paddingLeft = (depth * 12) + 'px';
+    var info = filterKeep ? filterKeep.get(el) : null;
+    if (filterKeep && !info) return null;
+
+    var kids = pageChildren(el);
+    var hasKids = kids.length > 0;
+    var open = filterKeep ? true : (hasKids && isOpen(el, depth));
+    var hidden = isElHidden(el);
+
+    var caret = h('span', { class: 'caret' }, hasKids ? [svgIcon(open ? 'chevD' : 'chevR')] : []);
+    var cat = catFor(el);
+    var row = h('div', {
+      class: 'trow' + (el === state.selected ? ' sel' : '') + (hidden ? ' hid' : '') +
+        (info && info.match ? ' hit' : ''),
+    }, [caret, h('span', { class: 'cat ' + cat.cls }, [svgIcon(cat.icon)]),
+      h('span', { class: 'flex1' }, [rowLabel(el)])]);
+    row.style.paddingLeft = (6 + depth * 12) + 'px';
+
+    // Right-side adornments: hide/show eye, collapsed child count.
+    var inlineHidden = inlineVal(el, 'display') === 'none';
+    if (hidden && inlineHidden) {
+      var eyeBtn = h('span', { class: 'rbtn on', title: 'Show (removes inline display: none)' }, [svgIcon('eyeoff')]);
+      eyeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        commitStyle(el, 'display', null, el.getAttribute('style'));
+        rebuildTree();
+      });
+      eyeBtn.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+      row.appendChild(eyeBtn);
+    } else if (!hidden) {
+      var hideBtn = h('span', { class: 'rbtn', title: 'Hide (inline display: none)' }, [svgIcon('eye')]);
+      hideBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        commitStyle(el, 'display', 'none', el.getAttribute('style'));
+        rebuildTree();
+      });
+      hideBtn.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+      row.appendChild(hideBtn);
+    }
+    if (hasKids && !open) row.appendChild(h('span', { class: 'nbadge', text: String(kids.length) }));
+
     treeRows.set(el, row);
     row.__veEl = el; // reverse lookup for tree-internal drag-and-drop
+    state.navOrder.push(el);
     row.addEventListener('click', function (ev) {
       ev.stopPropagation();
       select(el);
     });
+    row.addEventListener('mouseenter', function () { if (!drag) hoverHighlight(el); });
+    row.addEventListener('mouseleave', hoverClear);
     // Dragging a tree row moves the element, same as dragging on the page.
     row.addEventListener('pointerdown', function (ev) {
       if (ev.button !== 0) return;
       startPotentialDrag(el, ev.clientX, ev.clientY, true);
     });
-
-    var wrap = h('div', {}, [row]);
-    var kids = Array.prototype.filter.call(el.children, function (c) { return !isOurs(c); });
-    if (kids.length && depth < MAX_DEPTH) {
-      var open = depth < 2 || state.expanded.has(el);
-      caret.textContent = open ? '▾' : '▸';
+    if (hasKids) {
       caret.addEventListener('click', function (ev) {
         ev.stopPropagation();
-        if (state.expanded.has(el)) state.expanded.delete(el);
-        else state.expanded.add(el);
+        state.open.set(el, !isOpen(el, depth));
         rebuildTree();
       });
-      if (open) {
-        var box = h('div', { class: 'kids' });
-        box.style.marginLeft = '0';
-        kids.slice(0, MAX_CHILDREN).forEach(function (c) {
-          var sub = buildTreeRow(c, depth + 1);
-          if (sub) box.appendChild(sub);
-        });
-        if (kids.length > MAX_CHILDREN) {
-          box.appendChild(h('div', { class: 'trow', text: '…' + (kids.length - MAX_CHILDREN) + ' more' }));
-        }
-        wrap.appendChild(box);
+      caret.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+    }
+
+    var wrap = h('div', {}, [row]);
+    if (hasKids && open && depth < MAX_DEPTH) {
+      var box = h('div', {});
+      var cap = state.childLimit.get(el) || MAX_CHILDREN;
+      var shown = 0;
+      for (var i = 0; i < kids.length && shown < cap; i++) {
+        var sub = buildTreeRow(kids[i], depth + 1);
+        if (sub) { box.appendChild(sub); shown++; }
       }
+      if (!filterKeep && kids.length > cap) {
+        var more = h('div', { class: 'tmore', text: '… show ' + (kids.length - cap) + ' more' });
+        more.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          state.childLimit.set(el, Infinity);
+          rebuildTree();
+        });
+        box.appendChild(more);
+      }
+      wrap.appendChild(box);
     }
     return wrap;
   }
 
   function rebuildTree() {
-    leftPanel.textContent = '';
+    computeFilter();
+    var total = countPageElements();
+    treeCount.textContent = filterKeep ? filterMatchCount + '/' + total : String(total);
+    state.navOrder = [];
+    treeBox.textContent = '';
     var frag = document.createDocumentFragment();
-    Array.prototype.forEach.call(document.body.children, function (c) {
+    pageChildren(document.body).forEach(function (c) {
       var row = buildTreeRow(c, 0);
       if (row) frag.appendChild(row);
     });
-    leftPanel.appendChild(frag);
+    if (!frag.childNodes.length) {
+      frag.appendChild(h('div', {
+        class: 'tempty',
+        text: state.filter ? 'No elements match “' + state.filter + '”' : 'Empty page',
+      }));
+    }
+    treeBox.appendChild(frag);
+  }
+
+  function setAllOpen(value) {
+    function walk(el, depth) {
+      if (depth > MAX_DEPTH || isOurs(el)) return;
+      var kids = pageChildren(el);
+      if (kids.length) state.open.set(el, value);
+      kids.forEach(function (c) { walk(c, depth + 1); });
+    }
+    pageChildren(document.body).forEach(function (c) { walk(c, 0); });
+    rebuildTree();
+  }
+  expandAllBtn.addEventListener('click', function () { setAllOpen(true); });
+  collapseAllBtn.addEventListener('click', function () { setAllOpen(false); });
+
+  searchIn.addEventListener('input', function () {
+    state.filter = searchIn.value;
+    searchWrap.classList.toggle('has', !!state.filter);
+    rebuildTree();
+  });
+  searchIn.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') {
+      ev.stopPropagation();
+      searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has');
+      rebuildTree(); searchIn.blur();
+    }
+  });
+  searchClear.addEventListener('click', function () {
+    searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has'); rebuildTree();
+  });
+
+  // -------------------------------------------------------------------------
+  // Breadcrumbs
+  // -------------------------------------------------------------------------
+  function rebuildCrumbs() {
+    crumbsBar.textContent = '';
+    var el = state.selected;
+    if (!el || !el.isConnected) { crumbsBar.className = 've'; crumbsBar.id = 'crumbs'; return; }
+    crumbsBar.className = 've show';
+    crumbsBar.id = 'crumbs';
+    var chain = [];
+    for (var n = el; n && n !== document.documentElement; n = n.parentElement) chain.unshift(n);
+    chain.forEach(function (node, i) {
+      if (i) crumbsBar.appendChild(h('span', { class: 'crumbsep', text: '›' }));
+      var c = h('span', { class: 'crumb' + (node === el ? ' cur' : '') }, [
+        h('span', { text: node.tagName.toLowerCase() }),
+        node.id ? h('span', { class: 'id', text: '#' + node.id }) : null,
+      ]);
+      c.addEventListener('click', function () { if (node !== document.body) select(node); });
+      c.addEventListener('mouseenter', function () { hoverHighlight(node); });
+      c.addEventListener('mouseleave', hoverClear);
+      crumbsBar.appendChild(c);
+    });
+    crumbsBar.scrollLeft = crumbsBar.scrollWidth;
   }
 
   // -------------------------------------------------------------------------
-  // Properties (right panel)
+  // Inspector — shared control builders
   // -------------------------------------------------------------------------
   var PROP_NAME_RE = /^[a-zA-Z-][a-zA-Z0-9-]*$/;
+  var dimsEl = null; // live W×H readout in the header
 
-  function rebuildProps() {
-    rightPanel.textContent = '';
-    var el = state.selected;
-    if (!el) {
-      rightPanel.appendChild(h('div', { text: 'Nothing selected.\nUse Select or the tree.' }));
-      return;
+  function updateDims() {
+    if (!dimsEl || !state.selected || !state.selected.isConnected) return;
+    var r = state.selected.getBoundingClientRect();
+    dimsEl.textContent = Math.round(r.width) + ' × ' + Math.round(r.height);
+  }
+
+  function section(title, build) {
+    var open = title in state.sections ? state.sections[title] : !!DEFAULT_OPEN_SECTIONS[title];
+    var body = h('div', { class: 'secbody' });
+    var head = h('div', { class: 'sechead' }, [svgIcon('chevR'), h('span', { class: 't', text: title.toUpperCase() })]);
+    var sec = h('div', { class: 'sec' + (open ? ' open' : '') }, [head, body]);
+    head.addEventListener('click', function () {
+      var now = !sec.classList.contains('open');
+      sec.classList.toggle('open', now);
+      state.sections[title] = now;
+    });
+    build(body);
+    return sec;
+  }
+
+  function markSet(input, on) {
+    var row = input.closest ? input.closest('.prow') : null;
+    if (row) row.classList.toggle('set', !!on);
+  }
+
+  /** ±step keyboard handling + live preview + blur-commit for a text input
+   * holding a CSS length. */
+  function wireNumeric(el, input, session, prop, opts) {
+    opts = opts || {};
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
+        var base = input.value.trim() || input.placeholder.trim();
+        var delta = (ev.key === 'ArrowUp' ? 1 : -1) * (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1);
+        var next = stepValue(base === 'auto' || base === '' || base === '—' ? '0px' : base, delta);
+        if (next == null) return;
+        ev.preventDefault();
+        input.value = next;
+        session.preview(prop, normalizeCss(next, opts.px !== false));
+        markSet(input, true);
+      } else if (ev.key === 'Enter') {
+        input.blur();
+      } else if (ev.key === 'Escape') {
+        ev.stopPropagation();
+        session.cancel();
+        input.value = inlineVal(el, prop);
+        input.blur();
+      }
+    });
+    input.addEventListener('focus', function () { session.start(); });
+    input.addEventListener('input', function () {
+      session.preview(prop, normalizeCss(input.value, opts.px !== false));
+    });
+    input.addEventListener('blur', function () {
+      if (!session.isActive()) return;
+      var v = normalizeCss(input.value, opts.px !== false);
+      // Roll the preview back FIRST — only then does inlineVal read the true
+      // pre-edit value the commit must be compared against.
+      session.cancel();
+      var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        markSet(input, was !== '');
+        return;
+      }
+      if (v !== was) session.commit(prop, v === '' ? null : v);
+      markSet(input, v !== '');
+      if (opts.after) opts.after();
+    });
+  }
+
+  /** Label drag-to-scrub: horizontal drag adjusts the value 1px per px. */
+  function makeScrub(label, input, sessionFactory, prop) {
+    label.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      var startX = ev.clientX;
+      var base = input.value.trim() || input.placeholder.trim();
+      if (base === 'auto' || base === '' || base === '—' || stepValue(base, 0) == null) base = '0px';
+      var moved = false;
+      var session = sessionFactory();
+      session.start();
+      function onMove(e) {
+        var dx = Math.round(e.clientX - startX);
+        if (!moved && Math.abs(dx) < 2) return;
+        moved = true;
+        var next = stepValue(base, dx * (e.shiftKey ? 10 : 1));
+        if (next == null) return;
+        input.value = next;
+        session.preview(prop, normalizeCss(next, true));
+        markSet(input, true);
+      }
+      function onUp() {
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+        if (moved) session.commit(prop, normalizeCss(input.value, true));
+        else session.cancel();
+      }
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+    });
+  }
+
+  function resetBtn(el, prop, after) {
+    var b = h('span', { class: 'reset', title: 'Remove inline ' + prop }, [svgIcon('x')]);
+    b.addEventListener('click', function () {
+      commitStyle(el, prop, null, el.getAttribute('style'));
+      if (after) after(); else rebuildProps();
+    });
+    return b;
+  }
+
+  /** One labeled CSS-length row: inline value editable, computed shown as
+   * placeholder, ↑/↓ stepping, label scrubbing, reset ×. */
+  function numRow(el, label, prop, opts) {
+    opts = opts || {};
+    var session = styleSession(el);
+    var inline = inlineVal(el, prop);
+    var input = h('input', { value: inline, placeholder: computedVal(el, prop) || '—', spellcheck: 'false' });
+    var labelEl = h('span', { class: 'plabel', title: prop + ' — drag to scrub', text: label });
+    wireNumeric(el, input, session, prop, opts);
+    makeScrub(labelEl, input, function () { return styleSession(el); }, prop);
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [labelEl, input, resetBtn(el, prop, opts.after)]);
+  }
+
+  /** Plain text row (no numeric stepping) for values like font-family. */
+  function textStyleRow(el, label, prop) {
+    var session = styleSession(el);
+    var inline = inlineVal(el, prop);
+    var input = h('input', { value: inline, placeholder: computedVal(el, prop) || '—', spellcheck: 'false' });
+    input.addEventListener('focus', function () { session.start(); });
+    input.addEventListener('input', function () { session.preview(prop, input.value.trim()); });
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') input.blur();
+      else if (ev.key === 'Escape') { ev.stopPropagation(); session.cancel(); input.value = inlineVal(el, prop); input.blur(); }
+    });
+    input.addEventListener('blur', function () {
+      if (!session.isActive()) return;
+      var v = input.value.trim();
+      session.cancel(); // revert preview before reading the pre-edit value
+      var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        markSet(input, was !== '');
+        return;
+      }
+      if (v !== was) session.commit(prop, v === '' ? null : v);
+      markSet(input, v !== '');
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: prop, text: label }), input, resetBtn(el, prop)]);
+  }
+
+  /** <select> row committing on change. */
+  function selectRow(el, label, prop, options, opts) {
+    opts = opts || {};
+    var inline = inlineVal(el, prop);
+    var current = inline || computedVal(el, prop);
+    var sel = h('select', {});
+    var found = false;
+    options.forEach(function (o) {
+      var opt = h('option', { value: o, text: o });
+      if (o === current) { opt.selected = true; found = true; }
+      sel.appendChild(opt);
+    });
+    if (!found && current) {
+      var extra = h('option', { value: current, text: current });
+      extra.selected = true;
+      sel.appendChild(extra);
     }
+    sel.addEventListener('change', function () {
+      commitStyle(el, prop, sel.value, el.getAttribute('style'));
+      if (opts.after) opts.after(); else rebuildProps();
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: prop, text: label }), sel, resetBtn(el, prop, opts.after)]);
+  }
+
+  /** Icon/label segmented control bound to one property.
+   * options: [{v, icon?, label?, title, alt?}] — alt lists computed values
+   * that should light the option up too (e.g. start ≈ flex-start). */
+  function segRow(el, label, prop, options, opts) {
+    opts = opts || {};
+    var inline = inlineVal(el, prop);
+    var current = inline || computedVal(el, prop);
+    var seg = h('div', { class: 'seg' });
+    options.forEach(function (o) {
+      var b = h('button', { title: o.title || o.v }, o.icon ? [svgIcon(o.icon)] : [o.label || o.v]);
+      if (o.v === current || (o.alt && o.alt.indexOf(current) !== -1)) b.classList.add('on');
+      b.addEventListener('click', function () {
+        // Clicking the active option with an inline value clears it back to
+        // the stylesheet; otherwise the option becomes the inline value.
+        var v = b.classList.contains('on') && inline ? null : o.v;
+        commitStyle(el, prop, v, el.getAttribute('style'));
+        if (opts.after) opts.after(); else rebuildProps();
+      });
+      seg.appendChild(b);
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: prop, text: label }), seg]);
+  }
+
+  /** Color row: checkerboard swatch (native picker underneath) + text input. */
+  function colorRow(el, label, prop) {
+    var session = styleSession(el);
+    var inline = inlineVal(el, prop);
+    var computed = computedVal(el, prop);
+    var current = inline || computed;
+    var fill = h('span', { class: 'fill' });
+    fill.style.background = current || 'transparent';
+    var picker = h('input', { type: 'color', value: toHexColor(current) });
+    var swatch = h('span', { class: 'swatch', title: 'Pick ' + prop }, [fill, picker]);
+    var input = h('input', { value: inline, placeholder: computed || '—', spellcheck: 'false' });
+    picker.addEventListener('input', function () {
+      session.preview(prop, picker.value);
+      input.value = picker.value;
+      fill.style.background = picker.value;
+      markSet(input, true);
+    });
+    picker.addEventListener('change', function () { session.commit(prop, picker.value); });
+    input.addEventListener('focus', function () { session.start(); });
+    input.addEventListener('input', function () {
+      var v = input.value.trim();
+      session.preview(prop, v);
+      fill.style.background = v || computed;
+    });
+    input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') input.blur();
+      else if (ev.key === 'Escape') { ev.stopPropagation(); session.cancel(); input.value = inlineVal(el, prop); input.blur(); }
+    });
+    input.addEventListener('blur', function () {
+      if (!session.isActive()) return;
+      var v = input.value.trim();
+      session.cancel(); // revert preview before reading the pre-edit value
+      var was = inlineVal(el, prop);
+      if (!cssValueOk(prop, v)) {
+        setStatus('invalid ' + prop + ': ' + v, 'err');
+        input.value = was;
+        fill.style.background = was || computed;
+        markSet(input, was !== '');
+        return;
+      }
+      if (v !== was) session.commit(prop, v === '' ? null : v);
+      markSet(input, v !== '');
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: prop, text: label }), swatch, input, resetBtn(el, prop)]);
+  }
+
+  /** Shadow preset ladder (borrowed from openpath's inspector): named
+   * box-shadow presets in a select; the raw row below covers custom values. */
+  var SHADOW_PRESETS = [
+    { label: 'none', v: 'none' },
+    { label: 'subtle', v: '0 1px 2px rgba(0,0,0,.05)' },
+    { label: 'soft', v: '0 4px 12px rgba(0,0,0,.1)' },
+    { label: 'elevated', v: '0 12px 30px rgba(0,0,0,.16)' },
+    { label: 'dramatic', v: '0 24px 60px rgba(0,0,0,.22)' },
+    { label: 'inset', v: 'inset 0 2px 4px rgba(0,0,0,.06)' },
+  ];
+
+  var shadowProbe = h('div', {});
+
+  /** Browsers re-serialize box-shadow (rgba first, px units) — normalize a
+   * preset the same way so it still matches the stored inline value. */
+  function normShadow(v) {
+    shadowProbe.style.boxShadow = '';
+    shadowProbe.style.boxShadow = v;
+    return shadowProbe.style.boxShadow || v;
+  }
+
+  function shadowPresetRow(el) {
+    var inline = inlineVal(el, 'box-shadow');
+    var sel = h('select', {});
+    var matched = false;
+    SHADOW_PRESETS.forEach(function (p) {
+      var opt = h('option', { value: p.v, text: p.label });
+      if ((inline && (inline === p.v || inline === normShadow(p.v))) ||
+          (!inline && p.v === 'none' && computedVal(el, 'box-shadow') === 'none')) {
+        opt.selected = true; matched = true;
+      }
+      sel.appendChild(opt);
+    });
+    var custom = h('option', { value: '', text: 'custom…' });
+    if (!matched) custom.selected = true;
+    sel.appendChild(custom);
+    sel.addEventListener('change', function () {
+      if (sel.value === '') return; // "custom…" — edit via the raw row below
+      // Picking "none" with no shadow anywhere is a no-op, not an edit.
+      if (sel.value === 'none' && !inlineVal(el, 'box-shadow') &&
+          computedVal(el, 'box-shadow') === 'none') return;
+      commitStyle(el, 'box-shadow', sel.value, el.getAttribute('style'));
+      rebuildProps();
+    });
+    return h('div', { class: 'prow' + (inline ? ' set' : '') },
+      [h('span', { class: 'plabel nodrag', title: 'box-shadow', text: 'shadow' }), sel,
+        resetBtn(el, 'box-shadow')]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Inspector — box model editor
+  // -------------------------------------------------------------------------
+  function bmField(el, prop, posCls) {
+    var span = h('span', { class: 'bm-n ' + posCls + (inlineVal(el, prop) ? ' set' : ''), title: prop });
+    function display() {
+      var v = inlineVal(el, prop) || computedVal(el, prop);
+      var n = parseFloat(v);
+      span.textContent = isNaN(n) ? (v || '0') : String(Math.round(n * 10) / 10);
+      span.classList.toggle('set', !!inlineVal(el, prop));
+    }
+    display();
+
+    function openInput() {
+      var session = styleSession(el);
+      var input = h('input', {
+        value: inlineVal(el, prop) || (Math.round(parseFloat(computedVal(el, prop)) || 0) + 'px'),
+      });
+      span.textContent = '';
+      span.appendChild(input);
+      input.focus(); input.select();
+      input.addEventListener('keydown', function (ev) {
+        ev.stopPropagation();
+        if (ev.key === 'Enter') { input.blur(); }
+        else if (ev.key === 'Escape') { session.cancel(); input.removeEventListener('blur', onBlur); display(); }
+        else if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
+          ev.preventDefault();
+          var delta = (ev.key === 'ArrowUp' ? 1 : -1) * (ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1);
+          var next = stepValue(input.value.trim() || '0px', delta);
+          if (next == null) return;
+          input.value = next;
+          session.preview(prop, normalizeCss(next, true));
+        }
+      });
+      input.addEventListener('input', function () { session.preview(prop, normalizeCss(input.value, true)); });
+      function onBlur() {
+        if (session.isActive()) {
+          var v = normalizeCss(input.value, true);
+          session.cancel(); // revert preview before reading the pre-edit value
+          var was = inlineVal(el, prop);
+          if (!cssValueOk(prop, v)) {
+            setStatus('invalid ' + prop + ': ' + v, 'err');
+          } else if (v !== was) {
+            session.commit(prop, v === '' ? null : v);
+          }
+        }
+        display();
+      }
+      input.addEventListener('blur', onBlur);
+    }
+
+    // Click edits in place; horizontal drag scrubs.
+    span.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0 || span.querySelector('input')) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var startX = ev.clientX, moved = false;
+      var session = styleSession(el);
+      var baseN = parseFloat(inlineVal(el, prop) || computedVal(el, prop)) || 0;
+      function onMove(e) {
+        var dx = Math.round(e.clientX - startX);
+        if (!moved && Math.abs(dx) < 3) return;
+        moved = true;
+        var n = baseN + dx * (e.shiftKey ? 10 : 1);
+        span.textContent = String(n);
+        span.classList.add('set');
+        session.preview(prop, n + 'px');
+      }
+      function onUp(e) {
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+        if (moved) {
+          session.commit(prop, (baseN + Math.round(e.clientX - startX) * (e.shiftKey ? 10 : 1)) + 'px');
+          display();
+        } else {
+          session.cancel();
+          openInput();
+        }
+      }
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+    });
+    return span;
+  }
+
+  function buildBoxModel(el, body) {
+    var core = h('div', { class: 'bm-core' });
+    var r = el.getBoundingClientRect();
+    core.textContent = Math.round(r.width) + ' × ' + Math.round(r.height);
+    var pad = h('div', { class: 'bm-pad' }, [
+      h('span', { class: 'bm-tag', text: 'PADDING' }),
+      bmField(el, 'padding-top', 'n-top'),
+      bmField(el, 'padding-right', 'n-right'),
+      bmField(el, 'padding-bottom', 'n-bottom'),
+      bmField(el, 'padding-left', 'n-left'),
+      core,
+    ]);
+    body.appendChild(h('div', { class: 'bm' }, [
+      h('span', { class: 'bm-tag', text: 'MARGIN' }),
+      bmField(el, 'margin-top', 'n-top'),
+      bmField(el, 'margin-right', 'n-right'),
+      bmField(el, 'margin-bottom', 'n-bottom'),
+      bmField(el, 'margin-left', 'n-left'),
+      pad,
+    ]));
+  }
+
+  // -------------------------------------------------------------------------
+  // Inspector — Design tab
+  // -------------------------------------------------------------------------
+  function buildDesignTab(el, box) {
+    function relayout() { rebuildProps(); }
+
+    box.appendChild(section('Layout', function (body) {
+      body.appendChild(segRow(el, 'display', 'display', [
+        { v: 'block', label: 'blk', title: 'block' },
+        { v: 'flex', label: 'flex', title: 'flex' },
+        { v: 'grid', label: 'grid', title: 'grid' },
+        { v: 'inline-block', label: 'i-b', title: 'inline-block' },
+        { v: 'inline', label: 'inl', title: 'inline' },
+        { v: 'none', label: 'none', title: 'none' },
+      ], { after: relayout }));
+      var disp = inlineVal(el, 'display') || computedVal(el, 'display');
+      if (/flex/.test(disp)) {
+        body.appendChild(segRow(el, 'direction', 'flex-direction', [
+          { v: 'row', icon: 'row', title: 'row' },
+          { v: 'column', icon: 'col', title: 'column' },
+        ], { after: relayout }));
+        body.appendChild(segRow(el, 'justify', 'justify-content', [
+          { v: 'flex-start', icon: 'jStart', title: 'flex-start', alt: ['start', 'normal'] },
+          { v: 'center', icon: 'jCenter', title: 'center' },
+          { v: 'space-between', icon: 'jBetween', title: 'space-between' },
+          { v: 'flex-end', icon: 'jEnd', title: 'flex-end', alt: ['end'] },
+        ]));
+        body.appendChild(segRow(el, 'align', 'align-items', [
+          { v: 'flex-start', icon: 'aStart', title: 'flex-start', alt: ['start'] },
+          { v: 'center', icon: 'aCenter', title: 'center' },
+          { v: 'stretch', icon: 'aStretch', title: 'stretch', alt: ['normal'] },
+          { v: 'flex-end', icon: 'aEnd', title: 'flex-end', alt: ['end'] },
+        ]));
+        body.appendChild(segRow(el, 'wrap', 'flex-wrap', [
+          { v: 'nowrap', label: 'nowrap', title: 'nowrap' },
+          { v: 'wrap', label: 'wrap', title: 'wrap' },
+        ]));
+        body.appendChild(numRow(el, 'gap', 'gap'));
+      } else if (/grid/.test(disp)) {
+        body.appendChild(textStyleRow(el, 'columns', 'grid-template-columns'));
+        body.appendChild(numRow(el, 'gap', 'gap'));
+        body.appendChild(segRow(el, 'justify', 'justify-items', [
+          { v: 'start', icon: 'jStart', title: 'start', alt: ['normal', 'legacy'] },
+          { v: 'center', icon: 'jCenter', title: 'center' },
+          { v: 'stretch', icon: 'aStretch', title: 'stretch' },
+          { v: 'end', icon: 'jEnd', title: 'end' },
+        ]));
+      } else if (!/^(block|inline|inline-block|none)$/.test(disp)) {
+        body.appendChild(h('div', { class: 'hint', text: 'computed: display ' + disp }));
+      }
+    }));
+
+    box.appendChild(section('Spacing', function (body) {
+      buildBoxModel(el, body);
+    }));
+
+    box.appendChild(section('Size', function (body) {
+      body.appendChild(h('div', { class: 'grid2' }, [
+        numRow(el, 'W', 'width'), numRow(el, 'H', 'height'),
+        numRow(el, 'min W', 'min-width'), numRow(el, 'min H', 'min-height'),
+        numRow(el, 'max W', 'max-width'), numRow(el, 'max H', 'max-height'),
+      ]));
+      body.appendChild(selectRow(el, 'overflow', 'overflow', ['visible', 'hidden', 'auto', 'scroll', 'clip']));
+    }));
+
+    box.appendChild(section('Position', function (body) {
+      body.appendChild(selectRow(el, 'position', 'position',
+        ['static', 'relative', 'absolute', 'fixed', 'sticky'], { after: relayout }));
+      var pos = inlineVal(el, 'position') || computedVal(el, 'position');
+      if (pos !== 'static') {
+        body.appendChild(h('div', { class: 'grid2' }, [
+          numRow(el, 'top', 'top'), numRow(el, 'right', 'right'),
+          numRow(el, 'bottom', 'bottom'), numRow(el, 'left', 'left'),
+        ]));
+        body.appendChild(numRow(el, 'z-index', 'z-index', { px: false }));
+      }
+    }));
+
+    box.appendChild(section('Typography', function (body) {
+      body.appendChild(textStyleRow(el, 'family', 'font-family'));
+      var weightRow = selectRow(el, 'weight', 'font-weight',
+        ['100', '200', '300', '400', '500', '600', '700', '800', '900']);
+      weightRow.querySelector('.plabel').style.width = '34px';
+      body.appendChild(h('div', { class: 'grid2' }, [
+        numRow(el, 'size', 'font-size'),
+        weightRow,
+        numRow(el, 'line', 'line-height', { px: false }),
+        numRow(el, 'spacing', 'letter-spacing'),
+      ]));
+      body.appendChild(colorRow(el, 'color', 'color'));
+      body.appendChild(segRow(el, 'align', 'text-align', [
+        { v: 'left', icon: 'alignL', title: 'left', alt: ['start'] },
+        { v: 'center', icon: 'alignC', title: 'center' },
+        { v: 'right', icon: 'alignR', title: 'right', alt: ['end'] },
+        { v: 'justify', icon: 'alignJ', title: 'justify' },
+      ]));
+      body.appendChild(segRow(el, 'style', 'font-style', [
+        { v: 'normal', label: 'reg', title: 'normal' },
+        { v: 'italic', label: 'italic', title: 'italic' },
+      ]));
+      body.appendChild(selectRow(el, 'transform', 'text-transform',
+        ['none', 'uppercase', 'lowercase', 'capitalize']));
+      body.appendChild(selectRow(el, 'decoration', 'text-decoration-line',
+        ['none', 'underline', 'line-through', 'overline']));
+    }));
+
+    box.appendChild(section('Background', function (body) {
+      body.appendChild(colorRow(el, 'color', 'background-color'));
+      var bgi = computedVal(el, 'background-image');
+      if (bgi && bgi !== 'none') {
+        body.appendChild(h('div', { class: 'hint', title: bgi, text: 'image: ' + bgi }));
+      }
+    }));
+
+    box.appendChild(section('Border', function (body) {
+      var styleRow2 = selectRow(el, 'style', 'border-style',
+        ['none', 'solid', 'dashed', 'dotted', 'double']);
+      styleRow2.querySelector('.plabel').style.width = '34px';
+      body.appendChild(h('div', { class: 'grid2' }, [
+        numRow(el, 'width', 'border-width'),
+        styleRow2,
+      ]));
+      body.appendChild(colorRow(el, 'color', 'border-color'));
+      body.appendChild(numRow(el, 'radius', 'border-radius'));
+    }));
+
+    box.appendChild(section('Effects', function (body) {
+      // Opacity slider (0–100%) with live preview.
+      var session = styleSession(el);
+      var current = parseFloat(inlineVal(el, 'opacity') || computedVal(el, 'opacity'));
+      if (isNaN(current)) current = 1;
+      var slider = h('input', { type: 'range', min: '0', max: '100', value: String(Math.round(current * 100)) });
+      var pct = h('span', { class: 'plabel nodrag', text: Math.round(current * 100) + '%' });
+      pct.style.width = '32px'; pct.style.textAlign = 'right';
+      slider.style.setProperty('--fill', Math.round(current * 100) + '%');
+      slider.addEventListener('input', function () {
+        pct.textContent = slider.value + '%';
+        slider.style.setProperty('--fill', slider.value + '%');
+        session.preview('opacity', String(+slider.value / 100));
+      });
+      slider.addEventListener('change', function () {
+        session.commit('opacity', String(+slider.value / 100));
+      });
+      body.appendChild(h('div', { class: 'prow' + (inlineVal(el, 'opacity') ? ' set' : '') }, [
+        h('span', { class: 'plabel nodrag', text: 'opacity' }), slider, pct,
+        resetBtn(el, 'opacity'),
+      ]));
+      body.appendChild(shadowPresetRow(el));
+      body.appendChild(textStyleRow(el, 'custom', 'box-shadow'));
+      body.appendChild(selectRow(el, 'cursor', 'cursor',
+        ['auto', 'default', 'pointer', 'text', 'move', 'grab', 'not-allowed']));
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Inspector — Element tab
+  // -------------------------------------------------------------------------
+  function buildElementTab(el, box) {
     var file = fileFor(el);
 
-    // Tag name (read-only)
-    rightPanel.appendChild(h('label', { text: 'tag' }));
-    rightPanel.appendChild(h('input', { value: el.tagName.toLowerCase(), disabled: '' }));
-
-    // id
-    rightPanel.appendChild(h('label', { text: 'id' }));
-    rightPanel.appendChild(h('input', {
-      value: el.id || '',
-      onchange: function (ev) {
-        var v = ev.target.value.trim();
+    box.appendChild(section('Identity', function (body) {
+      var idIn = h('input', { value: el.id || '', placeholder: 'none', spellcheck: 'false' });
+      idIn.addEventListener('change', function () {
+        var v = idIn.value.trim();
         var inv = attrInverse(el, 'id');
-        var redo = function () { el.id = v; };
+        var redo = function () { if (v) el.id = v; else el.removeAttribute('id'); };
         redo();
         if (file) sendEdit(opFor(el, { op: 'setAttr', name: 'id', value: v || null }),
           { undo: inv.undo, redo: redo });
-        rebuildTree(); refreshOverlays();
-      },
+        rebuildTree(); rebuildCrumbs(); refreshOverlays();
+      });
+      body.appendChild(h('div', { class: 'prow' },
+        [h('span', { class: 'plabel nodrag', text: 'id' }), idIn]));
     }));
 
-    // classes (single space-separated input → className)
-    rightPanel.appendChild(h('label', { text: 'classes' }));
-    rightPanel.appendChild(h('input', {
-      value: el.className && typeof el.className === 'string' ? el.className : '',
-      onchange: function (ev) {
-        var v = ev.target.value.trim();
+    box.appendChild(section('Classes', function (body) {
+      var chips = h('div', { class: 'chips' });
+      function classList() {
+        var raw = el.getAttribute('class') || '';
+        return raw.trim() ? raw.trim().split(/\s+/) : [];
+      }
+      function commitClasses(list) {
+        var v = list.join(' ');
         var inv = attrInverse(el, 'class');
-        var redo = function () { el.className = v; };
+        var redo = function () { if (v) el.setAttribute('class', v); else el.removeAttribute('class'); };
         redo();
         if (file) sendEdit(opFor(el, { op: 'setAttr', name: 'class', value: v || null }),
           { undo: inv.undo, redo: redo });
+        renderChips();
         rebuildTree(); refreshOverlays();
-      },
-    }));
-
-    // Text content — only for text-leaf elements
-    if (el.children.length === 0) {
-      rightPanel.appendChild(h('label', { text: 'text content' }));
-      var ta = h('textarea', { text: el.textContent });
-      ta.addEventListener('change', function () {
-        var oldText = el.textContent;
-        var newText = ta.value;
-        var dom = {
-          undo: function () { el.textContent = oldText; },
-          redo: function () { el.textContent = newText; },
-        };
-        dom.redo();
-        if (file) sendEdit(opFor(el, { op: 'setText', text: newText }), dom);
-        rebuildTree(); refreshOverlays();
+      }
+      function renderChips() {
+        chips.textContent = '';
+        classList().forEach(function (cls) {
+          var rm = h('span', { class: 'rm', title: 'Remove .' + cls }, [svgIcon('x')]);
+          rm.addEventListener('click', function () {
+            commitClasses(classList().filter(function (c) { return c !== cls; }));
+          });
+          chips.appendChild(h('span', { class: 'chip' }, [cls, rm]));
+        });
+      }
+      renderChips();
+      var addIn = h('input', { placeholder: 'add class + ⏎', spellcheck: 'false' });
+      addIn.style.marginTop = '6px';
+      addIn.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        var v = addIn.value.trim().replace(/^\./, '');
+        if (!v) return;
+        var list = classList();
+        if (list.indexOf(v) === -1) commitClasses(list.concat(v));
+        addIn.value = '';
       });
-      rightPanel.appendChild(ta);
+      body.appendChild(chips);
+      body.appendChild(addIn);
+    }));
+
+    if (pageChildren(el).length === 0) {
+      box.appendChild(section('Text', function (body) {
+        var ta = h('textarea', { text: el.textContent, spellcheck: 'false' });
+        function autosize() {
+          ta.style.height = 'auto';
+          ta.style.height = Math.min(220, ta.scrollHeight + 2) + 'px';
+        }
+        ta.addEventListener('input', autosize);
+        setTimeout(autosize, 0);
+        ta.addEventListener('change', function () {
+          var oldText = el.textContent;
+          var newText = ta.value;
+          var dom = {
+            undo: function () { el.textContent = oldText; },
+            redo: function () { el.textContent = newText; },
+          };
+          dom.redo();
+          if (file) sendEdit(opFor(el, { op: 'setText', text: newText }), dom);
+          rebuildTree(); refreshOverlays();
+        });
+        body.appendChild(ta);
+      }));
     }
 
-    // Attributes (skip class/style — they have dedicated editors)
-    var attrSec = h('div', { class: 'sec' });
-    attrSec.appendChild(h('label', { text: 'attributes' }));
-    Array.prototype.forEach.call(el.attributes, function (a) {
-      if (a.name === 'class' || a.name === 'style') return;
-      if (a.name.indexOf('data-ve-') === 0) return;
-      attrSec.appendChild(attrRow(el, a.name, a.value));
-    });
-    attrSec.appendChild(h('button', {
-      class: 'mini', text: '+ add attribute',
-      onclick: function () { attrSec.insertBefore(attrRow(el, '', ''), attrSec.lastChild); },
+    box.appendChild(section('Attributes', function (body) {
+      Array.prototype.forEach.call(el.attributes, function (a) {
+        if (a.name === 'class' || a.name === 'style' || a.name === 'id') return;
+        if (a.name.indexOf('data-ve-') === 0) return;
+        body.appendChild(attrRow(el, a.name, a.value));
+      });
+      var addBtn = h('button', { class: 'mini', text: '+ attribute' });
+      addBtn.style.marginTop = '8px';
+      addBtn.addEventListener('click', function () {
+        body.insertBefore(attrRow(el, '', ''), addBtn);
+      });
+      body.appendChild(addBtn);
     }));
-    rightPanel.appendChild(attrSec);
 
-    // Inline style editor
-    var styleSec = h('div', { class: 'sec' });
-    styleSec.appendChild(h('label', { text: 'inline style' }));
-    for (var i = 0; i < el.style.length; i++) {
-      var p = el.style[i];
-      styleSec.appendChild(styleRow(el, p, el.style.getPropertyValue(p)));
-    }
-    styleSec.appendChild(h('button', {
-      class: 'mini', text: '+ add property',
-      onclick: function () { styleSec.insertBefore(styleRow(el, '', ''), styleSec.lastChild); },
+    box.appendChild(section('Inline CSS', function (body) {
+      for (var i = 0; i < el.style.length; i++) {
+        var p = el.style[i];
+        body.appendChild(styleRow(el, p, el.style.getPropertyValue(p)));
+      }
+      var addBtn = h('button', { class: 'mini', text: '+ property' });
+      addBtn.style.marginTop = '8px';
+      addBtn.addEventListener('click', function () {
+        body.insertBefore(styleRow(el, '', ''), addBtn);
+      });
+      body.appendChild(addBtn);
     }));
-    rightPanel.appendChild(styleSec);
   }
 
   function attrRow(el, name, value) {
-    var nameIn = h('input', { value: name, placeholder: 'name' });
-    var valIn = h('input', { value: value, placeholder: 'value' });
+    var nameIn = h('input', { value: name, placeholder: 'name', spellcheck: 'false' });
+    var valIn = h('input', { value: value, placeholder: 'value', spellcheck: 'false' });
+    nameIn.style.flex = '0 0 40%';
     function commit() {
       var n = nameIn.value.trim();
       if (!n) return;
@@ -517,25 +1760,26 @@
     }
     valIn.addEventListener('change', commit);
     nameIn.addEventListener('change', commit);
-    return h('div', { class: 'row' }, [nameIn, valIn, h('button', {
-      class: 'mini', text: '×', title: 'Remove attribute',
-      onclick: function (ev) {
-        var n = nameIn.value.trim();
-        if (n) {
-          var inv = attrInverse(el, n);
-          var redo = function () { el.removeAttribute(n); };
-          redo();
-          if (fileFor(el)) sendEdit(opFor(el, { op: 'setAttr', name: n, value: null }),
-            { undo: inv.undo, redo: redo });
-        }
-        ev.target.parentElement.remove();
-      },
-    })]);
+    var rm = h('span', { class: 'reset', title: 'Remove attribute' }, [svgIcon('x')]);
+    rm.style.display = 'inline-flex';
+    rm.addEventListener('click', function () {
+      var n = nameIn.value.trim();
+      if (n) {
+        var inv = attrInverse(el, n);
+        var redo = function () { el.removeAttribute(n); };
+        redo();
+        if (fileFor(el)) sendEdit(opFor(el, { op: 'setAttr', name: n, value: null }),
+          { undo: inv.undo, redo: redo });
+      }
+      rm.parentElement.remove();
+    });
+    return h('div', { class: 'prow' }, [nameIn, valIn, rm]);
   }
 
   function styleRow(el, prop, value) {
-    var propIn = h('input', { value: prop, placeholder: 'property' });
-    var valIn = h('input', { value: value, placeholder: 'value' });
+    var propIn = h('input', { value: prop, placeholder: 'property', spellcheck: 'false' });
+    var valIn = h('input', { value: value, placeholder: 'value', spellcheck: 'false' });
+    propIn.style.flex = '0 0 40%';
     function commit() {
       var p = propIn.value.trim();
       if (!PROP_NAME_RE.test(p)) { setStatus('error: bad property name', 'err'); return; }
@@ -548,47 +1792,105 @@
     }
     valIn.addEventListener('change', commit);
     propIn.addEventListener('change', commit);
-    return h('div', { class: 'row' }, [propIn, valIn, h('button', {
-      class: 'mini', text: '×', title: 'Remove property',
-      onclick: function (ev) {
-        var p = propIn.value.trim();
-        if (p && PROP_NAME_RE.test(p)) {
-          var inv = attrInverse(el, 'style');
-          var redo = function () { el.style.removeProperty(p); };
-          redo();
-          if (fileFor(el)) sendEdit(opFor(el, { op: 'setStyle', property: p, value: null }),
-            { undo: inv.undo, redo: redo });
-        }
-        ev.target.parentElement.remove();
-        refreshOverlays();
-      },
-    })]);
+    var rm = h('span', { class: 'reset', title: 'Remove property' }, [svgIcon('x')]);
+    rm.style.display = 'inline-flex';
+    rm.addEventListener('click', function () {
+      var p = propIn.value.trim();
+      if (p && PROP_NAME_RE.test(p)) {
+        var inv = attrInverse(el, 'style');
+        var redo = function () { el.style.removeProperty(p); };
+        redo();
+        if (fileFor(el)) sendEdit(opFor(el, { op: 'setStyle', property: p, value: null }),
+          { undo: inv.undo, redo: redo });
+      }
+      rm.parentElement.remove();
+      refreshOverlays();
+    });
+    return h('div', { class: 'prow' }, [propIn, valIn, rm]);
   }
+
+  // -------------------------------------------------------------------------
+  // Inspector — assembly
+  // -------------------------------------------------------------------------
+  function rebuildProps() {
+    propsBox.textContent = '';
+    elTag.textContent = '';
+    fileChip.textContent = '';
+    dimsEl = null;
+    var el = state.selected;
+    if (!el || !el.isConnected) {
+      tabsRow.style.display = 'none';
+      propsBox.appendChild(h('div', { class: 'empty-state' }, [
+        svgIcon('crosshair'),
+        h('div', {}, [
+          'Nothing selected.', h('br'),
+          'Use ', h('kbd', { text: 'Select' }), ', double-click the page,', h('br'),
+          'or pick from the Navigator.',
+        ]),
+      ]));
+      return;
+    }
+    tabsRow.style.display = 'flex';
+
+    // Header chip: tag #id .class + live dims
+    elTag.appendChild(h('span', { class: 'tag', text: el.tagName.toLowerCase() }));
+    if (el.id) elTag.appendChild(h('span', { class: 'id', text: '#' + el.id }));
+    var cls = (typeof el.className === 'string' && el.className)
+      ? el.className.trim().split(/\s+/).slice(0, 1) : [];
+    if (cls.length && cls[0]) elTag.appendChild(h('span', { class: 'cls', text: '.' + cls[0] }));
+    dimsEl = h('span', { class: 'dims' });
+    elTag.appendChild(dimsEl);
+    updateDims();
+    var file = fileFor(el);
+    fileChip.textContent = file;
+    fileChip.title = file;
+
+    if (state.tab === 'design') buildDesignTab(el, propsBox);
+    else buildElementTab(el, propsBox);
+  }
+
+  designTabBtn.addEventListener('click', function () {
+    state.tab = 'design';
+    designTabBtn.classList.add('on'); elementTabBtn.classList.remove('on');
+    rebuildProps();
+  });
+  elementTabBtn.addEventListener('click', function () {
+    state.tab = 'element';
+    elementTabBtn.classList.add('on'); designTabBtn.classList.remove('on');
+    rebuildProps();
+  });
 
   // -------------------------------------------------------------------------
   // Selection
   // -------------------------------------------------------------------------
   function select(el) {
     if (!el || isOurs(el)) return;
+    if (el === document.documentElement || el === document.body) return;
     state.selected = el;
     // Expand every collapsed ancestor so the selected row is actually
     // rendered, then scroll it into view inside the tree panel.
     for (var p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-      state.expanded.add(p);
+      state.open.set(p, true);
     }
     rebuildTree();
     rebuildProps();
+    rebuildCrumbs();
     refreshOverlays();
     var row = treeRows.get(el);
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  }
+
+  function deselect() {
+    state.selected = null;
+    rebuildTree(); rebuildProps(); rebuildCrumbs(); hideSelOverlays();
   }
 
   // -------------------------------------------------------------------------
   // Select mode (crosshair) — capture-phase listeners on the document
   // -------------------------------------------------------------------------
   function onHover(ev) {
-    if (isOurs(ev.target)) { ovHover.style.display = 'none'; return; }
-    placeOverlay(ovHover, ev.target, null);
+    if (isOurs(ev.target)) { hoverClear(); return; }
+    hoverHighlight(ev.target);
   }
   function onClickCapture(ev) {
     // Swallow the click that follows a completed drag.
@@ -605,11 +1907,17 @@
     setSelectMode(false);
     select(ev.target);
   }
+  function onDblClick(ev) {
+    if (isOurs(ev.target) || state.selectMode) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    select(ev.target);
+  }
   function setSelectMode(on) {
     state.selectMode = on;
     selectBtn.className = on ? 'on' : '';
     document.documentElement.style.cursor = on ? 'crosshair' : '';
-    if (!on) ovHover.style.display = 'none';
+    if (!on) hoverClear();
   }
 
   // -------------------------------------------------------------------------
@@ -640,10 +1948,10 @@
   upBtn.addEventListener('click', function () { move('up'); });
   downBtn.addEventListener('click', function () { move('down'); });
 
-  delBtn.addEventListener('click', function () {
+  function deleteSelected() {
     var el = state.selected;
     if (!el) return;
-    if (!window.confirm('Delete <' + el.tagName.toLowerCase() + '> from page and source?')) return;
+    var name = '<' + el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + '>';
     var op = fileFor(el) ? opFor(el, { op: 'remove' }) : null;
     var inv = moveInverse(el); // captures parent + next sibling before removal
     var redo = function () { el.remove(); };
@@ -651,11 +1959,89 @@
     redo();
     state.selected = null;
     if (op) sendEdit(op, dom);
-    rebuildTree(); rebuildProps(); refreshOverlays();
-  });
+    else setStatus('deleted ' + name + ' — undo with ⌘Z', 'ok');
+    refreshAll();
+  }
+  delBtn.addEventListener('click', deleteSelected);
+
+  function setDocked(on) {
+    state.docked = on;
+    dockBtn.className = on ? 'on' : '';
+    var s = document.documentElement.style;
+    if (on) {
+      s.setProperty('margin-left', LEFT_W + 'px', 'important');
+      s.setProperty('margin-right', RIGHT_W + 'px', 'important');
+      s.setProperty('margin-bottom', (BAR_H + CRUMB_H) + 'px', 'important');
+    } else {
+      s.removeProperty('margin-left');
+      s.removeProperty('margin-right');
+      s.removeProperty('margin-bottom');
+    }
+    refreshOverlays();
+  }
+  dockBtn.addEventListener('click', function () { setDocked(!state.docked); });
 
   closeBtn.addEventListener('click', function () { api.disable(); });
   undoBtn.addEventListener('click', function () { doUndo(); });
+
+  // -------------------------------------------------------------------------
+  // Keyboard navigation — tree walking, delete, escape, select-mode toggle
+  // -------------------------------------------------------------------------
+  function typingTarget() {
+    var ae = document.activeElement;
+    if (ae === host) ae = host.shadowRoot.activeElement;
+    return ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+      ae.tagName === 'SELECT' || ae.isContentEditable) ? ae : null;
+  }
+
+  function onNavKey(ev) {
+    if (drag) return;
+    if (typingTarget()) return;
+    var el = state.selected;
+    if (ev.key === 'Escape') {
+      if (state.selectMode) { setSelectMode(false); ev.preventDefault(); return; }
+      if (state.filter) {
+        searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has');
+        rebuildTree(); ev.preventDefault(); return;
+      }
+      if (el) { deselect(); ev.preventDefault(); }
+      return;
+    }
+    if ((ev.key === 'v' || ev.key === 'V') && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+      setSelectMode(!state.selectMode);
+      ev.preventDefault();
+      return;
+    }
+    if (!el) return;
+    if (ev.key === 'Delete' || ev.key === 'Backspace') {
+      ev.preventDefault();
+      deleteSelected();
+      return;
+    }
+    var order = state.navOrder;
+    var idx = order.indexOf(el);
+    if (ev.key === 'ArrowUp' && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      if (idx > 0) select(order[idx - 1]);
+    } else if (ev.key === 'ArrowDown' && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+      ev.preventDefault();
+      if (idx !== -1 && idx < order.length - 1) select(order[idx + 1]);
+    } else if (ev.key === 'ArrowRight') {
+      ev.preventDefault();
+      var kids = pageChildren(el);
+      if (!kids.length) return;
+      if (!treeRows.get(kids[0])) { state.open.set(el, true); rebuildTree(); }
+      else select(kids[0]);
+    } else if (ev.key === 'ArrowLeft') {
+      ev.preventDefault();
+      var kids2 = pageChildren(el);
+      if (kids2.length && treeRows.get(kids2[0])) {
+        state.open.set(el, false); rebuildTree();
+      } else if (el.parentElement && el.parentElement !== document.body) {
+        select(el.parentElement);
+      }
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Drag-and-drop repositioning (pointer events, no HTML5 DnD)
@@ -728,8 +2114,8 @@
     ghost.setAttribute('data-ve-editor-el', '');
     ghost.style.cssText =
       'position:fixed;z-index:2147482998;pointer-events:none;opacity:.65;' +
-      'outline:2px solid #4a7ac7;background:rgba(22,24,29,.4);max-width:45vw;' +
-      'max-height:45vh;overflow:hidden;margin:0;';
+      'outline:2px solid #4f9cf9;border-radius:3px;background:rgba(11,13,18,.45);max-width:45vw;' +
+      'max-height:45vh;overflow:hidden;margin:0;box-shadow:0 12px 40px rgba(0,0,0,.5);';
     ghost.appendChild(el.cloneNode(true));
     document.body.appendChild(ghost);
     moveGhost(x, y);
@@ -799,8 +2185,8 @@
   }
 
   /** Same candidate shape as computeCandidate, but resolved against tree rows:
-   * top ~30% of a row → before that element, bottom ~30% → after,
-   * middle 40% → into it as last child (when valid). */
+   * top ~25% of a row → before that element, bottom ~25% → after,
+   * middle 50% → into it as last child (when valid). */
   function computeTreeCandidate(x, y) {
     var row = shadow.elementFromPoint(x, y);
     while (row && !(row.classList && row.classList.contains('trow'))) row = row.parentElement;
@@ -813,7 +2199,7 @@
     // Never onto the dragged element or its descendants.
     var intoDragged = target === dragged || dragged.contains(target);
 
-    if (relY < 0.3 || relY > 0.7) {
+    if (relY < 0.25 || relY > 0.75) {
       var parent = target.parentElement;
       if (!parent || parent === document.documentElement) return null;
       var sibs = pageChildren(parent);
@@ -821,8 +2207,8 @@
       if (idx === -1) return null;
       return {
         parent: parent, refEl: target, inside: false,
-        before: relY < 0.3, horizontal: false,
-        index: relY < 0.3 ? idx : idx + 1,
+        before: relY < 0.25, horizontal: false,
+        index: relY < 0.25 ? idx : idx + 1,
         valid: !intoDragged && canContain(parent.tagName.toLowerCase(), dtag),
         rect: rect,
       };
@@ -856,6 +2242,7 @@
     if (c.inside) {
       ovLine.style.display = 'none';
       ovInside.className = 'ov ' + bad;
+      ovInside.id = 'ov-inside';
       ovInside.style.display = 'block';
       ovInside.style.left = r.left + 'px';
       ovInside.style.top = r.top + 'px';
@@ -864,6 +2251,7 @@
     } else {
       ovInside.style.display = 'none';
       ovLine.className = 'ov ' + bad;
+      ovLine.id = 'ov-line';
       ovLine.style.display = 'block';
       if (c.horizontal) {
         ovLine.style.left = (c.before ? r.left : r.right) - 1 + 'px';
@@ -879,6 +2267,7 @@
       if (!c.before) labelY = r.bottom + 2;
     }
     ovDropLabel.className = 'ov ' + bad;
+    ovDropLabel.id = 'ov-drop-label';
     ovDropLabel.style.display = 'block';
     ovDropLabel.style.left = labelX + 'px';
     ovDropLabel.style.top = labelY + 'px';
@@ -924,8 +2313,8 @@
       { undo: inv.undo, redo: redo });
     redo();
     // An "into" drop opens the target so the user sees where it landed.
-    if (c.inside) state.expanded.add(c.parent);
-    rebuildTree(); rebuildProps(); refreshOverlays();
+    if (c.inside) state.open.set(c.parent, true);
+    rebuildTree(); rebuildProps(); rebuildCrumbs(); refreshOverlays();
   }
 
   function endDrag(commit) {
@@ -983,9 +2372,9 @@
       if (!drag || !drag.active) { stopDragScroll(); return; }
       var y = drag.lastY;
       if (drag.fromTree && overTreePanel(drag.lastX, y)) {
-        var r = leftPanel.getBoundingClientRect();
-        if (y < r.top + DRAG_SCROLL_MARGIN) leftPanel.scrollTop -= DRAG_SCROLL_STEP;
-        else if (y > r.bottom - DRAG_SCROLL_MARGIN) leftPanel.scrollTop += DRAG_SCROLL_STEP;
+        var r = treeBox.getBoundingClientRect();
+        if (y < r.top + DRAG_SCROLL_MARGIN) treeBox.scrollTop -= DRAG_SCROLL_STEP;
+        else if (y > r.bottom - DRAG_SCROLL_MARGIN) treeBox.scrollTop += DRAG_SCROLL_STEP;
         else return;
       } else {
         if (y < DRAG_SCROLL_MARGIN) window.scrollBy(0, -DRAG_SCROLL_STEP);
@@ -1037,9 +2426,7 @@
   function onUndoKey(ev) {
     if (ev.key !== 'z' && ev.key !== 'Z') return;
     if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey) return;
-    var ae = document.activeElement;
-    if (ae === host) ae = host.shadowRoot.activeElement;
-    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+    if (typingTarget()) return;
     ev.preventDefault();
     doUndo();
   }
@@ -1049,6 +2436,7 @@
   document.addEventListener('pointerup', onPointerUp, true);
   document.addEventListener('keydown', onDragKey, true);
   document.addEventListener('keydown', onUndoKey, true);
+  document.addEventListener('keydown', onNavKey, true);
   document.addEventListener('selectstart', onSelectStart, true);
   document.addEventListener('mousedown', onPageMouseDown, true);
 
@@ -1058,6 +2446,7 @@
     document.removeEventListener('pointerup', onPointerUp, true);
     document.removeEventListener('keydown', onDragKey, true);
     document.removeEventListener('keydown', onUndoKey, true);
+    document.removeEventListener('keydown', onNavKey, true);
     document.removeEventListener('selectstart', onSelectStart, true);
     document.removeEventListener('mousedown', onPageMouseDown, true);
     stopDragScroll();
@@ -1074,6 +2463,7 @@
 
   document.addEventListener('mousemove', onMouseMove, true);
   document.addEventListener('click', onClickCapture, true);
+  document.addEventListener('dblclick', onDblClick, true);
   window.addEventListener('scroll', onScroll, true);
   window.addEventListener('resize', onResize);
 
@@ -1084,9 +2474,11 @@
     disable: function () {
       document.removeEventListener('mousemove', onMouseMove, true);
       document.removeEventListener('click', onClickCapture, true);
+      document.removeEventListener('dblclick', onDblClick, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onResize);
       removeDragListeners();
+      setDocked(false);
       document.documentElement.style.cursor = '';
       host.remove();
       delete window.__visualEditor;
