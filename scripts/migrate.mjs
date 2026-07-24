@@ -18,11 +18,19 @@
 //   The live DB already has every current migration applied (historically via
 //   ensureRuntimeSchema + manual pushes). A brand-new `_schema_migrations` table
 //   starts EMPTY, which would otherwise re-run every .sql file. To avoid that we
-//   detect "fresh tracking table + existing core schema" (the `workspaces` table
-//   exists) and BACKFILL `_schema_migrations` with all current filenames WITHOUT
-//   running them. The runner then only applies FUTURE migrations. On a truly
-//   empty database (no core schema) nothing is backfilled and all migrations run
-//   normally.
+//   detect "fresh tracking table + a COMPLETE core schema" and BACKFILL
+//   `_schema_migrations` with all current filenames WITHOUT running them. The
+//   runner then only applies FUTURE migrations. On a truly empty database (no
+//   core schema at all) nothing is backfilled and all migrations run normally.
+//
+//   H5 (2026-07 review): "complete" used to mean a single probe — does the
+//   `workspaces` table exist. A database left half-built by an aborted
+//   `npm run db:neon:push` HAS workspaces, so the backfill fired, marked every
+//   migration as applied without running it, printed a green "Up to date", and
+//   made the missing tables unrepairable by this tool forever. The probe now
+//   requires EVERY table in CORE_BOOTSTRAP_TABLES; a partially-provisioned
+//   database is loudly refused instead, and only an explicit `--baseline` flag
+//   can record migrations as applied over a schema that is missing core tables.
 
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -35,8 +43,27 @@ const MIGRATIONS_DIR = join(__dirname, '..', 'supabase', 'migrations');
 // session-scoped Postgres advisory lock so two processes can't apply the same
 // migration at once.
 const MIGRATION_LOCK_KEY = 4242042042;
+// Evidence of a COMPLETED bootstrap. Every one of these is created by the
+// supabase/migrations set (and by database/neon-schema.sql), and they are spread
+// across the whole of neon-schema.sql — so if that file aborted part-way, at
+// least one of them is missing and the backfill below refuses to run.
+const CORE_BOOTSTRAP_TABLES = [
+  'workspaces',
+  'chat_sessions',
+  'messages',
+  'workspace_agents',
+  'workspace_members',
+  'canvas_objects',
+  'tasks',
+  'document_comments',
+  'activity_events',
+];
 
 async function main() {
+  // Explicit opt-in to record every migration as already-applied even when the
+  // core schema looks incomplete. Never inferred — see the H5 note above.
+  const baselineRequested = process.argv.slice(2).includes('--baseline');
+
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.error('[migrate] DATABASE_URL is not set. Run via `npm run migrate` (loads .env) or export it.');
@@ -78,21 +105,41 @@ async function main() {
       return;
     }
 
-    // 4. First-run backfill: fresh tracking table + existing core schema.
+    // 4. First-run backfill: fresh tracking table + a COMPLETE core schema.
     if (!trackingExisted) {
-      const coreExists = Boolean(
-        (await sql`SELECT to_regclass('public.workspaces') AS reg`)[0].reg,
-      );
-      if (coreExists) {
+      const present = [];
+      const missing = [];
+      for (const table of CORE_BOOTSTRAP_TABLES) {
+        const reg = (await sql`SELECT to_regclass(${`public.${table}`}) AS reg`)[0].reg;
+        (reg ? present : missing).push(table);
+      }
+
+      if (present.length === 0) {
+        if (baselineRequested) {
+          console.log('[migrate] --baseline ignored: no core tables exist, so there is nothing to baseline.');
+        }
+        console.log('[migrate] Fresh database detected: all migrations will be applied.');
+      } else if (missing.length > 0 && !baselineRequested) {
+        console.error('[migrate] REFUSING TO RUN: this database is only partially provisioned.');
+        console.error(`[migrate]   present (${present.length}): ${present.join(', ')}`);
+        console.error(`[migrate]   MISSING (${missing.length}): ${missing.join(', ')}`);
+        console.error('[migrate] Recording the migrations as applied here would hide the missing');
+        console.error('[migrate] tables permanently. Finish the bootstrap first — `npm run db:neon:push`');
+        console.error('[migrate] applies database/neon-schema.sql in full — then re-run `npm run migrate`.');
+        console.error('[migrate] If you are certain this schema is already correct, re-run with --baseline.');
+        process.exitCode = 1;
+        return;
+      } else {
         await sql`
           INSERT INTO _schema_migrations ${sql(files.map((name) => ({ name })))}
           ON CONFLICT (name) DO NOTHING
         `;
+        const reason = missing.length > 0
+          ? `--baseline over an incomplete schema (missing: ${missing.join(', ')})`
+          : 'First run on an existing database';
         console.log(
-          `[migrate] First run on an existing database: backfilled ${files.length} migration(s) as already-applied (not re-run).`,
+          `[migrate] ${reason}: backfilled ${files.length} migration(s) as already-applied (not re-run).`,
         );
-      } else {
-        console.log('[migrate] Fresh database detected: all migrations will be applied.');
       }
     }
 

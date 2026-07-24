@@ -10,10 +10,14 @@ export function cn(...inputs: ClassValue[]) {
  * Uses DOM parsing when available for accuracy, falls back to regex.
  */
 export function stripHtml(html: string): string {
-  if (typeof document !== 'undefined') {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
+  if (typeof DOMParser !== 'undefined') {
+    // H2: parse into an INERT document. `div.innerHTML = html` on a detached div
+    // still kicks off subresource loads, so `<img src=x onerror=...>` and
+    // `<svg><animate onbegin=...>` execute in the app's origin even though the
+    // node is never attached. A DOMParser document loads nothing and runs
+    // nothing, so hostile markup is only ever read as text here.
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return doc.body?.textContent || '';
   }
   // Regex fallback for non-browser environments
   return html

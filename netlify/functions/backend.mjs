@@ -21,6 +21,9 @@ import {
  arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
+ safeSelectColumns,
+ getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
+ setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
 } from '../../shared/backend-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
@@ -323,12 +326,20 @@ function jsonErrorWithData(status, error, data = null) {
 }
 
 function getAuthSecret() {
- const secret = process.env.AUTH_SECRET;
+ // H9: accept the AGENSIS_AUTH_SECRET alias, in the same precedence order as
+ // server/index.cjs (AGENSIS_ first). AGENTS.md documents the var as "AUTH_SECRET
+ // (a.k.a. AGENSIS_AUTH_SECRET)" and Fly honours both, so an operator who set only
+ // the alias on Netlify used to get the hardcoded placeholder below — and if both
+ // are set to different values, matching Fly's order keeps the two backends on ONE
+ // secret instead of minting tokens the daemon then rejects.
+ const secret = process.env.AGENSIS_AUTH_SECRET || process.env.AUTH_SECRET;
  if (secret) return secret;
  // F2: NEVER fall back to the DB URL or a hardcoded constant — either makes the
- // HMAC session secret guessable/forgeable. Fail closed in production; only the
- // dev/preview sandbox may use a fixed placeholder.
- if (process.env.NODE_ENV === 'production') {
+ // HMAC session secret guessable/forgeable. Fail closed unless the insecure
+ // placeholder is explicitly opted into: NODE_ENV is not guaranteed to be
+ // 'production' in the Netlify Functions runtime, so gating on it left a real
+ // deploy signing sessions with a public constant (H9).
+ if (process.env.AGENSIS_ALLOW_INSECURE_AUTH !== 'true') {
   const err = new Error('Server auth is not configured (set AUTH_SECRET)');
   err.status = 500;
   throw err;
@@ -535,10 +546,20 @@ async function ensureSecretsTables() {
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       key text NOT NULL,
       value text NOT NULL DEFAULT '',
+      secret_cipher text DEFAULT '',
+      description text DEFAULT '',
       updated_by uuid,
       updated_at timestamptz DEFAULT now(),
       PRIMARY KEY (workspace_id, key)
     )
+  `);
+ // Idempotent backfill for databases whose workspace_secrets predates
+ // encryption-at-rest (CREATE TABLE IF NOT EXISTS above is a no-op for them).
+ // Mirrors ensureRuntimeSchema in server/index.cjs — this mirror now writes
+ // ciphertext, so the columns have to exist wherever it runs.
+ await query(`
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
  await query('CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id)');
 }
@@ -549,25 +570,20 @@ async function getSettingValue(key) {
  return rows[0]?.value || '';
 }
 
+// M5: both vault helpers delegate to the shared implementation so this mirror
+// stores AES-256-GCM ciphertext in secret_cipher (value stays '') and prefers it
+// on read — exactly like server/index.cjs. Writing plaintext into `value` here
+// left the Fly server's cipher-first read serving the OLD key after a rotation
+// through Netlify.
 async function getWorkspaceSecretValue(workspaceId, key) {
  if (!workspaceId) return '';
  await ensureSecretsTables();
- const rows = await query(
-  'select value from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
-  [workspaceId, key],
- );
- return rows[0]?.value || '';
+ return coreGetWorkspaceSecretValue(workspaceId, key, { db: query, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId = null) {
  await ensureSecretsTables();
- await query(
-  `insert into workspace_secrets (workspace_id, key, value, updated_by, updated_at)
-     values ($1, $2, $3, $4, now())
-     on conflict (workspace_id, key)
-     do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-  [workspaceId, key, value, userId],
- );
+ await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId });
 }
 
 async function resolveSecret(key, workspaceId = null) {
@@ -1735,7 +1751,10 @@ async function handleDb(pathname, req, userId) {
    : buildWhereClause(filters, []);
   const { clause, params } = where;
   const limitSql = Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : '';
-  const rows = await query(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
+  // M7: project the requested columns through the shared per-table read
+  // allow-list first, so `columns: "*"` on app_users can never return the
+  // caller's password_hash / token_version.
+  const rows = await query(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
   return json({ data: single ? (rows[0] ?? null) : rows, error: null });
  }
 

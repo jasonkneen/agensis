@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
@@ -29,6 +30,7 @@ const {
  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
  stripPrivilegedDbValues,
+ safeSelectColumns,
  storagePathBelongsToWorkspace,
  issueAuthToken,
  verifyAuthToken,
@@ -3678,7 +3680,12 @@ async function finalizeStuckJob(job, reason) {
   // 'running' forever — the exact bug that let a phantom job wedge a DM indefinitely
   // (reaper, connection-drop cleanup, and startup reconcile all funnel through here).
   const updated = await getDb().unsafe(
-   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status = 'running' returning id`,
+   // 'queued' is in the guard as well as 'running': hasActiveBurstJob awaits this
+   // for phantom jobs that never got claimed (the MCP case), specifically so the
+   // one-active-job unique index won't bounce the retry. A running-only guard
+   // matched zero rows there, leaving the queued row holding the
+   // (session_id, agent_id) active slot and silently dropping the next message.
+   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning id`,
    [job.id, `Agent stopped responding (${reason})`],
   );
   if (updated.length === 0) return; // a real result already finalized it
@@ -3722,7 +3729,7 @@ async function reapStuckAgentJobs() {
        where status = 'running'
          and (
            ((metadata->>'mode') = 'farm' and updated_at < now() - interval '31 minutes')
-           or (coalesce(metadata->>'mode', '') <> 'farm' and started_at < now() - interval '240 seconds')
+           or (coalesce(metadata->>'mode', '') <> 'farm' and coalesce(updated_at, started_at) < now() - interval '240 seconds')
          )`,
   );
   for (const job of rows) await finalizeStuckJob(job, 'timed out');
@@ -6135,6 +6142,15 @@ function attachRealtime(server) {
  const wss = new WebSocketServer({ server, path: '/backend/ws' });
 
  wss.on('connection', (ws, req) => {
+  // FIRST listener: ws@8 emits 'error' on the socket for any receiver-level
+  // protocol violation (invalid UTF-8, bad opcode, oversized frame). The WS
+  // handshake needs no credentials (auth is a first-message frame), so without a
+  // handler any anonymous client could crash the process — an EventEmitter
+  // 'error' with no listener throws. Log only: ws closes the socket itself and
+  // the 'close' handler below already does the cleanup.
+  ws.on('error', (error) => {
+   console.warn('[backend] websocket error:', error?.message || error);
+  });
   ws.subscriptions = [];
   // Liveness: the heartbeat interval below pings each socket and terminates any
   // that miss a pong, so an ungraceful drop still fires 'close' (→ offline).
@@ -6298,6 +6314,11 @@ function attachRealtime(server) {
  }, LIVENESS_PING_INTERVAL_MS);
  livenessInterval.unref?.();
  wss.on('close', () => clearInterval(livenessInterval));
+ // Server-level errors (a failed upgrade, an EADDR-style listen error surfaced by
+ // ws) would otherwise be an unhandled 'error' and kill the process.
+ wss.on('error', (error) => {
+  console.warn('[backend] websocket server error:', error?.message || error);
+ });
 
  return wss;
 }
@@ -6325,6 +6346,14 @@ function createApp() {
    throw error;
   })
   : Promise.resolve();
+ // Terminal handler attached at creation, so a boot-time DDL failure is never an
+ // unhandled rejection — Node's default mode terminates the process, which would
+ // make the per-request 500 degradation below unreachable. The gate still awaits
+ // the same promise, so requests keep surfacing the real error. Capturing it also
+ // lets /backend/health — registered before the gate — report "not ready" instead
+ // of a green light while every other /backend route is broken.
+ let runtimeSchemaError = null;
+ runtimeSchemaReady.catch((error) => { runtimeSchemaError = error; });
 
  // Auth is enforced at the route boundary and again per workspace-scoped
  // operation. Keep this server-side; client filters are only UX hints.
@@ -6332,6 +6361,12 @@ function createApp() {
  app.get('/backend/health', async (_req, res) => {
   try {
    await getDb().unsafe('select 1');
+   // The DB answering is not enough: if the runtime schema migration failed every
+   // route behind the gate below is broken, so a 200 here would keep Fly routing
+   // traffic to a dead instance. fly.toml's check only looks at the HTTP status.
+   if (runtimeSchemaError) {
+    return res.status(503).json({ ok: false, schema: 'failed', error: runtimeSchemaError.message || String(runtimeSchemaError) });
+   }
    res.json({ ok: true });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -6725,6 +6760,38 @@ function createApp() {
    fs.createReadStream(fullPath).pipe(res);
   } catch (error) {
    jsonError(res, 500, error);
+  }
+ });
+
+ // Deleting an upload through the generic /backend/db/delete only removes the row,
+ // so the blob stayed on the Fly volume forever and the per-workspace quota (a
+ // sum(size) over surviving rows) drifted below real disk usage until ENOSPC.
+ // This route removes both. The path is resolved BEFORE the row is deleted, since
+ // the containment check needs the row's workspace_id and storage_path.
+ app.delete('/backend/files/:id', requireAuth, async (req, res) => {
+  try {
+   const rows = await getDb().unsafe('select id, workspace_id, storage_path from uploaded_files where id = $1 limit 1', [req.params.id]);
+   const file = rows[0];
+   if (!file) return jsonError(res, 404, new Error('File was not found'));
+   await enforceWorkspaceRole(req.userId, file.workspace_id, 'write');
+   let fullPath = '';
+   if (file.storage_path) {
+    try {
+     fullPath = resolveStoragePathForWorkspace(file.workspace_id, file.storage_path);
+    } catch (pathError) {
+     return jsonError(res, pathError.status || 403, pathError);
+    }
+   }
+   const deleted = await getDb().unsafe('delete from uploaded_files where id = $1 returning *', [file.id]);
+   if (deleted.length > 0) notifyDbSubscribers('uploaded_files', 'DELETE', deleted);
+   // Best effort: the row is already gone, so a missing/undeletable blob must not
+   // fail the request — it would just leave the caller unable to retry.
+   if (fullPath) {
+    try { fs.rmSync(fullPath, { force: true }); } catch { /* blob already gone */ }
+   }
+   res.json({ data: { id: file.id }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
   }
  });
 
@@ -7139,6 +7206,39 @@ function createApp() {
  // returned to the client — publicGatewayConfig strips it and reports only whether
  // a key is configured. Selecting a gateway in chat routes that turn's inference
  // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
+
+ // SSRF guard (H1). base_url comes straight from the request body and /backend/ai-chat
+ // POSTs to `${baseUrl}/chat/completions` and streams the upstream body back, so an
+ // internal address stored here turns any signed-up user into a proxy for the private
+ // network (cloud metadata, admin ports). Same rules and rejection style as
+ // normalizeFlowWebhookUrl in server/flow-integration.cjs. Validation only — the raw
+ // value is still what gets stored, so existing base URLs concatenate as before.
+ function assertSafeGatewayBaseUrl(value) {
+  if (!value) throw badRequest('base_url is required');
+  let url;
+  try { url = new URL(String(value)); } catch { throw badRequest('Gateway base URL is invalid.'); }
+  if (url.username || url.password) {
+   throw badRequest('Gateway base URL must not contain credentials.');
+  }
+  // URL.hostname keeps IPv6 literals bracketed; strip them so net.isIP sees the address.
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+   throw badRequest('Gateway base URL must use a public hostname.');
+  }
+  if (['127.0.0.1', '::1', 'localhost'].includes(hostname)) {
+   if (process.env.NODE_ENV === 'production' || url.protocol !== 'http:') {
+    throw badRequest('Loopback gateway URLs are allowed only over HTTP in local development.');
+   }
+   return;
+  }
+  if (url.protocol !== 'https:') {
+   throw badRequest('Gateway base URL must use HTTPS.');
+  }
+  if (net.isIP(hostname) || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+   throw badRequest('Gateway base URL must use a public hostname.');
+  }
+ }
+
  function publicGatewayConfig(row) {
   return {
    id: row.id,
@@ -7205,6 +7305,7 @@ function createApp() {
    const apiKey = String(req.body?.api_key || req.body?.apiKey || '');
    const headers = parseJsonObject(req.body?.headers);
    if (!baseUrl) return jsonError(res, 400, new Error('base_url is required'));
+   assertSafeGatewayBaseUrl(baseUrl);
    const cipher = apiKey ? await encryptVaultSecret(apiKey) : '';
    const rows = await getDb().unsafe(
     `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
@@ -7228,7 +7329,11 @@ function createApp() {
    const params = [gatewayId, workspaceId];
    const push = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
    if (req.body?.name !== undefined) push('name', String(req.body.name).trim().slice(0, 120) || 'Gateway');
-   if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) push('base_url', String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500));
+   if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) {
+    const nextBaseUrl = String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500);
+    assertSafeGatewayBaseUrl(nextBaseUrl);
+    push('base_url', nextBaseUrl);
+   }
    if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
    if (req.body?.headers !== undefined) { params.push(JSON.stringify(parseJsonObject(req.body.headers))); sets.push(`headers = $${params.length}::jsonb`); }
    // Only rotate the key when a non-empty api_key is provided; an omitted or empty
@@ -8704,7 +8809,7 @@ function createApp() {
     ? appendWorkspaceAccessClause(buildWhereClause(filters, []), req.userId)
     : buildWhereClause(filters, []);
    const { clause, params } = where;
-   const rows = await getDb().unsafe(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
+   const rows = await getDb().unsafe(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
    res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -8824,7 +8929,13 @@ function createApp() {
  app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
   try {
    const workspaceId = settingsWorkspaceIdFromRequest(req);
-   if (workspaceId) await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // App-level (platform) secrets are not readable by users — omitting workspaceId
+   // used to skip authorization entirely and return a masked preview of the
+   // platform ANTHROPIC_API_KEY to any signed-in account. Mirrors the POST below.
+   if (!workspaceId) {
+    return jsonError(res, 403, new Error('App-level secret management is not available to users'));
+   }
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    const keys = await listManagedSecrets(workspaceId);
    res.json({ data: { keys }, error: null });
   } catch (error) {
@@ -8955,6 +9066,9 @@ function createApp() {
     try {
      upstream = await fetch(`${route.baseUrl}/chat/completions`, {
       method: 'POST',
+      // H1 — never follow redirects: base_url is validated as public at write time,
+      // but a permitted host could still 302 this request onto an internal address.
+      redirect: 'error',
       signal: controller.signal,
       headers: {
        'Content-Type': 'application/json',
@@ -9119,6 +9233,15 @@ function createApp() {
 }
 
 function startBackendServer(port = DEFAULT_PORT) {
+ // Last-resort process guards. A single malformed frame, a rejected background
+ // promise, or a throw from a detached callback must not take the whole backend
+ // down — every request path already reports its own errors, so log and stay up.
+ process.on('uncaughtException', (error) => {
+  console.error('[backend] uncaught exception:', error?.stack || error?.message || error);
+ });
+ process.on('unhandledRejection', (reason) => {
+  console.error('[backend] unhandled rejection:', reason?.stack || reason?.message || reason);
+ });
  const app = createApp();
  const server = http.createServer(app);
  const wss = attachRealtime(server);

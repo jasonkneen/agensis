@@ -47,11 +47,22 @@ CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
 CREATE TABLE IF NOT EXISTS workspace_secrets (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   key text NOT NULL,
+  -- Legacy plaintext column. Encrypted rows leave this empty and carry the
+  -- AES-256-GCM ciphertext in secret_cipher instead.
   value text NOT NULL DEFAULT '',
+  secret_cipher text DEFAULT '',
+  description text DEFAULT '',
   updated_by uuid,
   updated_at timestamptz DEFAULT now(),
   PRIMARY KEY (workspace_id, key)
 );
+
+-- M10 (2026-07 review): secret_cipher/description were added ONLY by the runtime
+-- ALTERs in server/index.cjs, so a DB provisioned from this file (or from the
+-- migrations) had neither. Re-stated as idempotent ALTERs so re-pushing this file
+-- over an existing database backfills them too.
+ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
+ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
 
@@ -238,6 +249,38 @@ CREATE TABLE IF NOT EXISTS memory_facts (
 
 CREATE INDEX IF NOT EXISTS idx_memory_facts_workspace_id ON memory_facts(workspace_id);
 
+-- Defined here (before agent_memory_files / memory_file_comments) because both
+-- of those FK it. psql runs this file top to bottom with ON_ERROR_STOP=1, so a
+-- forward REFERENCES aborts the whole push — keep referenced tables above their
+-- referrers.
+CREATE TABLE IF NOT EXISTS workspace_agents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  avatar text NOT NULL DEFAULT 'AI',
+  openpet_avatar_id text DEFAULT '',
+  accent_color text DEFAULT '#00a95c',
+  description text DEFAULT '',
+  system_prompt text NOT NULL DEFAULT '',
+  soul text DEFAULT '',
+  instructions text DEFAULT '',
+  tools jsonb DEFAULT '[]'::jsonb,
+  skills jsonb DEFAULT '[]'::jsonb,
+  handle text DEFAULT '',
+  connect_token_hash text DEFAULT '',
+  model text NOT NULL DEFAULT 'auto',
+  run_mode text NOT NULL DEFAULT 'builtin',
+  memory_dir text DEFAULT '',
+  enabled boolean NOT NULL DEFAULT true,
+  permission_mode text NOT NULL DEFAULT 'default',
+  version integer NOT NULL DEFAULT 1,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
+
 -- Agent file-memory mirror: read-only snapshots of the memory files an agent's
 -- daemon enumerates from its palace dir. Pushed up by the daemon; never edited
 -- in-app in phase 1. UPSERTed by UNIQUE(agent_id, path) so re-syncs update rows
@@ -404,34 +447,6 @@ CREATE TABLE IF NOT EXISTS memory_file_comments (
 CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
 CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
-
-CREATE TABLE IF NOT EXISTS workspace_agents (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  name text NOT NULL,
-  avatar text NOT NULL DEFAULT 'AI',
-  openpet_avatar_id text DEFAULT '',
-  accent_color text DEFAULT '#00a95c',
-  description text DEFAULT '',
-  system_prompt text NOT NULL DEFAULT '',
-  soul text DEFAULT '',
-  instructions text DEFAULT '',
-  tools jsonb DEFAULT '[]'::jsonb,
-  skills jsonb DEFAULT '[]'::jsonb,
-  handle text DEFAULT '',
-  connect_token_hash text DEFAULT '',
-  model text NOT NULL DEFAULT 'auto',
-  run_mode text NOT NULL DEFAULT 'builtin',
-  memory_dir text DEFAULT '',
-  enabled boolean NOT NULL DEFAULT true,
-  permission_mode text NOT NULL DEFAULT 'default',
-  version integer NOT NULL DEFAULT 1,
-  created_by uuid,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
 
 -- F10 (2026-07 review): `token` holds hashAgentToken(plaintext) for rows created
 -- after the hardening fix (server/index.cjs POST /backend/agent-webhooks) — the

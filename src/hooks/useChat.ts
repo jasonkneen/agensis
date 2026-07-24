@@ -66,6 +66,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     }
   }, [workspaceId]);
 
+  // Tracks the session currently on screen, synced DURING render so an in-flight
+  // fetchMessages from a previously-active session is ignored when its response
+  // lands, with no render→effect window (stale-response guard; mirrors
+  // useSessionMessages).
+  const activeSessionId = activeSession?.id ?? null;
+  const currentSessionRef = useRef<string | null>(activeSessionId);
+  currentSessionRef.current = activeSessionId;
+
   const fetchMessages = useCallback(async (sessionId: string) => {
     setLoading(true);
     // NET-05: load only the newest page on open. The cache key stays per-session
@@ -78,6 +86,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       const body = await res.json();
       return body?.data ?? { messages: [], hasMore: false };
     });
+    // Stale-response guard: the user may have switched sessions while this was
+    // in flight — painting it now would show this session's transcript under
+    // the new session's header/composer/thread panel. The newer fetch owns the
+    // loading flag from here on, so leave it alone too.
+    if (currentSessionRef.current !== sessionId) return;
     const rows = result?.messages ?? [];
     // Drop soft-deleted messages (a cleared/closed DM retains its rows in the DB
     // but they must never re-surface). The server already filters; this is belt.
@@ -130,13 +143,19 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     fetchSessions();
   }, [fetchSessions]);
 
+  // Depend on the session ID, not the session OBJECT: updateSession /
+  // autoTitleSession hand setActiveSession a fresh object for the SAME session,
+  // and re-running fetchMessages there replaces `messages` wholesale — wiping
+  // client-only rows such as the in-flight streaming assistant placeholder.
   useEffect(() => {
-    if (activeSession) fetchMessages(activeSession.id);
-    else setMessages([]);
-  }, [activeSession, fetchMessages]);
+    if (activeSessionId) fetchMessages(activeSessionId);
+    // No session to load: clear the transcript and release the loading flag,
+    // since the stale-response guard above leaves it to whoever loads next.
+    else { setMessages([]); setLoading(false); }
+  }, [activeSessionId, fetchMessages]);
 
   const messageDeduper = useRealtimeDeduper();
-  const sessionId = activeSession?.id ?? null;
+  const sessionId = activeSessionId;
   useTableSubscription<Message>(
     {
       enabled: !!sessionId,
@@ -241,6 +260,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // like the main view does (see topLevelMessages below).
     const topLevel = ((sourceMessages || []) as Message[]).filter(m => !m.thread_parent_id);
     if (topLevel.length > 0) {
+      // Every copy MUST carry the same keys: both backends derive the INSERT
+      // column list from the first row only, so a key that is absent from
+      // copies[0] is silently dropped for the whole batch — a channel that
+      // opens with a human message (no sender_*) would strip agent identity
+      // from every copied agent reply. Emit `?? null` instead of omitting.
       const copies = topLevel.map(m => {
         const row: Record<string, unknown> = {
           id: crypto.randomUUID(),
@@ -248,10 +272,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
           role: m.role,
           content: m.content,
           created_at: m.created_at,
+          sender_kind: m.sender_kind ?? null,
+          sender_id: m.sender_id ?? null,
+          sender_name: m.sender_name ?? null,
         };
-        if (m.sender_kind) row.sender_kind = m.sender_kind;
-        if (m.sender_id) row.sender_id = m.sender_id;
-        if (m.sender_name) row.sender_name = m.sender_name;
         return row;
       });
       await backendClient.from('messages').insert(copies);
@@ -313,7 +337,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     session: ChatSession,
     content: string,
     threadParentId?: string | null,
-  ): Promise<Message> => {
+  ): Promise<{ message: Message | null; error: { message: string; code?: string | null } | null }> => {
     const userMsg: Message = {
       id: crypto.randomUUID(),
       session_id: session.id,
@@ -334,9 +358,21 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     };
     if (currentUserName) insertPayload.sender_name = currentUserName;
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
-    await backendClient.from('messages').insert(insertPayload);
+    const { error } = await backendClient.from('messages').insert(insertPayload);
 
-    return userMsg;
+    // backendClient swallows HTTP failures into { error } instead of throwing,
+    // so an unchecked insert left a phantom message on screen after a 403
+    // (viewer role), 429 (rate limit) or 500 — and the caller then dispatched a
+    // messageId the server never stored. Roll the optimistic row back like the
+    // other optimistic mutations do (see handleTogglePin) and report the error.
+    // Offline sends are exempt: sendMessage's offline branch deliberately keeps
+    // the row and posts its own "will be sent when you reconnect" notice.
+    if (error && navigator.onLine) {
+      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+      return { message: null, error };
+    }
+
+    return { message: userMsg, error };
   }, [currentUserName]);
 
   const autoTitleSession = useCallback(async (
@@ -607,7 +643,23 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       return;
     }
 
-    const userMsg = await insertUserMessage(session, content, threadParentId);
+    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId);
+    // The message never reached the DB (viewer role, rate limit, server error).
+    // The optimistic row is already rolled back; say why and abort before
+    // dispatch/stream run against a messageId the server has never seen.
+    if (!userMsg) {
+      if (activeSession?.id === session.id) {
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          session_id: session.id,
+          role: 'assistant',
+          content: `Couldn't send your message — ${errorMessage(sendError)}`,
+          thread_parent_id: threadParentId ?? null,
+          created_at: new Date().toISOString(),
+        }]);
+      }
+      return;
+    }
     await autoTitleSession(session, content, threadParentId);
 
     // NET-05: the on-screen `messages` state is a PAGINATED window (newest page
@@ -749,8 +801,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
     // Land on the parent so the synthesis renders in place, then dispatch.
     setActiveSession(parent);
-    const userMsg = await insertUserMessage(parent, prompt);
-    const dispatched = await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null);
+    const { message: userMsg } = await insertUserMessage(parent, prompt);
+    // A rejected insert leaves nothing for the agent to answer, so treat it
+    // exactly like a failed dispatch below: keep the fork, surface the failure.
+    const dispatched = userMsg
+      ? await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null)
+      : false;
 
     // If the synthesis dispatch failed, keep the fork (do NOT soft-delete) so
     // the merge can be retried, and surface the failure instead of silently
