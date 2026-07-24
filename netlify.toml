@@ -20,11 +20,31 @@
   status = 200
   force = true
 
-# Device-authorization links and future app routes are handled by the Vite SPA.
+# The SPA owns /app and the farm-integration approval surface. Device-auth and
+# auth-callback links land on / or /landing with query/hash params and are
+# bounced to /app by root-entry.js, so they never need their own server route.
 [[redirects]]
-  from = "/*"
+  from = "/app"
   to = "/index.html"
   status = 200
+
+[[redirects]]
+  from = "/app/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/integrations/*"
+  to = "/index.html"
+  status = 200
+
+# Anything else that isn't a real static file is a genuine 404 — never the
+# 200 app shell. (The old catch-all made every unknown path a soft-404:
+# /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)
+[[redirects]]
+  from = "/*"
+  to = "/404.html"
+  status = 404
 
 [[headers]]
   for = "/release-notes.json"

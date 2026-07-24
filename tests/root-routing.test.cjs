@@ -74,7 +74,11 @@ test('both HTML entry points load the shared routing guard', () => {
 test('the service worker never substitutes the SPA shell for landing routes', () => {
   const viteConfig = fs.readFileSync(path.join(repoRoot, 'vite.config.ts'), 'utf8');
 
-  assert.ok(viteConfig.includes('navigateFallbackDenylist: [/^\\/$/, /^\\/landing(?:\\/|$)/]'));
+  assert.ok(
+    viteConfig.includes(
+      'navigateFallbackDenylist: [/^\\/$/, /^\\/landing(?:\\/|$)/, /^\\/(robots\\.txt|sitemap\\.xml|llms\\.txt|og-image\\.png|404\\.html)$/]',
+    ),
+  );
 });
 
 test('the public landing page keeps /app as an explicit user choice', () => {

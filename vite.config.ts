@@ -83,7 +83,7 @@ export default defineConfig({
       manifest: {
         name: 'agensis — AI Workspace',
         short_name: 'agensis',
-        description: 'AI-powered workspace for documents, chat, and memory',
+        description: 'A shared workspace where AI agents work with you, your team, and each other.',
         theme_color: '#0c0c0c',
         background_color: '#0c0c0c',
         display: 'standalone',
@@ -135,10 +135,12 @@ export default defineConfig({
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // The public landing routes must always reach their static HTML instead
         // of being replaced with the SPA shell by a controlling service worker.
-        navigateFallbackDenylist: [/^\/$/, /^\/landing(?:\/|$)/],
+        // Same for the SEO/share statics (robots, sitemap, og-image, 404) —
+        // without this, a returning visitor's SW serves the app shell for them.
+        navigateFallbackDenylist: [/^\/$/, /^\/landing(?:\/|$)/, /^\/(robots\.txt|sitemap\.xml|llms\.txt|og-image\.png|404\.html)$/],
         // Never precache the version manifest or release notes — they must be
         // fetched fresh so the update check reflects the true latest deploy.
-        globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],
+        globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/og-image.png', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],
         runtimeCaching: [
           {
             // Hashed lazy chunks (mermaid, diagrams, etc.) — cache on first use only.
