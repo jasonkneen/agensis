@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agensis.io — SEO / GEO / Marketing Brief</title>
+<style>
+  :root{
+    --bg:#0a0b0f; --panel:#12141b; --panel2:#171a23; --line:#232734;
+    --ink:#e8eaf0; --muted:#9aa3b2; --dim:#6b7280;
+    --acc:#7c8cff; --acc2:#4ade80; --warn:#fbbf24; --bad:#f87171;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:48px 24px 80px}
+  header{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px}
+  .eyebrow{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--acc);font-weight:600}
+  h1{font-size:34px;line-height:1.15;margin:12px 0 6px;font-weight:700;letter-spacing:-.02em}
+  h1 .lo{color:var(--muted);font-weight:500}
+  .sub{color:var(--muted);font-size:15px}
+  .meta{margin-top:14px;font-size:13px;color:var(--dim)}
+  h2{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:44px 0 16px;font-weight:600}
+  h3{font-size:18px;margin:0 0 8px;font-weight:650;letter-spacing:-.01em}
+  p{margin:0 0 14px;color:#cfd4de}
+  a{color:var(--acc);text-decoration:none}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:720px){.g4,.g2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .score{text-align:center}
+  .score .n{font-size:30px;font-weight:750;letter-spacing:-.02em}
+  .score .l{font-size:12px;color:var(--muted);margin-top:2px}
+  .score .t{font-size:11px;color:var(--dim);margin-top:8px}
+  .s-bad .n{color:var(--bad)} .s-mid .n{color:var(--warn)} .s-ok .n{color:var(--acc2)}
+  .flag{border-left:3px solid var(--bad);background:var(--panel2);border-radius:10px;padding:16px 18px;margin-bottom:14px}
+  .flag.two{border-color:var(--warn)}
+  .flag h3{color:#fff}
+  .flag .tag{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--bad);text-transform:uppercase}
+  .flag.two .tag{color:var(--warn)}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:6px 0 4px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  td .p0{color:var(--bad);font-weight:700} td .p1{color:var(--warn);font-weight:700} td .p2{color:var(--dim);font-weight:700}
+  .phase{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+  .phase .wk{font-size:12px;color:var(--acc);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+  .phase ul{margin:10px 0 0;padding-left:18px;color:#cfd4de}
+  .phase li{margin:5px 0}
+  .wedge{background:linear-gradient(135deg,#141726,#12141b);border:1px solid #2a3350;border-radius:var(--radius);padding:22px}
+  .wedge strong{color:#fff}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--muted);margin:3px 5px 3px 0}
+  .def{background:var(--panel2);border:1px dashed var(--line);border-radius:10px;padding:14px 16px;font-size:15px;color:#dde1ea;font-style:italic}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:20px;color:var(--dim);font-size:13px}
+  .good{color:var(--acc2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Working brief · SEO / GEO / Marketing</div>
+    <h1>agensis.io <span class="lo">— gap analysis &amp; path to spec</span></h1>
+    <div class="sub">Where the site stands against 2026 best practice, and the 90-day path to fix it.</div>
+    <div class="meta">Prepared 2026-07-24 · verified against the live site · draft v1 for the agensis creator</div>
+  </header>
+
+  <h2>Maturity scoreboard</h2>
+  <div class="grid g4">
+    <div class="card score s-bad"><div class="n">3/10</div><div class="l">Site info / content</div><div class="t">One indexable page; no depth</div></div>
+    <div class="card score s-mid"><div class="n">4/10</div><div class="l">Technical SEO</div><div class="t">SSR homepage, but soft-404s</div></div>
+    <div class="card score s-bad"><div class="n">1/10</div><div class="l">GEO / AI answers</div><div class="t">No entity; name collision</div></div>
+    <div class="card score s-bad"><div class="n">3/10</div><div class="l">Marketing / GTM</div><div class="t">Great voice; no ICP or proof</div></div>
+  </div>
+
+  <h2>The two problems that dominate everything</h2>
+  <div class="flag">
+    <div class="tag">P0 · Brand discoverability</div>
+    <h3>The name resolves to a medical term</h3>
+    <p>Search and AI engines read "agensis" as a misspelling of <strong>agenesis</strong> (an organ failing to develop). "agensis" returns zero brand results and a page of pathology; LLMs auto-correct the name before they ever consider citing you. This is a compounding tax on recall, search, and AI citation. It does not force a rename, but the entity + disambiguation work is non-negotiable and urgent.</p>
+  </div>
+  <div class="flag two">
+    <div class="tag">P0 · Retrievability</div>
+    <h3>There is nothing for humans or models to retrieve</h3>
+    <p>One indexable page, no entity node (no Wikidata, no Organization schema), and no third-party footprint (no Product Hunt, Crunchbase, G2, GitHub, press, reviews). AI answer engines have nothing to cite for exactly the AI-native buyer agensis targets. Until the corpus exists, agensis is invisible where it most needs to be seen.</p>
+  </div>
+
+  <h2>What's already working</h2>
+  <div class="card">
+    <p style="margin:0"><span class="good">Keep these:</span> the homepage is genuinely server-rendered with real content (crawlable), has a clean single-H1 structure, a canonical tag, and OG title/description. The copy voice is distinctive and an asset ("Everything a colleague needs. Nothing a chatbot has." / "Put agents on the roster."). The foundation is better than most pre-launch products.</p>
+  </div>
+
+  <h2>Gap register (top items)</h2>
+  <table>
+    <tr><th>Area</th><th>Gap</th><th>Sev</th><th>Fix</th></tr>
+    <tr><td>SEO</td><td>Soft-404 on every non-root route (200 + app shell)</td><td><span class="p0">P0</span></td><td>Real 404/410; split app to app.agensis.io</td></tr>
+    <tr><td>SEO</td><td>No robots.txt / sitemap.xml</td><td><span class="p0">P0</span></td><td>Ship both; allow AI crawlers</td></tr>
+    <tr><td>SEO/GEO</td><td>No JSON-LD structured data</td><td><span class="p0">P0</span></td><td>Organization + WebSite + SoftwareApplication graph</td></tr>
+    <tr><td>GEO</td><td>No entity node + name collision</td><td><span class="p0">P0</span></td><td>Wikidata item; sameAs; category lockup</td></tr>
+    <tr><td>GEO</td><td>Zero third-party corroboration</td><td><span class="p0">P0</span></td><td>Claim profiles; launch; seed reviews</td></tr>
+    <tr><td>Marketing</td><td>No named ICP / beachhead</td><td><span class="p0">P0</span></td><td>Pick one segment; write positioning</td></tr>
+    <tr><td>Marketing</td><td>No intent capture (app is the only CTA)</td><td><span class="p0">P0</span></td><td>Waitlist + design-partner CTA</td></tr>
+    <tr><td>SEO</td><td>No og:image / Twitter cards</td><td><span class="p1">P1</span></td><td>1200×630 shared share image</td></tr>
+    <tr><td>Content</td><td>Only one real page; no demo/proof</td><td><span class="p1">P1</span></td><td>/about, /use-cases, /docs, comparison pages, demo</td></tr>
+    <tr><td>GEO</td><td>No comparison / "vs" pages</td><td><span class="p1">P1</span></td><td>vs OpenAgents, vs Agentforce, alternatives</td></tr>
+    <tr><td>Marketing</td><td>Differentiation vs incumbents buried</td><td><span class="p1">P1</span></td><td>Lead with open / neutral / model-agnostic + mesh</td></tr>
+    <tr><td>GEO</td><td>llms.txt absent; no AI-visibility tracking</td><td><span class="p2">P2</span></td><td>Ship llms.txt; track a prompt set</td></tr>
+  </table>
+
+  <h2>The defensible wedge</h2>
+  <div class="wedge">
+    <p style="margin:0 0 10px"><strong>The category is crowded and shadowed by giants.</strong> OpenAgents (open-source "Collaboration OS for AI Agents") is the closest rival; Slack Agentforce and Microsoft ship "agent-first workspace" as a feature of tools teams already pay for. The threat is the category collapsing into an incumbent checkbox.</p>
+    <p style="margin:0"><strong>What incumbents structurally can't say:</strong> open, neutral, MCP-native, model-agnostic. Pair that with the agent-to-agent <strong>mesh</strong> and live <strong>presence</strong>, and the story becomes "the open, vendor-neutral place where any agent from any model works together." That is the wedge the current site buries under vibe.</p>
+    <div style="margin-top:14px">
+      <span class="pill">open runtime</span><span class="pill">MCP-native</span><span class="pill">model-agnostic</span><span class="pill">agent-to-agent mesh</span><span class="pill">presence</span><span class="pill">shared memory + canvas</span>
+    </div>
+  </div>
+
+  <h2>Canonical definition (use verbatim everywhere)</h2>
+  <div class="def">agensis is an agentic workspace where humans and AI agents work together in channels and threads, with persistent memory, live presence, and a shared canvas, built on an open, MCP-native, model-agnostic runtime.</div>
+  <p style="font-size:13px;color:var(--dim);margin-top:8px">Byte-identical across site, schema, Wikidata, LinkedIn, Crunchbase, and G2. Consistency is how LLMs merge you into one strong entity instead of several weak ones.</p>
+
+  <h2>90-day path to spec</h2>
+  <div class="phase">
+    <div class="wk">Phase 1 · weeks 1–2 · foundation &amp; disambiguation</div>
+    <ul>
+      <li>Kill the soft-404; move the app to app.agensis.io; ship real robots.txt + sitemap.xml.</li>
+      <li>Add the JSON-LD schema graph with sameAs[] on every page.</li>
+      <li>Create the Wikidata item; claim LinkedIn / Crunchbase / GitHub / Product Hunt / G2 with the identical name lockup + definition.</li>
+      <li>Add waitlist + design-partner capture; add the canonical definition; unify the two site descriptions.</li>
+      <li>Decide the beachhead ICP; write the one-page positioning doc.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="wk">Phase 2 · weeks 3–6 · depth, conversion, proof</div>
+    <ul>
+      <li>Build real content pages + FAQ blocks + comparison/alternatives pages (vs OpenAgents, vs Agentforce).</li>
+      <li>Add og:image + Twitter cards; baseline Core Web Vitals (watch INP on the SPA).</li>
+      <li>Rebuild the homepage to the conversion spec: clarity subhead, social proof, use cases, demo, one repeated primary CTA.</li>
+      <li>Write the messaging house; sharpen the open-runtime wedge in all copy; ship a 60s demo + first design-partner logos.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <div class="wk">Phase 3 · weeks 7–12 · corpus &amp; launch</div>
+    <ul>
+      <li>Product Hunt + Show HN launch; seed G2/Capterra reviews; earn listicle inclusion + mentions; participate on Reddit/HN/Discord.</li>
+      <li>Publish original data on multi-agent coordination; ship llms.txt + llms-full.txt.</li>
+      <li>Stand up AI-visibility tracking + AI-crawler log monitoring + GA4 AI referral segment; build battlecards; add a beta pricing story.</li>
+    </ul>
+  </div>
+
+  <h2>Founder decisions that unblock the set</h2>
+  <div class="grid g2">
+    <div class="card"><h3>1 · Beachhead ICP</h3><p style="margin:0;font-size:14px">Dev teams, agencies running client agents, or technical founders. Pick one.</p></div>
+    <div class="card"><h3>2 · Naming posture</h3><p style="margin:0;font-size:14px">Keep the name but always ship it as "agensis — agentic workspace" and win Wikidata fast.</p></div>
+    <div class="card"><h3>3 · Open-core or closed</h3><p style="margin:0;font-size:14px">The biggest lever against open-source OpenAgents.</p></div>
+    <div class="card"><h3>4 · Beta / free story</h3><p style="margin:0;font-size:14px">Replace "no pricing games yet" with an explicit free-during-beta promise + design partners.</p></div>
+  </div>
+
+  <footer>
+    agensis.io working brief · v1 · 2026-07-24. Companion detail: gap-analysis, SEO spec, GEO spec, and marketing spec docs.
+    Benchmarked against 2026 best practice (Core Web Vitals/INP, schema v30, GEO citation research, Dunford positioning, category design).
+  </footer>
+</div>
+</body>
+</html>
