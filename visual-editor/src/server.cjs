@@ -183,7 +183,10 @@ function parseStyleDecls(styleText) {
 }
 
 function patchStyle(source, node, property, value) {
-  const l = loc(node);
+  // Assertion, not a value: loc() throws when the node has no source location,
+  // which keeps patchStyle from splicing against offsets that don't exist. The
+  // return is genuinely unused here — every other caller needs the offsets.
+  loc(node);
   const span = findAttrSpan(source, node, 'style');
   const current = span && span.hasValue
     ? source.slice(span.valueStart, span.valueEnd)
