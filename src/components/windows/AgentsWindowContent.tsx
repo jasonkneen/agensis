@@ -1842,7 +1842,11 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
     window.setTimeout(() => setCopied(false), 1400);
   };
   return (
-    <div className={cn('relative rounded-md border bg-background', className)}>
+    // flex + min-h-0 so a max-h-* passed via className actually caps the pre and
+    // scrolls it — the pre's former max-h-full resolved to `none` because
+    // percentage max-heights need a definite parent height, so long content
+    // painted straight past the border onto the sections below.
+    <div className={cn('relative flex flex-col overflow-hidden rounded-md border bg-background', className)}>
       <Button
         type="button"
         variant="ghost"
@@ -1853,7 +1857,7 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
       >
         {copied ? <Check /> : <Copy />}
       </Button>
-      <pre className="max-h-full overflow-auto whitespace-pre-wrap break-words p-2 pr-8 text-xs leading-relaxed">{value}</pre>
+      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-2 pr-8 text-xs leading-relaxed">{value}</pre>
     </div>
   );
 }
