@@ -134,12 +134,23 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
     return true;
   }, [workspaceId]);
 
+  const disconnectAgent = useCallback(async (id: string) => {
+    const response = await fetch(apiUrl(`/backend/agents/${encodeURIComponent(id)}/disconnect`), {
+      method: 'POST',
+      headers: apiAuthHeaders(),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || `Disconnect HTTP ${response.status}`);
+    return payload?.data ?? null;
+  }, []);
+
   return {
     agents,
     loading,
     createAgent,
     updateAgent,
     deleteAgent,
+    disconnectAgent,
     refetch: fetchAgents,
   };
 }

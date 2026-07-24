@@ -28,6 +28,7 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Unplug,
   Upload,
   Wrench,
   X,
@@ -95,6 +96,7 @@ interface AgentsWindowContentProps {
   }) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  onDisconnectAgent: (id: string) => Promise<unknown>;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
   onOpenConnections: () => void;
@@ -144,6 +146,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onDisconnectAgent,
   onCreateWebhook,
   onUpdateWebhook,
   onOpenConnections,
@@ -515,6 +518,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
                 onUpdateAgent={onUpdateAgent}
                 onConnect={() => setConnectAgentId(selectedAgent.id)}
+                onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
                 onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
               />
             </div>
@@ -1082,6 +1086,7 @@ function AgentDetailPane({
   connections,
   onUpdateAgent,
   onConnect,
+  onDisconnect,
   onToggleWebhook,
 }: {
   agent: WorkspaceAgent | null;
@@ -1097,6 +1102,7 @@ function AgentDetailPane({
   connections: AgentConnection[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onConnect: () => void;
+  onDisconnect: () => Promise<unknown>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
 }) {
   const [editName, setEditName] = useState('');
@@ -1114,6 +1120,7 @@ function AgentDetailPane({
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     if (!agent) return;
@@ -1132,6 +1139,7 @@ function AgentDetailPane({
     setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin');
     setEditSandboxProvider(agent.sandbox_provider || 'e2b');
     setEditSandboxConfig(JSON.stringify(agent.sandbox_config || {}, null, 2));
+    setDisconnecting(false);
   }, [agent?.id]);
 
   if (!agent) {
@@ -1152,6 +1160,16 @@ function AgentDetailPane({
   const tools = normalizeList(agent.tools);
   const skills = normalizeList(agent.skills);
   const agentActive = isAgentActive(agent);
+  const isConnected = activeConnections.length > 0;
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    try {
+      await onDisconnect();
+    } finally {
+      setDisconnecting(false);
+    }
+  };
 
   const handleSave = () => {
     onSave({
@@ -1266,25 +1284,42 @@ function AgentDetailPane({
             variant={agentActive ? 'secondary' : 'outline'}
             size="sm"
             onClick={onToggleEnabled}
+            disabled={isConnected}
+            title={isConnected ? 'Disconnect before deactivating' : undefined}
           >
             <Power data-icon="inline-start" />
             {agentActive ? 'Deactivate' : 'Activate'}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onConnect}
-            disabled={!agentActive}
-          >
-            <Plug data-icon="inline-start" />
-            Connect
-          </Button>
+          {isConnected ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+            >
+              <Unplug data-icon="inline-start" />
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onConnect}
+              disabled={!agentActive}
+            >
+              <Plug data-icon="inline-start" />
+              Connect
+            </Button>
+          )}
           <Button
             type="button"
             variant={confirmDelete ? 'destructive' : 'ghost'}
             size="sm"
             onClick={onDelete}
+            disabled={isConnected || agentActive}
+            title={isConnected || agentActive ? 'Disconnect and deactivate before deleting' : undefined}
           >
             <Trash2 data-icon="inline-start" />
             {confirmDelete ? 'Confirm delete' : 'Delete'}
