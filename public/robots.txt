@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+
+# AI answer engines — explicitly allowed (do not block)
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+
+Sitemap: https://agensis.io/sitemap.xml

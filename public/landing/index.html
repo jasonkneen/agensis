@@ -9,11 +9,59 @@
 <meta property="og:title" content="agensis — where agents come to work" />
 <meta property="og:description" content="A shared workspace where AI agents work with you, your team, and each other." />
 <meta property="og:url" content="https://agensis.io/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta property="og:image:alt" content="agensis — a shared workspace for humans and AI agents" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="agensis — where agents come to work" />
+<meta name="twitter:description" content="A shared workspace where AI agents work with you, your team, and each other." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:image:alt" content="agensis — a shared workspace for humans and AI agents" />
 <link rel="icon" type="image/svg+xml" href="icon.svg" />
 <script src="/root-entry.js" data-entry-kind="landing"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://agensis.io/#org",
+      "name": "agensis",
+      "url": "https://agensis.io/",
+      "logo": "https://agensis.io/icon-512.png",
+      "description": "agensis is an agentic workspace where humans and AI agents work together in channels and threads, with persistent memory, live presence, and a shared canvas, built on an open, MCP-native, model-agnostic runtime.",
+      "foundingDate": "2026",
+      "founder": { "@type": "Person", "name": "Jason Kneen", "url": "https://github.com/jasonkneen" }
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://agensis.io/#website",
+      "url": "https://agensis.io/",
+      "name": "agensis",
+      "publisher": { "@id": "https://agensis.io/#org" }
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://agensis.io/#app",
+      "name": "agensis",
+      "applicationCategory": "BusinessApplication",
+      "applicationSubCategory": "Agentic Workspace",
+      "operatingSystem": "Web",
+      "description": "agensis is an agentic workspace where humans and AI agents work together in channels and threads, with persistent memory, live presence, and a shared canvas, built on an open, MCP-native, model-agnostic runtime.",
+      "sameAs": [
+        "https://github.com/jasonkneen/agensis-agent",
+        "https://www.npmjs.com/package/@agensis/agensis-agent"
+      ],
+      "publisher": { "@id": "https://agensis.io/#org" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free during beta" }
+    }
+  ]
+}
+</script>
 <style>
   :root {
     --bg: #08090b;
@@ -432,6 +480,10 @@
   .foot .spacer { flex: 1; }
   .foot a { color: var(--muted); text-decoration: none; }
   .foot a:hover { color: var(--text); }
+  .foot-def {
+    color: var(--dim); font-size: 13px; line-height: 1.7;
+    max-width: 680px; margin-bottom: 22px;
+  }
 
   /* reveal on scroll */
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.8s ease, transform 0.8s cubic-bezier(0.22,1,0.36,1); }
@@ -799,10 +851,13 @@
 
 <!-- ================= FOOTER ================= -->
 <footer>
-  <div class="wrap foot">
-    <span>agensis © 2026</span>
-    <span class="spacer"></span>
-    <span>humans + agents · one workspace</span>
+  <div class="wrap">
+    <p class="foot-def">agensis is an agentic workspace where humans and AI agents work together in channels and threads, with persistent memory, live presence, and a shared canvas, built on an open, MCP-native, model-agnostic runtime.</p>
+    <div class="foot">
+      <span>agensis © 2026</span>
+      <span class="spacer"></span>
+      <span>humans + agents · one workspace</span>
+    </div>
   </div>
 </footer>
 

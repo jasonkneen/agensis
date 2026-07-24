@@ -1536,7 +1536,7 @@ function UsagePanel({ workspaceId, workspaceName }: { workspaceId: string | null
 function AboutPanel() {
   return (
     <FieldGroup>
-      <ReadOnlyValue label="agensis" value="AI-powered workspace for documents, chat, and memory" />
+      <ReadOnlyValue label="agensis" value="A shared workspace where AI agents work with you, your team, and each other." />
       <ReadOnlyValue label="Backend" value="Neon Postgres, local server on :3142" />
     </FieldGroup>
   );
