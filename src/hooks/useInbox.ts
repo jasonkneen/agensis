@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { groupInboxItems, type InboxGroup } from '../components/inbox/inboxModel';
@@ -19,6 +19,12 @@ export interface UseInboxResult {
   unreadCount: number;
   loading: boolean;
   markRead: (contextKey: string) => Promise<void>;
+  /**
+   * Close a blocker. 'answered' writes `response` back for the agent to read;
+   * 'dismissed' retires one that stopped mattering. Resolves false on failure so
+   * the caller can keep the row rather than lying about it.
+   */
+  resolveBlocker: (entityId: string, status: 'answered' | 'dismissed', response?: string) => Promise<boolean>;
   refetch: () => void;
 }
 
@@ -133,7 +139,36 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
     }
   }, [workspaceId, items]);
 
+  // Close a blocker off. 'answered' carries a human reply the agent reads back
+  // (MCP list_thread_items tells agents to check status + response, so resolving
+  // with a comment is what actually wakes the agent up); 'dismissed' just retires
+  // one that stopped mattering. The inbox query already excludes dismissed rows,
+  // and answered ones drop out too, so either way the item leaves the list.
+  const resolveBlocker = useCallback(async (
+    entityId: string,
+    status: 'answered' | 'dismissed',
+    response = '',
+  ) => {
+    if (!entityId) return false;
+    const values: Record<string, unknown> = { status };
+    if (response.trim()) values.response = response.trim();
+
+    const { error } = await backendClient
+      .from('thread_items')
+      .update(values)
+      .eq('id', entityId);
+    if (error) {
+      console.warn('inbox: blocker not resolved', error);
+      return false;
+    }
+
+    // Drop it locally rather than refetching, so the list does not reshuffle
+    // under the cursor while the user is still reading.
+    setItems(prev => prev.filter(item => item.entityId !== entityId));
+    return true;
+  }, []);
+
   const groups = useMemo(() => groupInboxItems(items), [items]);
 
-  return { items, groups, unreadCount, loading, markRead, refetch: fetchInbox };
+  return { items, groups, unreadCount, loading, markRead, resolveBlocker, refetch: fetchInbox };
 }
