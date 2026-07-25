@@ -3305,6 +3305,15 @@ function claimTaskDispatch(taskId, agentId, windowMs) {
  return true;
 }
 
+// Hand the claim back when the dispatch did NOT happen. The window exists to
+// swallow a double-fire from ONE human click; it must never swallow a queue
+// drain minutes later. Without this, a task refused because the agent was busy
+// would keep its 15s claim and be refused again as a "duplicate" by the drain
+// that fires the moment the agent frees up — which is a second way to strand it.
+function releaseTaskDispatch(taskId, agentId) {
+ recentTaskDispatches.delete(`${taskId}:${agentId}`);
+}
+
 // source_type/source_id are the task's PROVENANCE, and source_id's meaning
 // depends on source_type ('ai' stores the authoring agent's id, 'canvas' the
 // canvas object's). Dispatch only claims the pair when there is no real
@@ -3312,14 +3321,102 @@ function claimTaskDispatch(taskId, agentId, windowMs) {
 // and simply doesn't offer "Open chat".
 const TASK_SOURCE_LINK_OVERWRITABLE = new Set(['', 'manual', 'chat']);
 
+// --- the task queue ---------------------------------------------------------
+//
+// THE DB IS THE QUEUE. A task that is 'todo' AND assigned to an agent is waiting
+// for that agent; the oldest one is next. Nothing is held in memory, so a Fly
+// restart loses no work.
+//
+// Why no new 'queued' status: 'todo' + an agent assignee already encodes exactly
+// "assigned, waiting its turn", and it is the state the human left the task in.
+// A new status value would mean a CHECK-constraint change on tasks.status in all
+// three schema places, a new TaskStatus member, and a new column/label/filter in
+// every tasks view (List, Kanban, Gantt) — for no information the pair
+// (status, assignee_id) does not already carry. The invariant this file now
+// upholds is what makes the distinction readable: 'in_progress' means a job is
+// actually running, 'todo' + assignee means waiting. Before this, a dropped
+// dispatch left the task 'in_progress' with nothing working it, which is what
+// made "assignment doesn't work" indistinguishable from "it's being worked on".
+const TASK_QUEUE_SCAN_LIMIT = 5;
+const TASK_QUEUE_MAX_STRIKES = 3;
+// Per-process failure counter, keyed `${taskId}:${agentId}`. A task whose
+// dispatch keeps failing for a reason the queue cannot fix (agent misconfigured,
+// turn budget exhausted, DB error) is dropped from the drain after this many
+// tries, so it cannot burn a turn on every future job completion. A human touch
+// (re-assign) or a backend restart gives it a fresh chance.
+const taskQueueStrikes = new Map();
+// Re-entrancy guard, keyed `${workspaceId}:${agentId}`. Covers the DECISION only
+// (see drainAgentTaskQueue) — never the dispatch itself.
+const taskQueueSelecting = new Set();
+// A run outcome that means "the agent is busy, try again when it frees up".
+// These requeue the task with no strike.
+const TASK_QUEUE_BUSY_RUN_REASONS = new Set(['agent_busy', 'locked', 'refused']);
+// Dispatch refusals that are about THIS task, not the agent: move to the next
+// candidate. (The drain's own SQL already filters most of them out.)
+const TASK_QUEUE_SKIP_REASONS = new Set(['task_not_found', 'terminal', 'stale_assignee', 'not_an_agent', 'missing_input', 'no_workspace']);
+// Dispatch refusals that are about the AGENT: stop the whole drain, since no
+// task of this agent's could start either.
+const TASK_QUEUE_STOP_REASONS = new Set(['queued', 'duplicate', 'agent_disabled', 'not_permitted', 'rate_limited']);
+
+// 1-based position of a task in its agent's FIFO queue, for the log line. Ordered
+// exactly like drainAgentTaskQueue's SELECT, so the number a human reads is the
+// number of drains they have to wait through. Best-effort: 0 means "unknown".
+async function taskQueuePosition(workspaceId, agentId, taskId) {
+ const rows = await getDb().unsafe(
+  `select count(*)::int as ahead
+      from tasks t, tasks self
+     where self.id = $3
+       and t.workspace_id = $1 and t.assignee_id = $2 and t.status = 'todo'
+       and (t.created_at, t.id) < (self.created_at, self.id)`,
+  [String(workspaceId || ''), String(agentId), String(taskId)],
+ ).catch(() => []);
+ const ahead = Number(rows[0]?.ahead);
+ return Number.isFinite(ahead) ? ahead + 1 : 0;
+}
+
+// Put a task back exactly as the human left it after a dispatch that never
+// started. Restores the status (and the provenance stamp, if this dispatch wrote
+// it) and removes the seed message nobody is going to answer — so the next
+// dispatch nags once, not twice.
+//
+// Compare-and-swap on `wroteStatus`: if the human (or the agent) changed the
+// status while the refused turn was in flight, THAT wins — a rollback must never
+// re-open a task somebody just closed. Best-effort: never throws.
+async function undoTaskDispatch({ task, priorStatus, wroteStatus, stampedSource, messageId, sessionId }) {
+ try {
+  const restored = stampedSource
+   ? await getDb().unsafe(
+    'update tasks set status = $1, source_type = $2, source_id = $3, updated_at = now() where id = $4 and status = $5 returning *',
+    [priorStatus, task.source_type || null, task.source_id || null, String(task.id), wroteStatus],
+   )
+   : await getDb().unsafe(
+    'update tasks set status = $1, updated_at = now() where id = $2 and status = $3 returning *',
+    [priorStatus, String(task.id), wroteStatus],
+   );
+  if (restored[0]) notifyDbSubscribers('tasks', 'UPDATE', restored);
+  if (messageId) {
+   const removed = await getDb().unsafe(
+    'delete from messages where id = $1 and session_id = $2 returning *',
+    [String(messageId), sessionId],
+   );
+   if (removed.length > 0) notifyDbSubscribers('messages', 'DELETE', removed);
+  }
+ } catch (error) {
+  console.error('undoTaskDispatch failed', error);
+ }
+}
+
 // Assigning a task to an agent IS a dispatch: the agent wakes in its DM, inside
 // that task's own subthread, exactly as a task-comment @mention does — and the
 // task records the session so the UI can jump to that chat. Never throws, so
 // callers can stay fire-and-forget; returns a {dispatched, reason} descriptor.
 // `run` is a test seam; production always uses continueConversation.
 async function dispatchTaskAssignment({
- workspaceId, taskId, agentId, actorUserId = null, actorName = null, run = continueConversation,
+ workspaceId, taskId, agentId, actorUserId = null, actorName = null, cause = 'assigned', run = continueConversation,
 }) {
+ // Released on every path that does NOT end in a running turn — the claim's job
+ // is to dedupe one human click, not to lock a task out of the queue.
+ let claim = null;
  try {
   if (!taskId || !agentId) return { dispatched: false, reason: 'missing_input' };
   const taskRows = await getDb().unsafe(
@@ -3356,6 +3453,7 @@ async function dispatchTaskAssignment({
    if (!dispatchRateLimiter.check(String(actorUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
   }
   if (!claimTaskDispatch(task.id, agent.id, TASK_ASSIGN_CLAIM_MS)) return { dispatched: false, reason: 'duplicate' };
+  claim = [task.id, agent.id];
 
   const session = await findOrCreateDirectSession(wsId, agent);
   if (!session) return { dispatched: false, reason: 'no_session' };
@@ -3377,9 +3475,22 @@ async function dispatchTaskAssignment({
    '\n\nPick this up and reply here in your DM.' +
    `\n\nSource: agensis://task/${task.id}`;
 
+  // All of an agent's task work lands in ONE DM session, and agent_jobs carries a
+  // partial unique index (one active job per session+agent), so a second dispatch
+  // while the agent is mid-turn physically cannot create a job. Find that out
+  // BEFORE writing anything: the task stays 'todo' + assigned, which is what
+  // "waiting its turn" looks like, and the drain picks it up when the agent frees
+  // up. The old code flipped it to 'in_progress' first and then dropped the turn.
+  if (await agentHasActiveJob(session.id, agent.id)) {
+   const position = await taskQueuePosition(wsId, agent.id, task.id);
+   console.log(`[task-queue] queued task=${task.id} ${JSON.stringify(String(task.title || ''))} for @${handle}: agent is mid-turn${position ? ` (queue position ${position})` : ''} (cause=${cause})`);
+   return { dispatched: false, reason: 'queued' };
+  }
+
   // Move a fresh task into progress (never clobbering a started status) and stamp
   // the chat this task is being worked in, so the UI can offer "Open chat".
-  const nextStatus = taskStatusOnDispatch(task.status || 'todo');
+  const priorStatus = String(task.status || 'todo');
+  const nextStatus = taskStatusOnDispatch(priorStatus);
   const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
   const updated = stampSource
    ? await getDb().unsafe(
@@ -3392,17 +3503,128 @@ async function dispatchTaskAssignment({
    );
   if (updated[0]) notifyDbSubscribers('tasks', 'UPDATE', updated);
 
-  const { threadParentId } = await postTaskSubthreadMention({
+  const { threadParentId, messageRow } = await postTaskSubthreadMention({
    session, taskId: task.id, content, authorUserId: actorUserId, authorName: who,
   });
-  void Promise.resolve(run({ workspaceId: wsId, sessionId: session.id, threadParentId })).catch((error) =>
-   console.error('continueConversation (task assignment) failed', error),
-  );
+
+  // AWAITED, unlike the fire-and-forget it replaces: the turn can still be
+  // refused inside continueConversation (the agent won its own one-active-job
+  // slot in the window between the check above and the job insert, or the turn
+  // budget is spent). Nothing retried that, so the task sat 'in_progress' with no
+  // job attached, forever. Callers are all `void`-ed, so awaiting costs no
+  // request latency. An older `run` seam that returns nothing still counts as
+  // started.
+  let outcome = null;
+  try {
+   outcome = await run({ workspaceId: wsId, sessionId: session.id, threadParentId });
+  } catch (error) {
+   console.error('continueConversation (task assignment) failed', error);
+   outcome = { started: false, reason: 'error' };
+  }
+  if (outcome && outcome.started === false) {
+   await undoTaskDispatch({
+    task, priorStatus, wroteStatus: nextStatus, stampedSource: stampSource,
+    messageId: messageRow?.id || null, sessionId: session.id,
+   });
+   const busy = TASK_QUEUE_BUSY_RUN_REASONS.has(String(outcome.reason || ''));
+   console.log(`[task-queue] ${busy ? 'requeued' : 'could not start'} task=${task.id} for @${handle}: run=${outcome.reason || 'unknown'} (cause=${cause}); status back to ${priorStatus}`);
+   return { dispatched: false, reason: busy ? 'queued' : 'not_started', runReason: String(outcome.reason || '') };
+  }
+
+  claim = null; // a real turn is running; keep the claim so a re-save can't double-run it
+  console.log(`[task-queue] dispatched task=${task.id} ${JSON.stringify(String(task.title || ''))} to @${handle} (cause=${cause}, session=${session.id})`);
   return { dispatched: true, reason: 'dispatched', sessionId: session.id, threadParentId };
  } catch (error) {
   console.error('dispatchTaskAssignment failed', error);
   return { dispatched: false, reason: 'error' };
+ } finally {
+  if (claim) releaseTaskDispatch(claim[0], claim[1]);
  }
+}
+
+// Dispatch the OLDEST task still waiting on this agent — FIFO, so the order the
+// human assigned them is the order they run. Called from every terminal job
+// transition; at most ONE task is dispatched per call, so a backlog is walked one
+// completion at a time rather than fired off all at once.
+async function drainAgentTaskQueue({ workspaceId, agentId, cause = 'job_finished', run = continueConversation } = {}) {
+ const wsId = String(workspaceId || '');
+ const aId = String(agentId || '');
+ if (!wsId || !aId) return { dispatched: false, reason: 'missing_input' };
+ const key = `${wsId}:${aId}`;
+ let waiting = [];
+
+ // The guard covers only the decision — which task is next, and is the agent free
+ // — never the dispatch. Holding it across the dispatch would swallow the drain
+ // fired by that very job's completion, which is exactly how a builtin agent
+ // finishes: synchronously, inside the dispatch being awaited. Two drains racing
+ // past the guard are still safe: claimTaskDispatch, the session-scoped active-job
+ // check and the unique index each refuse the second one.
+ if (taskQueueSelecting.has(key)) return { dispatched: false, reason: 'reentrant' };
+ taskQueueSelecting.add(key);
+ try {
+  waiting = await getDb().unsafe(
+   `select id, title, workspace_id, created_at from tasks
+       where workspace_id = $1 and assignee_id = $2 and status = 'todo'
+       order by created_at asc, id asc
+       limit $3`,
+   [wsId, aId, TASK_QUEUE_SCAN_LIMIT],
+  );
+  if (!Array.isArray(waiting) || waiting.length === 0) return { dispatched: false, reason: 'empty' };
+  // Belt: the unique index is the braces. A drain that fires while the agent is
+  // still mid-turn somewhere must not spend a turn.
+  if (await agentHasAnyActiveJob(wsId, aId)) {
+   console.log(`[task-queue] hold ${waiting.length} task(s) for agent=${aId}: still mid-turn (cause=${cause})`);
+   return { dispatched: false, reason: 'busy' };
+  }
+ } catch (error) {
+  console.error('drainAgentTaskQueue lookup failed', error);
+  return { dispatched: false, reason: 'error' };
+ } finally {
+  taskQueueSelecting.delete(key);
+ }
+
+ for (const task of waiting) {
+  const strikeKey = `${task.id}:${aId}`;
+  const strikes = Number(taskQueueStrikes.get(strikeKey) || 0);
+  if (strikes >= TASK_QUEUE_MAX_STRIKES) {
+   console.log(`[task-queue] skipping task=${task.id} for agent=${aId}: ${strikes} failed dispatch attempts, needs a human`);
+   continue;
+  }
+  const out = await dispatchTaskAssignment({
+   workspaceId: wsId, taskId: task.id, agentId: aId, cause: `drain:${cause}`, run,
+  });
+  if (out.dispatched) {
+   taskQueueStrikes.delete(strikeKey);
+   return { dispatched: true, reason: 'dispatched', taskId: task.id, waiting: waiting.length };
+  }
+  if (TASK_QUEUE_STOP_REASONS.has(out.reason)) {
+   console.log(`[task-queue] drain stopped for agent=${aId} at task=${task.id}: ${out.reason} (cause=${cause})`);
+   return { dispatched: false, reason: out.reason };
+  }
+  if (TASK_QUEUE_SKIP_REASONS.has(out.reason)) {
+   // Task-level ineligibility, and costs nothing to skip past: try the next one.
+   console.log(`[task-queue] skipping task=${task.id} for agent=${aId}: ${out.reason}`);
+   continue;
+  }
+  // Anything else (turn budget spent, no session, DB error) is a real failed
+  // attempt. Strike it and STOP: these causes are agent/session-level, so the
+  // next task would fail identically, and one completed job must not turn into
+  // five failed attempts. After TASK_QUEUE_MAX_STRIKES this task is skipped
+  // instead, which is what stops a poisoned head-of-line blocking the queue.
+  taskQueueStrikes.set(strikeKey, strikes + 1);
+  console.log(`[task-queue] task=${task.id} did not start for agent=${aId} (${out.reason}${out.runReason ? `/${out.runReason}` : ''}); strike ${strikes + 1}/${TASK_QUEUE_MAX_STRIKES}`);
+  return { dispatched: false, reason: out.reason, taskId: task.id, strikes: strikes + 1 };
+ }
+ return { dispatched: false, reason: 'no_eligible' };
+}
+
+// Fire-and-forget wrapper. A drain must never be able to fail — or even slow —
+// the job-completion write that triggered it.
+function scheduleTaskQueueDrain(workspaceId, agentId, cause) {
+ if (!workspaceId || !agentId) return;
+ void drainAgentTaskQueue({ workspaceId, agentId, cause }).catch((error) =>
+  console.error('drainAgentTaskQueue failed', error),
+ );
 }
 
 async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
@@ -3704,6 +3926,36 @@ function isAgentJobLive(job, agentId) {
  return job.connection_id ? isConnectionSocketOpen(job.connection_id) : false;
 }
 
+// Read-only "does this agent already have a live turn in flight?".
+//
+// Deliberately NOT hasActiveBurstJob: that one finalizes phantom jobs as a side
+// effect, and a queue drain must not be able to kill a turn it merely asked
+// about. Liveness still matters (a job whose worker vanished must not look
+// active forever) — the reaper, the socket-close sweep and startup reconcile are
+// what clear those, and each of them drains the queue afterwards.
+async function agentHasActiveJob(sessionId, agentId) {
+ const rows = await getDb().unsafe(
+  `select id, status, connection_id, metadata, started_at from agent_jobs
+      where session_id = $1 and agent_id = $2 and status in ('queued', 'running')`,
+  [sessionId, String(agentId)],
+ );
+ return rows.some((job) => isAgentJobLive(job, agentId));
+}
+
+// Same question, workspace-wide. The queue drain uses this rather than the
+// session-scoped check: an agent that is mid-turn anywhere (a channel, another
+// DM) is busy, and starting a task turn on top of it would run two turns at
+// once. Stricter than the unique index, and self-healing — every job completion
+// drains again.
+async function agentHasAnyActiveJob(workspaceId, agentId) {
+ const rows = await getDb().unsafe(
+  `select id, status, connection_id, metadata, started_at from agent_jobs
+      where workspace_id = $1 and agent_id = $2 and status in ('queued', 'running')`,
+  [String(workspaceId), String(agentId)],
+ );
+ return rows.some((job) => isAgentJobLive(job, agentId));
+}
+
 async function hasActiveBurstJob(sessionId, agentId) {
  // Include 'queued', not just 'running': an MCP-backed agent's job sits in
  // 'queued' until its client polls and claims it, so two rapid triggers for the
@@ -3881,6 +4133,9 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     [jobRows[0].id, responseText],
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+   // A builtin turn finalizes its own job here and never reaches
+   // finalizeAgentJobResult, so this is its own terminal hook for the task queue.
+   scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_done');
    // Wait for any in-flight throttled write to finish, THEN write the complete
    // text last so it can never be clobbered by a late-landing partial update.
    await writeChain.catch(() => { });
@@ -3903,6 +4158,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     [jobRows[0].id, errorText],
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+   scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
    const messageRows = await getDb().unsafe(
     `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
     [responseMessageId, `@${handle} failed: ${errorText}`, sessionId],
@@ -3988,11 +4244,16 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
 // Seeded by the dispatch endpoint and resumed after every agent message lands.
 // Drains a queue of agent turns under one shared budget (max_agent_turns), one
 // agent at a time. Builtin turns loop here; daemon turns return and resume async.
+// Returns { started, reason }: `started` is true only if this call actually put an
+// agent turn in flight (or ran one to completion). Task dispatch reads it to tell
+// "the agent is on it" from "the turn was refused — put the task back in the
+// queue"; every other caller ignores it.
 async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
- if (!workspaceId || !sessionId) return;
+ if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
- if (conversationLocks.has(lockKey)) return;
+ if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
  conversationLocks.add(lockKey);
+ let started = false;
  try {
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -4001,20 +4262,20 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     [sessionId],
    );
    const session = sessionRows[0];
-   if (!session || String(session.workspace_id) !== String(workspaceId)) return;
+   if (!session || String(session.workspace_id) !== String(workspaceId)) return { started, reason: 'no_session' };
    const maxTurns = Number(session.max_agent_turns) > 0 ? Number(session.max_agent_turns) : 10;
    const directTarget = directAgentParticipantFromSession(session);
 
    const rows = await loadChannelMessages(sessionId, threadParentId);
-   if (rows.length === 0) return;
+   if (rows.length === 0) return { started, reason: 'no_messages' };
    let startIdx = -1;
    for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i].role === 'user') { startIdx = i; break; }
    }
-   if (startIdx === -1) return; // no human seed; nothing to do
+   if (startIdx === -1) return { started, reason: 'no_seed' }; // no human seed; nothing to do
    const burst = rows.slice(startIdx);
    const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
-   if (agentTurns >= maxTurns) return; // budget exhausted
+   if (agentTurns >= maxTurns) return { started, reason: 'budget_exhausted' }; // budget exhausted
 
    const latest = rows[rows.length - 1];
    const latestAuthorAgentId = latest.sender_kind === 'agent' ? String(latest.sender_id || '') : '';
@@ -4023,7 +4284,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     'select * from workspace_agents where workspace_id = $1 order by created_at asc',
     [workspaceId],
    );
-   if (agents.length === 0) return;
+   if (agents.length === 0) return { started, reason: 'no_agents' };
    const byHandle = new Map();
    for (const agent of agents) {
     if (!isAgentEnabled(agent)) continue;
@@ -4118,8 +4379,8 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
      }
     }
    }
-   if (!nextAgent) return;
-   if (await hasActiveBurstJob(sessionId, nextAgent.id)) return;
+   if (!nextAgent) return { started, reason: 'no_agent' };
+   if (await hasActiveBurstJob(sessionId, nextAgent.id)) return { started, reason: 'agent_busy' };
 
    const involved = new Map();
    for (const id of participantAgentIds) {
@@ -4141,7 +4402,11 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
    const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants });
-   if (!result || result.pending) return; // daemon resumes asynchronously; stop the loop
+   if (result && result.ok) started = true;
+   // `ok:false, pending:true` is the one that matters to the task queue: the
+   // one-active-job unique index bounced the insert, so NO job exists and nothing
+   // will ever answer this turn.
+   if (!result || result.pending) return { started, reason: result && result.ok ? 'dispatched' : 'refused' };
    // builtin turn finished synchronously — loop to evaluate the next turn
   }
  } finally {
@@ -4175,6 +4440,10 @@ async function finalizeStuckJob(job, reason) {
    [job.id, `Agent stopped responding (${reason})`],
   );
   if (updated.length === 0) return; // a real result already finalized it
+  // A timeout, a dropped daemon, a phantom cleanup and a backend restart all land
+  // here — each one frees the agent's active-job slot, and each one used to strand
+  // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
+  scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
   const meta = parseJsonObject(job.metadata);
   const responseMessageId = meta.responseMessageId || null;
   if (!responseMessageId) return;
@@ -4283,6 +4552,24 @@ async function reconcileAgentConnectionsAtStartup() {
   const stuckJobs = await getDb().unsafe(`select * from agent_jobs where status = 'running'`);
   for (const job of stuckJobs) await finalizeStuckJob(job, 'the backend restarted');
   if (stuckJobs.length > 0) console.log(`[backend] finalized ${stuckJobs.length} orphaned running job(s) on startup`);
+
+  // A restart mid-job must not strand that agent's queue forever. finalizeStuckJob
+  // already drains, but do it explicitly here too so startup is ordered and
+  // logged, and so a job whose row was already finalized still gets a drain.
+  //
+  // Deliberately scoped to agents that were ACTUALLY mid-job at the restart — NOT
+  // a blanket sweep of every 'todo' task with an agent assignee. A blanket sweep
+  // would wake every stale assigned task in the workspace on every deploy, which
+  // is a token bill nobody asked for.
+  const restartedPairs = new Map();
+  for (const job of stuckJobs) {
+   if (!job.workspace_id || !job.agent_id) continue;
+   restartedPairs.set(`${job.workspace_id}:${job.agent_id}`, job);
+  }
+  for (const job of restartedPairs.values()) {
+   await drainAgentTaskQueue({ workspaceId: job.workspace_id, agentId: job.agent_id, cause: 'backend_restart' })
+    .catch((error) => console.error('drainAgentTaskQueue (startup) failed', error));
+  }
  } catch (error) {
   console.warn('[backend] startup agent-connection reconcile skipped:', error.message || error);
  }
@@ -4836,6 +5123,11 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
  if (updatedRows.length === 0) return null;
  notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
 
+ // The agent just freed its one active-job slot: give it the next task waiting on
+ // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
+ // drain too — a job finishing is a job finishing.
+ scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`);
+
  // Farm-originated coding jobs are control-plane work, not chat turns. They
  // deliberately have no session and are polled through the integration API;
  // writing a message with a null session would both violate the FK contract
@@ -5006,6 +5298,8 @@ async function cancelFarmAgentJob({ workspaceId, jobId, connection = null } = {}
   return publicFarmAgentJob(current[0] || job);
  }
  notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
+ // Cancelling frees the agent exactly like finishing does.
+ scheduleTaskQueueDrain(job.workspace_id, job.agent_id, 'job_cancelled');
  const exactConnection = connectedAgents.get(job.connection_id);
  const target = connection || (exactConnection?.ws?.readyState === 1 ? exactConnection : null) || findConnectedAgent(String(workspaceId), String(job.agent_id), '');
  if (target) sendWs(target.ws, { type: 'agent_job_cancel', jobId: job.id, reason: 'Cancelled by Farm' });
@@ -10256,6 +10550,8 @@ function resetTestState() {
  flowConnectionCoreInstance = undefined;
  connectedAgents.clear();
  recentTaskDispatches.clear();
+ taskQueueStrikes.clear();
+ taskQueueSelecting.clear();
 }
 
 // Test seam: register a fake WS client so the realtime-revocation path can be
@@ -10339,8 +10635,14 @@ module.exports = {
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
   dispatchTaskAssignment,
+  drainAgentTaskQueue,
+  agentHasActiveJob,
+  agentHasAnyActiveJob,
   claimTaskDispatch,
+  releaseTaskDispatch,
   TASK_ASSIGN_CLAIM_MS,
+  TASK_QUEUE_MAX_STRIKES,
+  TASK_QUEUE_SCAN_LIMIT,
   createTtlPromiseCache,
   hasActiveBurstJob,
   capabilitiesShapeValid,
