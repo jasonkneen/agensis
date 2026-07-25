@@ -29,6 +29,15 @@ const TASK_ROWS = {
   't-child': { id: 't-child', workspace_id: WS, parent_id: 't-root', title: 'Child' },
   't-grand': { id: 't-grand', workspace_id: WS, parent_id: 't-child', title: 'Grandchild' },
   't-other': { id: 't-other', workspace_id: OTHER_WS, parent_id: null, title: 'Foreign' },
+  // A chain longer than MAX_TASK_DEPTH (64): deep-0 -> deep-1 -> … -> deep-79.
+  // deep-0 is the ROOT of it, so walking up from deep-79 takes 79 hops and
+  // blows past the cap. The old guard exited the loop quietly at 64 and
+  // ACCEPTED the parent, so a long enough chain bypassed cycle detection
+  // entirely — and tasks.parent_id is ON DELETE CASCADE.
+  ...Object.fromEntries(Array.from({ length: 80 }, (_, i) => [
+    `deep-${i}`,
+    { id: `deep-${i}`, workspace_id: WS, parent_id: i === 0 ? null : `deep-${i - 1}`, title: `Deep ${i}` },
+  ])),
 };
 
 // Minimal fake postgres client. Recognizes only the statements the MCP tools
@@ -629,26 +638,49 @@ test('update_task can re-parent a task inside the workspace', async () => {
   const { db, res } = await callTask('update_task', { task_id: 't-grand', parent_id: 't-root' });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
   const update = db.calls.find((c) => c.n.startsWith('update tasks set'));
-  assert.ok(update.n.includes('parent_id = $9'), 'update must set parent_id');
+  // Guarded write: $10 says "the caller mentioned parent_id", $9 carries it.
+  assert.ok(update.n.includes('parent_id = case when $10 then $9 else parent_id end'), 'update must set parent_id under the guard');
   assert.equal(update.params[8], 't-root');
+  assert.equal(update.params[9], true, 'the guard must be ON when the caller supplies parent_id');
 });
 
 test('update_task with parent_id "" un-nests the task to top level', async () => {
   const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: '' });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
-  assert.equal(db.calls.find((c) => c.n.startsWith('update tasks set')).params[8], null);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(upd.params[8], null);
+  assert.equal(upd.params[9], true, 'an explicit "" is still the caller mentioning parent_id');
 });
 
 test('update_task without parent_id leaves the existing parent untouched', async () => {
+  // Stronger than it used to be. The old implementation re-wrote parent_id from
+  // a row it had read moments earlier, so ANY unrelated update was a
+  // read-modify-write that silently reverted a concurrent re-parent. Now the
+  // guard is off and the SQL falls back to the row's OWN value at update time,
+  // so the column is never touched. Assert the guard, not a copied value.
   const { db, res } = await callTask('update_task', { task_id: 't-child', status: 'done' });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
-  assert.equal(db.calls.find((c) => c.n.startsWith('update tasks set')).params[8], 't-root');
+  const update = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(update.params[9], false, 'the guard must be OFF when the caller never mentions parent_id');
+  assert.ok(update.n.includes('else parent_id end'), 'must fall back to the row\'s own parent_id');
 });
 
 test('update_task rejects self-parenting — before any update', async () => {
   const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: 't-child' });
   assert.equal(res.body.result.isError, true);
   assert.match(res.body.result.content[0].text, /cannot be its own parent/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task fails CLOSED when the parent chain is too deep to verify', async () => {
+  // Regression: the cycle walk used to be `for (…; hops < MAX_TASK_DEPTH; …)`,
+  // so hitting the cap fell out of the loop and returned the parent as valid.
+  // A chain of 80 slipped through unchecked. Refusing is correct either way —
+  // a real tree is never this deep, so reaching the cap means the table already
+  // holds a cycle, and guessing wrong cascades a delete through a subtree.
+  const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: 'deep-79' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /too deep to verify/i);
   assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
 });
 

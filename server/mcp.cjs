@@ -101,10 +101,22 @@ async function resolveParentTaskId(db, workspaceId, rawParentId, childId) {
  if (!parent[0]) throw new ToolError('Parent task not found in this workspace');
  if (childId) {
   let cursor = parent[0].parent_id ? String(parent[0].parent_id) : null;
-  for (let hops = 0; cursor && hops < MAX_TASK_DEPTH; hops += 1) {
+  let hops = 0;
+  while (cursor) {
    if (cursor === childId) {
     throw new ToolError('That parent would create a cycle in the task tree');
    }
+   // FAIL CLOSED at the cap, never open. Exiting the walk quietly and accepting
+   // the parent means a chain longer than MAX_TASK_DEPTH bypasses the cycle
+   // check entirely — a 71-link chain slipped straight through the previous
+   // `for (… hops < MAX_TASK_DEPTH)` form. Refusing is right either way: a
+   // legitimate tree is never this deep, so hitting the cap means the table
+   // already contains a cycle or something pathological, and parent_id is
+   // ON DELETE CASCADE, so guessing wrong deletes a subtree.
+   if (hops >= MAX_TASK_DEPTH) {
+    throw new ToolError('Task tree is too deep to verify safely; re-parent higher up');
+   }
+   hops += 1;
    const next = await db.unsafe(
     'select parent_id from tasks where id = $1 and workspace_id = $2 limit 1',
     [cursor, workspaceId]);
@@ -639,11 +651,17 @@ function buildTools() {
    // parent_id can't ride the coalesce() pattern: null there means "leave
    // alone", but an explicit "" has to mean "un-nest to top level". Resolve the
    // final value here instead, using the row we already loaded.
-   const nextParentId = typeof args?.parent_id === 'string'
+   // Did the CALLER mention parent_id at all? If not we must not write the
+   // column: sourcing it from `existing` (read moments ago) turns every
+   // unrelated update_task into a read-modify-write that silently reverts a
+   // concurrent re-parent. `case when $10 then $9 else parent_id end` below
+   // leaves it to the row's own value at update time instead.
+   const touchesParent = typeof args?.parent_id === 'string';
+   const nextParentId = touchesParent
     ? (args.parent_id.trim()
      ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, taskId)
      : null)
-    : (existing[0].parent_id || null);
+    : null;
    const rows = await db.unsafe(
     `update tasks set
            title = coalesce($3, title),
@@ -652,7 +670,7 @@ function buildTools() {
            priority = coalesce($6, priority),
            assignee_id = coalesce($7, assignee_id),
            due_date = coalesce($8, due_date),
-           parent_id = $9,
+           parent_id = case when $10 then $9 else parent_id end,
            completed_at = case when $5 = 'done' then now() else completed_at end,
            version = version + 1,
            updated_at = now()
@@ -663,7 +681,7 @@ function buildTools() {
      status, priority,
      typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
      typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
-     nextParentId]);
+     nextParentId, touchesParent]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
    return { task: rows[0] };
   },
