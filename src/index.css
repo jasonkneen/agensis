@@ -1088,6 +1088,57 @@
  overflow: visible !important;
 }
 
+/* Accent wash — a soft bleed of the active theme's accent in from the sidebar's
+   top-left corner, so the accent lives in the chrome and not only on controls.
+   Rendered by Sidebar.tsx as its own aria-hidden element (not a background
+   layer on the panel) for two reasons:
+     1. Per-theme rules repaint the panel's `background` outright — neo sets
+        `background: var(--card) !important` — which would wipe out any extra
+        background layer added to [data-sidebar-panel] itself.
+     2. It must stay INSIDE the sidebar's stacking context. [data-window-surface]
+        is a backdrop-filter surface; anything painted at the app root behind the
+        windows gets sampled by that blur and smeared across window *content*.
+        Scoped here, it can only ever tint the sidebar's own frame.
+   z-index -1 puts it above the panel's own background/blur but below every
+   child, so it tints the surface without touching text, icons or rows. The
+   panel already establishes a stacking context and an abspos containing block
+   (position:relative + contain, plus backdrop-filter on the non-neo families),
+   so the negative index cannot escape behind the panel.
+   Colour comes from --accent, which every family defines for both schemes:
+   classic/base sets it literally, neo + tinyworld + normal map it to the
+   per-theme --primary (see expand() in showcase/neoThemes.ts). */
+/* The @supports guard is load-bearing, not decoration: Lightning CSS compiles a
+   plain-colour fallback for every color-mix() it sees, and for a gradient that
+   fallback is the *opaque* accent — i.e. a solid slab of brand colour over the
+   whole sidebar on any engine without color-mix. Behind the guard, such an
+   engine simply gets no wash, which is the right degradation for a purely
+   decorative layer. */
+@supports (color: color-mix(in srgb, red, red)) {
+ .sidebar-accent-wash {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(
+   125% 80% at 0% 0%,
+   color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+   color-mix(in srgb, var(--accent) 6%, transparent) 38%,
+   transparent 72%
+  );
+ }
+
+ /* Light schemes sit on near-white chrome where the dark-mode strength reads as
+     a muddy stain rather than a wash, so halve it. */
+ :root[data-theme="light"] .sidebar-accent-wash {
+  background: radial-gradient(
+   125% 80% at 0% 0%,
+   color-mix(in srgb, var(--accent) 7%, transparent) 0%,
+   color-mix(in srgb, var(--accent) 3%, transparent) 38%,
+   transparent 72%
+  );
+ }
+}
 
 .sidebar-workspace-pill {
  min-height: 34px;
