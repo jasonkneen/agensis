@@ -1,5 +1,17 @@
 [
   {
+    "version": "live-agent-steps",
+    "date": "2026-07-25",
+    "title": "See what an agent is actually doing",
+    "summary": "Agents now post a message for each step they take instead of one silent placeholder, so you can follow the work as it happens — and jump in mid-task.",
+    "highlights": [
+      "Each file read, search or command an agent runs appears as its own message",
+      "Steps thread under the agent's reply, so a long task stays readable",
+      "You can see progress instead of a “Thinking…” spinner with nothing behind it",
+      "The 3D agent map has been removed — the 2D network view is now the only one"
+    ]
+  },
+  {
     "version": "2026.07.25",
     "date": "2026-07-25",
     "title": "Stability: the app, your agents, and stuck chats",
