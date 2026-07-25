@@ -5,7 +5,6 @@ const http = require('http');
 const net = require('net');
 const os = require('os');
 const dns = require('dns').promises;
-const net = require('net');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const express = require('express');
@@ -6386,6 +6385,12 @@ async function assertSafeOutboundUrl(rawUrl, label = 'base_url') {
  let url;
  try { url = new URL(String(rawUrl || '').trim()); } catch { return reject('must be a valid absolute URL'); }
  if (url.protocol !== 'https:' && url.protocol !== 'http:') reject('must use http or https');
+ // Preserved from the superseded assertSafeGatewayBaseUrl: plaintext http would
+ // put the workspace's decrypted API key on the wire, and .local/.internal are
+ // split-horizon names that can resolve differently on the server than here.
+ if (url.protocol !== 'https:') reject('must use HTTPS');
+ const lowerHost = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+ if (lowerHost.endsWith('.local') || lowerHost.endsWith('.internal')) reject('must use a public hostname');
  if (url.username || url.password) reject('must not embed credentials');
 
  const host = url.hostname.replace(/^\[|\]$/g, '');
@@ -7292,37 +7297,6 @@ function createApp() {
  // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
 
  // SSRF guard (H1). base_url comes straight from the request body and /backend/ai-chat
- // POSTs to `${baseUrl}/chat/completions` and streams the upstream body back, so an
- // internal address stored here turns any signed-up user into a proxy for the private
- // network (cloud metadata, admin ports). Same rules and rejection style as
- // normalizeFlowWebhookUrl in server/flow-integration.cjs. Validation only — the raw
- // value is still what gets stored, so existing base URLs concatenate as before.
- function assertSafeGatewayBaseUrl(value) {
-  if (!value) throw badRequest('base_url is required');
-  let url;
-  try { url = new URL(String(value)); } catch { throw badRequest('Gateway base URL is invalid.'); }
-  if (url.username || url.password) {
-   throw badRequest('Gateway base URL must not contain credentials.');
-  }
-  // URL.hostname keeps IPv6 literals bracketed; strip them so net.isIP sees the address.
-  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
-   throw badRequest('Gateway base URL must use a public hostname.');
-  }
-  if (['127.0.0.1', '::1', 'localhost'].includes(hostname)) {
-   if (process.env.NODE_ENV === 'production' || url.protocol !== 'http:') {
-    throw badRequest('Loopback gateway URLs are allowed only over HTTP in local development.');
-   }
-   return;
-  }
-  if (url.protocol !== 'https:') {
-   throw badRequest('Gateway base URL must use HTTPS.');
-  }
-  if (net.isIP(hostname) || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
-   throw badRequest('Gateway base URL must use a public hostname.');
-  }
- }
-
  function publicGatewayConfig(row) {
   return {
    id: row.id,
@@ -9160,9 +9134,6 @@ function createApp() {
       // but a permitted host could still 302 this request onto an internal address.
       redirect: 'error',
       signal: controller.signal,
-      // A redirect is how a validated public host reaches a private one. Fail
-      // instead of following — see the LIMITS note on assertSafeOutboundUrl.
-      redirect: 'error',
       headers: {
        'Content-Type': 'application/json',
        ...(route.apiKey ? { Authorization: `Bearer ${route.apiKey}` } : {}),
