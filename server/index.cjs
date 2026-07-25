@@ -4730,7 +4730,36 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   : (responseText || `@${handle} finished without output.`);
  const threadParentId = jobMetadata.threadParentId || null;
  const responseMessageId = jobMetadata.responseMessageId || null;
- if (responseMessageId) {
+ // A segmented turn (see handleAgentJobSegment) has already posted every completed
+ // text block as its own message and left a FRESH placeholder waiting for the next
+ // one. A turn that ends right after a block leaves that placeholder with nothing
+ // to say — the result is either empty or a repeat of the block already on screen —
+ // so it is DELETED rather than left behind as an orphan "Thinking …" bubble, and
+ // the block's own message stands in for it in Activity and task mirroring. A turn
+ // whose tail streamed on past the last segment still lands in the placeholder as
+ // before, and so does an error.
+ const lastSegmentText = Number(jobMetadata.segmentCount || 0) > 0
+  ? textFromValue(jobMetadata.lastSegmentText).trim()
+  : '';
+ const finalText = textFromValue(responseText).trim();
+ const trailingPlaceholderIsSpent = !errorText && !!lastSegmentText && (!finalText || finalText === lastSegmentText);
+ if (responseMessageId && trailingPlaceholderIsSpent) {
+  const removedRows = await getDb().unsafe(
+   'delete from messages where id = $1 and session_id = $2 returning *',
+   [responseMessageId, job.session_id],
+  );
+  if (removedRows.length > 0) notifyDbSubscribers('messages', 'DELETE', removedRows);
+  const segmentRows = jobMetadata.lastSegmentMessageId
+   ? await getDb().unsafe(
+    'select * from messages where id = $1 and session_id = $2 limit 1',
+    [String(jobMetadata.lastSegmentMessageId), job.session_id],
+   )
+   : [];
+  if (segmentRows.length > 0) {
+   void logMessageActivity(segmentRows);
+   void mirrorAgentReplyToTaskComment(segmentRows[0]);
+  }
+ } else if (responseMessageId) {
   const messageRows = await getDb().unsafe(
    `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4
        where id = $1 and session_id = $5 returning *`,
@@ -5216,6 +5245,105 @@ async function handleAgentJobStep(ws, message) {
   [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', step.name, step.detail],
  );
  notifyDbSubscribers('messages', 'INSERT', messageRows);
+}
+
+// An agent turn is really [text][tool][text][tool][text]. The delta pump owns ONE
+// placeholder for the WHOLE turn, so every text block was concatenated into a
+// single ever-growing bubble — five separate thoughts run together with no
+// boundary the human could read, let alone steer between. `agent_job_segment`
+// says "that text block is finished": the current placeholder is finalised with
+// the block's text (it becomes a normal, complete agent message) and a FRESH
+// placeholder takes its place for the next block. Deltas, steps and segments that
+// follow flow into the new one, so the turn renders as message · chips · message
+// instead of one bubble that grows.
+async function handleAgentJobSegment(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+ const jobId = String(message.jobId || '');
+ if (!jobId) throw badRequest('jobId is required');
+ const rows = await getDb().unsafe(
+  `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+  [jobId, auth.agentId, auth.workspaceId],
+ );
+ const job = rows[0];
+ if (!job) throw forbidden('Agent job not found');
+ if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
+ const text = textFromValue(message.text ?? message.content ?? message.response).trim();
+ if (!text) return; // an empty block is not a message; never rotate the placeholder on one
+ const metadata = parseJsonObject(job.metadata);
+ const responseMessageId = metadata.responseMessageId || null;
+ const nextPlaceholderId = crypto.randomUUID();
+ // Where the block itself lands: normally the placeholder that has been streaming
+ // it (now final). A job with no placeholder at all still gets its own message
+ // rather than losing the text.
+ const blockMessageId = responseMessageId || crypto.randomUUID();
+ // A completed text block is the agent demonstrably producing output, so it counts
+ // as progress for the stuck-job reaper exactly like a tool step does.
+ // lastSegmentText/lastSegmentMessageId let finalizeAgentJobResult recognise a final
+ // result that merely repeats the block already on screen. `response` is deliberately
+ // left alone: only the delta pump and the final result own it.
+ const nextMetadata = {
+  ...metadata,
+  responseMessageId: nextPlaceholderId,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+  segmentCount: Number(metadata.segmentCount || 0) + 1,
+  lastSegmentText: text,
+  lastSegmentMessageId: blockMessageId,
+ };
+ nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+ const segmentRows = await getDb().unsafe(
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
+  [jobId, nextMetadata],
+ );
+ if (segmentRows.length === 0) return; // the job already finished; the segment is stale
+ const senderName = job.agent_name || auth.name || auth.handle || 'Agent';
+ let threadParentId = metadata.threadParentId || null;
+ if (responseMessageId) {
+  const finalizedRows = await getDb().unsafe(
+   `update messages
+       set content = $2,
+           sender_kind = 'agent',
+           sender_id = $3,
+           sender_name = $4
+       where id = $1 and session_id = $5
+       returning *`,
+   [responseMessageId, text, String(job.agent_id || ''), senderName, job.session_id],
+  );
+  if (finalizedRows.length > 0) {
+   notifyDbSubscribers('messages', 'UPDATE', finalizedRows);
+   // The replacement has to sit in exactly the same place as the message it
+   // succeeds, so read the parent off the row instead of recomputing one: inside
+   // a thread the placeholder is itself a reply (the same reason a tool step
+   // resolves the thread root from this column rather than assuming top level).
+   threadParentId = finalizedRows[0].thread_parent_id || null;
+  }
+ } else {
+  const blockRows = await getDb().unsafe(
+   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+      values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
+   [blockMessageId, job.session_id, text, threadParentId, String(job.agent_id || ''), senderName],
+  );
+  notifyDbSubscribers('messages', 'INSERT', blockRows);
+ }
+ const placeholderRows = await getDb().unsafe(
+  `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+     values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
+  // Same "Thinking …" shape the turn started with — isAgentPlaceholder and
+  // finalizeStuckJob both key off it.
+  [nextPlaceholderId, job.session_id, agentLiveMessageContent({ elapsedMs: message.elapsedMs }), threadParentId, String(job.agent_id || ''), senderName],
+ );
+ notifyDbSubscribers('messages', 'INSERT', placeholderRows);
 }
 
 async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
@@ -6764,6 +6892,10 @@ function attachRealtime(server) {
     }
     if (message.action === 'agent_job_step') {
      await handleAgentJobStep(ws, message);
+     return;
+    }
+    if (message.action === 'agent_job_segment') {
+     await handleAgentJobSegment(ws, message);
      return;
     }
     if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {
@@ -10062,6 +10194,7 @@ module.exports = {
   cancelFarmAgentJob,
   handleAgentJobDelta,
   handleAgentJobStep,
+  handleAgentJobSegment,
   agentStepContent,
   agentStepParts,
   handleAgentCapabilitiesSync,
