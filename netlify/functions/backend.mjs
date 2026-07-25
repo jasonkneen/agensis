@@ -2115,7 +2115,14 @@ async function route(req) {
   const url = new URL(req.url);
   const workspaceId = String(url.searchParams.get('workspaceId') || '').trim() || null;
   // Managed secrets (ANTHROPIC_API_KEY etc.) require workspace manage rights.
-  if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+  // The workspaceId check is NOT optional: when it was, omitting the query param
+  // skipped authorization entirely and listManagedSecrets fell back to the
+  // app-level secret, handing any signed-up user a masked preview of the
+  // platform ANTHROPIC_API_KEY. Mirrors the POST handler directly below.
+  if (!workspaceId) {
+   return jsonError(403, new Error('App-level secret management is not available to users'));
+  }
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
   const keys = await listManagedSecrets(workspaceId);
   return json({ data: { keys }, error: null });
  }

@@ -344,6 +344,35 @@ CREATE TABLE IF NOT EXISTS canvas_groups (
 
 CREATE INDEX IF NOT EXISTS idx_canvas_groups_workspace_id ON canvas_groups(workspace_id);
 
+-- Canvas layers (the "projects"/canvases a workspace is split into). The shared
+-- definition — name and ordering — of each layer, so a canvas one member creates
+-- is visible to the rest of the workspace. `layer_id` is the client-generated
+-- text id that canvas_objects.layer_id stores ('base' for the default layer); the
+-- uuid `id` is the row's own key so every generic /backend/db row id stays
+-- globally unique (the RBAC gate resolves a row's workspace from a bare id
+-- filter). Which layer is active is per-browser and stays in localStorage.
+CREATE TABLE IF NOT EXISTS canvas_layers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  layer_id text NOT NULL,
+  name text NOT NULL DEFAULT 'Workspace',
+  sort_order double precision NOT NULL DEFAULT 0,
+  description text DEFAULT '',
+  icon text DEFAULT '',
+  local_path text DEFAULT '',
+  project_kind text DEFAULT '',
+  git_root text DEFAULT '',
+  git_remote text DEFAULT '',
+  background_opacity double precision DEFAULT 0.42,
+  background_image text DEFAULT '',
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, layer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
+
 CREATE TABLE IF NOT EXISTS canvas_objects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

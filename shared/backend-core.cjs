@@ -32,6 +32,7 @@ const ALLOWED_TABLES = new Set([
  'uploaded_files',
  'workspace_members',
  'canvas_groups',
+ 'canvas_layers',
  'canvas_objects',
  'tasks',
  'document_comments',
@@ -60,6 +61,7 @@ const VERSIONED_TABLES = new Set([
  'memory_facts',
  'uploaded_files',
  'canvas_groups',
+ 'canvas_layers',
  'canvas_objects',
  'tasks',
  'document_comments',
@@ -111,7 +113,7 @@ function toPgArrayLiteral(value) {
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
- 'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
+ 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'document_comments',
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
@@ -141,6 +143,9 @@ const DB_TABLE_ACCESS = {
  memory_facts: DEFAULT_TABLE_ACCESS,
  uploaded_files: DEFAULT_TABLE_ACCESS,
  canvas_groups: DEFAULT_TABLE_ACCESS,
+ // A layer is no more privileged than the objects drawn on it: same read/write
+ // capabilities as canvas_objects, so anyone who can draw can name a canvas.
+ canvas_layers: DEFAULT_TABLE_ACCESS,
  canvas_objects: DEFAULT_TABLE_ACCESS,
  tasks: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
