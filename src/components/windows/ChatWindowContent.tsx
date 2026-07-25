@@ -2327,14 +2327,31 @@ function ChatMessageBubble({
               // never fires hover, so hover-only here means unreachable (this app
               // ships a mobile layer). Coarse pointers get it permanently visible
               // but dimmed, so it stays quiet on desktop where hover works.
-              <button
-                type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
-                onClick={onCreateSubThread}
-              >
-                <Plus className="size-3" />
-                Sub-thread
-              </button>
+              //
+              // Once at least one sub-thread already exists on this message, the
+              // chips above already say "there's a sub-thread here" — the full
+              // "+ Sub-thread" label next to them is redundant noise, so it
+              // collapses to an icon-only affordance for starting another one.
+              subThreads && subThreads.length > 0 ? (
+                <button
+                  type="button"
+                  title="Start another sub-thread"
+                  aria-label="Start another sub-thread"
+                  className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
+                  onClick={onCreateSubThread}
+                >
+                  <Plus className="size-3" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
+                  onClick={onCreateSubThread}
+                >
+                  <Plus className="size-3" />
+                  Sub-thread
+                </button>
+              )
             )}
           </div>
         ) : null}
