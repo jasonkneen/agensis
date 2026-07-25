@@ -16,6 +16,7 @@ import { ALL_WINDOW_EDGES, computeFlushEdges, computeFullBleed, type WindowEdge 
 // Shared with the commit path on purpose: the preview and the drop must agree
 // on what is splittable, or the preview promises a split that never lands.
 import { canSplitContainer } from '../../hooks/useWindows';
+import { GROUP_FRAME_PADDING, GROUP_HEADER_HEIGHT } from '../../lib/windowGroups';
 
 const SNAP_THRESHOLD = 44;
 const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
@@ -326,8 +327,6 @@ interface FloatingWindowShellProps {
    * and behaves exactly as before.
    */
   groupRole?: 'host' | 'member' | null;
-  /** Minimise every member of a group at once (host control cluster only). */
-  onMinimizeGroup?: (groupId: string) => void;
   onShare?: () => void;
   presenceMode?: PresenceVisibilityMode;
   currentUserId?: string;
@@ -355,7 +354,6 @@ export function FloatingWindowShell({
   onUpdate,
   onMinimize,
   groupRole,
-  onMinimizeGroup,
   onShare,
   presenceMode = 'visible',
   currentUserId,
@@ -424,10 +422,14 @@ export function FloatingWindowShell({
   const gutterInset = (edge: WindowEdge) => (
     !isFullSurface && adjacentEdges?.has(edge) ? GROUP_GUTTER / 2 : 0
   );
-  const gutterLeft = gutterInset('left');
-  const gutterRight = gutterInset('right');
-  const gutterTop = gutterInset('top');
-  const gutterBottom = gutterInset('bottom');
+  const gutterLeft = gutterInset('left') + (groupRole ? GROUP_FRAME_PADDING : 0);
+  const gutterRight = gutterInset('right') + (groupRole ? GROUP_FRAME_PADDING : 0);
+  const gutterBottom = gutterInset('bottom') + (groupRole ? GROUP_FRAME_PADDING : 0);
+  // Panes in the group's TOP row drop below the frame's own title bar. Rows
+  // further down already sit under a neighbour, so only the top row pays.
+  const gutterTop = gutterInset('top')
+    + (groupRole ? GROUP_FRAME_PADDING : 0)
+    + (groupRole && !adjacentEdges?.has('top') ? GROUP_HEADER_HEIGHT : 0);
 
   // Single source of truth for painted-vs-stored, consumed by BOTH shellStyle
   // (the React render) and syncShellBounds (the imperative drag/resize writes).
@@ -802,7 +804,7 @@ export function FloatingWindowShell({
             {/* A grouped pane that is not the host shows its label and nothing
                 else — the group is one composite window and the host bar owns
                 every control. Ungrouping is still reachable from the dock. */}
-            {groupRole !== 'member' && (
+            {!groupRole && (
             <div className="flex shrink-0 flex-nowrap items-center gap-1">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -872,15 +874,12 @@ export function FloatingWindowShell({
                 type="button"
                 variant="outline"
                 size="icon-xs"
-                onClick={() => {
-                  // Minimising the host minimises the whole group — the panes
-                  // are one window, so leaving orphans behind would strand
-                  // members whose own title bars no longer have any controls.
-                  if (groupRole === 'host' && win.groupId && onMinimizeGroup) onMinimizeGroup(win.groupId);
-                  else onMinimize(win.id);
-                }}
+                // This cluster renders only for UNGROUPED windows now — a group's
+                // controls live on WindowGroupFrame's single title bar, which acts
+                // on every member. So there is no group case to handle here.
+                onClick={() => onMinimize(win.id)}
                 disabled={!canControl}
-                aria-label={groupRole === 'host' ? 'Minimize group' : 'Minimize'}
+                aria-label="Minimize"
               >
                 <Minus />
               </Button>
