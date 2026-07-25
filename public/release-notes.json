@@ -1,5 +1,17 @@
 [
   {
+    "version": "inbox",
+    "date": "2026-07-25",
+    "title": "Inbox — one place for things that need you",
+    "summary": "A triage view that collects everything waiting on a human: agents that are blocked, comments, mentions, failed agent runs and workspace activity.",
+    "highlights": [
+      "Blockers first — when an agent hits a decision it cannot make, it lands here",
+      "Comments on documents, tasks and agent memory in one list",
+      "Mentions of you, and agent runs that failed",
+      "Filter by category, and read state follows you across devices"
+    ]
+  },
+  {
     "version": "live-agent-steps",
     "date": "2026-07-25",
     "title": "See what an agent is actually doing",

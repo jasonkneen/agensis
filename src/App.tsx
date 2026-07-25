@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
@@ -93,6 +93,7 @@ import { useCanvasObjects } from './hooks/useCanvasObjects';
 import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
+import { useInbox } from './hooks/useInbox';
 import { useAgents, type CreateAgentInput } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
@@ -117,6 +118,7 @@ const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWi
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
 const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
+const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
@@ -805,6 +807,10 @@ function AppContent() {
     user?.id,
   );
 
+  // Sidebar badge only — the unfiltered count of things waiting on a human. The
+  // inbox window runs its own useInbox with the tab the user picked.
+  const { unreadCount: inboxUnreadCount } = useInbox(activeWorkspaceId || null, 'all');
+
   const {
     webhooks: agentWebhooks,
     createWebhook: createAgentWebhook,
@@ -1068,6 +1074,16 @@ function AppContent() {
       return;
     }
     openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  const handleOpenInbox = useCallback(() => {
+    const existing = windows.find(w => w.type === 'inbox');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('inbox', { title: 'Inbox', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenUsers = useCallback(() => {
@@ -1359,6 +1375,13 @@ function AppContent() {
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
   }, [setActiveSession, openWindow, activeLayerId, user?.id]);
 
+  // Inbox rows carry a session id, not a session — resolve and open it so
+  // "go read it where it happened" is one click from the triage list.
+  const handleSessionOpenById = useCallback((sessionId: string) => {
+    const session = sessions.find(item => item.id === sessionId);
+    if (session) handleSessionOpen(session);
+  }, [sessions, handleSessionOpen]);
+
   const handleSplitThread = useCallback(async (source: ChatSession) => {
     const pending = toast.loading(`Splitting “${source.title || 'thread'}”…`);
     const forked = await splitSession(source);
@@ -1467,8 +1490,9 @@ function AppContent() {
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
+    else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenInbox, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1739,6 +1763,7 @@ function AppContent() {
             onDirectMessageDelete={handleDeleteDm}
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
+            onOpenInbox={handleOpenInbox}
             onOpenMemory={handleOpenMemory}
             onOpenSkills={handleOpenSkills}
             onOpenTasks={handleOpenTasks}
@@ -1750,6 +1775,7 @@ function AppContent() {
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
             openTaskCount={openTasks.length}
+            inboxUnreadCount={inboxUnreadCount}
             recents={recents}
             sessions={sessions}
             agents={agents}
@@ -1928,6 +1954,7 @@ function AppContent() {
                   onShareWindow={handleShareWindow}
                   onSendMessage={wrappedSendMessage}
                   onSetActiveSession={setActiveSession}
+                  onOpenSessionById={handleSessionOpenById}
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
                   onToggleFavorite={toggleFavorite}
@@ -2226,6 +2253,7 @@ function CanvasLayerScene({
   onShareWindow,
   onSendMessage,
   onSetActiveSession,
+  onOpenSessionById,
   onDeleteDocument,
   onAutoSaveDocument,
   onToggleFavorite,
@@ -2317,6 +2345,7 @@ function CanvasLayerScene({
   onShareWindow: (title: string) => void;
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
   onSetActiveSession: (session: ChatSession) => void;
+  onOpenSessionById: (sessionId: string) => void;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onToggleFavorite: (id: string, current: boolean) => void;
@@ -2759,6 +2788,38 @@ function CanvasLayerScene({
                   onCreateWebhook={onCreateAgentWebhook}
                   onUpdateWebhook={onUpdateAgentWebhook}
                   onOpenConnections={onOpenConnections}
+                />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'inbox') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Inbox size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <InboxWindowContent
+                  workspaceId={workspaceId}
+                  onOpenSession={onOpenSessionById}
                 />
               </Suspense>
             </FloatingWindowShell>

@@ -663,6 +663,27 @@ CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_
 CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
 CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
 
+-- Inbox read state: one MONOTONIC marker per (user, workspace, context_key).
+-- The inbox aggregates existing sources (blockers, comments, mentions, agent-job
+-- errors, activity) and owns no rows of its own — read/unread is entirely this
+-- table: an item is unread when its created_at is newer than the marker for its
+-- context_key, or when no marker exists. Markers only ever move FORWARD (the
+-- upsert in server/index.cjs carries a `read_at < excluded.read_at` guard) so a
+-- stale write from a second device cannot un-read something.
+--
+-- The primary key IS the read-path index: the inbox query looks markers up by
+-- the (user_id, workspace_id) prefix, which the PK btree covers. The extra
+-- workspace_id index only serves the ON DELETE CASCADE from workspaces.
+CREATE TABLE IF NOT EXISTS inbox_read_state (
+  user_id uuid NOT NULL,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  context_key text NOT NULL,
+  read_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  PRIMARY KEY (user_id, workspace_id, context_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.

@@ -898,6 +898,26 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_event_comments(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
     CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
+
+    -- Inbox read state: one MONOTONIC marker per (user, workspace, context_key).
+    -- The inbox aggregates five existing sources (blockers, comments, mentions,
+    -- agent-job errors, activity) and has no rows of its own — read/unread is
+    -- entirely this table: an item is unread when its created_at is newer than
+    -- the marker for its context_key, or when no marker exists. Markers only
+    -- ever move FORWARD (the upsert carries a "read_at < excluded.read_at"
+    -- guard) so an out-of-order write from a second device cannot un-read
+    -- something. The primary key IS the read-path index: the inbox query looks
+    -- markers up by the (user_id, workspace_id) prefix, which the PK btree
+    -- covers, so no second index is created.
+    CREATE TABLE IF NOT EXISTS inbox_read_state (
+      user_id uuid NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      context_key text NOT NULL,
+      read_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      PRIMARY KEY (user_id, workspace_id, context_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
   `);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS workspace_secrets (
@@ -2580,6 +2600,241 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
   connections: connectionRows.map(publicAgentConnection),
   memoryFacts: memoryRows,
   limits: BOOTSTRAP_LIMITS,
+ };
+}
+
+// --- Inbox (triage surface) --------------------------------------------------
+// The inbox aggregates five sources that ALREADY produce rows — it has no
+// producers of its own and writes nothing except read state. Categories:
+//
+//   blocker  thread_items.kind='blocker'  — an agent hit a decision it can't make
+//   comment  document_comments / task_comments / memory_file_comments
+//   mention  activity_events 'message_sent' whose message text @s the caller
+//   error    agent_jobs.status='error'
+//   activity activity_events, minus the message firehose
+//
+// VISIBILITY: this app's only ACL boundary is the workspace — every member can
+// already read every session, task, document and comment in it (see the
+// bootstrap + /backend/sessions/:id/messages routes, which gate on
+// enforceWorkspaceRole 'read' and nothing finer). So workspace membership IS the
+// correct scope for four of the five categories. The genuinely per-user surfaces
+// are (a) mentions, which are filtered to the caller's own @handle, and (b) read
+// state, which is keyed by user_id. Self-authored comments are dropped: you do
+// not need to triage your own comment.
+//
+// BOUNDEDNESS: every category is a separate LIMIT-ed subquery, the merged set is
+// capped again, and the two firehose-backed categories (mention, activity) plus
+// agent_jobs errors carry a lookback window. Worst case the endpoint returns
+// INBOX_CATEGORY_BRANCHES x INBOX_MAX_LIMIT rows. These tables grow without
+// bound, so an unbounded scan here would be a production hazard.
+const INBOX_DEFAULT_LIMIT = 50;
+const INBOX_MAX_LIMIT = 100;
+// Union branches in buildInboxSql (comment fans out over three tables), used to
+// cap the merged set at perCategory x branches.
+const INBOX_CATEGORY_BRANCHES = 7;
+const INBOX_LOOKBACK_DAYS = 30;
+const INBOX_TITLE_CHARS = 160;
+const INBOX_BODY_CHARS = 280;
+const INBOX_FILTERS = new Set(['all', 'blocker', 'comment', 'mention', 'error', 'activity']);
+
+// The @handle a message would use to mention this user. Users have no handle
+// column, so it is derived the same way the composer renders them: display name
+// first, else the local part of the email. Returns '' when nothing usable
+// exists, which disables the mention category rather than matching everyone.
+function inboxMentionHandle(user) {
+ const source = String(user?.display_name || '').trim() || String(user?.email || '').split('@')[0] || '';
+ return source
+  .toLowerCase()
+  .replace(/^@+/, '')
+  .replace(/[^a-z0-9_-]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 40);
+}
+
+// POSIX pattern matching '@handle' on a word boundary, so @jane does not match
+// @janet. slugHandle-style output is [a-z0-9_-] only, so it needs no escaping.
+function inboxMentionPattern(handle) {
+ return handle ? `(^|[^a-z0-9_.-])@${handle}([^a-z0-9_.-]|$)` : '';
+}
+
+// One statement, five bounded branches, unread resolved by a left join onto the
+// per-user markers. $1 = workspace id, $2 = caller id, $3 = mention pattern.
+function buildInboxSql(perCategory) {
+ const cap = Number(perCategory);
+ const window = `now() - interval '${INBOX_LOOKBACK_DAYS} days'`;
+ const title = (expr) => `left(regexp_replace(coalesce(${expr}, ''), '\\s+', ' ', 'g'), ${INBOX_TITLE_CHARS})`;
+ const body = (expr) => `left(coalesce(${expr}, ''), ${INBOX_BODY_CHARS})`;
+ return `
+    with items as (
+      (
+        select 'blocker:' || ti.id::text as id,
+               'blocker'::text as category,
+               ${title('ti.content')} as title,
+               ${body('ti.response')} as body,
+               'blocker:' || ti.id::text as context_key,
+               ti.session_id::text as session_id,
+               'thread_item'::text as entity_type,
+               ti.id::text as entity_id,
+               coalesce(ti.created_by_agent, '')::text as actor_name,
+               ti.created_at as created_at
+          from thread_items ti
+          join chat_sessions cs on cs.id = ti.session_id and cs.deleted_at is null
+         where ti.workspace_id = $1::uuid
+           and ti.kind = 'blocker'
+           and ti.status <> 'dismissed'
+         order by ti.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || dc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || coalesce(nullif(d.title, ''), 'document')`)},
+               ${body('dc.content')},
+               'comment:' || dc.id::text,
+               null::text,
+               'document'::text,
+               dc.document_id::text,
+               coalesce(nullif(u.display_name, ''), u.email, '')::text,
+               dc.created_at
+          from document_comments dc
+          join documents d on d.id = dc.document_id
+          left join app_users u on u.id = dc.user_id
+         where dc.workspace_id = $1::uuid
+           and dc.resolved is not true
+           and (dc.user_id is null or dc.user_id <> $2::uuid)
+         order by dc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || tc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || coalesce(nullif(t.title, ''), 'task')`)},
+               ${body('tc.content')},
+               'comment:' || tc.id::text,
+               null::text,
+               'task'::text,
+               tc.task_id::text,
+               coalesce(nullif(wa.name, ''), nullif(u.display_name, ''), u.email, '')::text,
+               tc.created_at
+          from task_comments tc
+          join tasks t on t.id = tc.task_id
+          left join app_users u on u.id = tc.user_id
+          left join workspace_agents wa on wa.id = tc.agent_id
+         where tc.workspace_id = $1::uuid
+           and tc.resolved is not true
+           and (tc.user_id is null or tc.user_id <> $2::uuid)
+         order by tc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || mc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || mc.path`)},
+               ${body('mc.content')},
+               'comment:' || mc.id::text,
+               null::text,
+               'memory_file'::text,
+               mc.agent_id::text,
+               coalesce(nullif(u.display_name, ''), u.email, '')::text,
+               mc.created_at
+          from memory_file_comments mc
+          left join app_users u on u.id = mc.user_id
+         where mc.workspace_id = $1::uuid
+           and mc.resolved is not true
+           and (mc.user_id is null or mc.user_id <> $2::uuid)
+         order by mc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'mention:' || ae.id::text,
+               'mention'::text,
+               ${title('ae.title')},
+               ${body(`ae.metadata->>'content'`)},
+               'thread:' || coalesce(nullif(ae.metadata->>'session_id', ''), ae.id::text),
+               nullif(ae.metadata->>'session_id', ''),
+               'message'::text,
+               ae.entity_id,
+               coalesce(ae.metadata->>'sender_name', '')::text,
+               ae.created_at
+          from activity_events ae
+         where ae.workspace_id = $1::uuid
+           and ae.event_type = 'message_sent'
+           and ae.created_at > ${window}
+           and $3::text <> ''
+           and coalesce(ae.metadata->>'content', '') ~* $3::text
+           and (ae.user_id is null or ae.user_id <> $2::uuid)
+         order by ae.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'error:' || j.id::text,
+               'error'::text,
+               ${title(`coalesce(nullif(a.name, ''), 'Agent') || ' run failed'`)},
+               ${body('j.error')},
+               'agent_job:' || j.id::text,
+               j.session_id::text,
+               'agent_job'::text,
+               j.id::text,
+               coalesce(a.name, '')::text,
+               coalesce(j.finished_at, j.updated_at, j.created_at)
+          from agent_jobs j
+          left join workspace_agents a on a.id = j.agent_id
+         where j.workspace_id = $1::uuid
+           and j.status = 'error'
+           and coalesce(j.finished_at, j.updated_at, j.created_at) > ${window}
+         order by coalesce(j.finished_at, j.updated_at, j.created_at) desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'activity:' || ae.id::text,
+               'activity'::text,
+               ${title('ae.title')},
+               ''::text,
+               'activity:' || ae.id::text,
+               case when ae.entity_type = 'chat' then nullif(ae.entity_id, '') else null::text end,
+               ae.entity_type,
+               ae.entity_id,
+               coalesce(nullif(u.display_name, ''), u.email, '')::text,
+               ae.created_at
+          from activity_events ae
+          left join app_users u on u.id = ae.user_id
+         where ae.workspace_id = $1::uuid
+           and ae.event_type <> 'message_sent'
+           and ae.created_at > ${window}
+         order by ae.created_at desc
+         limit ${cap}
+      )
+    )
+    select i.id, i.category, i.title, i.body, i.context_key, i.session_id,
+           i.entity_type, i.entity_id, i.actor_name, i.created_at,
+           (r.read_at is null or i.created_at > r.read_at) as unread
+      from items i
+      left join inbox_read_state r
+        on r.user_id = $2::uuid and r.workspace_id = $1::uuid and r.context_key = i.context_key
+     order by i.created_at desc
+     limit ${cap * INBOX_CATEGORY_BRANCHES}`;
+}
+
+// Row -> the shared InboxItem wire shape (camelCase; both sides agree on this).
+function toInboxItem(row) {
+ return {
+  id: String(row.id || ''),
+  category: String(row.category || ''),
+  title: String(row.title || ''),
+  body: String(row.body || ''),
+  contextKey: String(row.context_key || ''),
+  sessionId: row.session_id ? String(row.session_id) : null,
+  entityType: row.entity_type ? String(row.entity_type) : null,
+  entityId: row.entity_id ? String(row.entity_id) : null,
+  actorName: String(row.actor_name || ''),
+  createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ''),
+  unread: row.unread !== false,
  };
 }
 
@@ -8129,6 +8384,68 @@ function createApp() {
     return connection;
    });
    res.json({ data: reconciled, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Inbox (triage surface) ----------------------------------------------
+ // Aggregates the five existing "this needs a human" sources into one
+ // newest-first list. See buildInboxSql for the visibility + boundedness
+ // reasoning. Membership is enforced exactly as every sibling workspace route
+ // does (enforceWorkspaceRole 'read'); getting this wrong leaks one tenant's
+ // inbox into another's.
+ app.get('/backend/workspaces/:workspaceId/inbox', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const filter = String(req.query.filter || 'all').trim().toLowerCase();
+   if (!INBOX_FILTERS.has(filter)) return jsonError(res, 400, new Error('Unknown inbox filter'));
+   const limit = Math.min(INBOX_MAX_LIMIT, Math.max(1, Math.trunc(Number(req.query.limit)) || INBOX_DEFAULT_LIMIT));
+
+   const userRows = await getDb().unsafe('select display_name, email from app_users where id = $1 limit 1', [req.userId]);
+   const pattern = inboxMentionPattern(inboxMentionHandle(userRows[0]));
+
+   const rows = await getDb().unsafe(buildInboxSql(limit), [workspaceId, String(req.userId), pattern]);
+   const all = rows.map(toInboxItem);
+   // unreadCount is deliberately computed over EVERY category, not the filtered
+   // view, so the badge does not change when the user switches tabs. It counts
+   // the bounded window this query returns — an inbox with more unread than that
+   // is a "lots" signal, not a precise number.
+   const unreadCount = all.reduce((n, item) => n + (item.unread ? 1 : 0), 0);
+   const items = (filter === 'all' ? all : all.filter((item) => item.category === filter)).slice(0, limit);
+   res.json({ data: { items, unreadCount }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Advance the caller's read marker for one context. MONOTONIC: the upsert's
+ // WHERE guard drops a readAt that is not newer than the stored one, so a slow
+ // or out-of-order write (a second device that was behind) can never un-read an
+ // item. Always reports ok — "already at or ahead of this point" is success.
+ app.post('/backend/inbox/read', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim();
+   const contextKey = String(req.body?.contextKey || req.body?.context_key || '').trim().slice(0, 200);
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   if (!contextKey) return jsonError(res, 400, new Error('contextKey is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rawReadAt = req.body?.readAt ?? req.body?.read_at;
+   const readAt = rawReadAt === undefined || rawReadAt === null || rawReadAt === ''
+    ? new Date()
+    : new Date(rawReadAt);
+   if (Number.isNaN(readAt.getTime())) return jsonError(res, 400, new Error('readAt must be an ISO timestamp'));
+   await getDb().unsafe(
+    `insert into inbox_read_state (user_id, workspace_id, context_key, read_at)
+         values ($1::uuid, $2::uuid, $3, $4::timestamptz)
+         on conflict (user_id, workspace_id, context_key)
+         do update set read_at = excluded.read_at, updated_at = now()
+         where inbox_read_state.read_at < excluded.read_at`,
+    [String(req.userId), workspaceId, contextKey, readAt.toISOString()],
+   );
+   res.json({ data: { ok: true }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
