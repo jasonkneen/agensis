@@ -1,28 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Hand, Inbox, RotateCw } from 'lucide-react';
-import type { InboxFilter } from '../../types';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { ChevronDown, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
+import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';
-import { InboxFilterTabs } from './InboxFilterTabs';
 import { InboxRow } from './InboxRow';
-import { MICRO_LABEL } from './inboxPresentation';
-import {
-  buildInboxRows,
-  countByCategory,
-  inboxEmptyState,
-  type InboxRowModel,
-} from './inboxModel';
+import { FOCUS_RING, PANE_HEADER, ROW_PADDING } from './inboxPresentation';
+import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
 
 // ---------------------------------------------------------------------------
 // The triage surface. Work that needs a HUMAN collects here instead of being
@@ -30,27 +23,51 @@ import {
 // stuck on a decision it cannot make is the only thing in this list that is
 // actively costing time.
 //
-// It is built as an INBOX, not a feed: uniform ~34px single-line rows on a
-// hairline rule, five columns that land on the same verticals all the way down,
-// one type size, and colour spent only on urgency. Everything about the row is
-// in InboxRow.tsx; the column geometry is in inboxPresentation.ts.
+// It is an INBOX, not a feed: one flat chronological stream of ~90px rows, each
+// three lines of text against a 32px face, with NOTHING drawn between them. No
+// section headers, no date dividers, no per-row rules, no cards, no counts, no
+// badges. Restraint is the whole design — see InboxRow.tsx.
+//
+// The category filter bar that used to sit under this header now lives in
+// Activity, which is a feed and is where slicing by category actually helps.
+// What is left here is the one filter an inbox genuinely needs: unread.
 //
 // Two interaction rules hold the whole thing up:
 //   1. selection is keyed off the group's contextKey (a stable conversation id),
 //      so an item arriving mid-read never moves the user's place;
-//   2. no timers. Relative times are computed once per data load and allowed to
-//      go stale — this app has a history of re-render storms from live clocks.
+//   2. no timers. `now` is sampled once per data load; the list timestamps are
+//      absolute clock times, which cannot go stale, and the one relative label
+//      (the thread tail in the detail pane) is allowed to — this app has a
+//      history of re-render storms from live clocks.
 // ---------------------------------------------------------------------------
 
-// With a detail pane open the list gives up most of the width — and on a phone
-// (where the window IS the viewport) it steps aside entirely, so reading an item
-// is not done through a 170px column. Closing the detail brings the list back.
-const LIST_NARROW_CLASS = 'w-[44%] shrink-0 border-r border-border max-md:hidden';
+const DEFAULT_LIST_WIDTH = 340;
+const MIN_LIST_WIDTH = 240;
+const MAX_LIST_WIDTH = 520;
+const LIST_WIDTH_KEY = 'agensis.inbox.list-width';
 
-const EMPTY_COUNTS = countByCategory([]);
+/**
+ * Under 42rem (672px) the two panes cannot both hold a readable column, so the
+ * list goes full-width and the detail REPLACES it (with a back arrow) rather
+ * than being read through a 170px slot. Done as a container query on the
+ * window, not a media query — this lives in a floating window whose width has
+ * nothing to do with the viewport's, and a container query costs no re-renders
+ * where a ResizeObserver would cost one per frame of a window drag.
+ *
+ * Written out in full rather than composed, because Tailwind scans source text
+ * for literal class names and never sees a concatenated one.
+ */
+const SINGLE_COLUMN_HIDE = '@max-2xl/inboxwin:hidden';
 
-function sameCounts(a: Record<InboxFilter, number>, b: Record<InboxFilter, number>): boolean {
-  return (Object.keys(a) as InboxFilter[]).every(key => a[key] === b[key]);
+function readStoredWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_LIST_WIDTH;
+  try {
+    const raw = Number(window.sessionStorage.getItem(LIST_WIDTH_KEY));
+    if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LIST_WIDTH;
+    return Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(raw)));
+  } catch {
+    return DEFAULT_LIST_WIDTH;
+  }
 }
 
 interface InboxWindowContentProps {
@@ -63,12 +80,13 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
   workspaceId,
   onOpenSession,
 }: InboxWindowContentProps) {
-  const [filter, setFilter] = useState<InboxFilter>('all');
-  const { groups, unreadCount, loading, markRead, resolveBlocker, refetch } = useInbox(workspaceId, filter);
+  const { groups, unreadCount, loading, markRead, resolveBlocker, refetch } = useInbox(workspaceId);
 
   // STABLE SELECTION: the contextKey, never an index and never the newest item's
   // id. New arrivals re-sort the list around the user without moving them.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [listWidth, setListWidth] = useState(readStoredWidth);
 
   // `now` is sampled here and nowhere else — one timestamp per data load, no
   // interval, no per-second re-render.
@@ -77,54 +95,102 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     return { rows: buildInboxRows(groups, sampled), now: sampled };
   }, [groups]);
 
-  const counts = useMemo(() => countByCategory(groups), [groups]);
+  const visibleRows = useMemo(
+    () => (unreadOnly ? rows.filter(row => row.group.unreadCount > 0) : rows),
+    [rows, unreadOnly],
+  );
+
   const selected = useMemo(
     () => (selectedKey ? groups.find(group => group.key === selectedKey) ?? null : null),
     [groups, selectedKey],
   );
-
-  // Counts are only truthful on the unfiltered fetch — the server returns just
-  // the requested slice otherwise. Hold the last full snapshot so the segmented
-  // control keeps its numbers (and, more importantly, its WIDTH) while a filter
-  // is applied, instead of collapsing the moment you click a tab.
-  const [snapshot, setSnapshot] = useState<{
-    workspaceId: string | null;
-    counts: Record<InboxFilter, number>;
-  }>({ workspaceId: null, counts: EMPTY_COUNTS });
-
-  useEffect(() => {
-    if (filter !== 'all' || loading) return;
-    setSnapshot(prev =>
-      prev.workspaceId === workspaceId && sameCounts(prev.counts, counts)
-        ? prev
-        : { workspaceId, counts },
-    );
-  }, [filter, loading, counts, workspaceId]);
-
-  const tabCounts =
-    filter === 'all'
-      ? counts
-      : snapshot.workspaceId === workspaceId
-        ? snapshot.counts
-        : EMPTY_COUNTS;
 
   const handleSelect = useCallback((key: string) => {
     setSelectedKey(key);
     markRead(key);
   }, [markRead]);
 
+  // Drag-to-resize, via pointer capture so it needs no window listeners and
+  // cannot leak a handler if the window unmounts mid-drag.
+  const dragRef = useRef<{ x: number; width: number } | null>(null);
+
+  const clampWidth = (value: number) =>
+    Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(value)));
+
+  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { x: event.clientX, width: listWidth };
+  }, [listWidth]);
+
+  const handleResizeMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    setListWidth(clampWidth(drag.width + (event.clientX - drag.x)));
+  }, []);
+
+  const handleResizeEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    try {
+      window.sessionStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+    } catch {
+      // Width is a nicety; a storage-denied browser just gets the default back.
+    }
+  }, [listWidth]);
+
+  const resetWidth = useCallback(() => setListWidth(DEFAULT_LIST_WIDTH), []);
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-card text-card-foreground">
-      <header className="flex shrink-0 flex-col gap-1.5 border-b border-border px-2 pb-1.5 pt-2">
-        <div className="flex h-6 items-center gap-2 px-0.5">
-          <Inbox className="size-3.5 shrink-0 text-muted-foreground" />
-          <h2 className="text-[13px] font-semibold tracking-tight">Inbox</h2>
-          {unreadCount > 0 && (
-            <span className="rounded-full bg-primary px-1.5 text-[10px] font-semibold leading-4 tabular-nums text-primary-foreground">
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </span>
-          )}
+    <div className="@container/inboxwin flex h-full min-h-0 bg-card text-card-foreground">
+      <section
+        className={cn(
+          'relative flex min-h-0 min-w-0 flex-col',
+          selected ? cn('shrink-0 border-r border-border/60', SINGLE_COLUMN_HIDE) : 'flex-1',
+        )}
+        style={selected ? { width: listWidth, maxWidth: '62%' } : undefined}
+      >
+        <div className={PANE_HEADER}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  'relative -ml-1 flex h-6 items-center gap-1 rounded-md px-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted/70',
+                  FOCUS_RING,
+                )}
+              >
+                <span>{unreadOnly ? 'Unread' : 'All'}</span>
+                <ChevronDown className="size-3.5 text-muted-foreground" />
+                {unreadCount > 0 && !unreadOnly && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-0 top-0 size-1.5 rounded-full bg-primary ring-2 ring-card"
+                  />
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuRadioGroup
+                value={unreadOnly ? 'unread' : 'all'}
+                onValueChange={value => setUnreadOnly(value === 'unread')}
+              >
+                <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="unread">
+                  Unread
+                  {unreadCount > 0 && (
+                    <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <div className="flex-1" />
+
           <Button
             type="button"
             variant="ghost"
@@ -137,28 +203,53 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           </Button>
         </div>
 
-        <InboxFilterTabs filter={filter} counts={tabCounts} onChange={setFilter} />
-      </header>
-
-      <div className="flex min-h-0 flex-1">
         <InboxList
-          rows={rows}
-          filter={filter}
+          rows={visibleRows}
+          unreadOnly={unreadOnly}
           loading={loading}
           selectedKey={selectedKey}
-          narrow={!!selected}
           onSelect={handleSelect}
+          onMarkRead={markRead}
+          onOpenSession={onOpenSession}
         />
+
+        {/* An invisible 12px grab strip whose hairline only appears under the
+            pointer — the divider is the pane border, not this. */}
         {selected && (
-          <InboxDetail
-            group={selected}
-            now={now}
-            onClose={() => setSelectedKey(null)}
-            onOpenSession={onOpenSession}
-            onResolveBlocker={resolveBlocker}
-          />
+          <button
+            type="button"
+            aria-label="Resize inbox list"
+            title="Drag to resize. Double-click to reset."
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeEnd}
+            onDoubleClick={resetWidth}
+            className={cn(
+              'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
+              SINGLE_COLUMN_HIDE,
+              FOCUS_RING,
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
+            />
+          </button>
         )}
-      </div>
+      </section>
+
+      {selected && (
+        <InboxDetail
+          group={selected}
+          now={now}
+          /* The back arrow exists only when the detail has replaced the list. */
+          backButtonClass="hidden @max-2xl/inboxwin:inline-flex"
+          onClose={() => setSelectedKey(null)}
+          onOpenSession={onOpenSession}
+          onResolveBlocker={resolveBlocker}
+        />
+      )}
     </div>
   );
 });
@@ -167,21 +258,24 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
 
 interface InboxListProps {
   rows: InboxRowModel[];
-  filter: InboxFilter;
+  unreadOnly: boolean;
   loading: boolean;
   selectedKey: string | null;
-  narrow: boolean;
   onSelect: (key: string) => void;
+  onMarkRead: (key: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 /** Pure list pane — takes pre-formatted rows so it never reads the clock. */
-export function InboxList({ rows, filter, loading, selectedKey, narrow, onSelect }: InboxListProps) {
-  const blockers = rows.filter(row => row.group.category === 'blocker');
-  const rest = rows.filter(row => row.group.category !== 'blocker');
-  // Two sections only when there is genuinely a boundary to draw. A lone
-  // "Needs you" heading over the whole list would be noise.
-  const sectioned = blockers.length > 0 && rest.length > 0;
-
+export function InboxList({
+  rows,
+  unreadOnly,
+  loading,
+  selectedKey,
+  onSelect,
+  onMarkRead,
+  onOpenSession,
+}: InboxListProps) {
   // Arrow keys walk the rows; the rows are real buttons, so Enter/Space already
   // open them and no extra key handling is needed.
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -200,80 +294,55 @@ export function InboxList({ rows, filter, loading, selectedKey, narrow, onSelect
 
   if (loading && rows.length === 0) {
     return (
-      <div className={cn('min-w-0', narrow ? LIST_NARROW_CLASS : 'flex-1')}>
-        <Empty className="h-full border-0">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <Spinner />
-            </EmptyMedia>
-            <EmptyTitle>Collecting what needs you</EmptyTitle>
-          </EmptyHeader>
-        </Empty>
+      <div className="min-h-0 flex-1" data-inbox-skeleton="">
+        {[0, 1, 2, 3].map(index => (
+          <div key={index} className={cn('flex items-start gap-2.5', ROW_PADDING)}>
+            <Skeleton className="size-8 shrink-0 rounded-full" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="ml-auto h-3 w-10" />
+              </div>
+              <Skeleton className="mt-1.5 h-2.5 w-16" />
+              <Skeleton className="mt-2 h-3 w-full" />
+              <Skeleton className="mt-1 h-3 w-3/5" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
 
   if (rows.length === 0) {
-    const empty = inboxEmptyState(filter);
+    // Two lines of plain text, centred. No illustration, no icon, no CTA — an
+    // empty inbox is good news and does not need decorating.
+    const empty = inboxEmptyState(unreadOnly);
     return (
-      <div className={cn('min-w-0', narrow ? LIST_NARROW_CLASS : 'flex-1')}>
-        <Empty className="h-full border-0">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              {filter === 'blocker' ? <Hand /> : <Inbox />}
-            </EmptyMedia>
-            <EmptyTitle>{empty.title}</EmptyTitle>
-            <EmptyDescription className="text-xs/relaxed">{empty.description}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+        <div className="max-w-[16rem]">
+          <p className="text-[13px] font-medium text-foreground">{empty.title}</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{empty.description}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <ScrollArea
-      className={cn('@container/inbox h-full min-w-0', narrow ? LIST_NARROW_CLASS : 'flex-1')}
-    >
-      {/* No gaps, no padding, no rounded row cards — rows butt onto a hairline
-          rule so the columns read as one continuous table. */}
-      <div className="flex flex-col" onKeyDown={handleKeyDown}>
-        {sectioned && <SectionHeader label="Needs you" count={blockers.length} />}
-        {blockers.map(row => (
+    <ScrollArea className="min-h-0 flex-1">
+      {/* One flat stream, newest first, blockers pinned above it. Nothing is
+          drawn between rows — see InboxRow. */}
+      <div className="flex flex-col pb-2" onKeyDown={handleKeyDown}>
+        {rows.map(row => (
           <InboxRow
             key={row.group.key}
             row={row}
             selected={row.group.key === selectedKey}
             onSelect={onSelect}
-          />
-        ))}
-        {sectioned && <SectionHeader label="Everything else" count={rest.length} />}
-        {rest.map(row => (
-          <InboxRow
-            key={row.group.key}
-            row={row}
-            selected={row.group.key === selectedKey}
-            onSelect={onSelect}
+            onMarkRead={onMarkRead}
+            onOpenSession={onOpenSession}
           />
         ))}
       </div>
     </ScrollArea>
-  );
-}
-
-/**
- * Sticks to the top of the viewport while its section scrolls under it, so you
- * always know whether the row you are looking at is one that needs you.
- */
-function SectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div
-      className={cn(
-        'sticky top-0 z-10 flex h-[22px] items-center gap-1.5 border-b border-border/60 bg-card px-2',
-        MICRO_LABEL,
-      )}
-    >
-      <span>{label}</span>
-      <span className="font-normal tabular-nums text-muted-foreground/60">{count}</span>
-    </div>
   );
 }

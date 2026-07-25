@@ -1,4 +1,4 @@
-import type { InboxCategory, InboxFilter, InboxItem } from '../../types';
+import type { InboxCategory, InboxItem } from '../../types';
 
 // ---------------------------------------------------------------------------
 // Pure triage model. No React, no DOM, no clock reads — everything that decides
@@ -13,21 +13,6 @@ export const CATEGORY_RANK: Record<InboxCategory, number> = {
   mention: 2,
   comment: 3,
 };
-
-export const CATEGORY_LABEL: Record<InboxCategory, string> = {
-  blocker: 'Blocker',
-  error: 'Error',
-  mention: 'Mention',
-  comment: 'Comment',
-};
-
-export const INBOX_FILTERS: Array<{ id: InboxFilter; label: string }> = [
-  { id: 'all', label: 'All' },
-  { id: 'blocker', label: 'Blockers' },
-  { id: 'comment', label: 'Comments' },
-  { id: 'mention', label: 'Mentions' },
-  { id: 'error', label: 'Errors' },
-];
 
 /**
  * A burst of replies on one thread is ONE row. The group's identity is its
@@ -124,7 +109,8 @@ export function groupReadAt(group: InboxGroup): string {
 /**
  * Relative time, computed ONCE against a caller-supplied `now`. Deliberately
  * not live: nothing in this feature runs on a timer, so a label going stale is
- * the intended behaviour, not a bug.
+ * the intended behaviour, not a bug. Used for the thread tail in the detail
+ * pane, where "3h ago" reads better than a wall of repeated dates.
  */
 export function relativeTime(iso: string, now: number): string {
   const then = Date.parse(iso);
@@ -141,14 +127,36 @@ export function relativeTime(iso: string, now: number): string {
   return new Date(then).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-/** A group plus its already-formatted timestamp — see relativeTime on staleness. */
-export interface InboxRowModel {
-  group: InboxGroup;
-  when: string;
-}
+/**
+ * The LIST timestamp: absolute, never relative.
+ *
+ * "3h ago" is the one label in a no-timer app that is guaranteed to be a lie
+ * the moment the tab has been open a while. A clock time cannot go stale, so
+ * the list stays truthful without anything ticking:
+ *
+ *   today       -> "2:34 PM"
+ *   yesterday   -> "Yesterday"
+ *   this year   -> "Apr 2"
+ *   older       -> "Apr 2, 2025"
+ */
+export function inboxTimestamp(iso: string, now: number): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return '';
+  const date = new Date(then);
+  const today = new Date(now);
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  // Built by calendar date rather than by subtracting 86_400_000, so the day
+  // either side of a DST change is still one day.
+  const startOfYesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).getTime();
 
-export function buildInboxRows(groups: InboxGroup[], now: number): InboxRowModel[] {
-  return groups.map(group => ({ group, when: relativeTime(group.latestAt, now) }));
+  if (then >= startOfToday) {
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  if (then >= startOfYesterday) return 'Yesterday';
+  if (date.getFullYear() === today.getFullYear()) {
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export function absoluteTime(iso: string): string {
@@ -157,46 +165,118 @@ export function absoluteTime(iso: string): string {
   return new Date(parsed).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-/** Per-filter empty copy. "No items" tells the user nothing — these say what the tab is for. */
-export function inboxEmptyState(filter: InboxFilter): { title: string; description: string } {
-  switch (filter) {
+// --- Row copy -------------------------------------------------------------
+//
+// The server composes `title` differently per category (see buildInboxSql), so
+// the split between "what kind of thing is this" (line 2) and "what does it
+// say" (line 3) has to be made here rather than assumed.
+//
+//   blocker  title = the agent's question, body = a response that is usually ''
+//   comment  title = "Comment on <doc/task/path>",  body = the comment text
+//   mention  title = "<Sender>: <first 80 chars>",  body = the full message
+//   error    title = "<Agent> run failed",          body = the error text
+
+/** Line 2: what kind of thing this is, and what it is attached to. */
+export interface InboxTypeLabel {
+  text: string;
+  /** A neutral chip — the document/task/file the item hangs off, when known. */
+  chip: string | null;
+  /** Only the two "a human has to move this" categories carry a hue. */
+  tone: 'blocker' | 'error' | 'muted';
+}
+
+const COMMENT_PREFIX = 'Comment on ';
+
+export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
+  switch (group.category) {
     case 'blocker':
-      return {
-        title: 'Nothing is blocked',
-        description: 'When an agent hits a decision it cannot make, it raises a blocker and it lands here.',
-      };
-    case 'comment':
-      return {
-        title: 'No comments waiting',
-        description: 'Replies on documents, tasks and memory files show up here instead of scrolling past you.',
-      };
-    case 'mention':
-      return {
-        title: 'Nobody has @-mentioned you',
-        description: 'Mentions from teammates and agents collect here so they do not get lost in a channel.',
-      };
+      return { text: 'Needs your decision', chip: null, tone: 'blocker' };
     case 'error':
-      return {
-        title: 'No failed agent runs',
-        description: 'A job that errors out lands here with its thread, so you can restart it from the source.',
-      };
+      return { text: 'Run failed', chip: null, tone: 'error' };
+    case 'comment': {
+      // The server literally builds `'Comment on ' || <name>`, so this split is
+      // deterministic — but it falls back to the whole title if that ever stops
+      // being true, rather than rendering a mangled chip.
+      const target = group.title.startsWith(COMMENT_PREFIX)
+        ? group.title.slice(COMMENT_PREFIX.length).trim()
+        : '';
+      return target
+        ? { text: 'Comment on', chip: target, tone: 'muted' }
+        : { text: group.title || 'Comment', chip: null, tone: 'muted' };
+    }
     default:
-      return {
-        title: 'Inbox zero',
-        description: 'Blockers, comments, mentions and failed runs land here when something needs a human.',
-      };
+      return { text: 'Mentioned you', chip: null, tone: 'muted' };
   }
 }
 
-/** Per-tab counts for the filter rail. Blockers/errors count groups, not raw rows. */
-export function countByCategory(groups: InboxGroup[]): Record<InboxFilter, number> {
-  const counts: Record<InboxFilter, number> = {
-    all: groups.length,
-    blocker: 0,
-    comment: 0,
-    mention: 0,
-    error: 0,
-  };
-  for (const group of groups) counts[group.category] += 1;
-  return counts;
+/**
+ * Line 3. There is no separate subject line — the preview IS the subject, so
+ * whichever field actually carries the words wins.
+ */
+export function inboxPreview(group: InboxGroup): string {
+  if (group.category === 'blocker') return group.title.trim();
+  const body = group.body.trim();
+  if (body) return body;
+  if (group.category === 'mention') {
+    // "Jane: hey @you can you look at…" — the sender is already line 1.
+    const split = group.title.indexOf(': ');
+    if (split > 0) return group.title.slice(split + 2).trim();
+  }
+  return group.title.trim();
+}
+
+/** Line 1. Never blank — an unnamed row still has to say who it is from. */
+export function senderLabel(group: InboxGroup): string {
+  const name = group.actorName.trim();
+  if (name) return name;
+  return group.category === 'blocker' || group.category === 'error' ? 'An agent' : 'Someone';
+}
+
+/** Up to two initials for the avatar; '' when there is nothing usable to show. */
+export function senderInitials(label: string): string {
+  const words = label
+    .replace(/[^\p{L}\p{N}\s._-]+/gu, ' ')
+    .split(/[\s._-]+/)
+    .filter(Boolean);
+  if (words.length === 0) return '';
+  const letters = words.slice(0, 2).map(word => word[0]);
+  return letters.join('').toUpperCase();
+}
+
+/** A group plus everything the row needs, all resolved at data-load time. */
+export interface InboxRowModel {
+  group: InboxGroup;
+  /** Absolute — see inboxTimestamp. Never ticks. */
+  when: string;
+  label: InboxTypeLabel;
+  sender: string;
+  initials: string;
+  preview: string;
+}
+
+export function buildInboxRows(groups: InboxGroup[], now: number): InboxRowModel[] {
+  return groups.map(group => {
+    const sender = senderLabel(group);
+    return {
+      group,
+      when: inboxTimestamp(group.latestAt, now),
+      label: inboxTypeLabel(group),
+      sender,
+      initials: senderInitials(sender),
+      preview: inboxPreview(group),
+    };
+  });
+}
+
+/** Two lines of plain text. "No items" tells the user nothing; these say why. */
+export function inboxEmptyState(unreadOnly: boolean): { title: string; description: string } {
+  return unreadOnly
+    ? {
+        title: 'No unread messages',
+        description: 'Turn off the unread filter to see everything that has already been read.',
+      }
+    : {
+        title: 'Inbox zero',
+        description: 'Blockers, comments, mentions and failed runs land here when something needs a human.',
+      };
 }

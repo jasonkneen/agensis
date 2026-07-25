@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Activity,
   Brain,
@@ -70,6 +70,126 @@ function formatClock(iso: string): string {
 
 function formatFullDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+}
+
+// ---------------------------------------------------------------------------
+// Category filters.
+//
+// These moved here from the Inbox, where they were wrong: the inbox is a triage
+// queue you are trying to empty, and slicing it hid the very blockers it exists
+// to surface. Activity IS a feed — a chronological log you scan rather than
+// clear — so narrowing it to "just the task churn" or "just agent connections"
+// is exactly the right move.
+//
+// The Inbox's categories (Blockers / Comments / Mentions / Errors) do NOT exist
+// in activity_events, so they are deliberately NOT reproduced here:
+//   * blockers live in thread_items and never reach this table;
+//   * errors live in agent_jobs and never reach this table;
+//   * "mentions" would need the caller's derived @handle, which only the
+//     server's inbox query knows how to build.
+// Copying those labels across would have produced tabs that always read 0.
+// What Activity actually has is event_type, so these tabs are event_type
+// families — the honest mapping.
+// ---------------------------------------------------------------------------
+
+type ActivityFilter =
+  | 'all' | 'docs' | 'tasks' | 'messages' | 'comments' | 'agents' | 'memory' | 'people' | 'canvas';
+
+const ACTIVITY_FAMILY: Record<ActivityEventType, Exclude<ActivityFilter, 'all'>> = {
+  document_created: 'docs',
+  document_updated: 'docs',
+  document_deleted: 'docs',
+  task_created: 'tasks',
+  task_completed: 'tasks',
+  task_updated: 'tasks',
+  comment_created: 'comments',
+  chat_created: 'messages',
+  message_sent: 'messages',
+  memory_added: 'memory',
+  member_joined: 'people',
+  canvas_updated: 'canvas',
+  agent_connected: 'agents',
+  agent_disconnected: 'agents',
+};
+
+const ACTIVITY_FILTERS: Array<{ id: ActivityFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'docs', label: 'Docs' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'messages', label: 'Messages' },
+  { id: 'comments', label: 'Comments' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'people', label: 'People' },
+  { id: 'canvas', label: 'Canvas' },
+];
+
+function countByFamily(events: ActivityEvent[]): Record<ActivityFilter, number> {
+  const counts = ACTIVITY_FILTERS.reduce((acc, tab) => {
+    acc[tab.id] = 0;
+    return acc;
+  }, {} as Record<ActivityFilter, number>);
+  counts.all = events.length;
+  for (const event of events) {
+    const family = ACTIVITY_FAMILY[event.event_type];
+    if (family) counts[family] += 1;
+  }
+  return counts;
+}
+
+/**
+ * A segmented control, not a row of chips: one recessed track, one raised active
+ * segment, so the bar reads as "which slice of the log am I looking at" rather
+ * than as nine independent buttons.
+ *
+ * Filtering is client-side over the already-loaded page of events, so the counts
+ * are always truthful and the control never resizes underneath the pointer
+ * mid-click — which is exactly what the inbox version could not promise, because
+ * there the server returned only the requested slice.
+ */
+function ActivityFilterTabs({
+  tabs,
+  filter,
+  counts,
+  onChange,
+}: {
+  tabs: Array<{ id: ActivityFilter; label: string }>;
+  filter: ActivityFilter;
+  counts: Record<ActivityFilter, number>;
+  onChange: (filter: ActivityFilter) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Filter activity"
+      className={cn(
+        'flex min-w-0 items-center gap-0.5 overflow-x-auto rounded-lg bg-muted/70 p-0.5',
+        '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+      )}
+    >
+      {tabs.map(tab => {
+        const active = tab.id === filter;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            aria-pressed={active}
+            className={cn(
+              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[11px] font-medium transition-colors',
+              'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
+              active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {tab.label}
+            {counts[tab.id] > 0 && (
+              <span className="tabular-nums text-muted-foreground/70">{counts[tab.id]}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function groupByDay(events: ActivityEvent[]): Array<{ label: string; items: ActivityEvent[] }> {
@@ -160,6 +280,30 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
 
 export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading, workspaceId, currentUserId }: ActivityWindowContentProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ActivityFilter>('all');
+
+  const counts = useMemo(() => countByFamily(events), [events]);
+  // Only offer a tab for something that is actually in the log. A workspace that
+  // has never touched the canvas should not be shown a Canvas tab reading 0.
+  const tabs = useMemo(
+    () => ACTIVITY_FILTERS.filter(tab => tab.id === 'all' || counts[tab.id] > 0),
+    [counts],
+  );
+  // Derived, not stored: if the last event of a family scrolls out of the loaded
+  // page, its tab disappears and the view falls back to All rather than showing
+  // an empty log under a tab that no longer exists.
+  const activeFilter = tabs.some(tab => tab.id === filter) ? filter : 'all';
+
+  const filtered = useMemo(
+    () => (activeFilter === 'all'
+      ? events
+      : events.filter(event => ACTIVITY_FAMILY[event.event_type] === activeFilter)),
+    [events, activeFilter],
+  );
+  const days = useMemo(() => groupByDay(filtered), [filtered]);
+
+  // Resolved against the FULL set, so switching tabs never yanks away the entry
+  // you were reading in the detail pane.
   const selectedEvent = selectedId ? events.find(e => e.id === selectedId) ?? null : null;
 
   if (loading && events.length === 0) {
@@ -190,10 +334,22 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full min-h-0 flex-col">
+      {tabs.length > 1 && (
+        <div className="flex shrink-0 items-center border-b border-border/60 px-2 py-1.5">
+          <ActivityFilterTabs tabs={tabs} filter={activeFilter} counts={counts} onChange={setFilter} />
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
       <ScrollArea className={cn('h-full min-w-0', selectedEvent ? 'w-[46%] shrink-0 border-r' : 'flex-1')}>
         <div className="flex flex-col p-1.5">
-          {groupByDay(events).map(group => (
+          {days.length === 0 && (
+            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+              Nothing in this category yet.
+            </p>
+          )}
+          {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
                 <MarkerContent className="text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
@@ -275,6 +431,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           </ScrollArea>
         </div>
       )}
+      </div>
     </div>
   );
 });

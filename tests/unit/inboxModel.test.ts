@@ -1,10 +1,13 @@
 // Guards the triage model behind the inbox surface (src/components/inbox/).
 //
-// The two behaviours worth locking down are the ones that make the inbox usable
+// The behaviours worth locking down are the ones that make the inbox usable
 // while an agent is actively working:
 //   * a burst of replies on one thread collapses to ONE row, keyed by a stable
 //     conversation id (contextKey) — so a new arrival cannot move the selection;
-//   * blockers sort above everything else, however recent the rest is.
+//   * blockers sort above everything else, however recent the rest is;
+//   * the list renders as a FLAT stream — no section headers, no reply counts —
+//     and its timestamps are absolute, so nothing in this feature ever needs a
+//     timer to stay truthful.
 //
 // Written with createElement rather than JSX so it stays a .ts file and vitest's
 // existing `tests/unit/**/*.test.ts` include needs no config change.
@@ -15,10 +18,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { InboxCategory, InboxItem } from '../../src/types';
 import {
   buildInboxRows,
-  countByCategory,
   groupInboxItems,
   inboxEmptyState,
+  inboxPreview,
+  inboxTimestamp,
+  inboxTypeLabel,
   relativeTime,
+  senderInitials,
+  senderLabel,
 } from '../../src/components/inbox/inboxModel';
 import { InboxList } from '../../src/components/inbox/InboxWindowContent';
 
@@ -125,21 +132,6 @@ describe('groupInboxItems', () => {
   });
 });
 
-describe('countByCategory', () => {
-  it('counts groups per category, not raw rows', () => {
-    const groups = groupInboxItems([
-      item({ id: 'c1', createdAt: T(9), contextKey: 'thread:abc', category: 'comment' }),
-      item({ id: 'c2', createdAt: T(8), contextKey: 'thread:abc', category: 'comment' }),
-      item({ id: 'k1', createdAt: T(7), contextKey: 'blocker:1', category: 'blocker' }),
-    ]);
-    const counts = countByCategory(groups);
-    expect(counts.all).toBe(2);
-    expect(counts.comment).toBe(1);
-    expect(counts.blocker).toBe(1);
-    expect(counts.error).toBe(0);
-  });
-});
-
 describe('relativeTime', () => {
   const now = Date.parse('2026-01-01T12:00:00.000Z');
 
@@ -163,16 +155,88 @@ describe('relativeTime', () => {
   });
 });
 
+describe('inboxTimestamp', () => {
+  // Local-time construction throughout: these labels are what a human in this
+  // timezone would call these instants, which is the whole point of the function.
+  const now = new Date(2026, 3, 10, 14, 30, 0).getTime();
+
+  it('shows a clock time for today, so the label can never go stale', () => {
+    const label = inboxTimestamp(new Date(2026, 3, 10, 9, 5, 0).toISOString(), now);
+    expect(label).toMatch(/9[:.]05/);
+    expect(label).not.toMatch(/ago/);
+  });
+
+  it('names yesterday instead of dating it', () => {
+    expect(inboxTimestamp(new Date(2026, 3, 9, 23, 59, 0).toISOString(), now)).toBe('Yesterday');
+  });
+
+  it('drops the year within the current year and keeps it outside', () => {
+    expect(inboxTimestamp(new Date(2026, 2, 2, 12, 0, 0).toISOString(), now)).not.toMatch(/2026/);
+    expect(inboxTimestamp(new Date(2025, 2, 2, 12, 0, 0).toISOString(), now)).toMatch(/2025/);
+  });
+
+  it('returns empty string for an unparseable timestamp', () => {
+    expect(inboxTimestamp('not-a-date', now)).toBe('');
+  });
+});
+
+describe('row copy', () => {
+  const group = (overrides: Partial<InboxItem> & { id: string }) =>
+    groupInboxItems([item({ createdAt: T(1), ...overrides })])[0];
+
+  it('reads a blocker as its question, labelled as needing a decision', () => {
+    const blocker = group({ id: 'k1', category: 'blocker', title: 'Ship or wait?', body: '' });
+    expect(inboxTypeLabel(blocker)).toEqual({ text: 'Needs your decision', chip: null, tone: 'blocker' });
+    expect(inboxPreview(blocker)).toBe('Ship or wait?');
+  });
+
+  it('splits the server-composed comment title into a label and a neutral chip', () => {
+    const comment = group({
+      id: 'c1',
+      category: 'comment',
+      title: 'Comment on Design doc',
+      body: 'this heading is wrong',
+    });
+    expect(inboxTypeLabel(comment)).toEqual({ text: 'Comment on', chip: 'Design doc', tone: 'muted' });
+    expect(inboxPreview(comment)).toBe('this heading is wrong');
+  });
+
+  it('keeps a comment title whole when it does not carry the known prefix', () => {
+    const comment = group({ id: 'c2', category: 'comment', title: 'Something else entirely' });
+    expect(inboxTypeLabel(comment)).toEqual({ text: 'Something else entirely', chip: null, tone: 'muted' });
+  });
+
+  it('strips the duplicated sender prefix off a mention with no body', () => {
+    const mention = group({ id: 'm1', category: 'mention', title: 'Jane: look at @you', body: '' });
+    expect(inboxTypeLabel(mention).text).toBe('Mentioned you');
+    expect(inboxPreview(mention)).toBe('look at @you');
+  });
+
+  it('labels a failed run without repeating the agent name already on line 1', () => {
+    const failed = group({ id: 'e1', category: 'error', title: 'Scout run failed', body: 'exit 1' });
+    expect(inboxTypeLabel(failed)).toEqual({ text: 'Run failed', chip: null, tone: 'error' });
+    expect(inboxPreview(failed)).toBe('exit 1');
+  });
+
+  it('never leaves the sender blank, and takes at most two initials', () => {
+    expect(senderLabel(group({ id: 's1', category: 'blocker', actorName: '' }))).toBe('An agent');
+    expect(senderLabel(group({ id: 's2', category: 'comment', actorName: '' }))).toBe('Someone');
+    expect(senderLabel(group({ id: 's3', actorName: '  Ada Lovelace ' }))).toBe('Ada Lovelace');
+    expect(senderInitials('Ada Lovelace')).toBe('AL');
+    expect(senderInitials('scout')).toBe('S');
+    expect(senderInitials('agent-code-review')).toBe('AC');
+    expect(senderInitials('!!!')).toBe('');
+  });
+});
+
 describe('inboxEmptyState', () => {
-  it('says something useful per filter instead of "No items"', () => {
-    const filters = ['all', 'blocker', 'comment', 'mention', 'error'] as const;
-    const titles = filters.map(f => inboxEmptyState(f).title);
-    expect(new Set(titles).size).toBe(filters.length);
-    for (const filter of filters) {
-      const empty = inboxEmptyState(filter);
+  it('says something useful per mode instead of "No items"', () => {
+    for (const unreadOnly of [false, true]) {
+      const empty = inboxEmptyState(unreadOnly);
       expect(empty.title).not.toMatch(/^no items$/i);
       expect(empty.description.length).toBeGreaterThan(20);
     }
+    expect(inboxEmptyState(true).title).not.toBe(inboxEmptyState(false).title);
   });
 });
 
@@ -184,46 +248,59 @@ describe('InboxList rendering', () => {
     const rows = buildInboxRows(groupInboxItems(items), now);
     return renderToStaticMarkup(createElement(InboxList, {
       rows,
-      filter: 'all' as const,
+      unreadOnly: false,
       loading,
       selectedKey,
-      narrow: selectedKey !== null,
       onSelect: noop,
+      onMarkRead: noop,
     }));
   }
 
+  const mixed = () => [
+    item({ id: 'c1', createdAt: T(1), contextKey: 'thread:c', category: 'comment', title: 'Comment on Roadmap', body: 'Nice work' }),
+    item({ id: 'k1', createdAt: T(120), contextKey: 'blocker:1', category: 'blocker', title: 'Ship or wait?' }),
+  ];
+
   it('renders the blocker above the newer comment and labels it', () => {
-    const html = render([
-      item({ id: 'c1', createdAt: T(1), contextKey: 'thread:c', category: 'comment', title: 'Nice work' }),
-      item({ id: 'k1', createdAt: T(120), contextKey: 'blocker:1', category: 'blocker', title: 'Ship or wait?' }),
-    ]);
+    const html = render(mixed());
     expect(html.indexOf('Ship or wait?')).toBeGreaterThan(-1);
     expect(html.indexOf('Ship or wait?')).toBeLessThan(html.indexOf('Nice work'));
-    expect(html).toContain('Needs you');
-    expect(html).toContain('Everything else');
+    expect(html).toContain('Needs your decision');
   });
 
-  it('marks unread rows and collapses a burst into one row with a +N chip', () => {
+  it('is a flat stream — no section headers, no reply counts', () => {
+    const html = render(mixed());
+    expect(html).not.toContain('Everything else');
+    expect(html).not.toContain('>Needs you<');
+    expect(html).not.toMatch(/>\+\d+</);
+  });
+
+  it('marks a burst as ONE unread row led by the newest item', () => {
     const html = render([
-      item({ id: 'a1', createdAt: T(9), contextKey: 'thread:abc', title: 'Older doc reply', unread: true }),
-      item({ id: 'a2', createdAt: T(8), contextKey: 'thread:abc', title: 'Newest doc reply', unread: true }),
+      item({ id: 'a1', createdAt: T(9), contextKey: 'thread:abc', body: 'Older doc reply', unread: true }),
+      item({ id: 'a2', createdAt: T(8), contextKey: 'thread:abc', body: 'Newest doc reply', unread: true }),
     ]);
     // Two unread items, ONE unread marker — the burst is one row, not two.
     expect((html.match(/aria-label="Unread"/g) || []).length).toBe(1);
-    expect(html).toContain('+1');
     // The row leads with the newest item; the tail lives in the detail pane.
     expect(html).toContain('Newest doc reply');
     expect(html).not.toContain('Older doc reply');
   });
 
-  it('shows the per-filter empty copy when there is nothing to triage', () => {
-    const html = render([]);
-    expect(html).toContain(inboxEmptyState('all').title);
+  it('renders an absolute timestamp, never a relative one', () => {
+    const html = render([item({ id: 'a1', createdAt: T(200), contextKey: 'thread:abc', body: 'hi' })]);
+    expect(html).not.toMatch(/\d+[mhd] ago/);
+    expect(html).not.toContain('just now');
   });
 
-  it('shows a loading state instead of the empty state on first load', () => {
+  it('shows the empty copy when there is nothing to triage', () => {
+    const html = render([]);
+    expect(html).toContain(inboxEmptyState(false).title);
+  });
+
+  it('shows a skeleton instead of the empty state on first load', () => {
     const html = render([], null, true);
-    expect(html).toContain('Collecting what needs you');
-    expect(html).not.toContain(inboxEmptyState('all').title);
+    expect(html).toContain('data-inbox-skeleton');
+    expect(html).not.toContain(inboxEmptyState(false).title);
   });
 });

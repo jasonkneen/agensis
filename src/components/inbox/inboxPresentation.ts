@@ -5,15 +5,16 @@ import type { InboxCategory } from '../../types';
 // ---------------------------------------------------------------------------
 // Shared presentation constants for the inbox surface.
 //
-// The whole design rests on ONE idea: every row is a single line whose columns
-// land on the same vertical rules all the way down the list, so the eye can run
-// straight down "who / what / when" without re-reading a layout each time.
-// The column widths therefore live here — declared once — instead of being
-// re-typed per call site where they would inevitably drift apart.
+// The design rests on one idea, borrowed wholesale: a row is three lines of
+// text and a face. One 32px avatar column at a 10px gutter puts every line of
+// every row on the SAME left edge (12 + 32 + 10 = 54px), and nothing else
+// structural is drawn — no rules between rows, no gaps, no cards, no radii, no
+// shadows. Separation is done with whitespace and a ~3% background wash.
 //
-// Colour is deliberately scarce: category is carried by a MUTED glyph, and hue
-// is spent only where something is actually costing a human time (a blocker an
-// agent is stuck on, a run that failed). Everything else is foreground/muted.
+// Colour is spent in exactly three places: the unread dot, the amber
+// "needs your decision" label, and the red "run failed" label. Everything else
+// is foreground/muted, so a full list stays calm and the two rows that are
+// actually costing a human time are the only things that shout.
 // ---------------------------------------------------------------------------
 
 export const CATEGORY_ICON: Record<InboxCategory, ComponentType<{ className?: string }>> = {
@@ -34,27 +35,22 @@ export function categoryAccent(category: InboxCategory): string {
   return '';
 }
 
-/** Fixed-width row columns. Changing a width here moves the whole list together. */
-export const COL = {
-  /** Unread marker gutter — always rendered so the icons never shift. */
-  dot: 'flex w-1.5 shrink-0 items-center justify-center',
-  icon: 'size-3.5 shrink-0',
-  /**
-   * Who it came from. Widens with the pane (container query, not viewport) so
-   * the same component works at 40% width beside the reading pane and at full
-   * width on a phone — and drops out entirely once the pane is too narrow to
-   * hold a column, rather than pushing the title off the row.
-   */
-  actor: 'flex w-16 shrink-0 items-baseline gap-1 @max-xs/inbox:hidden @sm/inbox:w-24 @lg/inbox:w-32',
-  /** Right-aligned so every timestamp ends on one rule. */
-  time: 'w-[4.25rem] shrink-0 text-right tabular-nums',
-  /** Reserved even when empty — the hover affordance must not move the row. */
-  chevron: 'size-3.5 shrink-0',
-} as const;
+/**
+ * The row wash, derived from --foreground rather than --muted.
+ *
+ * This app ships six UI themes and in several of them --muted sits within 3% of
+ * --card, which would make hover and selection literally invisible. Mixing a few
+ * percent of --foreground into --card instead is self-correcting: it darkens in
+ * a light theme and lightens in a dark one, by the same perceptual amount, in
+ * every theme. Selected and hover are deliberately close — selection is also
+ * carried by the detail pane and by aria-current, so the list does not need to
+ * shout about it.
+ */
+export const ROW_WASH_HOVER = 'color-mix(in oklab, var(--card) 96%, var(--foreground))';
+export const ROW_WASH_SELECTED = 'color-mix(in oklab, var(--card) 91%, var(--foreground))';
 
-/** Row metrics. ~34px + hairline: roughly twice the density of a stacked card. */
-export const ROW_BASE =
-  'group/row relative flex h-[34px] w-full items-center gap-x-2 border-b border-border/60 px-2 text-left text-[13px] outline-none transition-colors last:border-b-0';
+/** Row metrics. ~90px: three text lines against a 32px face. */
+export const ROW_PADDING = 'px-3 py-3';
 
 /** Drawn inside the row so an adjacent row never clips it. */
 export const FOCUS_RING =
@@ -63,3 +59,15 @@ export const FOCUS_RING =
 /** Section headers and micro-labels — chrome, deliberately below row type size. */
 export const MICRO_LABEL =
   'text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground';
+
+/**
+ * The two panes' headers are the same band so they line up pixel-for-pixel
+ * across the divider — the single most noticeable thing about a two-pane inbox
+ * that has been built carelessly.
+ */
+export const PANE_HEADER =
+  'flex h-9 shrink-0 items-center gap-1.5 border-b border-border/60 px-2.5';
+
+/** Hover-pill buttons: 24px circles, quiet until the row is under the pointer. */
+export const PILL_BUTTON =
+  'flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5';
