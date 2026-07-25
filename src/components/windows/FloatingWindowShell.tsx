@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,9 @@ import {
 import { cn } from '@/lib/utils';
 import { WORKSPACE_BOTTOM_RESERVE, WORKSPACE_CHROME_GAP, WORKSPACE_PANEL_EDGE_INSET, WORKSPACE_TOP_RESERVE } from '../../lib/workspaceLayout';
 import { ALL_WINDOW_EDGES, computeFlushEdges, computeFullBleed, type WindowEdge } from '../../lib/windowBleed';
+// Shared with the commit path on purpose: the preview and the drop must agree
+// on what is splittable, or the preview promises a split that never lands.
+import { canSplitContainer } from '../../hooks/useWindows';
 
 const SNAP_THRESHOLD = 44;
 const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
@@ -27,6 +30,10 @@ const MOBILE_BOTTOM_RESERVE = WORKSPACE_BOTTOM_RESERVE;
 const MAXIMIZED_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
+// Visible channel between two tiled panes, in px. Split between the two
+// neighbours (half each), so this is the width of the finished seam — not the
+// amount each pane loses. Paint-time only; stored bounds stay flush.
+const GROUP_GUTTER = 6;
 
 type WindowBounds = { x: number; y: number; width: number; height: number };
 type WindowUpdateOptions = { interaction?: 'drag' | 'resize' | 'programmatic' };
@@ -130,11 +137,23 @@ function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow):
   }, shell);
 }
 
-function syncShellBounds(shell: HTMLElement, bounds: WindowBounds) {
-  shell.style.left = `${bounds.x}px`;
-  shell.style.top = `${bounds.y}px`;
-  shell.style.width = `${bounds.width}px`;
-  shell.style.height = `${bounds.height}px`;
+/**
+ * The difference between a window's STORED box and its PAINTED box: full-bleed
+ * edges extend outward into the 8px chrome gap, tiled edges pull inward by half
+ * the group gutter. Both are presentation-only — `win` never sees them.
+ */
+type PaintOffsets = { dx: number; dy: number; dw: number; dh: number };
+const NO_PAINT_OFFSETS: PaintOffsets = { dx: 0, dy: 0, dw: 0, dh: 0 };
+
+function syncShellBounds(shell: HTMLElement, bounds: WindowBounds, offsets: PaintOffsets = NO_PAINT_OFFSETS) {
+  // Every caller MUST pass the offsets. This writes inline styles directly, and
+  // React only rewrites an inline style key when its value changes between
+  // renders — so a bare write here permanently wins over shellStyle and repaints
+  // the window at its raw stored bounds, wiping the bleed and the gutter.
+  shell.style.left = `${bounds.x + offsets.dx}px`;
+  shell.style.top = `${bounds.y + offsets.dy}px`;
+  shell.style.width = `${bounds.width + offsets.dw}px`;
+  shell.style.height = `${bounds.height + offsets.dh}px`;
 }
 
 // Other windows tiled into the same group, so a drag can move them in lockstep
@@ -185,6 +204,18 @@ function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: ViewportR
   return Array.from(document.querySelectorAll<HTMLElement>('[data-floating-window]'))
     .filter(element => element.dataset.floatingWindowId !== currentId)
     .map(element => {
+      // Prefer the window's LOGICAL bounds over its painted rect. The painted
+      // rect is not the window: it is inflated by up to 8px per full-bleed edge
+      // and deflated by the group gutter, and during a drag it also carries a
+      // translate3d. Snapping against it made the shell's preview disagree with
+      // useWindows' stored-bounds check (12px tolerance), so a drop could
+      // silently fail to split and leave the window floating on top of its
+      // target with no group and no feedback. The rect stays as a fallback for
+      // anything that has not painted a data-window-bounds yet.
+      const logical = element.dataset.windowBounds?.split(',').map(Number);
+      if (logical?.length === 4 && logical.every(Number.isFinite)) {
+        return { x: logical[0], y: logical[1], width: logical[2], height: logical[3] };
+      }
       const rect = element.getBoundingClientRect();
       return {
         x: rect.left - viewportRect.left,
@@ -237,7 +268,13 @@ function computeSnapPreview(
   for (const bounds of snapshot.otherBounds) {
     if (!pointerInsideBounds(pointerX, pointerY, bounds)) continue;
     const edge = nearestEdge(pointerX, pointerY, bounds);
-    if (edge) return clampWindowBounds(splitBounds(bounds, edge), shell, viewport);
+    // Mirror useWindows.canSplitContainer: a target too small to hold two
+    // minimum-size tiles must not draw a preview, or we promise a split that
+    // the commit path will refuse — the drop then leaves the window floating
+    // on top of the target with no group and no feedback.
+    if (edge && canSplitContainer(bounds, edge)) {
+      return clampWindowBounds(splitBounds(bounds, edge), shell, viewport);
+    }
   }
 
   return null;
@@ -282,6 +319,15 @@ interface FloatingWindowShellProps {
   onFocus: (id: string) => void;
   onUpdate: (id: string, updates: Partial<FloatingWindow>, options?: WindowUpdateOptions) => void;
   onMinimize: (id: string) => void;
+  /**
+   * A tiled group is presented as ONE composite window: the host pane owns the
+   * whole title-bar control cluster and acts on every member, and member panes
+   * render their label only. `null`/undefined means the window is not grouped
+   * and behaves exactly as before.
+   */
+  groupRole?: 'host' | 'member' | null;
+  /** Minimise every member of a group at once (host control cluster only). */
+  onMinimizeGroup?: (groupId: string) => void;
   onShare?: () => void;
   presenceMode?: PresenceVisibilityMode;
   currentUserId?: string;
@@ -308,6 +354,8 @@ export function FloatingWindowShell({
   onFocus,
   onUpdate,
   onMinimize,
+  groupRole,
+  onMinimizeGroup,
   onShare,
   presenceMode = 'visible',
   currentUserId,
@@ -335,11 +383,71 @@ export function FloatingWindowShell({
   // and skip the floating bounds-sync + drag/resize paths (single-window mode).
   const fullViewport = isMaximized || isMobile || isFullExpand;
 
+  // Painted-box geometry. Hoisted above the drag/resize callbacks on purpose:
+  // syncShellBounds writes straight to element.style and must apply the SAME
+  // bleed/gutter offsets as shellStyle, or every drag, drop and resize repaints
+  // the window at its raw stored bounds and the gutter flickers away.
+  const displayBounds = getCurrentWindowBounds(shellRef.current, win);
+  const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current);
+
+  // Full bleed: a window that fills the whole panel (maximized, or a tiled group
+  // whose tiles collectively fill it) drops its corners + chrome gap and paints
+  // edge-to-edge into the main panel. Its shell extends by the chrome gap on each
+  // boundary-flush edge to cover the padding; <main> un-clips (see App.tsx) so the
+  // extension reaches the true panel edge. A maximized window fills the viewport
+  // by construction, so use all four edges; otherwise measure which edges are flush.
+  const viewportSize = getShellViewport(shellRef.current);
+  const flushEdges = fullViewport
+    ? new Set<WindowEdge>(ALL_WINDOW_EDGES)
+    : computeFlushEdges(displayBounds, viewportSize);
+  const { isFullBleed, bleedEdges, squareCorners } = computeFullBleed({
+    isMobile,
+    isMaximized: isMaximized || isFullExpand,
+    adjacentEdges,
+    flushEdges,
+  });
+  const bleedLeft = bleedEdges.has('left') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedRight = bleedEdges.has('right') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedTop = bleedEdges.has('top') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedBottom = bleedEdges.has('bottom') ? WORKSPACE_CHROME_GAP : 0;
+
+  const isFullSurface = isFullView || isFullBleed;
+
+  // Group gutter: tiled panes partition their container EXACTLY (no gap in the
+  // stored bounds — the snapping maths depends on that), so the visible seam is
+  // produced purely at paint time by pulling each pane in by half a gutter on
+  // every edge it shares with a sibling. Two neighbours each give up half, so
+  // the seam reads as one GROUP_GUTTER-wide channel with the workspace showing
+  // through. Never write this back into `win` — `data-window-bounds` below
+  // publishes the un-inset geometry precisely so the inset cannot feed back
+  // into the next split and shrink the tiles a little more each time.
+  const gutterInset = (edge: WindowEdge) => (
+    !isFullSurface && adjacentEdges?.has(edge) ? GROUP_GUTTER / 2 : 0
+  );
+  const gutterLeft = gutterInset('left');
+  const gutterRight = gutterInset('right');
+  const gutterTop = gutterInset('top');
+  const gutterBottom = gutterInset('bottom');
+
+  // Single source of truth for painted-vs-stored, consumed by BOTH shellStyle
+  // (the React render) and syncShellBounds (the imperative drag/resize writes).
+  // Memoised on the eight numbers rather than rebuilt per render: the drag and
+  // resize callbacks below list it as a dependency, and a fresh object every
+  // render would recreate all of them every render. Stale offsets are not
+  // cosmetic — a callback holding the pre-grouping value would paint the window
+  // at the wrong box for the whole gesture right after it joins a group.
+  const paintOffsets = useMemo<PaintOffsets>(() => ({
+    dx: -bleedLeft + gutterLeft,
+    dy: -bleedTop + gutterTop,
+    dw: bleedLeft + bleedRight - gutterLeft - gutterRight,
+    dh: bleedTop + bleedBottom - gutterTop - gutterBottom,
+  }), [bleedLeft, bleedRight, bleedTop, bleedBottom, gutterLeft, gutterRight, gutterTop, gutterBottom]);
+
   useEffect(() => {
     const syncBounds = () => {
       const shell = shellRef.current;
       if (!shell || fullViewport || isDragging || isResizing) return;
-      syncShellBounds(shell, getCurrentWindowBounds(shell, win));
+      syncShellBounds(shell, getCurrentWindowBounds(shell, win), paintOffsets);
     };
 
     syncBounds();
@@ -352,7 +460,7 @@ export function FloatingWindowShell({
     const observer = new ResizeObserver(syncBounds);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [win, fullViewport, isDragging, isResizing]);
+  }, [win, fullViewport, isDragging, isResizing, paintOffsets]);
 
   const handleDragStart = useCallback((e: React.PointerEvent) => {
     if (!canControl || isMobile || isFullExpand) return;
@@ -363,7 +471,7 @@ export function FloatingWindowShell({
       ? restoreBoundsForDrag(e.clientX, e.clientY, shellRef.current, win)
       : getCurrentWindowBounds(shellRef.current, win);
     if (shellRef.current) {
-      syncShellBounds(shellRef.current, startBounds);
+      syncShellBounds(shellRef.current, startBounds, paintOffsets);
     }
     dragRef.current = {
       startX: e.clientX,
@@ -471,7 +579,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand]);
+  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand, paintOffsets]);
 
   const handleResizeStart = useCallback((e: React.PointerEvent) => {
     if (!canControl || isMaximized || isMobile || isFullExpand) return;
@@ -480,7 +588,7 @@ export function FloatingWindowShell({
     onFocus(win.id);
     const startBounds = getCurrentWindowBounds(shellRef.current, win);
     if (shellRef.current) {
-      syncShellBounds(shellRef.current, startBounds);
+      syncShellBounds(shellRef.current, startBounds, paintOffsets);
     }
     resizeRef.current = {
       startX: e.clientX,
@@ -503,7 +611,7 @@ export function FloatingWindowShell({
         width: resizeRef.current.winW + dx,
         height: resizeRef.current.winH + dy,
       }, shellRef.current);
-      syncShellBounds(shellRef.current, next);
+      syncShellBounds(shellRef.current, next, paintOffsets);
     };
 
     const onUp = (ev: PointerEvent) => {
@@ -517,7 +625,7 @@ export function FloatingWindowShell({
           height: resizeRef.current.winH + dy,
         }, shellRef.current);
         if (shellRef.current) {
-          syncShellBounds(shellRef.current, next);
+          syncShellBounds(shellRef.current, next, paintOffsets);
         }
         onUpdate(win.id, { ...next, restoreBounds: next }, { interaction: 'resize' });
       }
@@ -530,7 +638,7 @@ export function FloatingWindowShell({
 
     const onCancel = () => {
       if (shellRef.current) {
-        syncShellBounds(shellRef.current, startBounds);
+        syncShellBounds(shellRef.current, startBounds, paintOffsets);
       }
       resizeRef.current = null;
       setIsResizing(false);
@@ -542,7 +650,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand]);
+  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand, paintOffsets]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
@@ -576,30 +684,6 @@ export function FloatingWindowShell({
   const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
-  const displayBounds = getCurrentWindowBounds(shellRef.current, win);
-  const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current);
-
-  // Full bleed: a window that fills the whole panel (maximized, or a tiled group
-  // whose tiles collectively fill it) drops its corners + chrome gap and paints
-  // edge-to-edge into the main panel. Its shell extends by the chrome gap on each
-  // boundary-flush edge to cover the padding; <main> un-clips (see App.tsx) so the
-  // extension reaches the true panel edge. A maximized window fills the viewport
-  // by construction, so use all four edges; otherwise measure which edges are flush.
-  const viewportSize = getShellViewport(shellRef.current);
-  const flushEdges = fullViewport
-    ? new Set<WindowEdge>(ALL_WINDOW_EDGES)
-    : computeFlushEdges(displayBounds, viewportSize);
-  const { isFullBleed, bleedEdges, squareCorners } = computeFullBleed({
-    isMobile,
-    isMaximized: isMaximized || isFullExpand,
-    adjacentEdges,
-    flushEdges,
-  });
-  const bleedLeft = bleedEdges.has('left') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedRight = bleedEdges.has('right') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedTop = bleedEdges.has('top') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedBottom = bleedEdges.has('bottom') ? WORKSPACE_CHROME_GAP : 0;
-  const isFullSurface = isFullView || isFullBleed;
 
   const shellStyle: React.CSSProperties = fullViewport
     ? {
@@ -616,10 +700,10 @@ export function FloatingWindowShell({
     }
     : {
       position: 'absolute',
-      left: displayBounds.x - bleedLeft,
-      top: displayBounds.y - bleedTop,
-      width: displayBounds.width + bleedLeft + bleedRight,
-      height: displayBounds.height + bleedTop + bleedBottom,
+      left: displayBounds.x + paintOffsets.dx,
+      top: displayBounds.y + paintOffsets.dy,
+      width: displayBounds.width + paintOffsets.dw,
+      height: displayBounds.height + paintOffsets.dh,
       zIndex: win.zIndex,
       opacity: isDimmed ? dimmedOpacity : 1,
       filter: isDimmed ? 'saturate(0.55)' : undefined,
@@ -634,16 +718,16 @@ export function FloatingWindowShell({
   // "corners are square again" bug. Classes emit the radius into the CSS layer
   // where it's cascade-normal and purge-proof. Unlisted corners stay square.
   // Full-bleed windows square every corner (they fill the panel edge-to-edge).
-  const cornerClass = (() => {
-    if (squareCorners) return '';
-    if (!adjacentEdges || adjacentEdges.size === 0) return 'rounded-xl';
-    const corners: string[] = [];
-    if (!adjacentEdges.has('left') && !adjacentEdges.has('top')) corners.push('rounded-tl-xl');
-    if (!adjacentEdges.has('right') && !adjacentEdges.has('top')) corners.push('rounded-tr-xl');
-    if (!adjacentEdges.has('left') && !adjacentEdges.has('bottom')) corners.push('rounded-bl-xl');
-    if (!adjacentEdges.has('right') && !adjacentEdges.has('bottom')) corners.push('rounded-br-xl');
-    return corners.join(' ');
-  })();
+  // Tiled panes now keep ALL FOUR corners rounded. Squaring the shared edges
+  // was an attempt to weld two flush panes into one surface, but the outer
+  // wrapper and the inner surface carry the radius on different boxes (the
+  // wrapper draws the elevation shadow and, under neo, a real 2px border), so a
+  // squared corner left a square shadow/border "ear" poking out past the
+  // rounded glass — the chrome artifact at every seam. With GROUP_GUTTER the
+  // panes no longer touch, so there is nothing to weld: each pane is a plain
+  // rounded card and the gap itself shows the join. Full-bleed windows still
+  // square everything, because they genuinely do reach the panel edge.
+  const cornerClass = squareCorners ? '' : 'rounded-xl';
 
   return (
     <>
@@ -664,6 +748,10 @@ export function FloatingWindowShell({
         data-floating-window
         data-floating-window-id={win.id}
         data-window-group={win.groupId || undefined}
+        // The window's LOGICAL box, before bleed inflation and before the group
+        // gutter. getOtherWindowBounds reads this instead of measuring, so
+        // snapping always works against the same numbers useWindows stores.
+        data-window-bounds={`${Math.round(displayBounds.x)},${Math.round(displayBounds.y)},${Math.round(displayBounds.width)},${Math.round(displayBounds.height)}`}
         data-window-view-mode={isFullSurface ? 'full' : 'floating'}
         onPointerDown={() => onFocus(win.id)}
         onDragOver={e => e.stopPropagation()}
@@ -711,6 +799,10 @@ export function FloatingWindowShell({
               <span className="truncate text-xs font-medium">{win.title}</span>
             </div>
 
+            {/* A grouped pane that is not the host shows its label and nothing
+                else — the group is one composite window and the host bar owns
+                every control. Ungrouping is still reachable from the dock. */}
+            {groupRole !== 'member' && (
             <div className="flex shrink-0 flex-nowrap items-center gap-1">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -780,9 +872,15 @@ export function FloatingWindowShell({
                 type="button"
                 variant="outline"
                 size="icon-xs"
-                onClick={() => onMinimize(win.id)}
+                onClick={() => {
+                  // Minimising the host minimises the whole group — the panes
+                  // are one window, so leaving orphans behind would strand
+                  // members whose own title bars no longer have any controls.
+                  if (groupRole === 'host' && win.groupId && onMinimizeGroup) onMinimizeGroup(win.groupId);
+                  else onMinimize(win.id);
+                }}
                 disabled={!canControl}
-                aria-label="Minimize"
+                aria-label={groupRole === 'host' ? 'Minimize group' : 'Minimize'}
               >
                 <Minus />
               </Button>
@@ -824,6 +922,7 @@ export function FloatingWindowShell({
                 <X />
               </Button>
             </div>
+            )}
           </div>
 
           <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>

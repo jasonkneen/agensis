@@ -8,6 +8,7 @@ import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
+import { computeGroupRole } from './lib/windowGroups';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
@@ -1923,6 +1924,7 @@ function AppContent() {
                   onFocusWindow={focusWindow}
                   onUpdateWindow={updateWindow}
                   onMinimizeWindow={minimizeWindow}
+                  onMinimizeWindowGroup={minimizeWindowGroup}
                   onShareWindow={handleShareWindow}
                   onSendMessage={wrappedSendMessage}
                   onSetActiveSession={setActiveSession}
@@ -2218,6 +2220,7 @@ function CanvasLayerScene({
   onFocusWindow,
   onUpdateWindow,
   onMinimizeWindow,
+  onMinimizeWindowGroup,
   onShareWindow,
   onSendMessage,
   onSetActiveSession,
@@ -2306,6 +2309,7 @@ function CanvasLayerScene({
   onFocusWindow: (winId: string) => void;
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimizeWindow: (id: string) => void;
+  onMinimizeWindowGroup: (groupId: string) => void;
   onShareWindow: (title: string) => void;
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
   onSetActiveSession: (session: ChatSession) => void;
@@ -2349,6 +2353,11 @@ function CanvasLayerScene({
     [windows],
   );
 
+  const groupRoleByWindowId = useMemo(
+    () => new Map(windows.map(w => [w.id, computeGroupRole(w, windows)])),
+    [windows],
+  );
+
   // Identical for every chat window — build once instead of per-window in the map.
   const contextControlsElement = useMemo(() => (
     <KnowledgeContextControl
@@ -2381,6 +2390,7 @@ function CanvasLayerScene({
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
         const adjacentEdges = adjacencyByWindowId.get(win.id);
+        const groupRole = groupRoleByWindowId.get(win.id);
 
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
@@ -2390,6 +2400,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2503,6 +2515,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2544,6 +2558,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2580,6 +2596,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2610,6 +2628,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2652,6 +2672,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2683,6 +2705,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2724,6 +2748,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2757,6 +2783,8 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}

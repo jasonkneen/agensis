@@ -181,6 +181,21 @@ function getVisibleBounds(win: FloatingWindow): WindowBounds {
   });
 }
 
+// A container can only be split if BOTH resulting tiles clear the minimum
+// window size. Without this guard the two halves are floored independently —
+// getSplitTile floors the dragged half at MIN_WINDOW_WIDTH, and
+// clampToViewport floors the complementary half at the same minimum — so a
+// container narrower than 2 × MIN produces two tiles that together exceed it
+// and visibly OVERLAP, while still being handed a shared groupId. A 500px-wide
+// target used to yield two 320px tiles: a 140px overlap the UI treated as a
+// clean tiled pair. Refusing the split is the honest outcome; there is no
+// arrangement of a 500px box into two 320px halves.
+export function canSplitContainer(container: WindowBounds, edge: TileEdge): boolean {
+  return edge === 'left' || edge === 'right'
+    ? Math.round(container.width) >= MIN_WINDOW_WIDTH * 2
+    : Math.round(container.height) >= MIN_WINDOW_HEIGHT * 2;
+}
+
 export function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
   const fullWidth = Math.round(container.width);
   const fullHeight = Math.round(container.height);
@@ -287,7 +302,15 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
   if (workspaceEdge) {
     const partner = visiblePartners[0];
     if (!partner) return windows;
-    const partnerBounds = clampToViewport(getComplementaryTile(viewportBounds, workspaceEdge));
+    if (!canSplitContainer(viewportBounds, workspaceEdge)) return windows;
+    // NOT clampToViewport: the complementary tile is by construction inside
+    // `container`, which is already on-screen, so clamping can only do harm.
+    // It used to do exactly that twice over — flooring the tile's width back
+    // up to MIN_WINDOW_WIDTH (creating the overlap canSplitContainer now
+    // prevents), and shrinking its height by WORKSPACE_BOTTOM_RESERVE, which
+    // the shell does not subtract. That second mismatch is why a snapped pair
+    // landed with bottom edges 56px out of line.
+    const partnerBounds = getComplementaryTile(viewportBounds, workspaceEdge);
     const groupId = partner.groupId || active.groupId || generateGroupId();
     return cleanupSoloGroups(windows.map(w => {
       if (w.id === partner.id) {
@@ -302,12 +325,15 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
     .map(partner => {
       const container = getVisibleBounds(partner);
       const edge = getTileEdge(activeBounds, container);
-      return edge ? { partner, container, edge } : null;
+      // A target too small to hold two minimum-size tiles is not a split
+      // target at all — pairing with it produced overlapping windows.
+      if (!edge || !canSplitContainer(container, edge)) return null;
+      return { partner, container, edge };
     })
     .find(Boolean);
   if (!splitTarget) return windows;
 
-  const partnerBounds = clampToViewport(getComplementaryTile(splitTarget.container, splitTarget.edge));
+  const partnerBounds = getComplementaryTile(splitTarget.container, splitTarget.edge);
   const groupId = splitTarget.partner.groupId || active.groupId || generateGroupId();
   return cleanupSoloGroups(windows.map(w => {
     if (w.id === splitTarget.partner.id) {
