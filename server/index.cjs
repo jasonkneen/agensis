@@ -3235,16 +3235,28 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
 
    const taskId = config.sourceTaskId ? config.sourceTaskId(row) : null;
    if (taskId) {
+    // The same human action also writes assignee_id, which now dispatches on its
+    // own — claim the pair so the agent runs ONCE. The window is short (seconds),
+    // so a genuine second @mention comment still wakes the agent.
+    if (!claimTaskDispatch(String(taskId), String(agent.id), TASK_MENTION_CLAIM_MS)) continue;
     // Assign the task to the mentioned agent and move it into progress (never
     // clobbering a started/done/cancelled status), then run the agent inside
     // the task's own subthread so its reply mirrors back as a task comment.
     try {
-     const cur = await getDb().unsafe('select status from tasks where id = $1 limit 1', [String(taskId)]);
+     const cur = await getDb().unsafe('select status, source_type from tasks where id = $1 limit 1', [String(taskId)]);
      const nextStatus = taskStatusOnDispatch(cur[0]?.status || 'todo');
-     const taskRows = await getDb().unsafe(
-      'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
-      [String(agent.id), nextStatus, String(taskId)],
-     );
+     // Record the chat this task is now being worked in (see
+     // TASK_SOURCE_LINK_OVERWRITABLE) so the task can offer "Open chat".
+     const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(cur[0]?.source_type || ''));
+     const taskRows = stampSource
+      ? await getDb().unsafe(
+       "update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3, updated_at = now() where id = $4 returning *",
+       [String(agent.id), nextStatus, String(session.id), String(taskId)],
+      )
+      : await getDb().unsafe(
+       'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
+       [String(agent.id), nextStatus, String(taskId)],
+      );
      if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
     } catch (error) {
      console.error('assign task on mention failed', error);
@@ -3270,6 +3282,126 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
   } catch (error) {
    console.error(`comment mention dispatch failed for @${handle}`, error);
   }
+ }
+}
+
+// One human action can reach dispatch twice: the task UI posts a comment that
+// @mentions an agent AND writes assignee_id, milliseconds apart. Each dispatch
+// path CLAIMS the (task, agent) pair first, so the second one is a no-op instead
+// of a second agent run (and a second bill). Process-local, like the other
+// in-memory maps here.
+const recentTaskDispatches = new Map(); // `${taskId}:${agentId}` -> ms
+const TASK_ASSIGN_CLAIM_MS = 15_000;
+const TASK_MENTION_CLAIM_MS = 5_000;
+function claimTaskDispatch(taskId, agentId, windowMs) {
+ const now = Date.now();
+ for (const [key, at] of recentTaskDispatches) {
+  if (now - at > TASK_ASSIGN_CLAIM_MS) recentTaskDispatches.delete(key);
+ }
+ const key = `${taskId}:${agentId}`;
+ const last = recentTaskDispatches.get(key);
+ if (last && (now - last) < windowMs) return false;
+ recentTaskDispatches.set(key, now);
+ return true;
+}
+
+// source_type/source_id are the task's PROVENANCE, and source_id's meaning
+// depends on source_type ('ai' stores the authoring agent's id, 'canvas' the
+// canvas object's). Dispatch only claims the pair when there is no real
+// provenance to destroy — so an 'ai'/'canvas'/'document' task keeps its origin
+// and simply doesn't offer "Open chat".
+const TASK_SOURCE_LINK_OVERWRITABLE = new Set(['', 'manual', 'chat']);
+
+// Assigning a task to an agent IS a dispatch: the agent wakes in its DM, inside
+// that task's own subthread, exactly as a task-comment @mention does — and the
+// task records the session so the UI can jump to that chat. Never throws, so
+// callers can stay fire-and-forget; returns a {dispatched, reason} descriptor.
+// `run` is a test seam; production always uses continueConversation.
+async function dispatchTaskAssignment({
+ workspaceId, taskId, agentId, actorUserId = null, actorName = null, run = continueConversation,
+}) {
+ try {
+  if (!taskId || !agentId) return { dispatched: false, reason: 'missing_input' };
+  const taskRows = await getDb().unsafe(
+   'select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks where id = $1 limit 1',
+   [String(taskId)],
+  );
+  const task = taskRows[0];
+  if (!task) return { dispatched: false, reason: 'task_not_found' };
+  const wsId = String(workspaceId || task.workspace_id || '');
+  if (!wsId) return { dispatched: false, reason: 'no_workspace' };
+  // A finished task must never be resurrected by an assignment.
+  if (task.status === 'done' || task.status === 'cancelled') return { dispatched: false, reason: 'terminal' };
+  // The row is read AFTER the write that triggered this, so a later update that
+  // re-assigned the task wins — never run an agent that is no longer the assignee.
+  if (String(task.assignee_id || '') !== String(agentId)) return { dispatched: false, reason: 'stale_assignee' };
+
+  // assignee_id has no FK: a human user id is a perfectly valid assignee, and a
+  // human being assigned must never run an agent.
+  const agentRows = await getDb().unsafe(
+   'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+   [String(agentId), wsId],
+  );
+  const agent = agentRows[0];
+  if (!agent) return { dispatched: false, reason: 'not_an_agent' };
+  // Mirrors the @mention path, which resolves through enabled agents only.
+  if (!isAgentEnabled(agent)) return { dispatched: false, reason: 'agent_disabled' };
+
+  // Running an agent is an agent-dispatch action, so it carries the same
+  // capability + throttle as the @mention path: a commenter/viewer who can edit
+  // a task still cannot run agents with it.
+  if (actorUserId) {
+   const role = await getWorkspaceRole(actorUserId, wsId);
+   if (!roleHasWorkspaceCapability(role, 'run_agents')) return { dispatched: false, reason: 'not_permitted' };
+   if (!dispatchRateLimiter.check(String(actorUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
+  }
+  if (!claimTaskDispatch(task.id, agent.id, TASK_ASSIGN_CLAIM_MS)) return { dispatched: false, reason: 'duplicate' };
+
+  const session = await findOrCreateDirectSession(wsId, agent);
+  if (!session) return { dispatched: false, reason: 'no_session' };
+
+  let who = actorName || '';
+  if (!who && actorUserId) {
+   const u = await getDb()
+    .unsafe('select display_name, email from app_users where id = $1 limit 1', [actorUserId])
+    .catch(() => []);
+   who = u[0]?.display_name || u[0]?.email || '';
+  }
+  who = who || 'A teammate';
+
+  const handle = slugHandle(agent.handle || agent.name);
+  const details = String(task.description || '').trim();
+  const content =
+   `@${handle} — ${who} assigned you the task "${task.title}".` +
+   (details ? `\n\n> ${details.replace(/\n/g, '\n> ')}` : '') +
+   '\n\nPick this up and reply here in your DM.' +
+   `\n\nSource: agensis://task/${task.id}`;
+
+  // Move a fresh task into progress (never clobbering a started status) and stamp
+  // the chat this task is being worked in, so the UI can offer "Open chat".
+  const nextStatus = taskStatusOnDispatch(task.status || 'todo');
+  const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+  const updated = stampSource
+   ? await getDb().unsafe(
+    "update tasks set status = $1, source_type = 'chat', source_id = $2, updated_at = now() where id = $3 returning *",
+    [nextStatus, String(session.id), String(task.id)],
+   )
+   : await getDb().unsafe(
+    'update tasks set status = $1, updated_at = now() where id = $2 returning *',
+    [nextStatus, String(task.id)],
+   );
+  if (updated[0]) notifyDbSubscribers('tasks', 'UPDATE', updated);
+
+  const { threadParentId } = await postTaskSubthreadMention({
+   session, taskId: task.id, content, authorUserId: actorUserId, authorName: who,
+  });
+  void Promise.resolve(run({ workspaceId: wsId, sessionId: session.id, threadParentId })).catch((error) =>
+   console.error('continueConversation (task assignment) failed', error),
+  );
+  return { dispatched: true, reason: 'dispatched', sessionId: session.id, threadParentId };
+ } catch (error) {
+  console.error('dispatchTaskAssignment failed', error);
+  return { dispatched: false, reason: 'error' };
  }
 }
 
@@ -8899,6 +9031,7 @@ function createApp() {
   slugHandle,
   claimMcpJob,
   submitMcpJobResult,
+  dispatchTaskAssignment,
   resolveWorkspaceAgentByHandle,
   registerAgentRequest,
   getRegistrationStatus,
@@ -9623,6 +9756,24 @@ function createApp() {
     }
    }
 
+   // A task CREATED already assigned to an agent dispatches it too — otherwise
+   // "add task, assign @coder" would sit there while the same choice made a
+   // second later (via update) runs. An insert is always a change, so there is
+   // nothing to diff; dispatchTaskAssignment still vets agent-vs-human, disabled
+   // agents, terminal status and duplicates.
+   if (table === 'tasks') {
+    for (const row of result) {
+     const assigneeId = typeof row?.assignee_id === 'string' ? row.assignee_id.trim() : '';
+     if (!assigneeId || !row.id) continue;
+     void dispatchTaskAssignment({
+      workspaceId: row.workspace_id,
+      taskId: row.id,
+      agentId: assigneeId,
+      actorUserId: req.userId,
+     }).catch((error) => console.error('dispatchTaskAssignment failed', error));
+    }
+   }
+
    if (table === 'workspaces') {
     for (const row of result) {
      try {
@@ -9662,6 +9813,23 @@ function createApp() {
     return jsonError(res, 400, new Error('No updatable fields provided'));
    }
    const setClause = setParts.join(', ');
+
+   // Dispatch-on-assign needs the PREVIOUS assignee: an update that re-writes the
+   // assignee it already had is not a change and must not re-run the agent. Read
+   // it with the same filters, before the write, and only for the rare update
+   // that actually sets assignee_id (an unassign — null/'' — never dispatches).
+   const nextAssigneeId = table === 'tasks' && typeof safeValues.assignee_id === 'string'
+    ? safeValues.assignee_id.trim()
+    : '';
+   let priorTaskRows = [];
+   if (nextAssigneeId) {
+    const priorWhere = buildWhereClause(filters, []);
+    priorTaskRows = await getDb().unsafe(
+     `select id, workspace_id, assignee_id from ${tableSql}${priorWhere.clause}`,
+     priorWhere.params,
+    ).catch(() => []);
+   }
+
    const where = buildWhereClause(filters, params);
    const result = await getDb().unsafe(
     `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
@@ -9669,6 +9837,21 @@ function createApp() {
    );
 
    notifyDbSubscribers(table, 'UPDATE', result);
+
+   // Assigning a task to an agent runs it — the same flow a task-comment @mention
+   // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed
+   // dispatch can never lose the user's edit. dispatchTaskAssignment re-checks
+   // everything that matters (agent vs human, disabled, done/cancelled, duplicate).
+   for (const before of priorTaskRows) {
+    if (String(before.assignee_id || '') === nextAssigneeId) continue;
+    void dispatchTaskAssignment({
+     workspaceId: before.workspace_id,
+     taskId: before.id,
+     agentId: nextAssigneeId,
+     actorUserId: req.userId,
+    }).catch((error) => console.error('dispatchTaskAssignment failed', error));
+   }
+
    res.json({ data: single ? (result[0] ?? null) : result, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -10072,6 +10255,7 @@ function resetTestState() {
  farmIntegrationCoreInstance = undefined;
  flowConnectionCoreInstance = undefined;
  connectedAgents.clear();
+ recentTaskDispatches.clear();
 }
 
 // Test seam: register a fake WS client so the realtime-revocation path can be
@@ -10154,6 +10338,9 @@ module.exports = {
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
+  dispatchTaskAssignment,
+  claimTaskDispatch,
+  TASK_ASSIGN_CLAIM_MS,
   createTtlPromiseCache,
   hasActiveBurstJob,
   capabilitiesShapeValid,
