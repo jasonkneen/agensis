@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -149,7 +149,13 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
 
   const hasUnseen = newestActivityAt > 0 && newestActivityAt > lastSeenAt;
 
+  // "Unread" (for the All/Unread toggle) is judged against the lastSeenAt that
+  // was in effect *before* this popover session opened it — captured into a
+  // ref so opening the bell doesn't instantly mark everything read out from
+  // under the toggle.
+  const unreadBaselineRef = useRef(0);
   const markSeen = () => {
+    unreadBaselineRef.current = lastSeenAt;
     const now = Math.max(newestActivityAt, Date.now());
     setLastSeenAt(now);
     if (lastSeenKey) {
@@ -159,6 +165,56 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
         /* localStorage unavailable — degrade to session-only */
       }
     }
+  };
+
+  // Per-item dismissal for the "Clear" button. Local/persisted only — the
+  // underlying activity feed is an immutable, insert-only audit log, so
+  // "clearing" hides items from this popover rather than deleting anything.
+  // Approvals are excluded: they represent a pending decision, not a
+  // dismissible notification.
+  const dismissedKey = workspaceId ? `notif:dismissed:${workspaceId}` : null;
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!dismissedKey) {
+      setDismissed(new Set());
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(dismissedKey);
+      setDismissed(raw ? new Set(JSON.parse(raw) as string[]) : new Set());
+    } catch {
+      setDismissed(new Set());
+    }
+  }, [dismissedKey]);
+
+  const persistDismissed = (next: Set<string>) => {
+    setDismissed(next);
+    if (dismissedKey) {
+      try {
+        // Cap so this never grows unbounded across a long-lived workspace.
+        localStorage.setItem(dismissedKey, JSON.stringify([...next].slice(-200)));
+      } catch {
+        /* localStorage unavailable — degrade to session-only */
+      }
+    }
+  };
+
+  const visibleItems = useMemo(
+    () => items.filter((item) => item.kind === 'approval' || !dismissed.has(item.id)),
+    [items, dismissed],
+  );
+
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+  const filteredItems = showUnreadOnly
+    ? visibleItems.filter(
+        (item) => item.kind === 'approval' || new Date(item.at).getTime() > unreadBaselineRef.current,
+      )
+    : visibleItems;
+
+  const clearableIds = visibleItems.filter((item) => item.kind !== 'approval').map((item) => item.id);
+  const clearAll = () => {
+    if (clearableIds.length === 0) return;
+    persistDismissed(new Set([...dismissed, ...clearableIds]));
   };
 
   return (
@@ -208,15 +264,53 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-80 p-0">
-        <PopoverHeader className="px-3 py-2.5">
+        <PopoverHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2.5">
           <PopoverTitle className="text-sm">Notifications</PopoverTitle>
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center rounded-md bg-muted p-0.5 text-[11px] leading-none">
+              <button
+                type="button"
+                onClick={() => setShowUnreadOnly(false)}
+                aria-pressed={!showUnreadOnly}
+                className={cn(
+                  'rounded px-1.5 py-1 font-medium transition-colors',
+                  !showUnreadOnly ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowUnreadOnly(true)}
+                aria-pressed={showUnreadOnly}
+                className={cn(
+                  'rounded px-1.5 py-1 font-medium transition-colors',
+                  showUnreadOnly ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                Unread
+              </button>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={clearAll}
+              disabled={clearableIds.length === 0}
+            >
+              Clear
+            </Button>
+          </div>
         </PopoverHeader>
         <Separator />
         <div className="max-h-80 overflow-y-auto py-1">
-          {items.length === 0 ? (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">You're all caught up.</p>
+          {filteredItems.length === 0 ? (
+            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+              {showUnreadOnly ? 'No unread notifications.' : "You're all caught up."}
+            </p>
           ) : (
-            items.map((item) => (
+            filteredItems.map((item) => (
               <div key={item.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
                 <StatusDot
                   tone={
