@@ -644,7 +644,7 @@ function buildTools() {
    }
    const taskId = requireString(args, 'task_id');
    const existing = await db.unsafe(
-    'select id, parent_id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
+    'select id, parent_id, assignee_id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
    if (!existing[0]) throw new ToolError('Task not found in this workspace');
    const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : null;
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : null;
@@ -683,6 +683,18 @@ function buildTools() {
      typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
      nextParentId, touchesParent]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
+   // Assigning a task to an agent dispatches it, exactly as it does from the UI.
+   // `existing` was read BEFORE the write, so an agent re-writing the assignee it
+   // already had (or updating only status/title as it works) never re-runs it.
+   const nextAssigneeId = typeof args?.assignee_id === 'string' ? args.assignee_id.trim() : '';
+   if (nextAssigneeId && String(existing[0].assignee_id || '') !== nextAssigneeId && deps.dispatchTaskAssignment) {
+    void Promise.resolve(deps.dispatchTaskAssignment({
+     workspaceId: identity.workspaceId,
+     taskId,
+     agentId: nextAssigneeId,
+     actorName: identity.kind === 'agent' ? (identity.name || 'An agent') : null,
+    })).catch(() => { });
+   }
    return { task: rows[0] };
   },
  });

@@ -8,6 +8,7 @@ import {
   Clock,
   Columns3,
   CornerDownRight,
+  ExternalLink,
   Flag,
   GanttChart,
   Link2,
@@ -65,6 +66,7 @@ import {
 } from '@/components/ui/marker';
 import {
   NativeSelect,
+  NativeSelectOptGroup,
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -86,6 +88,8 @@ interface TasksWindowContentProps {
   onToggleStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  /** Opens the chat a task is being worked in (source_type 'chat'). */
+  onOpenSession?: (sessionId: string) => void;
   /** A task to scroll to and expand once it's in view (e.g. opened from search). */
   focusTaskId?: string;
   /** Called once the focus has been applied, so the caller can clear it. */
@@ -132,6 +136,44 @@ function taskDependsOn(task: Task): string[] {
   return [];
 }
 
+// A task dispatched to an agent records the chat it is being worked in:
+// source_type 'chat' + the session id. Every other source_type stores a
+// different kind of id (an agent id for 'ai', a canvas object id for 'canvas'),
+// so only 'chat' is safe to open as a session.
+function taskChatSessionId(task: Task): string | null {
+  return task.source_type === 'chat' && task.source_id ? task.source_id : null;
+}
+
+// Assignee options: people AND agents. Assigning an agent dispatches the task to
+// it — that's the point of the picker, so agents can't be missing from it.
+// Disabled agents are left out: they can't run.
+function AssigneeOptions({ members, agents }: { members: WorkspaceMember[]; agents: WorkspaceAgent[] }) {
+  const activeAgents = agents.filter(agent => agent.enabled !== false);
+  return (
+    <>
+      <NativeSelectOption value="">Unassigned</NativeSelectOption>
+      {members.length > 0 && (
+        <NativeSelectOptGroup label="People">
+          {members.map(member => (
+            <NativeSelectOption key={member.user_id} value={member.user_id}>
+              {member.email?.split('@')[0] || 'Member'}
+            </NativeSelectOption>
+          ))}
+        </NativeSelectOptGroup>
+      )}
+      {activeAgents.length > 0 && (
+        <NativeSelectOptGroup label="Agents">
+          {activeAgents.map(agent => (
+            <NativeSelectOption key={agent.id} value={agent.id}>
+              @{agentHandle(agent)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelectOptGroup>
+      )}
+    </>
+  );
+}
+
 export const TasksWindowContent = memo(function TasksWindowContent({
   tasks,
   members,
@@ -145,6 +187,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onToggleStatus,
   onDeleteTask,
   onUpdateAgent,
+  onOpenSession,
   focusTaskId,
   onFocusTaskConsumed,
 }: TasksWindowContentProps) {
@@ -321,22 +364,15 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               <NativeSelectOption key={priority} value={priority}>{PRIORITY_LABELS[priority]}</NativeSelectOption>
             ))}
           </NativeSelect>
-          {members.length > 0 && (
-            <NativeSelect
-              value={newAssignee}
-              onChange={e => setNewAssignee(e.target.value)}
-              size="sm"
-              className="w-40 max-w-full"
-              aria-label="Assignee"
-            >
-              <NativeSelectOption value="">Unassigned</NativeSelectOption>
-              {members.map(member => (
-                <NativeSelectOption key={member.user_id} value={member.user_id}>
-                  {member.email?.split('@')[0] || 'Member'}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          )}
+          <NativeSelect
+            value={newAssignee}
+            onChange={e => setNewAssignee(e.target.value)}
+            size="sm"
+            className="w-40 max-w-full"
+            aria-label="Assignee"
+          >
+            <AssigneeOptions members={members} agents={agents} />
+          </NativeSelect>
           <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim()}>
             <Plus data-icon="inline-start" />
             Add
@@ -378,6 +414,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                           members={members}
                           agents={agents}
                           onUpdateAgent={onUpdateAgent}
+                          onOpenSession={onOpenSession}
                           workspaceId={workspaceId}
                           currentUserId={currentUserId}
                           currentUserEmail={currentUserEmail}
@@ -429,6 +466,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               members={members}
               agents={agents}
               onUpdateAgent={onUpdateAgent}
+              onOpenSession={onOpenSession}
               workspaceId={workspaceId}
               currentUserId={currentUserId}
               currentUserEmail={currentUserEmail}
@@ -459,6 +497,7 @@ function TaskRow({
   members,
   agents,
   onUpdateAgent,
+  onOpenSession,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -480,6 +519,7 @@ function TaskRow({
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onOpenSession?: (sessionId: string) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -496,6 +536,7 @@ function TaskRow({
   const [expanded, setExpanded] = useState(false);
   const done = task.status === 'done';
   const doneSubs = subtasks.filter(subtask => subtask.status === 'done').length;
+  const chatSessionId = taskChatSessionId(task);
 
   // Re-expand whenever this row becomes the search/focus target — covers both
   // first mount and a second click on an already-mounted row.
@@ -561,23 +602,28 @@ function TaskRow({
           </div>
         </ItemContent>
         <ItemActions className="ml-auto flex-wrap justify-end">
-          {members.length > 0 && (
-            <NativeSelect
-              value={task.assignee_id || ''}
-              onChange={e => onChangeAssignee(e.target.value || null)}
-              onClick={e => e.stopPropagation()}
-              size="sm"
-              className="w-32"
-              aria-label="Assign task"
+          {chatSessionId && onOpenSession && (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={e => { e.stopPropagation(); onOpenSession(chatSessionId); }}
+              title="Open the chat this task is being worked in"
             >
-              <NativeSelectOption value="">Unassigned</NativeSelectOption>
-              {members.map(member => (
-                <NativeSelectOption key={member.user_id} value={member.user_id}>
-                  {member.email?.split('@')[0] || 'Member'}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <ExternalLink data-icon="inline-start" />
+              Open chat
+            </Button>
           )}
+          <NativeSelect
+            value={task.assignee_id || ''}
+            onChange={e => onChangeAssignee(e.target.value || null)}
+            onClick={e => e.stopPropagation()}
+            size="sm"
+            className="w-32"
+            aria-label="Assign task"
+          >
+            <AssigneeOptions members={members} agents={agents} />
+          </NativeSelect>
           <NativeSelect
             value={task.status}
             onChange={e => onChangeStatus(e.target.value as TaskStatus)}
@@ -1044,6 +1090,7 @@ function TaskEditPanel({
   members,
   agents,
   onUpdateAgent,
+  onOpenSession,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -1064,6 +1111,7 @@ function TaskEditPanel({
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onOpenSession?: (sessionId: string) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -1083,6 +1131,7 @@ function TaskEditPanel({
   // changes (keyed by task.id).
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || '');
+  const chatSessionId = taskChatSessionId(task);
 
   useEffect(() => {
     setTitle(task.title);
@@ -1173,20 +1222,25 @@ function TaskEditPanel({
                 ))}
               </NativeSelect>
             </div>
-            {members.length > 0 && (
-              <NativeSelect
-                value={task.assignee_id || ''}
-                onChange={e => onChangeAssignee(e.target.value || null)}
+            <NativeSelect
+              value={task.assignee_id || ''}
+              onChange={e => onChangeAssignee(e.target.value || null)}
+              size="sm"
+              aria-label="Assign task"
+            >
+              <AssigneeOptions members={members} agents={agents} />
+            </NativeSelect>
+            {chatSessionId && onOpenSession && (
+              <Button
+                type="button"
+                variant="outline"
                 size="sm"
-                aria-label="Assign task"
+                className="self-start"
+                onClick={() => onOpenSession(chatSessionId)}
               >
-                <NativeSelectOption value="">Unassigned</NativeSelectOption>
-                {members.map(member => (
-                  <NativeSelectOption key={member.user_id} value={member.user_id}>
-                    {member.email?.split('@')[0] || 'Member'}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                <ExternalLink data-icon="inline-start" />
+                Open chat
+              </Button>
             )}
           </div>
           <TaskDetail

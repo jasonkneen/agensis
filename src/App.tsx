@@ -2712,6 +2712,7 @@ function CanvasLayerScene({
                 onToggleStatus={onToggleTaskStatus}
                 onDeleteTask={onDeleteTask}
                 onUpdateAgent={onUpdateAgent}
+                onOpenSession={onOpenSessionById}
                 focusTaskId={win.focusTaskId}
               />
             </FloatingWindowShell>
