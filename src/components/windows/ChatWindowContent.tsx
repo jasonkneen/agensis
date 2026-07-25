@@ -159,6 +159,7 @@ import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor 
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
 import { useSharedNow } from '../../hooks/useSharedNow';
+import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
@@ -2077,10 +2078,12 @@ function ThinkingIndicator({ text = 'Thinking…' }: { text?: string }) {
  * not the message rows themselves (avatars, markdown, artifacts).
  */
 function ThreadReplySummaryButton({
+  parentMessageId,
   replyCount,
   summary,
   onOpenThread,
 }: {
+  parentMessageId: string;
   replyCount: number;
   summary?: ThreadReplySummary;
   onOpenThread: () => void;
@@ -2132,6 +2135,11 @@ function ThreadReplySummaryButton({
         <CornerDownRight className="size-3 shrink-0" />
       )}
       <span className="shrink-0 font-medium">{replyLabel}</span>
+      {/* "· working 1m 4s" while an agent has a running job in THIS thread.
+          Self-contained: it subscribes to the agent-work store and owns the 1s
+          clock internally, so the tick repaints one <span> and this chip (with
+          its avatars + markdown-free labels) is untouched. */}
+      <ThreadWorkBadge parentMessageId={parentMessageId} />
       {lastReplyLabel && (
         <>
           <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
@@ -2302,6 +2310,7 @@ function ChatMessageBubble({
         )}
         {replyCount && onOpenThread ? (
           <ThreadReplySummaryButton
+            parentMessageId={msg.id}
             replyCount={replyCount}
             summary={replySummary}
             onOpenThread={onOpenThread}

@@ -501,6 +501,26 @@ export interface AgentConnection {
  updated_at: string;
 }
 
+/**
+ * One row of `agent_jobs` — an agent turn the server has queued/started.
+ *
+ * Only the columns the client actually reads are typed: the row also carries
+ * `prompt` and `response`, which are the FULL daemon prompt and the FULL reply,
+ * so nothing client-side should select them (see useAgentWorkFeed).
+ * `metadata.threadParentId` is what ties a job to a thread rather than just to
+ * the session it runs in.
+ */
+export interface AgentJobRow {
+ id: string;
+ workspace_id: string;
+ agent_id: string | null;
+ session_id: string | null;
+ status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+ started_at: string | null;
+ created_at: string;
+ metadata: Record<string, unknown>;
+}
+
 export interface AgentWebhook {
  id: string;
  workspace_id: string;
