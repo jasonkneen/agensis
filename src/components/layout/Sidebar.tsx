@@ -452,6 +452,9 @@ export const Sidebar = React.memo(function Sidebar({
     className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground shadow-xl"
     style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
    >
+    {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
+        Decorative, non-interactive, and out of flow, so it is not a flex item. */}
+    <div aria-hidden="true" className="sidebar-accent-wash" />
     <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
      <PanelLeft />
     </Button>
@@ -524,6 +527,9 @@ export const Sidebar = React.memo(function Sidebar({
     className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-none border-r border-border bg-card/45 text-card-foreground shadow-xl"
     style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
    >
+    {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
+        Decorative, non-interactive, and out of flow, so it is not a flex item. */}
+    <div aria-hidden="true" className="sidebar-accent-wash" />
     <div
      data-sidebar-titlebar
      className="px-2 pt-2 pb-3"
