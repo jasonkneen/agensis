@@ -14,6 +14,7 @@ import {
  Folder,
  GitMerge,
  Hash,
+ Inbox,
  Layers3,
  LayoutTemplate,
  LogOut,
@@ -208,6 +209,7 @@ interface SidebarProps {
  onDirectMessageDelete?: (session: ChatSession) => void;
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
+ onOpenInbox?: () => void;
  onOpenMemory: () => void;
  onOpenSkills?: () => void;
  onOpenTasks?: () => void;
@@ -219,6 +221,8 @@ interface SidebarProps {
  onAgentProfile?: (agent: SidebarAgentTarget) => void;
  onOpenTemplates?: () => void;
  openTaskCount?: number;
+ /** Unread inbox items — the "this needs you" badge above the channel list. */
+ inboxUnreadCount?: number;
  recents: Document[];
  sessions: ChatSession[];
  agents?: WorkspaceAgent[];
@@ -260,6 +264,7 @@ export const Sidebar = React.memo(function Sidebar({
  onDirectMessageDelete,
  onSessionSplit,
  onSessionMerge,
+ onOpenInbox,
  onOpenMemory,
  onOpenSkills,
  onOpenTasks,
@@ -271,6 +276,7 @@ export const Sidebar = React.memo(function Sidebar({
  onAgentProfile,
  onOpenTemplates,
  openTaskCount = 0,
+ inboxUnreadCount = 0,
  recents,
  sessions,
  agents = [],
@@ -464,6 +470,7 @@ export const Sidebar = React.memo(function Sidebar({
     <SidebarRailButton icon={<Settings />} title="Workspace settings" onClick={onOpenSettings} />
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
+    {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadSessions.length} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
@@ -572,6 +579,17 @@ export const Sidebar = React.memo(function Sidebar({
 
     <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
      <div className="flex flex-col gap-1 pb-2">
+      {/* Above the channels: whatever needs a human is the first thing in the
+          sidebar, not something you scroll past. */}
+      {onOpenInbox && (
+       <ActionTile
+        icon={<Inbox />}
+        label="Inbox"
+        count={inboxUnreadCount}
+        active={focusedWindowType === 'inbox'}
+        onClick={onOpenInbox}
+       />
+      )}
       <SidebarSection
        id="threads"
        label="Threads"

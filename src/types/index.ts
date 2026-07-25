@@ -188,7 +188,7 @@ export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'li
 
 export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'inbox';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -306,6 +306,41 @@ export interface ActivityEvent {
  title: string;
  metadata: Record<string, unknown>;
  created_at: string;
+}
+
+/** Triage categories, most urgent first. `blocker` is the one an agent raises
+ *  when it hits a decision it cannot make — that is what the inbox exists for. */
+export type InboxCategory = 'blocker' | 'comment' | 'mention' | 'error' | 'activity';
+
+export type InboxFilter = 'all' | InboxCategory;
+
+/**
+ * One row in the triage inbox. Aggregated server-side from data that already
+ * exists (thread_items, the three comment tables, activity_events, agent_jobs)
+ * — the inbox adds no producers of its own.
+ *
+ * `contextKey` is the READ-STATE key AND the grouping key: every item sharing
+ * one is one conversation, marked read together (see inbox_read_state).
+ */
+export interface InboxItem {
+ /** Stable, unique across categories (prefixed by category). */
+ id: string;
+ category: InboxCategory;
+ /** One line, already human-readable. */
+ title: string;
+ /** Short preview, may be ''. */
+ body: string;
+ /** Read-state key, e.g. 'blocker:<uuid>' / 'thread:<uuid>' / 'comment:<uuid>'. */
+ contextKey: string;
+ /** Chat session to open, when there is one. */
+ sessionId: string | null;
+ /** 'document' | 'task' | 'memory_file' | 'agent_job' | … */
+ entityType: string | null;
+ entityId: string | null;
+ /** Who/what caused it, may be ''. */
+ actorName: string;
+ createdAt: string;
+ unread: boolean;
 }
 
 export interface FloatingWindow {

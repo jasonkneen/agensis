@@ -111,6 +111,8 @@ function getDefaultRestoreSize(type: FloatingWindowType): { width: number; heigh
     tasks: { width: Math.min(680, Math.max(460, Math.round(viewport.width * 0.52))), height: Math.min(720, Math.max(540, Math.round(viewport.height * 0.74))) },
     activity: { width: Math.min(620, Math.max(420, Math.round(viewport.width * 0.48))), height: Math.min(720, Math.max(540, Math.round(viewport.height * 0.74))) },
     agents: { width: Math.min(980, Math.max(720, Math.round(viewport.width * 0.72))), height: Math.min(760, Math.max(560, Math.round(viewport.height * 0.76))) },
+    // Two-pane triage (list + detail) needs the width or the detail pane is unreadable.
+    inbox: { width: Math.min(940, Math.max(660, Math.round(viewport.width * 0.66))), height: Math.min(740, Math.max(540, Math.round(viewport.height * 0.76))) },
   };
   return fitWindowSize(sizeMap[type] || sizeMap.chat, viewport, WORKSPACE_WINDOW_MARGIN);
 }
