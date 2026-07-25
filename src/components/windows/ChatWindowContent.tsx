@@ -1199,9 +1199,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     const el = document.getElementById(`chat-msg-${messageId}`);
     if (!el) return;
     setAutoScroll(false);
+    // Scroll only — deliberately no highlight flash. The 1.6s animated
+    // background this used to add read as a flicker, and it fought with the
+    // row's own hover/agent-accent backgrounds while it ran. The thread toolbar
+    // appearing is sufficient confirmation of where you landed.
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('chat-msg-jump-highlight');
-    window.setTimeout(() => el.classList.remove('chat-msg-jump-highlight'), 1600);
   }, []);
   const openThread = () => {
     setSidePanel('thread');
