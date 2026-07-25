@@ -648,7 +648,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
-                <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))]">
+                <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(148px,1fr))]">
                   {visibleAgents.map(agent => {
                     const accent = agentAccentColor(agent);
                     const presence = presenceByAgent.get(agent.id);
@@ -660,35 +660,47 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         type="button"
                         onClick={() => setSelectedAgentId(agent.id)}
                         style={agentAccentStyle(agent)}
+                        title={[
+                          `@${agent.handle || agentHandle(agent.name)}`,
+                          agentTransportLabel(agent.run_mode),
+                          agent.description,
+                        ].filter(Boolean).join(' · ')}
                         className={cn(
-                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          'group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
                           !active && 'opacity-60',
                         )}
                       >
-                        <div className="flex items-start gap-2.5">
-                          <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-muted text-base">
-                            <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
-                              <span className="truncate text-sm font-semibold">{agent.name}</span>
-                            </div>
-                            <span className="block truncate text-xs text-muted-foreground">@{agent.handle || agentHandle(agent.name)}</span>
+                        <span className="relative grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
+                          <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+                          {live && (
+                            <span
+                              className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-emerald-500 ring-2 ring-card"
+                              title="Connected"
+                              aria-hidden
+                            />
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
+                            <span className="truncate text-sm font-semibold">{agent.name}</span>
                           </div>
-                          {live && <span className="mt-1 size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-hidden />}
-                        </div>
-                        <p className="line-clamp-2 text-xs text-muted-foreground">
-                          {agent.description || 'No description'}
-                        </p>
-                        <div className="mt-auto flex items-center gap-1.5 border-t pt-2 text-[11px] text-muted-foreground">
-                          {agent.run_mode === 'daemon' || agent.run_mode === 'sandbox' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
-                          <span className="truncate">{agentTransportLabel(agent.run_mode)}</span>
-                          <span className="ml-auto truncate opacity-80">{displayModel(agent.model)}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
+                          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
                         </div>
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setCreateStep('choose')}
+                    className="flex min-h-[124px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card/20 p-4 text-center text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/60 hover:text-foreground"
+                  >
+                    <span className="grid size-16 place-items-center rounded-2xl border-2 border-dashed border-border/70">
+                      <Plus className="size-6" />
+                    </span>
+                    <span className="text-sm font-medium">New agent</span>
+                  </button>
                 </div>
               </div>
             )}
