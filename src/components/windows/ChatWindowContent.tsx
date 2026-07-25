@@ -323,6 +323,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
   const [deleteMessageTarget, setDeleteMessageTarget] = useState<ChatMessage | null>(null);
   const [panelWidth, setPanelWidth] = useState(360);
+  // Thread replies read better as a near-even split than the narrow fixed
+  // sidebar used for files/pins/profile/sub-thread panels, so it gets its own
+  // width state. `null` means "not manually resized yet" — render at a CSS
+  // percentage (auto-adjusts as the window resizes) rather than a stale px
+  // value computed once at open time.
+  const [threadPanelWidth, setThreadPanelWidth] = useState<number | null>(null);
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectRoot, setProjectRoot] = useState('');
   const [projectFileSources, setProjectFileSources] = useState<ProjectFileSource[]>([]);
@@ -330,6 +336,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const sidePanelRef = useRef<HTMLElement | null>(null);
   const autoOpenedProfileForRef = useRef<string | null>(null);
 
   const filteredDocs = useMemo(() => {
@@ -1253,11 +1260,19 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   };
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    const isThread = sidePanel === 'thread';
     const startX = event.clientX;
-    const startWidth = panelWidth;
+    // Read the actual on-screen width rather than trusting state — the thread
+    // panel starts life as a CSS percentage (`45%`), not a px value, so
+    // `threadPanelWidth` alone doesn't know the real width to drag from until
+    // the user has resized it at least once.
+    const startWidth = sidePanelRef.current?.getBoundingClientRect().width
+      ?? (isThread ? threadPanelWidth ?? 360 : panelWidth);
+    const maxWidth = isThread ? 900 : 680;
     const onMove = (moveEvent: PointerEvent) => {
-      const next = Math.min(680, Math.max(280, startWidth + (startX - moveEvent.clientX)));
-      setPanelWidth(next);
+      const next = Math.min(maxWidth, Math.max(280, startWidth + (startX - moveEvent.clientX)));
+      if (isThread) setThreadPanelWidth(next);
+      else setPanelWidth(next);
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -1831,8 +1846,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
       {!readOnly && sidePanel && (
         <aside
+          ref={sidePanelRef}
           className="channel-side-panel relative flex h-full shrink-0 flex-col border-l border-border text-card-foreground"
-          style={{ width: panelWidth }}
+          style={{ width: sidePanel === 'thread' ? (threadPanelWidth ?? '45%') : panelWidth }}
         >
           <div
             className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
