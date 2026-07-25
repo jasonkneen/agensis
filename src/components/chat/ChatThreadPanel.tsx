@@ -10,6 +10,7 @@ import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '
 import { ModelSelector } from './ModelSelector';
 import { availableChatModelId } from '../../lib/sharedModels';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Roughly how much of the thread parent to show before offering "Show more". */
 const PARENT_PREVIEW_CHARS = 220;
@@ -76,7 +77,7 @@ interface ChatThreadPanelProps {
   threadMessages: ChatMessage[];
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
-  onSendReply: (content: string, model: string) => void;
+  onSendReply: (content: string, model: string, broadcastToChannel?: boolean) => void;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -104,6 +105,11 @@ export function ChatThreadPanel({
   const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
   const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
+  // "Send to channel" (Slack's "Also send to channel"): a thread reply stays in the
+  // thread but is ALSO shown in the channel. Off by default — a thread exists
+  // precisely so the working conversation stays out of the channel — and reset
+  // after each send so it can never silently broadcast the next reply too.
+  const [broadcastToChannel, setBroadcastToChannel] = useState(false);
   const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
   // Steps land here (threaded under the agent's reply), so they must be chips in the
   // panel too — a run of four is four chips, not four bubbles.
@@ -117,8 +123,9 @@ export function ChatThreadPanel({
     if (streaming) return;
     const content = m.buildContent();
     if (!content) return;
-    onSendReply(content, model);
+    onSendReply(content, model, broadcastToChannel);
     m.clear();
+    setBroadcastToChannel(false);
     inputRef.current?.focus();
   };
 
@@ -212,7 +219,18 @@ export function ChatThreadPanel({
               onInput={e => autosizeComposer(e.currentTarget)}
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
-              <ModelSelector value={model} onChange={setModel} models={models} />
+              <div className="flex min-w-0 items-center gap-2">
+                <ModelSelector value={model} onChange={setModel} models={models} />
+                <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Checkbox
+                    checked={broadcastToChannel}
+                    onCheckedChange={checked => setBroadcastToChannel(checked === true)}
+                    disabled={streaming}
+                    aria-label="Also send this reply to the channel"
+                  />
+                  <span className="truncate">Send to channel</span>
+                </label>
+              </div>
               <Button
                 type="button"
                 size="icon-sm"

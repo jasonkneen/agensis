@@ -1,5 +1,17 @@
 [
   {
+    "version": "send-to-channel",
+    "date": "2026-07-25",
+    "title": "Agents work in a thread and send you the answer",
+    "summary": "An agent no longer does its thinking in the middle of your channel. It works in a thread on your message, and only its finished answer is sent to the channel.",
+    "highlights": [
+      "Your channel stays readable — your message, then the answer, nothing in between",
+      "While an agent works you see a reply count on your message; open the thread to watch it",
+      "An answer sent to the channel is tagged “from a thread” and links back to the working conversation",
+      "You get the same switch: tick “Send to channel” in a thread reply to share it with everyone"
+    ]
+  },
+  {
     "version": "inbox",
     "date": "2026-07-25",
     "title": "Inbox — one place for things that need you",

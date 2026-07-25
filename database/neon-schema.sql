@@ -173,6 +173,15 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
 
+-- "Send to channel": an agent WORKS inside a thread and only its final answer is
+-- broadcast to the channel/DM. A broadcast reply KEEPS its thread_parent_id (it is
+-- still part of the thread) and is additionally shown in the channel view, so the
+-- channel reads as message → answer while every "Thinking …" placeholder,
+-- tool-step chip and intermediate text block stays in the thread. Humans get the
+-- same switch from the thread composer. Mirrors the runtime ALTER in
+-- server/index.cjs and supabase/migrations/20260725160000_*.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT NULL DEFAULT false;
+
 -- Tasks <-> subthread <-> comments loop: a task @mention runs the agent inside a
 -- per-task subthread; source_task_id ties the thread root back to its task.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
