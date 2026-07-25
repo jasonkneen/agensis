@@ -137,6 +137,16 @@ const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon
   { value: 'icon:monitor', label: 'Monitor', icon: Monitor },
 ];
 
+// How an agent's turns are actually served. 'external' means an MCP client
+// registered itself and works AS this agent (register_agent + claim_job) — it is
+// remote like a daemon, but there is no daemon CLI to connect, so offering the
+// daemon Connect flow for one is a wrong door.
+function agentTransportLabel(runMode?: string | null): string {
+  if (runMode === 'daemon' || runMode === 'sandbox') return 'Remote';
+  if (runMode === 'external') return 'MCP client';
+  return 'Built-in';
+}
+
 export const AgentsWindowContent = memo(function AgentsWindowContent({
   agents,
   webhooks,
@@ -672,8 +682,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           {agent.description || 'No description'}
                         </p>
                         <div className="mt-auto flex items-center gap-1.5 border-t pt-2 text-[11px] text-muted-foreground">
-                          {agent.run_mode === 'daemon' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
-                          <span className="truncate">{agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'}</span>
+                          {agent.run_mode === 'daemon' || agent.run_mode === 'sandbox' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
+                          <span className="truncate">{agentTransportLabel(agent.run_mode)}</span>
                           <span className="ml-auto truncate opacity-80">{displayModel(agent.model)}</span>
                         </div>
                       </button>
@@ -1269,7 +1279,7 @@ function AgentDetailPane({
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{agent.description || 'No description'}</p>
             <div className="mt-2 flex flex-wrap gap-1">
               <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
-                {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
+                {agent.run_mode === 'daemon' ? 'remote daemon' : agent.run_mode === 'external' ? 'MCP client' : 'built-in'}
               </Badge>
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
               <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
@@ -1328,7 +1338,7 @@ function AgentDetailPane({
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'} />
+            <AgentDetailField label="Mode" value={agentTransportLabel(agent.run_mode)} />
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>

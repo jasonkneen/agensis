@@ -3293,7 +3293,11 @@ async function hasActiveBurstJob(sessionId, agentId) {
 // remote sandbox and supervises it — so only 'builtin' stays in-process.
 function resolveRunTarget(agent) {
  const m = agent && agent.run_mode;
- return m === 'daemon' || m === 'sandbox' ? 'daemon' : 'builtin';
+ if (m === 'daemon' || m === 'sandbox') return 'daemon';
+ // 'external' = an MCP client works AS this agent (register_agent). It is NOT
+ // builtin: answering such a turn with the workspace's own model would put words
+ // in the registered client's mouth, indistinguishable from the real thing.
+ return m === 'external' ? 'external' : 'builtin';
 }
 
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
@@ -3337,6 +3341,40 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   return { ok: true, pending: true }; // a polling client will claim it; conversation resumes on submit
+ }
+
+ // An 'external' agent with no live MCP poller. Do NOT fall through to the
+ // builtin lane: that answers as the agent using the workspace's own model, and
+ // the reply is indistinguishable from the registered client — which reads as a
+ // working agent when nothing is attached. That is worse than silence, because
+ // the human acts on it. Queue the turn (a client that reconnects will claim it)
+ // and post a clearly-attributed stand-in notice instead of impersonating.
+ if (runMode === 'external') {
+  const jobRows = await insertActiveAgentJob(
+   `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
+       values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
+       returning *`,
+   [
+    workspaceId, agent.id, sessionId, createdBy,
+    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity),
+    { handle, threadParentId: threadParentId || null, mode: 'mcp' },
+   ],
+  );
+  if (jobRows) notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  const noticeRows = await getDb().unsafe(
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+       returning *`,
+   [
+    sessionId,
+    `_@${handle} is an MCP client and is not attached right now, so nobody has answered this yet._\n\nYour message is queued — it will be picked up when that client next connects. This notice is from agensis, not from @${handle}.`,
+    threadParentId || null,
+    String(agent.id),
+    agent.name,
+   ],
+  );
+  notifyDbSubscribers('messages', 'INSERT', noticeRows);
+  return { ok: true, pending: true };
  }
 
  if (runMode === 'builtin') {
@@ -4605,7 +4643,7 @@ async function finalizeRegistrationApproval(reg) {
  } else {
   const created = await getDb().unsafe(
    `insert into workspace_agents (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, mcp_approved)
-       values ($1, $2, $3, '', '', 'auto', 'builtin', 'default', 'AI', '#00a95c', true, true)
+       values ($1, $2, $3, '', '', 'auto', 'external', 'default', 'AI', '#00a95c', true, true)
        returning *`,
    [reg.workspace_id, name || handle || 'Agent', slugHandle(handle || name || 'agent')],
   );
