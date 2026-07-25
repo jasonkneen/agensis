@@ -244,6 +244,19 @@ export interface TaskComment {
  updated_at: string;
 }
 
+export interface ActivityEventComment {
+ id: string;
+ event_id: string;
+ workspace_id: string;
+ user_id: string | null;
+ parent_id: string | null;
+ content: string;
+ resolved: boolean;
+ version?: number;
+ created_at: string;
+ updated_at: string;
+}
+
 export interface DocumentComment {
  id: string;
  // Optional so MemoryFileComment (anchored to a workspace file, not a

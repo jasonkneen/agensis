@@ -637,6 +637,24 @@ CREATE TABLE IF NOT EXISTS activity_events (
 CREATE INDEX IF NOT EXISTS idx_activity_events_workspace_created ON activity_events(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_events_entity ON activity_events(entity_type, entity_id);
 
+-- Notes left on an activity log entry ("comment I can look at later"), anchored
+-- to the activity_events row itself. Mirrors memory_file_comments' shape.
+CREATE TABLE IF NOT EXISTS activity_event_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id uuid NOT NULL REFERENCES activity_events(id) ON DELETE CASCADE,
+  user_id uuid,
+  parent_id uuid REFERENCES activity_event_comments(id) ON DELETE CASCADE,
+  content text NOT NULL,
+  resolved boolean DEFAULT false,
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_event_comments(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.

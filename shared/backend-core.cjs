@@ -47,6 +47,7 @@ const ALLOWED_TABLES = new Set([
  'agent_memory_files',
  'memory_file_comments',
  'thread_items',
+ 'activity_event_comments',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -70,6 +71,7 @@ const VERSIONED_TABLES = new Set([
  'agent_webhooks',
  'agent_memory_files',
  'memory_file_comments',
+ 'activity_event_comments',
 ]);
 
 const JSON_COLUMNS_BY_TABLE = {
@@ -118,7 +120,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
- 'agent_schedules', 'agent_schedule_runs',
+ 'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -170,6 +172,7 @@ const DB_TABLE_ACCESS = {
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
+ activity_event_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
