@@ -4,6 +4,11 @@ const {
  assertConnectionChannel,
  connectionCanUseTool,
 } = require('./flow-integration.cjs');
+// tasks.depends_on is a native uuid[]. postgres.js `.unsafe(sql, params)` does
+// NOT array-serialize a raw JS array bound to an untyped $n — it coerces with
+// '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
+// backend-core (same helper the generic /backend/db path uses).
+const { toPgArrayLiteral } = require('../shared/backend-core.cjs');
 
 // Native MCP (Model Context Protocol) server for agensis.
 //
@@ -124,6 +129,93 @@ async function resolveParentTaskId(db, workspaceId, rawParentId, childId) {
   }
  }
  return parentId;
+}
+
+// Parse an ISO-ish date argument. Callers hand us whatever their planner
+// produced, so an unparseable value must be REFUSED, not silently stored as
+// null (which is indistinguishable from "leave it alone") or as the string
+// 'Invalid Date' (which postgres rejects mid-statement).
+// Returns null when the caller did not supply the argument at all.
+function optDateArg(args, key) {
+ const raw = args && args[key];
+ if (raw === undefined || raw === null) return null;
+ if (typeof raw !== 'string' || !raw.trim()) return null;
+ const value = raw.trim();
+ const ms = Date.parse(value);
+ if (!Number.isFinite(ms)) {
+  throw new ToolError(`${key} is not a parseable date: ${value}`);
+ }
+ return new Date(ms).toISOString();
+}
+
+// tasks.depends_on is a native uuid[]. Reads come back as a JS array from
+// postgres.js, but be tolerant of a raw PG array literal string so the cycle
+// walk never iterates the CHARACTERS of '{a,b}'.
+function normalizeDependsOn(value) {
+ if (Array.isArray(value)) {
+  return value.map((id) => String(id || '').trim()).filter(Boolean);
+ }
+ if (typeof value === 'string') {
+  return value.replace(/^\{|\}$/g, '').split(',')
+   .map((id) => id.replace(/^"|"$/g, '').trim())
+   .filter(Boolean);
+ }
+ return [];
+}
+
+/**
+ * Resolve + validate a `depends_on` list. Never pass the caller's value into
+ * the write:
+ *   - every id must be a task in the SAME workspace (this surface is
+ *     workspace-scoped; a foreign id would leak another tenant's task id AND
+ *     draw an arrow to a row that can never load),
+ *   - a task may not depend on itself,
+ *   - the list may not close a cycle. A cycle hangs any topological layout —
+ *     the Gantt walks these edges to lay bars out.
+ * `taskId` is null on create: a brand-new row has no id, so nothing can already
+ * depend on it and only the existence check applies.
+ */
+async function resolveDependsOn(db, workspaceId, rawList, taskId) {
+ if (!Array.isArray(rawList)) {
+  throw new ToolError('depends_on must be an array of task ids');
+ }
+ const ids = [];
+ for (const entry of rawList) {
+  if (typeof entry !== 'string' || !entry.trim()) {
+   throw new ToolError('depends_on must contain task id strings');
+  }
+  const id = entry.trim();
+  if (taskId && id === taskId) throw new ToolError('A task cannot depend on itself');
+  if (!ids.includes(id)) ids.push(id);
+ }
+ if (ids.length === 0) return [];
+
+ // One read of the workspace's dependency edges: it both proves every id
+ // exists here and gives us the graph to walk for cycles.
+ const rows = await db.unsafe(
+  'select id, depends_on from tasks where workspace_id = $1', [workspaceId]);
+ const edges = new Map();
+ for (const row of rows) edges.set(String(row.id), normalizeDependsOn(row.depends_on));
+ for (const id of ids) {
+  if (!edges.has(id)) throw new ToolError(`Dependency task not found in this workspace: ${id}`);
+ }
+ if (!taskId) return ids;
+
+ // Walk FORWARD from each proposed dependency. Reaching taskId means taskId
+ // already (transitively) blocks it, so making taskId depend on it closes a
+ // loop. `seen` bounds the walk even if the stored graph already holds a cycle.
+ const seen = new Set();
+ const stack = ids.slice();
+ while (stack.length > 0) {
+  const current = stack.pop();
+  if (current === taskId) {
+   throw new ToolError('That dependency would create a cycle in the task graph');
+  }
+  if (seen.has(current)) continue;
+  seen.add(current);
+  for (const next of edges.get(current) || []) stack.push(next);
+ }
+ return ids;
 }
 
 // =============================================================================
@@ -582,7 +674,7 @@ function buildTools() {
 
  add({
   name: 'create_task',
-  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai). Pass parent_id to nest it under an existing task instead of faking hierarchy in the title.',
+  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai). Pass parent_id to nest it under an existing task instead of faking hierarchy in the title. Pass start_date/due_date so it appears as a real bar on the timeline, and depends_on to declare what must finish first instead of encoding an order in the title ("1..6").',
   inputSchema: {
    type: 'object',
    properties: {
@@ -591,7 +683,13 @@ function buildTools() {
     status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'], description: 'Default "todo".' },
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Default "normal".' },
     assignee_id: { type: 'string', description: 'User id to assign to (optional).' },
+    start_date: { type: 'string', description: 'ISO8601 date work starts (optional). Without it the timeline can only draw an undated marker.' },
     due_date: { type: 'string', description: 'ISO8601 due date (optional).' },
+    depends_on: {
+     type: 'array',
+     items: { type: 'string' },
+     description: 'Task ids that must finish before this one. Must be tasks in this workspace.',
+    },
     parent_id: { type: 'string', description: 'Id of the task this is a sub-task of (optional). Must be a task in this workspace.' },
    },
    required: ['title'],
@@ -608,17 +706,27 @@ function buildTools() {
    const parentId = typeof args?.parent_id === 'string' && args.parent_id.trim()
     ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, null)
     : null;
+   const startDate = optDateArg(args, 'start_date');
+   const dueDate = optDateArg(args, 'due_date');
+   // Same rule as the parent: validated BEFORE the insert, so a bad dependency
+   // never lands as an edge pointing at nothing. `null` taskId = nothing can
+   // depend on a row that does not exist yet, so no cycle is possible here.
+   const dependsOn = args?.depends_on === undefined
+    ? []
+    : await resolveDependsOn(db, identity.workspaceId, args.depends_on, null);
    const rows = await db.unsafe(
-    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id)
-         values ($1, null, $2, $3, $4, $5, $6, $7, 'ai', $8, $9) returning *`,
+    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id, start_date, depends_on)
+         values ($1, null, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, $10, $11::uuid[]) returning *`,
     [identity.workspaceId,
     typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
      title,
     typeof args?.description === 'string' ? args.description : '',
      status, priority,
-    typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
+     dueDate,
     identity.agentId ? String(identity.agentId) : null,
-     parentId]);
+     parentId,
+     startDate,
+    toPgArrayLiteral(dependsOn)]);
    deps.notifyDbSubscribers('tasks', 'INSERT', rows);
    return { task: rows[0] };
   },
@@ -626,7 +734,7 @@ function buildTools() {
 
  add({
   name: 'update_task',
-  description: 'Update an existing task (status, title, description, priority, assignee, due date, parent task).',
+  description: 'Update an existing task (status, title, description, priority, assignee, start/due dates, dependencies, parent task). Set start_date + due_date so the task draws as a real span on the timeline, and depends_on to declare the order of a chain of work rather than numbering titles.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -636,7 +744,13 @@ function buildTools() {
     description: { type: 'string' },
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
     assignee_id: { type: 'string' },
+    start_date: { type: 'string', description: 'ISO8601 date work starts.' },
     due_date: { type: 'string', description: 'ISO8601 due date.' },
+    depends_on: {
+     type: 'array',
+     items: { type: 'string' },
+     description: 'REPLACES this task\'s dependency list with these task ids (all must be tasks in this workspace). Pass [] to clear it. A list that would create a cycle is rejected.',
+    },
     parent_id: { type: 'string', description: 'Re-parent this task under another task in this workspace. Pass "" to un-nest it back to top level.' },
    },
    required: ['task_id'],
@@ -666,6 +780,18 @@ function buildTools() {
      ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, taskId)
      : null)
     : null;
+   // Dates are parsed (and REFUSED if unparseable) before the write. They ride
+   // the coalesce() pattern like due_date always has: null = leave alone.
+   const startDate = optDateArg(args, 'start_date');
+   const dueDate = optDateArg(args, 'due_date');
+   // depends_on needs the same "did the caller mention it?" guard parent_id
+   // uses: [] must mean "clear the list", not "leave it alone". Validated
+   // (existence + self + cycle) BEFORE the update, so a rejected list never
+   // half-writes.
+   const touchesDependsOn = args?.depends_on !== undefined;
+   const nextDependsOn = touchesDependsOn
+    ? await resolveDependsOn(db, identity.workspaceId, args.depends_on, taskId)
+    : [];
    const rows = await db.unsafe(
     `update tasks set
            title = coalesce($3, title),
@@ -675,6 +801,8 @@ function buildTools() {
            assignee_id = coalesce($7, assignee_id),
            due_date = coalesce($8, due_date),
            parent_id = case when $10 then $9 else parent_id end,
+           start_date = coalesce($11, start_date),
+           depends_on = case when $13 then $12::uuid[] else depends_on end,
            completed_at = case when $5 = 'done' then now() else completed_at end,
            version = version + 1,
            updated_at = now()
@@ -684,8 +812,10 @@ function buildTools() {
      typeof args?.description === 'string' ? args.description : null,
      status, priority,
      typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
-     typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
-     nextParentId, touchesParent]);
+     dueDate,
+     nextParentId, touchesParent,
+     startDate,
+     toPgArrayLiteral(nextDependsOn), touchesDependsOn]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
    // Assigning a task to an agent dispatches it, exactly as it does from the UI.
    // `existing` was read BEFORE the write, so an agent re-writing the assignee it

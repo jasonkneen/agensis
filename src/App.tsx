@@ -636,7 +636,6 @@ function AppContent() {
     activeSubThread,
     subThreadMessages,
     subThreadStreaming,
-    createSubThread,
     openSubThread,
     closeSubThread,
     sendSubThreadMessage,
@@ -1649,22 +1648,6 @@ function AppContent() {
 
   const handleOpenMobileMenu = useCallback(() => setMobileDrawerOpen(true), []);
   const handleToggleWorkspaceCtx = useCallback(() => setUseWorkspaceCtx(v => !v), []);
-  const handleCreateSubThreadFromScene = useCallback(async (messageId: string, agent: WorkspaceAgent, messageContent?: string) => {
-    const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-    const otherAgents = agents
-      .filter(a => a.enabled !== false && a.id !== agent.id)
-      .map(a => ({
-        id: a.id,
-        name: a.name,
-        handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
-      }));
-    await createSubThread(messageId, slug, agent.id, agent.name, {
-      contextMessage: messageContent,
-      additionalAgents: otherAgents,
-    });
-    // Background task — don't open the sub-thread panel; let it run autonomously.
-    // The user can view it from the Threads panel.
-  }, [agents, createSubThread]);
   const handleDeleteDocumentFromScene = useCallback(async (id: string) => {
     const doc = documents.find(d => d.id === id);
     await deleteDocument(id);
@@ -1939,7 +1922,6 @@ function AppContent() {
                   subThreadStreaming={subThreadStreaming}
                   onOpenSubThread={openSubThread}
                   onCloseSubThread={closeSubThread}
-                  onCreateSubThread={handleCreateSubThreadFromScene}
                   onSendSubThreadMessage={sendSubThreadMessage}
                   onSplitThread={handleSplitThread}
                   useWorkspaceCtx={useWorkspaceCtx}
@@ -2238,7 +2220,6 @@ function CanvasLayerScene({
   subThreadStreaming,
   onOpenSubThread,
   onCloseSubThread,
-  onCreateSubThread: onCreateSubThreadProp,
   onSendSubThreadMessage,
   onSplitThread,
   useWorkspaceCtx,
@@ -2330,7 +2311,6 @@ function CanvasLayerScene({
   subThreadStreaming: boolean;
   onOpenSubThread: (session: import('./types').ChatSession) => void;
   onCloseSubThread: () => void;
-  onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
   onSplitThread: (source: import('./types').ChatSession) => void;
   useWorkspaceCtx: boolean;
@@ -2542,7 +2522,6 @@ function CanvasLayerScene({
                     subThreadStreaming={subThreadStreaming}
                     onOpenSubThread={onOpenSubThread}
                     onCloseSubThread={onCloseSubThread}
-                    onCreateSubThread={onCreateSubThreadProp}
                     onSendSubThreadMessage={onSendSubThreadMessage}
                     channelTitle={winSession?.title || win.title}
                     currentUserId={userId}

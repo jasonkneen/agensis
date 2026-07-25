@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';
 import { InboxRow } from './InboxRow';
-import { FOCUS_RING, PANE_HEADER, ROW_PADDING } from './inboxPresentation';
+import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, ROW_PADDING } from './inboxPresentation';
 import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
 
 // ---------------------------------------------------------------------------
@@ -295,20 +295,22 @@ export function InboxList({
   if (loading && rows.length === 0) {
     return (
       <div className="min-h-0 flex-1" data-inbox-skeleton="">
-        {[0, 1, 2, 3].map(index => (
-          <div key={index} className={cn('flex items-start gap-2.5', ROW_PADDING)}>
-            <Skeleton className="size-8 shrink-0 rounded-full" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="ml-auto h-3 w-10" />
+        <div className={LIST_COLUMN_CLASS}>
+          {[0, 1, 2, 3].map(index => (
+            <div key={index} className={cn('flex items-start gap-2.5', ROW_PADDING)}>
+              <Skeleton className="size-8 shrink-0 rounded-full" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="ml-auto h-3 w-10" />
+                </div>
+                <Skeleton className="mt-1.5 h-2.5 w-16" />
+                <Skeleton className="mt-2 h-3 w-full" />
+                <Skeleton className="mt-1 h-3 w-3/5" />
               </div>
-              <Skeleton className="mt-1.5 h-2.5 w-16" />
-              <Skeleton className="mt-2 h-3 w-full" />
-              <Skeleton className="mt-1 h-3 w-3/5" />
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     );
   }
@@ -330,8 +332,9 @@ export function InboxList({
   return (
     <ScrollArea className="min-h-0 flex-1">
       {/* One flat stream, newest first, blockers pinned above it. Nothing is
-          drawn between rows — see InboxRow. */}
-      <div className="flex flex-col pb-2" onKeyDown={handleKeyDown}>
+          drawn between rows — see InboxRow. Capped and centred (LIST_COLUMN_CLASS)
+          so a wide window doesn't stretch rows into a thin edge-to-edge ribbon. */}
+      <div className={cn('flex flex-col pb-2', LIST_COLUMN_CLASS)} onKeyDown={handleKeyDown}>
         {rows.map(row => (
           <InboxRow
             key={row.group.key}
