@@ -660,6 +660,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         type="button"
                         onClick={() => setSelectedAgentId(agent.id)}
                         style={agentAccentStyle(agent)}
+                        title={[
+                          `@${agent.handle || agentHandle(agent.name)}`,
+                          agentTransportLabel(agent.run_mode),
+                          agent.description,
+                        ].filter(Boolean).join(' · ')}
                         className={cn(
                           'group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
                           !active && 'opacity-60',
@@ -680,6 +685,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
                             <span className="truncate text-sm font-semibold">{agent.name}</span>
                           </div>
+                          <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
                         </div>
                       </button>
