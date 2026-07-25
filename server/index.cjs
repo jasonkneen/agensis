@@ -762,6 +762,35 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_thread_items_session ON thread_items(session_id, kind, order_index);
     CREATE INDEX IF NOT EXISTS idx_thread_items_workspace ON thread_items(workspace_id);
 
+    -- Canvas layers (the "projects"/canvases a workspace is split into). Layer
+    -- definitions used to live only in each browser's localStorage while the
+    -- objects drawn on them lived in the shared canvas_objects table keyed by
+    -- that browser-generated layer id — so a canvas one member created was
+    -- invisible to everyone else. layer_id is that same text id
+    -- (canvas_objects.layer_id, 'base' for the default layer); the uuid id is
+    -- the row's own key so every generic /backend/db row id stays globally
+    -- unique. Active-layer state stays per-browser in localStorage.
+    CREATE TABLE IF NOT EXISTS canvas_layers (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      layer_id text NOT NULL,
+      name text NOT NULL DEFAULT 'Workspace',
+      sort_order double precision NOT NULL DEFAULT 0,
+      description text DEFAULT '',
+      icon text DEFAULT '',
+      local_path text DEFAULT '',
+      project_kind text DEFAULT '',
+      git_root text DEFAULT '',
+      git_remote text DEFAULT '',
+      background_opacity double precision DEFAULT 0.42,
+      background_image text DEFAULT '',
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, layer_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
+
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
@@ -1431,6 +1460,9 @@ const farmDeviceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below.
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// CSP violation reports are browser-generated and unauthenticated, so they are
+// keyed per-IP and kept cheap — a page in a redirect loop can emit a lot.
+const cspReportRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -6505,6 +6537,38 @@ function createApp() {
    jsonError(res, error.status || 500, error);
   }
  });
+
+ // CSP violation sink. The Content-Security-Policy-Report-Only header on the
+ // Netlify side is inert without somewhere to report TO — without this, "ship
+ // report-only, watch the violations, then enforce" collects nothing and the
+ // policy can never be safely promoted. Deliberately:
+ //  - unauthenticated: the browser posts these with no credentials, by spec;
+ //  - registered ABOVE the runtime-schema gate: it needs no DB, and a violation
+ //    report is most interesting precisely when the rest of the API is broken;
+ //  - rate limited per IP and body-capped, since it is an open endpoint;
+ //  - always 204, so a misbehaving report can never surface to a user.
+ app.post(
+  '/backend/csp-report',
+  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '16kb' }),
+  (req, res) => {
+   if (rateLimitBlocked(res, cspReportRateLimiter, clientIpFromReq(req))) return;
+   try {
+    const body = req.body || {};
+    // Level 2 sends {"csp-report": {...}}; the Reporting API sends an array.
+    const reports = Array.isArray(body) ? body : [body['csp-report'] || body];
+    for (const report of reports.slice(0, 10)) {
+     if (!report || typeof report !== 'object') continue;
+     const directive = report['effective-directive'] || report['violated-directive'] || report.effectiveDirective || '';
+     const blocked = report['blocked-uri'] || report.blockedURL || '';
+     const documentUri = report['document-uri'] || report.documentURL || '';
+     console.warn('[csp] violation:', JSON.stringify({ directive, blocked, documentUri }));
+    }
+   } catch (error) {
+    console.warn('[csp] malformed report:', error?.message || error);
+   }
+   res.status(204).end();
+  },
+ );
 
  app.use('/backend', async (_req, res, next) => {
   try {
