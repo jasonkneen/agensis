@@ -1821,23 +1821,6 @@
  border-width: 2px;
 }
 
-.chat-msg-jump-highlight {
- animation: chat-msg-jump 1.6s ease-out;
- border-radius: 0.5rem;
-}
-
-@keyframes chat-msg-jump {
-
- 0%,
- 30% {
-  background: color-mix(in srgb, var(--primary) 22%, transparent);
- }
-
- 100% {
-  background: transparent;
- }
-}
-
 .chat-message-row[data-agent-message="true"] .chat-message-avatar,
 .chat-thread-message[data-agent-message="true"]>div:first-child {
  border: 1px solid color-mix(in srgb, var(--agent-accent) 62%, var(--border));
