@@ -399,7 +399,10 @@ export interface WorkspaceAgent {
  metadata?: Record<string, unknown> | null;
  handle?: string | null;
  model: string;
- run_mode?: 'builtin' | 'daemon' | 'sandbox';
+ /** How this agent's turns are served. 'external' = an MCP client registered
+  *  itself (register_agent) and works AS this agent via claim_job — remote, but
+  *  with no daemon CLI to connect, so the daemon Connect flow does not apply. */
+ run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
  sandbox_provider?: string | null;
  sandbox_config?: Record<string, unknown>;
  enabled?: boolean;

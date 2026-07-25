@@ -77,6 +77,55 @@ function optInt(value, fallback, max) {
  return max ? Math.min(Math.floor(n), max) : Math.floor(n);
 }
 
+// Max parent links we will walk when checking for a cycle. Guards against an
+// unbounded loop if the table ALREADY contains a cycle (written by some other
+// path); a legitimate task tree is never this deep.
+const MAX_TASK_DEPTH = 64;
+
+// Resolve + validate a `parent_id` for task nesting. Never pass the caller's
+// value straight into the INSERT/UPDATE:
+//   - the parent must live in the SAME workspace. This surface is
+//     workspace-scoped, so accepting a foreign parent would both leak the
+//     existence of another tenant's task and hang our row off it.
+//   - a task may not be its own parent, and may not be re-parented under one
+//     of its own descendants. tasks.parent_id is ON DELETE CASCADE, so a cycle
+//     is not cosmetic — it makes a subtree that can delete itself in a loop.
+// `childId` is null on create (a brand-new row has no id and no descendants,
+// so only the workspace check applies).
+async function resolveParentTaskId(db, workspaceId, rawParentId, childId) {
+ const parentId = String(rawParentId).trim();
+ if (childId && parentId === childId) throw new ToolError('A task cannot be its own parent');
+ const parent = await db.unsafe(
+  'select id, parent_id from tasks where id = $1 and workspace_id = $2 limit 1',
+  [parentId, workspaceId]);
+ if (!parent[0]) throw new ToolError('Parent task not found in this workspace');
+ if (childId) {
+  let cursor = parent[0].parent_id ? String(parent[0].parent_id) : null;
+  let hops = 0;
+  while (cursor) {
+   if (cursor === childId) {
+    throw new ToolError('That parent would create a cycle in the task tree');
+   }
+   // FAIL CLOSED at the cap, never open. Exiting the walk quietly and accepting
+   // the parent means a chain longer than MAX_TASK_DEPTH bypasses the cycle
+   // check entirely — a 71-link chain slipped straight through the previous
+   // `for (… hops < MAX_TASK_DEPTH)` form. Refusing is right either way: a
+   // legitimate tree is never this deep, so hitting the cap means the table
+   // already contains a cycle or something pathological, and parent_id is
+   // ON DELETE CASCADE, so guessing wrong deletes a subtree.
+   if (hops >= MAX_TASK_DEPTH) {
+    throw new ToolError('Task tree is too deep to verify safely; re-parent higher up');
+   }
+   hops += 1;
+   const next = await db.unsafe(
+    'select parent_id from tasks where id = $1 and workspace_id = $2 limit 1',
+    [cursor, workspaceId]);
+   cursor = next[0] && next[0].parent_id ? String(next[0].parent_id) : null;
+  }
+ }
+ return parentId;
+}
+
 // =============================================================================
 // Tool definitions. Each tool: { name, description, inputSchema, run }.
 // `run(args, ctx)` where ctx = { db, identity, deps }. Throw ToolError for
@@ -504,7 +553,7 @@ function buildTools() {
 
  add({
   name: 'list_tasks',
-  description: 'List tasks in the workspace, optionally filtered by status.',
+  description: 'List tasks in the workspace, optionally filtered by status. Each row carries parent_id (null for a top-level task), so the task tree can be rebuilt from the result.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -529,7 +578,7 @@ function buildTools() {
 
  add({
   name: 'create_task',
-  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai).',
+  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai). Pass parent_id to nest it under an existing task instead of faking hierarchy in the title.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -539,6 +588,7 @@ function buildTools() {
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Default "normal".' },
     assignee_id: { type: 'string', description: 'User id to assign to (optional).' },
     due_date: { type: 'string', description: 'ISO8601 due date (optional).' },
+    parent_id: { type: 'string', description: 'Id of the task this is a sub-task of (optional). Must be a task in this workspace.' },
    },
    required: ['title'],
    additionalProperties: false,
@@ -550,16 +600,21 @@ function buildTools() {
    const title = requireString(args, 'title');
    const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : 'todo';
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : 'normal';
+   // Validated before the insert: a bad parent must not create an orphan row.
+   const parentId = typeof args?.parent_id === 'string' && args.parent_id.trim()
+    ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, null)
+    : null;
    const rows = await db.unsafe(
-    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id)
-         values ($1, null, $2, $3, $4, $5, $6, $7, 'ai', $8) returning *`,
+    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id)
+         values ($1, null, $2, $3, $4, $5, $6, $7, 'ai', $8, $9) returning *`,
     [identity.workspaceId,
     typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
      title,
     typeof args?.description === 'string' ? args.description : '',
      status, priority,
     typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
-    identity.agentId ? String(identity.agentId) : null]);
+    identity.agentId ? String(identity.agentId) : null,
+     parentId]);
    deps.notifyDbSubscribers('tasks', 'INSERT', rows);
    return { task: rows[0] };
   },
@@ -567,7 +622,7 @@ function buildTools() {
 
  add({
   name: 'update_task',
-  description: 'Update an existing task (status, title, description, priority, assignee, due date).',
+  description: 'Update an existing task (status, title, description, priority, assignee, due date, parent task).',
   inputSchema: {
    type: 'object',
    properties: {
@@ -578,6 +633,7 @@ function buildTools() {
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
     assignee_id: { type: 'string' },
     due_date: { type: 'string', description: 'ISO8601 due date.' },
+    parent_id: { type: 'string', description: 'Re-parent this task under another task in this workspace. Pass "" to un-nest it back to top level.' },
    },
    required: ['task_id'],
    additionalProperties: false,
@@ -588,10 +644,24 @@ function buildTools() {
    }
    const taskId = requireString(args, 'task_id');
    const existing = await db.unsafe(
-    'select id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
+    'select id, parent_id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
    if (!existing[0]) throw new ToolError('Task not found in this workspace');
    const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : null;
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : null;
+   // parent_id can't ride the coalesce() pattern: null there means "leave
+   // alone", but an explicit "" has to mean "un-nest to top level". Resolve the
+   // final value here instead, using the row we already loaded.
+   // Did the CALLER mention parent_id at all? If not we must not write the
+   // column: sourcing it from `existing` (read moments ago) turns every
+   // unrelated update_task into a read-modify-write that silently reverts a
+   // concurrent re-parent. `case when $10 then $9 else parent_id end` below
+   // leaves it to the row's own value at update time instead.
+   const touchesParent = typeof args?.parent_id === 'string';
+   const nextParentId = touchesParent
+    ? (args.parent_id.trim()
+     ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, taskId)
+     : null)
+    : null;
    const rows = await db.unsafe(
     `update tasks set
            title = coalesce($3, title),
@@ -600,6 +670,7 @@ function buildTools() {
            priority = coalesce($6, priority),
            assignee_id = coalesce($7, assignee_id),
            due_date = coalesce($8, due_date),
+           parent_id = case when $10 then $9 else parent_id end,
            completed_at = case when $5 = 'done' then now() else completed_at end,
            version = version + 1,
            updated_at = now()
@@ -609,7 +680,8 @@ function buildTools() {
      typeof args?.description === 'string' ? args.description : null,
      status, priority,
      typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
-     typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null]);
+     typeof args?.due_date === 'string' && args.due_date.trim() ? args.due_date.trim() : null,
+     nextParentId, touchesParent]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
    return { task: rows[0] };
   },

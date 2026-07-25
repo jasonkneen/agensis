@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
@@ -55,12 +55,12 @@ import {
   ContextMenuTrigger,
 } from './components/ui/context-menu';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from './components/ui/dropdown-menu';
 import { Switch } from './components/ui/switch';
 import { ScrollArea } from './components/ui/scroll-area';
@@ -450,25 +450,22 @@ function KnowledgeContextControl({
     });
   };
 
+  // Rendered as a SUBMENU of the chat window's channel overflow menu, not as a
+  // standalone header button — a nested <DropdownMenu> would dismiss the outer
+  // one, whereas Sub/SubTrigger share the parent menu's context.
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={enabled ? 'secondary' : 'outline'}
-          size="sm"
-          className="knowledge-context-trigger h-8 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs"
-          title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
-        >
-          <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
-          <span>Knowledge</span>
-          <Badge variant="secondary" className="h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
-            {activeTotal}
-          </Badge>
-          <ChevronDown className="size-3" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72 p-0">
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        className="gap-2 px-2 py-1.5"
+        title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
+      >
+        <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
+        <span>Knowledge</span>
+        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
+          {activeTotal}
+        </Badge>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-72 p-0">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-sm font-semibold leading-none">Knowledge</span>
@@ -528,8 +525,8 @@ function KnowledgeContextControl({
             );
           })}
         </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 

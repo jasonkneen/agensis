@@ -606,7 +606,9 @@
  pointer-events: none;
 }
 
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger,
+/* .knowledge-context-trigger used to be a header button here; the Knowledge
+   control is now a submenu row inside the channel overflow menu and must not
+   pick up the gold button skin. */
 :root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
  border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
  color: var(--tw-gold-outline) !important;
@@ -617,12 +619,6 @@
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
   var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger [data-slot="badge"] {
- border-color: transparent !important;
- background: color-mix(in srgb, var(--tw-gold-outline) 18%, transparent) !important;
- box-shadow: none !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
@@ -4061,14 +4057,28 @@ select {
  font-weight: 700 !important;
  border-width: 2px !important;
  border-color: var(--neo-edge) !important;
- box-shadow: var(--neo-shadow-xs) !important;
+ /* Every neo badge rule below has to win with !important, which would otherwise
+    wipe out the shared `control-outer-ring` utility — Tailwind v4 paints ring-*
+    through box-shadow, so an !important box-shadow drops the ring instead of
+    layering with it. Compose it in as the first layer of the neo shadow: the
+    default is an invisible zero-spread shadow, and only badges that opted into
+    the utility (the `outline` variant, see badge.tsx) get a real ring. */
+ --neo-badge-ring: 0 0 0 0 transparent;
+ box-shadow: var(--neo-badge-ring), var(--neo-shadow-xs) !important;
+}
+
+/* The ring is a dark-mode-only treatment (see --control-outer-ring above), and
+   this selector must out-specify the default set on the base rule. */
+:root[data-ui-theme="neo"][data-theme="dark"] [data-slot="badge"].control-outer-ring:not([data-variant="ghost"]):not([data-variant="link"]) {
+ --neo-badge-ring: 0 0 0 1px var(--control-outer-ring);
 }
 
 /* profile flavours — square + airy for editorial/terminal, chunkier for the
    loud profiles. (No rotation here: badges sit inline in dense UI.) */
 :root[data-ui-theme="neo"][data-neo-style="editorial"] [data-slot="badge"] {
  border-radius: 0 !important;
- box-shadow: none !important;
+ /* No neo drop shadow in this flavour, but keep the outer ring layer. */
+ box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent) !important;
  letter-spacing: 0.12em;
 }
 
@@ -4079,7 +4089,7 @@ select {
 
 :root[data-ui-theme="neo"][data-neo-style="heavy"] [data-slot="badge"],
 :root[data-ui-theme="neo"][data-neo-style="sticker"] [data-slot="badge"] {
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent), var(--neo-shadow-sm) !important;
 }
 
 /* ---- pill switch with a bordered circular knob (skill signature) ----------- */
