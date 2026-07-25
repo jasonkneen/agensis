@@ -152,6 +152,7 @@ import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
@@ -966,6 +967,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => buildAgentAccentLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
   );
+  // Who replied and when, per parent message — derived from the messages already
+  // in memory (threadReplyCounts stays the source of truth for the number itself).
+  const threadReplySummaries = useMemo(
+    () => buildThreadReplySummaries(messages, message => resolveMessageAvatar(message, agentAvatarLookup)),
+    [messages, agentAvatarLookup],
+  );
 
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
     if (channelMeta?.id) return channelMeta;
@@ -1450,6 +1457,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           accent={resolveMessageAccent(msg, agentAccentLookup)}
                           isStreaming={streaming && idx === shownMessages.length - 1 && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
+                          replySummary={threadReplySummaries[msg.id]}
                           isEditing={editingMessageId === msg.id}
                           editingContent={editingContent}
                           actionBusy={messageActionBusy === msg.id}
@@ -2052,6 +2060,7 @@ function ChatMessageBubble({
   accent,
   isStreaming,
   replyCount,
+  replySummary,
   isEditing,
   editingContent,
   actionBusy,
@@ -2075,6 +2084,7 @@ function ChatMessageBubble({
   accent?: string;
   isStreaming?: boolean;
   replyCount?: number;
+  replySummary?: ThreadReplySummary;
   isEditing?: boolean;
   editingContent?: string;
   actionBusy?: boolean;
@@ -2116,6 +2126,14 @@ function ChatMessageBubble({
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const reactions = msg.reactions ?? {};
   const uid = currentUserId || 'me';
+
+  // Reply summary. replyCount stays authoritative for the number; replySummary
+  // only decorates it (who spoke, how long ago) and can be absent for windows
+  // that were handed counts but not the messages behind them.
+  const replyLabel = `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
+  const replyParticipants = replySummary?.participants ?? [];
+  const replyOverflow = replySummary?.overflow ?? 0;
+  const lastReplyLabel = formatLastReplyTime(replySummary?.lastReplyAt);
 
   return (
     <div
@@ -2182,11 +2200,46 @@ function ChatMessageBubble({
         {replyCount && onOpenThread ? (
           <button
             type="button"
-            className="mt-1 inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            className="mt-1 -ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
             onClick={onOpenThread}
+            aria-label={lastReplyLabel
+              ? `Open thread — ${replyLabel}, last reply ${lastReplyLabel}`
+              : `Open thread — ${replyLabel}`}
           >
-            <CornerDownRight className="size-3" />
-            {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+            {replyParticipants.length > 0 ? (
+              <span className="flex shrink-0 items-center">
+                {replyParticipants.map((participant, index) => (
+                  <span
+                    key={participant.key}
+                    className={cn(
+                      'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background',
+                      index > 0 && '-ml-1.5',
+                    )}
+                    title={participant.name}
+                  >
+                    <MessageAvatar
+                      avatar={participant.avatar}
+                      initials={participant.name.slice(0, 2).toUpperCase()}
+                      isAgent={participant.isAgent}
+                    />
+                  </span>
+                ))}
+                {replyOverflow > 0 && (
+                  <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background">
+                    +{replyOverflow}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <CornerDownRight className="size-3 shrink-0" />
+            )}
+            <span className="shrink-0 font-medium">{replyLabel}</span>
+            {lastReplyLabel && (
+              <>
+                <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
+                <span className="truncate text-muted-foreground/70">last reply {lastReplyLabel}</span>
+              </>
+            )}
           </button>
         ) : null}
         {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
@@ -2209,9 +2262,13 @@ function ChatMessageBubble({
               );
             })}
             {onCreateSubThread && (
+              // Hover-only: this used to sit under every single message whether or
+              // not it had anything to do with a sub-thread, which made it the
+              // loudest repeated element in the timeline. Opacity (not `hidden`)
+              // so revealing it doesn't reflow the row under the cursor.
               <button
                 type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
                 onClick={onCreateSubThread}
               >
                 <Plus className="size-3" />
