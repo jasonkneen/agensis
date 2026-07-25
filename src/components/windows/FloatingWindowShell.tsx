@@ -839,6 +839,15 @@ export function FloatingWindowShell({
                       {isMaximized ? <Minimize2 /> : <Maximize2 />}
                       {isMaximized ? 'Restore' : 'Maximize'}
                     </DropdownMenuItem>
+                    {!isMobile && onToggleFullExpand && (
+                      <DropdownMenuItem
+                        disabled={!canControl}
+                        onSelect={() => onToggleFullExpand(win.id)}
+                      >
+                        {isFullExpand ? <Shrink /> : <Expand />}
+                        {isFullExpand ? 'Exit full expand' : 'Full expand'}
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuGroup>
                   <DropdownMenuSeparator />
                   <DropdownMenuGroup>
@@ -884,32 +893,10 @@ export function FloatingWindowShell({
                 <Minus />
               </Button>
 
-              {!isMobile && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-xs"
-                  onClick={handleMaximize}
-                  disabled={!canControl}
-                  aria-label={isMaximized ? 'Restore' : 'Maximize'}
-                >
-                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
-                </Button>
-              )}
-              {!isMobile && onToggleFullExpand && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon-xs"
-                  onClick={() => onToggleFullExpand(win.id)}
-                  disabled={!canControl}
-                  aria-label={isFullExpand ? 'Exit full expand' : 'Full expand'}
-                  aria-pressed={isFullExpand}
-                  title={isFullExpand ? 'Exit full expand' : 'Full expand'}
-                >
-                  {isFullExpand ? <Shrink /> : <Expand />}
-                </Button>
-              )}
+              {/* Maximize and Full expand used to sit here as their own icon
+                  buttons; both are in the "..." menu above now, so the title bar
+                  keeps only the three controls a user reaches for blind:
+                  overflow, minimize, close. */}
               <Button
                 type="button"
                 variant="outline"

@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Mic,
   Monitor,
+  MoreHorizontal,
   Palette,
   PanelRightClose,
   PanelRightOpen,
@@ -110,6 +111,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -192,6 +194,8 @@ interface ChatWindowContentProps {
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
   onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
   systemCapabilities?: SystemCapabilities | null;
+  // Rendered INSIDE the channel overflow menu, so it must be menu-item-shaped
+  // (a DropdownMenuItem / DropdownMenuSub), not a standalone button.
   contextControls?: React.ReactNode;
   isDirectMessage?: boolean;
   onAgentProfile?: (agentIdOrHandle: string) => void;
@@ -722,6 +726,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   );
   const parentMessage = activeThreadId ? visibleMessages.find(m => m.id === activeThreadId) : null;
   const pinnedMessages = visibleMessages.filter(message => message.pinned);
+  const subThreadCount = useMemo(
+    () => Object.values(subThreadsByMessage).reduce((total, list) => total + list.length, 0),
+    [subThreadsByMessage],
+  );
   const inferredSessionId = useMemo(() => (
     messages[0]?.session_id ||
     topLevelMessages?.[0]?.session_id ||
@@ -1271,34 +1279,28 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 <span className="max-w-48 truncate font-semibold">{directAgent?.name || channelTitle || 'Direct message'}</span>
               </Button>
             ) : (
-              <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
-                      <Hash data-icon="inline-start" />
-                      <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
-                      <ChevronDown className="size-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-72">
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        handleOpenParticipantsDialog();
-                      }}
-                    >
-                      <UserPlus data-icon="inline-start" />
-                      Add people or agents
-                    </DropdownMenuItem>
-                    {channelActionStatus && (
-                      <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => void handleOpenFlowConnect()}>
-                  <Link2 data-icon="inline-start" />
-                  Connect
-                </Button>
-              </>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
+                    <Hash data-icon="inline-start" />
+                    <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
+                    <ChevronDown className="size-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-72">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      handleOpenParticipantsDialog();
+                    }}
+                  >
+                    <UserPlus data-icon="inline-start" />
+                    Add people or agents
+                  </DropdownMenuItem>
+                  {channelActionStatus && (
+                    <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
             <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)}>
               <MessageSquare data-icon="inline-start" />
@@ -1307,10 +1309,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')}>
               <Paperclip data-icon="inline-start" />
               Files
-            </Button>
-            <Button type="button" variant={sidePanel === 'pins' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('pins')}>
-              <Pin data-icon="inline-start" />
-              Pins
             </Button>
             <Button
               type="button"
@@ -1321,93 +1319,110 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             >
               <GitBranch data-icon="inline-start" />
               Threads
-              {Object.values(subThreadsByMessage).flat().length > 0 && (
+              {subThreadCount > 0 && (
                 <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
-                  {Object.values(subThreadsByMessage).flat().length}
+                  {subThreadCount}
                 </span>
               )}
             </Button>
-            {onSplitThread && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2"
-                onClick={onSplitThread}
-                title="Split this thread — copies the transcript into a new thread beside this one; send a message to start it"
-              >
-                <Columns2 data-icon="inline-start" />
-                Split
-              </Button>
-            )}
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={clearView} title="Clear this view — messages stay; scroll up to restore">
-              <Eraser data-icon="inline-start" />
-              Clear
-            </Button>
             <div className="min-w-2 flex-1" />
-            {!isDirectMessage && contextControls && (
-              <div className="flex min-w-0 max-w-[40vw] shrink overflow-x-auto text-xs text-muted-foreground">
-                {contextControls}
-              </div>
-            )}
             {!isDirectMessage && (
-              <>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
-                  <RotateCcw data-icon="inline-start" />
-                  Catch up
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="participant-count-chip h-8 gap-1 px-2"
+                    title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
+                  >
+                    <Users data-icon="inline-start" />
+                    {participants.length}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  {participants.map(participant => (
+                    <DropdownMenuItem key={participant.id} className="gap-2">
+                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
+                        {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
+                        {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{participant.name}</span>
+                        {participant.status && (
+                          <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
+                        )}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {/* Overflow. Everything that isn't Messages / Files / Threads lives
+                here — this row previously carried nine labelled ghost buttons
+                inside a fixed h-11 strip with overflow-hidden, so on a narrow
+                window the right-hand controls were simply clipped. This is the
+                CHANNEL menu; FloatingWindowShell's own "..." owns WINDOW actions
+                (share, maximize, close) and is not rendered at all for grouped
+                panes, so channel actions cannot live there. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="More channel actions">
+                  <MoreHorizontal />
                 </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="participant-count-chip h-8 gap-1 px-2"
-                      title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
-                    >
-                      <Users data-icon="inline-start" />
-                      {participants.length}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-64">
-                    {participants.map(participant => (
-                      <DropdownMenuItem key={participant.id} className="gap-2">
-                        <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
-                          {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
-                          {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm">{participant.name}</span>
-                          {participant.status && (
-                            <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
-                          )}
-                        </span>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
-            )}
-            {showWidgetRail && (
-              <Button
-                type="button"
-                variant={widgetsCollapsed ? 'ghost' : 'secondary'}
-                size="sm"
-                className="h-8 px-2"
-                aria-pressed={!widgetsCollapsed}
-                disabled={widgetsTooNarrow}
-                title={
-                  widgetsTooNarrow
-                    ? 'Widen the window to show widgets'
-                    : widgetsCollapsed
-                      ? 'Show thread widgets'
-                      : 'Hide thread widgets'
-                }
-                onClick={() => setWidgetsCollapsed(v => !v)}
-              >
-                {widgetsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
-              </Button>
-            )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem onSelect={() => setSidePanel('pins')}>
+                  <Pin data-icon="inline-start" />
+                  Pins
+                </DropdownMenuItem>
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => setCatchUpOpen(true)}>
+                    <RotateCcw data-icon="inline-start" />
+                    Catch up
+                  </DropdownMenuItem>
+                )}
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => { void handleOpenFlowConnect(); }}>
+                    <Link2 data-icon="inline-start" />
+                    Connect
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                {onSplitThread && (
+                  <DropdownMenuItem onSelect={() => onSplitThread()}>
+                    <Columns2 data-icon="inline-start" />
+                    Split thread
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={clearView}>
+                  <Eraser data-icon="inline-start" />
+                  Clear this view
+                </DropdownMenuItem>
+                {showWidgetRail && (
+                  <DropdownMenuItem
+                    disabled={widgetsTooNarrow}
+                    onSelect={event => {
+                      event.preventDefault();
+                      setWidgetsCollapsed(v => !v);
+                    }}
+                  >
+                    {widgetsCollapsed ? <PanelRightOpen data-icon="inline-start" /> : <PanelRightClose data-icon="inline-start" />}
+                    {widgetsTooNarrow
+                      ? 'Widen the window to show widgets'
+                      : widgetsCollapsed
+                        ? 'Show thread widgets'
+                        : 'Hide thread widgets'}
+                  </DropdownMenuItem>
+                )}
+                {!isDirectMessage && contextControls && (
+                  <>
+                    <DropdownMenuSeparator />
+                    {contextControls}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
         <MessageScrollerProvider autoScroll={autoScroll}>

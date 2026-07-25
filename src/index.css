@@ -606,7 +606,9 @@
  pointer-events: none;
 }
 
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger,
+/* .knowledge-context-trigger used to be a header button here; the Knowledge
+   control is now a submenu row inside the channel overflow menu and must not
+   pick up the gold button skin. */
 :root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
  border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
  color: var(--tw-gold-outline) !important;
@@ -617,12 +619,6 @@
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
   var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger [data-slot="badge"] {
- border-color: transparent !important;
- background: color-mix(in srgb, var(--tw-gold-outline) 18%, transparent) !important;
- box-shadow: none !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
