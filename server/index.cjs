@@ -3183,7 +3183,8 @@ async function mirrorAgentReplyToTaskComment(messageRow) {
 // file), wake each mentioned agent in its DM with a message that quotes the comment
 // and links back to the source — so "you were tagged" turns into a real, visible
 // response in the DM instead of a silent flag the agent has to poll for.
-async function dispatchCommentMentions({ table, row, authorUserId }) {
+// `run` is a test seam; production always uses continueConversation.
+async function dispatchCommentMentions({ table, row, authorUserId, run = continueConversation }) {
  const config = COMMENT_MENTION_TABLES[table];
  if (!config || !row) return;
  // Never dispatch on an agent-authored comment (e.g. a reply this loop mirrored
@@ -3220,6 +3221,9 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
  }
 
  for (const handle of handles) {
+  // Released on every path that does NOT end in a running turn — the claim's job
+  // is to dedupe one human action, not to lock a task out of the queue.
+  let claim = null;
   try {
    const agent = await resolveWorkspaceAgentByHandle(workspaceId, handle);
    if (!agent) continue;
@@ -3239,34 +3243,92 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
     // own — claim the pair so the agent runs ONCE. The window is short (seconds),
     // so a genuine second @mention comment still wakes the agent.
     if (!claimTaskDispatch(String(taskId), String(agent.id), TASK_MENTION_CLAIM_MS)) continue;
+    claim = [String(taskId), String(agent.id)];
+    const handleSlug = slugHandle(agent.handle || agent.name);
+
+    // Read the row BEFORE writing anything: the busy check below has to be able to
+    // leave the task exactly as the human left it, and a rollback needs the
+    // provenance this dispatch would overwrite. task_comments.task_id is a
+    // cascading FK, so a comment cannot outlive its task — no row means the task
+    // just went away and there is nothing to dispatch onto.
+    const cur = await getDb().unsafe(
+     'select id, status, source_type, source_id from tasks where id = $1 limit 1',
+     [String(taskId)],
+    );
+    const task = cur[0];
+    if (!task) continue;
+    const priorStatus = String(task.status || 'todo');
+
+    // All of an agent's task work lands in ONE DM session, and agent_jobs carries a
+    // partial unique index (one active job per session+agent), so a turn started
+    // while the agent is mid-turn physically cannot create a job. Find that out
+    // BEFORE writing: record the assignment, so the agent's queue owns the task,
+    // but leave the status alone — 'todo' + assigned is exactly what
+    // drainAgentTaskQueue selects, and it is the state the human left it in. The
+    // old code flipped it to 'in_progress' and then dropped the refused turn, so
+    // an @mention while the agent was busy left a task that read as "being worked
+    // on" with no job attached and nothing that would ever pick it up.
+    if (await agentHasActiveJob(session.id, agent.id)) {
+     const queued = await getDb().unsafe(
+      'update tasks set assignee_id = $1, updated_at = now() where id = $2 returning *',
+      [String(agent.id), String(taskId)],
+     );
+     if (queued[0]) notifyDbSubscribers('tasks', 'UPDATE', queued);
+     const position = await taskQueuePosition(workspaceId, agent.id, taskId);
+     console.log(`[task-queue] queued task=${taskId} for @${handleSlug}: agent is mid-turn${position ? ` (queue position ${position})` : ''} (cause=mention)`);
+     continue;
+    }
+
     // Assign the task to the mentioned agent and move it into progress (never
     // clobbering a started/done/cancelled status), then run the agent inside
     // the task's own subthread so its reply mirrors back as a task comment.
-    try {
-     const cur = await getDb().unsafe('select status, source_type from tasks where id = $1 limit 1', [String(taskId)]);
-     const nextStatus = taskStatusOnDispatch(cur[0]?.status || 'todo');
-     // Record the chat this task is now being worked in (see
-     // TASK_SOURCE_LINK_OVERWRITABLE) so the task can offer "Open chat".
-     const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(cur[0]?.source_type || ''));
-     const taskRows = stampSource
-      ? await getDb().unsafe(
-       "update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3, updated_at = now() where id = $4 returning *",
-       [String(agent.id), nextStatus, String(session.id), String(taskId)],
-      )
-      : await getDb().unsafe(
-       'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
-       [String(agent.id), nextStatus, String(taskId)],
-      );
-     if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
-    } catch (error) {
-     console.error('assign task on mention failed', error);
-    }
-    const { threadParentId } = await postTaskSubthreadMention({
+    // Record the chat this task is now being worked in (see
+    // TASK_SOURCE_LINK_OVERWRITABLE) so the task can offer "Open chat".
+    const nextStatus = taskStatusOnDispatch(priorStatus);
+    const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+    const taskRows = stampSource
+     ? await getDb().unsafe(
+      "update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3, updated_at = now() where id = $4 returning *",
+      [String(agent.id), nextStatus, String(session.id), String(taskId)],
+     )
+     : await getDb().unsafe(
+      'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
+      [String(agent.id), nextStatus, String(taskId)],
+     );
+    if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
+
+    const { threadParentId, messageRow } = await postTaskSubthreadMention({
      session, taskId, content, authorUserId, authorName,
     });
-    void continueConversation({ workspaceId, sessionId: session.id, threadParentId }).catch((error) =>
-     console.error('continueConversation (task subthread mention) failed', error),
-    );
+
+    // AWAITED, unlike the fire-and-forget it replaces: the turn can still be
+    // refused inside continueConversation (the agent won its own one-active-job
+    // slot in the window between the check above and the job insert, or the
+    // subthread's turn budget is spent). Nothing retried that, so the task sat
+    // 'in_progress' with no job attached, forever. Every caller is `void`-ed, so
+    // awaiting costs no request latency.
+    let outcome = null;
+    try {
+     outcome = await run({ workspaceId, sessionId: session.id, threadParentId });
+    } catch (error) {
+     console.error('continueConversation (task subthread mention) failed', error);
+     outcome = { started: false, reason: 'error' };
+    }
+    if (outcome && outcome.started === false) {
+     // Compare-and-swap rollback (see undoTaskDispatch): it restores only the
+     // status THIS dispatch wrote, so it can never re-open a task a human closed
+     // while the refused turn was in flight. The assignee stays, so the task is
+     // left as a plain 'todo' + assigned — which is what the drain picks up the
+     // moment the agent frees up.
+     await undoTaskDispatch({
+      task, priorStatus, wroteStatus: nextStatus, stampedSource: stampSource,
+      messageId: messageRow?.id || null, sessionId: session.id,
+     });
+     const busy = TASK_QUEUE_BUSY_RUN_REASONS.has(String(outcome.reason || ''));
+     console.log(`[task-queue] ${busy ? 'requeued' : 'could not start'} task=${taskId} for @${handleSlug}: run=${outcome.reason || 'unknown'} (cause=mention); status back to ${priorStatus}`);
+     continue;
+    }
+    claim = null; // a real turn is running; keep the claim so a re-post can't double-run it
    } else {
     const messageRows = await getDb().unsafe(
      `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
@@ -3275,12 +3337,16 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
      [session.id, content, String(authorUserId || ''), authorName],
     );
     notifyDbSubscribers('messages', 'INSERT', messageRows);
-    void continueConversation({ workspaceId, sessionId: session.id }).catch((error) =>
+    // No task, so no queue: a plain DM mention wakes the agent immediately, exactly
+    // as before. There is no task status to strand if the turn is refused.
+    void run({ workspaceId, sessionId: session.id }).catch((error) =>
      console.error('continueConversation (comment mention) failed', error),
     );
    }
   } catch (error) {
    console.error(`comment mention dispatch failed for @${handle}`, error);
+  } finally {
+   if (claim) releaseTaskDispatch(claim[0], claim[1]);
   }
  }
 }
@@ -10634,6 +10700,7 @@ module.exports = {
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
+  dispatchCommentMentions,
   dispatchTaskAssignment,
   drainAgentTaskQueue,
   agentHasActiveJob,
