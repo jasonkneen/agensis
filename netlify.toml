@@ -70,6 +70,16 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    # microphone=(self) — required by huddles (LiveKit voice). This header is
+    # ENFORCED, so with `microphone=()` getUserMedia({audio:true}) is blocked
+    # outright and a huddle can never capture audio, whatever the app does.
+    # (self) is the narrowest value that works: same-origin documents only, no
+    # cross-origin iframe (chat artifacts / canvas applets are srcdoc iframes and
+    # do NOT inherit an allowlist they are not named in). Camera and geolocation
+    # stay off.
+    Permissions-Policy = "camera=(), microphone=(self), geolocation=()"
     Content-Security-Policy = "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
-    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'; report-uri https://agensis-backend.fly.dev/backend/csp-report"
+    # connect-src also allows *.livekit.cloud: the LiveKit client opens a wss://
+    # signalling connection to the project's own host, not to our backend. Listed
+    # now so promoting this policy from Report-Only cannot silently kill voice.
+    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev https://*.livekit.cloud wss://*.livekit.cloud; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'; report-uri https://agensis-backend.fly.dev/backend/csp-report"

@@ -1,5 +1,17 @@
 [
   {
+    "version": "huddles",
+    "date": "2026-07-25",
+    "title": "Huddles — talk in a channel",
+    "summary": "Start a voice huddle from any channel and anyone in the workspace can join, with a live card showing who is in.",
+    "highlights": [
+      "Start a huddle from a channel and it opens a room instantly",
+      "The card shows who has joined, live",
+      "Mute and leave from the in-call bar",
+      "Voice runs on LiveKit — nothing to install"
+    ]
+  },
+  {
     "version": "send-to-channel",
     "date": "2026-07-25",
     "title": "Agents work in a thread and send you the answer",

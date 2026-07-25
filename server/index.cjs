@@ -21,6 +21,7 @@ const {
  signFlowWebhook,
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
+const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
 const {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
@@ -1074,6 +1075,15 @@ async function ensureRuntimeSchema() {
     `);
  } catch (error) {
   console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
+ }
+
+ // Huddle tables live in server/huddles.cjs so the LiveKit surface stays in one
+ // module, but the DDL runs HERE so the three-place rule holds and a fresh Fly
+ // boot provisions them like everything else.
+ try {
+  await ensureHuddlesSchema(getDb());
+ } catch (error) {
+  console.warn('[backend] huddles schema migration failed:', error.message || error);
  }
 }
 
@@ -8660,6 +8670,13 @@ function createApp() {
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
+ });
+
+ // Voice huddles (LiveKit). Fly-only, like gateways: it needs the websocket fanout,
+ // so the Netlify mirror deliberately has no huddle routes.
+ mountHuddleRoutes(app, {
+  getDb, requireAuth, enforceWorkspaceRole, jsonError, notifyDbSubscribers,
+  rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
  });
 
  // Per-workspace usage/storage stats in one round-trip. Read-role only. Bytes

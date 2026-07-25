@@ -34,6 +34,8 @@ const MUST_BE_LINTED = [
   'server/index.cjs',
   'server/mcp.cjs',
   'server/skills.cjs',
+  // Mints LiveKit join tokens and verifies the LiveKit webhook signature.
+  'server/huddles.cjs',
   'server/inference-broker.cjs',
   'server/farm-integration.cjs',
   'server/flow-integration.cjs',

@@ -60,6 +60,7 @@ import {
   type ProjectFileSource,
 } from '../chat/ComposerAddContent';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
+import { HuddleCard } from '../huddle/HuddleCard';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
@@ -750,6 +751,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // width, the cards just float over the empty right-hand space (they don't
   // reserve a column). The overlay is click-through except for the cards.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
+  // Voice huddle strip, between the header and the transcript. Bound to THIS
+  // session so the call belongs to the conversation it was called from.
+  const showHuddleCard = !readOnly && !!inferredSessionId && !!workspaceId;
   const widgetsActive = showWidgetRail && !widgetsCollapsed && !widgetsTooNarrow;
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
@@ -1446,6 +1450,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             </DropdownMenu>
           </div>
         </div>
+        {showHuddleCard && <HuddleCard workspaceId={workspaceId} sessionId={inferredSessionId} />}
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
