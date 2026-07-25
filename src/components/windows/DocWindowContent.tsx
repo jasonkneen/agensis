@@ -364,6 +364,32 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     lastSnapshotTimeRef.current = Date.now();
   }, [doc.id]);
 
+  // Keep embedded "Task list" blocks in sync with live task status. `tasks` is
+  // websocket-backed (see useTasks), so this re-runs whenever a task's status
+  // changes anywhere — another user, another doc, or an agent via update_task —
+  // patching the already-rendered checkbox/label in place. Deliberately does not
+  // call triggerAutoSave: syncing a live prop into the DOM isn't a user edit, and
+  // re-saving on every remote status change would spam doc versions/snapshots.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || tasks.length === 0) return;
+    const checkboxes = el.querySelectorAll<HTMLInputElement>('.doc-task-checkbox[data-task-id]');
+    checkboxes.forEach((checkbox) => {
+      const taskId = checkbox.dataset.taskId;
+      const task = taskId ? tasks.find(t => t.id === taskId) : undefined;
+      if (!task) return;
+      const isDone = task.status === 'done';
+      if (checkbox.checked !== isDone) {
+        checkbox.checked = isDone;
+      }
+      const label = task.status.replace('_', ' ');
+      const small = checkbox.closest('.doc-task-row')?.querySelector('small');
+      if (small && small.textContent !== label) {
+        small.textContent = label;
+      }
+    });
+  }, [tasks, doc.id]);
+
   const handleRestoreVersion = useCallback((version: DocumentVersion) => {
     if (contentRef.current) {
       contentRef.current.innerHTML = sanitizeHtml(version.content);
