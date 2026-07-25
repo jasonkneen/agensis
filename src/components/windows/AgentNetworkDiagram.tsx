@@ -1,12 +1,7 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { WorkspaceAgent, AgentConnection } from '../../types';
 import { agentAccentColor } from '../../lib/agentAccent';
-import { cn } from '../../lib/utils';
 import { KIND_META, STATUS_META, CX, CY, initials, buildNetworkModel, type ConnKind, type NodeStatus } from './agentNetworkModel';
-
-// three.js scene is heavy — load it only when the user opens the 3D tab so it
-// never lands in the agents-window chunk.
-const AgentNetworkDiagram3D = lazy(() => import('./AgentNetworkDiagram3D'));
 
 interface AgentNetworkDiagramProps {
   agents: WorkspaceAgent[];
@@ -36,7 +31,6 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 export function AgentNetworkDiagram({ agents, connections = [], onSelectAgent }: AgentNetworkDiagramProps) {
   const enabled = useMemo(() => agents.filter(a => a.enabled !== false), [agents]);
-  const [view, setView] = useState<'2d' | '3d'>('2d');
   const [hover, setHover] = useState<string | null>(null);
 
   // Include disabled agents so "inactive" nodes still appear (ghosted).
@@ -54,30 +48,8 @@ export function AgentNetworkDiagram({ agents, connections = [], onSelectAgent }:
 
   return (
     <div className="flex h-full flex-col">
-      {/* 2D / 3D view toggle — keep both. */}
-      <div className="flex shrink-0 items-center justify-center gap-0.5 border-b border-border bg-card/40 p-1.5">
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5 text-[11px] font-medium tracking-wide"
-          style={{ fontFamily: MONO }}>
-          {(['2d', '3d'] as const).map(v => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              aria-pressed={view === v}
-              className={cn(
-                'rounded-md px-3 py-1 transition',
-                view === v ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {v.toUpperCase()}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div className="min-h-0 flex-1 overflow-hidden">
-        {view === '2d' ? (
-          <svg viewBox="0 0 1000 840" className="size-full" role="img" aria-label="Agent network diagram (2D)">
+        <svg viewBox="0 0 1000 840" className="size-full" role="img" aria-label="Agent network diagram">
             <defs>
               <radialGradient id="hub-glow" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.22" />
@@ -251,18 +223,7 @@ export function AgentNetworkDiagram({ agents, connections = [], onSelectAgent }:
                 </foreignObject>
               );
             })()}
-          </svg>
-        ) : (
-          <Suspense
-            fallback={
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Loading 3D view…
-              </div>
-            }
-          >
-            <AgentNetworkDiagram3D model={model} enabledCount={enabled.length} onSelectAgent={onSelectAgent} />
-          </Suspense>
-        )}
+        </svg>
       </div>
 
       {/* Legend: live STATUS (inner nodes) + CONNECTION kind (outer endpoints). */}
