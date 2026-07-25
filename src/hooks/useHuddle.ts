@@ -11,6 +11,11 @@ export interface HuddleConnection {
   identity: string;
   roomName: string;
   huddleId: string;
+  /**
+   * When THIS browser joined. Voice output reads only messages written after
+   * it, so joining a busy channel never reads the backlog aloud.
+   */
+  joinedAtMs: number;
 }
 
 interface HuddlePayload {
@@ -154,7 +159,13 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     }
   }, [applyPayload]);
 
-  /** Start a huddle here, or join the one already running. Same call either way. */
+  /**
+   * Start a huddle here, or join the one already running. Same call either way.
+   *
+   * Starting IS joining: the POST response carries this user's join token, and
+   * holding on to it is what mounts the in-call bar. Without that the starter
+   * would stand outside their own huddle waiting for someone else to connect.
+   */
   const startOrJoin = useCallback(async () => {
     if (!base) return null;
     const data = await post(base);
@@ -165,6 +176,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
         identity: data.identity || '',
         roomName: data.roomName,
         huddleId: data.huddle.id,
+        joinedAtMs: Date.now(),
       };
       setConnection(next);
       return next;

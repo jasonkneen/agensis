@@ -1,5 +1,17 @@
 [
   {
+    "version": "huddle-voice",
+    "date": "2026-07-25",
+    "title": "Talk to your agents",
+    "summary": "Start a huddle in a DM or channel and just speak — your words become a message, the agent answers, and the reply is read back to you.",
+    "highlights": [
+      "Speak instead of typing — your words appear live, then send",
+      "The agent replies out loud, starting as soon as it has its first sentence",
+      "Mute your mic or silence the reply mid-sentence",
+      "Uses your browser’s built-in voices — nothing to install, no account"
+    ]
+  },
+  {
     "version": "huddles",
     "date": "2026-07-25",
     "title": "Huddles — talk in a channel",

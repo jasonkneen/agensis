@@ -3801,9 +3801,44 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
  }
 }
 
-function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '') {
+// Voice etiquette. A huddle turns every agent message into speech on the
+// human's machine, so LATENCY is the whole experience: a perfect paragraph that
+// lands six seconds later reads as a broken call, while "on it — checking the
+// logs now" in 400ms reads as a conversation. Segmented turns already give the
+// agent a way to say something first and keep going (each text block is its own
+// message, spoken as it lands); this note is what tells it to use them.
+//
+// Only added while a huddle is actually live for the session — a silent channel
+// must not be told to answer in half-sentences.
+const VOICE_HUDDLE_NOTE = [
+ 'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
+ 'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
+ 'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
+].join('\n');
+
+// Is a huddle running in this conversation right now? Answered from the huddles
+// table (idx_huddles_one_live_per_session covers exactly this predicate).
+// Fails CLOSED: any error means "no huddle", so a missing table or a slow
+// query can never break a turn — it only means the voice note is not added.
+async function sessionHasLiveHuddle(sessionId) {
+ if (!sessionId) return false;
+ try {
+  const rows = await getDb().unsafe(
+   'select 1 from huddles where session_id = $1 and ended_at is null limit 1',
+   [String(sessionId)],
+  );
+  return rows.length > 0;
+ } catch {
+  return false;
+ }
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false) {
  const selfHandle = slugHandle(agent.handle || agent.name);
  const lines = [];
+ // First, before the roster and the transcript: it changes HOW the agent answers,
+ // so it must be read before what it is answering.
+ if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
   lines.push(
    `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
@@ -4125,6 +4160,13 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  if (recentActivity && agentContext) {
   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's DMs and channels. Recent activity elsewhere (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
  }
+ // Someone is on a voice call in this conversation, so this turn will be spoken
+ // out loud. Every lane below gets the same note — builtin through the system
+ // prompt, daemon/MCP/external through the daemon prompt.
+ const voiceHuddle = await sessionHasLiveHuddle(sessionId);
+ if (voiceHuddle && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<voice_huddle>\n${VOICE_HUDDLE_NOTE}\n</voice_huddle>`.trim();
+ }
 
  // If one or more MCP clients are working AS this agent (joined via the invite link and
  // polling claim_job), serve this turn through the pull queue: enqueue a job; whichever
@@ -4139,7 +4181,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', pendingRows);
-  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
+  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle);
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
        values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
@@ -4176,7 +4218,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
        returning *`,
    [
     workspaceId, agent.id, sessionId, createdBy,
-    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity),
+    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle),
     { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
    ],
   );
@@ -4334,7 +4376,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  );
  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
- const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
+ const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle);
  const jobRows = await insertActiveAgentJob(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
@@ -10762,6 +10804,8 @@ module.exports = {
   registerTestConnectedAgent,
   insertActiveAgentJob,
   buildWhereClause,
+  buildDaemonPrompt,
+  VOICE_HUDDLE_NOTE,
   capabilityForDbOperation,
   canManageWorkspace,
   canMutateWorkspace,

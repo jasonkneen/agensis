@@ -791,3 +791,58 @@ test('the realtime fanout does not strip huddle fields', () => {
   assert.equal(delivered.payload.eventType, 'INSERT');
   assert.deepEqual(delivered.payload.new, row);
 });
+
+// ---------------------------------------------------------------------------
+// Agents in the huddle
+// ---------------------------------------------------------------------------
+//
+// The agent never touches audio: speech becomes text in the browser and is
+// posted as a normal message, and agent messages are read aloud by the browser.
+// So the ONLY thing the server contributes is etiquette — telling the agent
+// that what it writes is about to be spoken, and that the first sentence must
+// leave immediately. Two ways that can be wrong:
+//
+//   1. it is never added (the feature is inert), or
+//   2. it is added to a channel where nobody is in a call (every agent in the
+//      workspace suddenly answers in half-sentences).
+
+test('the voice note is added ONLY when a huddle is live for the session', () => {
+  const agent = { id: 'a1', name: 'Coder', handle: 'coder' };
+  const context = [{ role: 'user', content: '[Jason]: what is the build doing' }];
+
+  const silent = __test.buildDaemonPrompt(context, agent, [], '', false);
+  assert.equal(silent.includes('LIVE VOICE HUDDLE'), false, 'a typed channel must not be told to answer aloud');
+
+  const spoken = __test.buildDaemonPrompt(context, agent, [], '', true);
+  assert.ok(spoken.includes('LIVE VOICE HUDDLE'));
+  // The point of the note. Without "immediately", segmented turns exist but go
+  // unused and every reply lands as one six-second block of speech.
+  assert.match(spoken, /IMMEDIATELY/);
+  assert.match(spoken, /read aloud/i);
+  // It has to be read BEFORE the transcript it applies to.
+  assert.ok(spoken.indexOf('LIVE VOICE HUDDLE') < spoken.indexOf('Conversation so far:'));
+  // Still the same prompt otherwise.
+  assert.ok(spoken.includes('[Jason]: what is the build doing'));
+  assert.ok(spoken.trimEnd().endsWith('Write your next reply as @coder.'));
+});
+
+test('the voice note reaches EVERY run lane, and defaults to off', () => {
+  // Three lanes build a daemon prompt (mcp, external, daemon) and the builtin
+  // lane appends to the system prompt instead. A note wired into one of them is
+  // a feature that works for one kind of agent and silently does not for the
+  // others — this repo's most repeated bug shape.
+  const source = read('server/index.cjs');
+  const calls = source.match(/(?<!function )buildDaemonPrompt\(contextMessages[^)]*\)/g) || [];
+  assert.equal(calls.length, 3, 'expected three buildDaemonPrompt call sites');
+  for (const call of calls) {
+    assert.match(call, /voiceHuddle\)/, `call site does not pass voiceHuddle: ${call}`);
+  }
+  // The builtin lane, which never builds a daemon prompt.
+  assert.match(source, /voiceHuddle && agentContext[\s\S]{0,200}<voice_huddle>/);
+  // Derived from the huddles table, not from anything a client sends.
+  assert.match(source, /const voiceHuddle = await sessionHasLiveHuddle\(sessionId\)/);
+  assert.match(source, /select 1 from huddles where session_id = \$1 and ended_at is null/);
+  // Off unless asked for: a caller that forgets the argument must not opt every
+  // agent into voice etiquette.
+  assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false\)/);
+});
