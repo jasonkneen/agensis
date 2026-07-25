@@ -2524,7 +2524,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, agent_id, name, handle, host, cwd, status, last_seen_at, created_at, updated_at
+   `select id, workspace_id, agent_id, name, handle, host, cwd, status, last_seen_at, connected_at, updated_at
        from agent_connections
        where workspace_id = $1
        order by last_seen_at desc nulls last
