@@ -2253,7 +2253,7 @@ function ChatMessageBubble({
                 <button
                   key={session.id}
                   type="button"
-                  className="inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="control-outer-ring inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => onOpenSubThread?.(session)}
                 >
                   <MessageSquare className="size-2.5" />
@@ -2286,7 +2286,7 @@ function ChatMessageBubble({
                 type="button"
                 onClick={() => onToggleReaction?.(emoji)}
                 className={cn(
-                  'inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
+                  'control-outer-ring inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
                   users.includes(uid)
                     ? 'border-primary/40 bg-primary/10 text-foreground'
                     : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
