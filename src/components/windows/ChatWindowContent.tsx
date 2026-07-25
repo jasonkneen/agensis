@@ -64,6 +64,7 @@ import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
 import { buildTranscriptRows } from '../chat/toolSteps';
+import { isBroadcastFromThread } from '../chat/channelView';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
   BUILTIN_SLASH_ITEMS,
@@ -188,7 +189,9 @@ interface ChatWindowContentProps {
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
-  onSendThreadReply?: (content: string, model: string) => void;
+  // broadcastToChannel = the thread composer's "Send to channel" switch: post the
+  // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
+  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void;
   readOnly?: boolean;
   channelTitle?: string;
   workspaceId?: string | null;
@@ -1518,6 +1521,13 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                             onOpenThread(msg.id);
                             openThread();
                           } : undefined}
+                          // A broadcast reply's thread is rooted at its PARENT, not
+                          // at itself — opening msg.id would open an empty thread on
+                          // the answer instead of the conversation that produced it.
+                          onOpenSourceThread={onOpenThread && msg.thread_parent_id ? () => {
+                            onOpenThread(msg.thread_parent_id as string);
+                            openThread();
+                          } : undefined}
                           onAgentProfile={openAgentProfilePanel}
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
@@ -2190,6 +2200,7 @@ function ChatMessageBubble({
   onSaveEdit,
   onDelete,
   onOpenThread,
+  onOpenSourceThread,
   onAgentProfile,
   subThreads,
   onOpenSubThread,
@@ -2214,6 +2225,7 @@ function ChatMessageBubble({
   onSaveEdit?: () => void;
   onDelete?: () => void;
   onOpenThread?: () => void;
+  onOpenSourceThread?: () => void;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   subThreads?: ChatSession[];
   onOpenSubThread?: (session: ChatSession) => void;
@@ -2270,6 +2282,29 @@ function ChatMessageBubble({
             <span className="truncate text-sm font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
           {timeLabel && <span className="shrink-0 text-xs text-muted-foreground">{timeLabel}</span>}
+          {/* A broadcast reply was WRITTEN in a thread and only its answer was sent
+              here, so without this it reads as a top-level message that lost its
+              context — you cannot tell what it is replying to, or where the tool
+              steps and intermediate blocks went. The chip says "there is a working
+              conversation behind this" and opens it. */}
+          {isBroadcastFromThread(msg) && (
+            onOpenSourceThread ? (
+              <button
+                type="button"
+                className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                onClick={onOpenSourceThread}
+                title="Written in a thread — open it to see the working"
+              >
+                <CornerDownRight className="size-3" />
+                from a thread
+              </button>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <CornerDownRight className="size-3" />
+                from a thread
+              </span>
+            )
+          )}
         </div>
         {isEditing ? (
           <div className="mt-2 max-w-4xl space-y-2">

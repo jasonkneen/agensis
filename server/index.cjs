@@ -805,6 +805,13 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_name text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_detail text DEFAULT '';
+    -- "Send to channel" (2026-07): an agent WORKS inside a thread and only its
+    -- final answer is broadcast to the channel/DM. A broadcast reply KEEPS its
+    -- thread_parent_id (it is still part of the thread) and is additionally shown
+    -- in the channel view, so the channel reads as message → answer while every
+    -- "Thinking …" placeholder, tool-step chip and intermediate text block stays
+    -- in the thread. Humans get the same switch from the thread composer.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
     CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
     -- Trigram indexes so MCP search_messages / search_docs (leading-wildcard
@@ -2879,7 +2886,7 @@ function validUuid(value) {
 async function inferThreadAgentTarget(sessionId, threadParentId) {
  if (!sessionId || !threadParentId) return null;
  const rows = await getDb().unsafe(
-  `select id, sender_kind, sender_id, sender_name, content, message_kind, tool_name, tool_detail, created_at
+  `select id, sender_kind, sender_id, sender_name, content, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
      from messages
      where session_id = $1
        and(id = $2 or thread_parent_id = $2)
@@ -3630,17 +3637,23 @@ function scheduleTaskQueueDrain(workspaceId, agentId, cause) {
 async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
  const rows = threadParentId
   ? await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
          where session_id = $1 and (id = $2 or thread_parent_id = $2) and deleted_at is null
          order by created_at desc
          limit $3`,
    [sessionId, threadParentId, limit],
   )
+  // The CHANNEL level is "top level OR broadcast to the channel" — the same
+  // predicate the client's channel view uses. Since an agent now works inside a
+  // thread and only broadcasts its answer, a broadcast-only filter here would
+  // hide every reply from the channel-level context: buildAgentTurnContext would
+  // forget what was already answered, and continueConversation would count zero
+  // agent turns in the burst and dispatch the same turn again, forever.
   : await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
-         where session_id = $1 and thread_parent_id is null and deleted_at is null
+         where session_id = $1 and (thread_parent_id is null or broadcast_to_channel) and deleted_at is null
          order by created_at desc
          limit $2`,
    [sessionId, limit],
@@ -3993,11 +4006,44 @@ function resolveRunTarget(agent) {
  return m === 'external' ? 'external' : 'builtin';
 }
 
+// "Send to channel": where an agent WORKS when the turn was seeded in the channel
+// itself — a thread hanging off the newest top-level human message, i.e. the one
+// that started this burst. Returns { parentId, broadcast }: broadcast=true means
+// "post the placeholder in that thread and flag the final answer for the channel".
+// A session with no such message has nothing to hang a thread off (the whole
+// transcript is threaded, or it is empty), so the turn falls back to exactly the
+// pre-feature behaviour: work at the top level, no broadcast flag.
+async function resolveWorkThreadParent(sessionId) {
+ const rows = await getDb().unsafe(
+  `select id from messages
+     where session_id = $1 and thread_parent_id is null and role = 'user' and deleted_at is null
+     order by created_at desc, id desc
+     limit 1`,
+  [sessionId],
+ );
+ const parentId = rows[0] ? String(rows[0].id) : null;
+ return parentId ? { parentId, broadcast: true } : { parentId: null, broadcast: false };
+}
+
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
  if (!isAgentEnabled(agent)) return { ok: false, pending: false };
  const handle = slugHandle(agent.handle || agent.name);
  const runMode = resolveRunTarget(agent);
  const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
+ // The agent works in a thread and only broadcasts its answer. A turn seeded at
+ // channel level opens (or re-uses) the thread on the human message that started
+ // it, so the "Thinking …" placeholder, its tool chips and its intermediate text
+ // blocks all land there; the final answer is flagged broadcast_to_channel so
+ // that — and only that — surfaces in the channel view. A turn already running
+ // inside a thread keeps working there and broadcasts nothing, as before.
+ // ACCEPTED TRADEOFF: while the agent works, the channel shows only the human's
+ // message and its reply count. There is deliberately no channel-level
+ // "working…" row.
+ const workThread = threadParentId
+  ? { parentId: threadParentId, broadcast: false }
+  : await resolveWorkThreadParent(sessionId);
+ const workThreadParentId = workThread.parentId;
+ const broadcastToChannel = workThread.broadcast;
  const agentContext = agentContextFromRow(agent, coParticipants);
  const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
  if (recentActivity && agentContext) {
@@ -4014,7 +4060,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
        values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
        returning *`,
-   [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+   [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', pendingRows);
   const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
@@ -4027,7 +4073,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     // Pass the OBJECT (not JSON.stringify'd): postgres.js encodes it as a real jsonb
     // object, so `metadata->>'mode'` in claimMcpJob/reaper matches. JSON.stringify here
     // would double-encode into a jsonb STRING scalar and the SQL key lookup returns null.
-    { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' },
+    //
+    // threadParentId stays the DISPATCH level (null for a channel turn) so
+    // continueConversation resumes where the human is talking; workThreadParentId
+    // is where the agent's own messages live, and broadcastToChannel tells
+    // finalizeAgentJobResult to flag the final answer for the channel view.
+    { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'mcp' },
    ],
    responseMessageId,
   );
@@ -4050,20 +4101,25 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    [
     workspaceId, agent.id, sessionId, createdBy,
     buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity),
-    { handle, threadParentId: threadParentId || null, mode: 'mcp' },
+    { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
    ],
   );
   if (jobRows) notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  // "Nobody is attached" is not a working note — it is the answer the human has to
+  // act on, so it is broadcast rather than buried in the work thread. Same for
+  // every other stand-in notice below: silence in the channel would read as a
+  // working agent.
   const noticeRows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6)
        returning *`,
    [
     sessionId,
     `_@${handle} is an MCP client and is not attached right now, so nobody has answered this yet._\n\nYour message is queued — it will be picked up when that client next connects. This notice is from agensis, not from @${handle}.`,
-    threadParentId || null,
+    workThreadParentId,
     String(agent.id),
     agent.name,
+    broadcastToChannel,
    ],
   );
   notifyDbSubscribers('messages', 'INSERT', noticeRows);
@@ -4076,19 +4132,19 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
        values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
        returning *`,
    // Object, not JSON.stringify — same double-encode trap as the daemon insert below.
-   [workspaceId, agent.id, sessionId, createdBy, '', { handle, threadParentId: threadParentId || null, mode: 'builtin' }],
+   [workspaceId, agent.id, sessionId, createdBy, '', { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'builtin' }],
   );
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   // Insert a 'Thinking' placeholder first, then stream the built-in reply into it
-  // token-by-token (message UPDATE broadcasts) so it renders live in the channel
+  // token-by-token (message UPDATE broadcasts) so it renders live in the thread
   // like a daemon agent — instead of popping in complete when the call finishes.
   const responseMessageId = crypto.randomUUID();
   const placeholderRows = await getDb().unsafe(
    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
         values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
         returning *`,
-   [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+   [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', placeholderRows);
   let writeChain = Promise.resolve();
@@ -4139,9 +4195,13 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    // Wait for any in-flight throttled write to finish, THEN write the complete
    // text last so it can never be clobbered by a late-landing partial update.
    await writeChain.catch(() => { });
+   // The turn is over: this row IS the answer, so it graduates out of the work
+   // thread into the channel view (it stays a thread message — the flag only adds
+   // it to the channel). The throttled partial writes above deliberately leave the
+   // flag alone, which is what keeps the channel quiet while the agent works.
    const messageRows = await getDb().unsafe(
-    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-    [responseMessageId, responseText || `@${handle} finished without output.`, sessionId],
+    `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
+    [responseMessageId, responseText || `@${handle} finished without output.`, sessionId, broadcastToChannel],
    );
    if (messageRows.length > 0) {
     notifyDbSubscribers('messages', 'UPDATE', messageRows);
@@ -4159,9 +4219,11 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
    scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
+   // A failure is the outcome of the turn, so it broadcasts too — a channel that
+   // silently shows nothing reads as "still working" forever.
    const messageRows = await getDb().unsafe(
-    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-    [responseMessageId, `@${handle} failed: ${errorText}`, sessionId],
+    `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
+    [responseMessageId, `@${handle} failed: ${errorText}`, sessionId, broadcastToChannel],
    );
    if (messageRows.length > 0) notifyDbSubscribers('messages', 'UPDATE', messageRows);
    return { ok: false, pending: false };
@@ -4171,15 +4233,16 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
  if (!connection) {
   const assistantRows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6)
        returning *`,
    [
     sessionId,
     `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
-    threadParentId || null,
+    workThreadParentId,
     String(agent.id),
     agent.name,
+    broadcastToChannel,
    ],
   );
   notifyDbSubscribers('messages', 'INSERT', assistantRows);
@@ -4191,7 +4254,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
      values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
      returning *`,
-  [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+  [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
  );
  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
@@ -4212,7 +4275,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    // `metadata || ...` APPENDED instead of merging and metadata became an array;
    // metadata->>'responseMessageId' then returned null and finalizeStuckJob could
    // never clear the "Thinking …" placeholder, hanging the thread forever.
-   { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' },
+   { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'daemon' },
   ],
   responseMessageId,
  );
@@ -4449,11 +4512,14 @@ async function finalizeStuckJob(job, reason) {
   if (!responseMessageId) return;
   const handle = meta.handle || 'agent';
   const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+  // Broadcast it for the same reason the reply is broadcast: the placeholder was
+  // working inside a thread, and a channel that shows nothing at all after the
+  // human's message reads as "still thinking" forever.
   const rows = await getDb().unsafe(
-   `update messages set content = $2
+   `update messages set content = $2, broadcast_to_channel = $4
        where id = $1 and session_id = $3 and content ~ '^Thinking '
        returning *`,
-   [responseMessageId, content, job.session_id],
+   [responseMessageId, content, job.session_id, meta.broadcastToChannel === true],
   );
   if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
  } catch {
@@ -5141,6 +5207,13 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   : (responseText || `@${handle} finished without output.`);
  const threadParentId = jobMetadata.threadParentId || null;
  const responseMessageId = jobMetadata.responseMessageId || null;
+ // "Send to channel": the agent has been working inside a thread, so THIS write is
+ // the moment its answer becomes public. Flagging the row adds it to the channel
+ // view without moving it out of the thread. False for a turn that was already
+ // running inside a thread (nothing to broadcast) and for jobs written before this
+ // feature existed, which keeps their behaviour identical.
+ const broadcastToChannel = jobMetadata.broadcastToChannel === true;
+ const workThreadParentId = jobMetadata.workThreadParentId || threadParentId;
  // A segmented turn (see handleAgentJobSegment) has already posted every completed
  // text block as its own message and left a FRESH placeholder waiting for the next
  // one. A turn that ends right after a block leaves that placeholder with nothing
@@ -5160,21 +5233,29 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
    [responseMessageId, job.session_id],
   );
   if (removedRows.length > 0) notifyDbSubscribers('messages', 'DELETE', removedRows);
+  // The last completed BLOCK stands in as the turn's reply, so it is the row that
+  // gets broadcast — the placeholder that would have carried the flag is gone.
+  // UPDATE ... returning so the flip fans out to clients like any other change.
   const segmentRows = jobMetadata.lastSegmentMessageId
    ? await getDb().unsafe(
-    'select * from messages where id = $1 and session_id = $2 limit 1',
+    broadcastToChannel
+     ? `update messages set broadcast_to_channel = true
+          where id = $1 and session_id = $2 returning *`
+     : 'select * from messages where id = $1 and session_id = $2 limit 1',
     [String(jobMetadata.lastSegmentMessageId), job.session_id],
    )
    : [];
   if (segmentRows.length > 0) {
+   if (broadcastToChannel) notifyDbSubscribers('messages', 'UPDATE', segmentRows);
    void logMessageActivity(segmentRows);
    void mirrorAgentReplyToTaskComment(segmentRows[0]);
   }
  } else if (responseMessageId) {
   const messageRows = await getDb().unsafe(
-   `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4
+   `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4,
+                        broadcast_to_channel = $6
        where id = $1 and session_id = $5 returning *`,
-   [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id],
+   [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id, broadcastToChannel],
   );
   if (messageRows.length > 0) {
    notifyDbSubscribers('messages', 'UPDATE', messageRows);
@@ -5182,10 +5263,13 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
    void mirrorAgentReplyToTaskComment(messageRows[0]);
   }
  } else {
+  // No placeholder was ever created (an 'external' agent queued with nobody
+  // attached, claimed later). The answer still belongs in the work thread, still
+  // broadcast — otherwise it would land top-level and lose the thread it answered.
   const messageRows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
-   [job.session_id, content, threadParentId, String(job.agent_id || ''), senderName],
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6) returning *`,
+   [job.session_id, content, workThreadParentId, String(job.agent_id || ''), senderName, broadcastToChannel],
   );
   notifyDbSubscribers('messages', 'INSERT', messageRows);
   void mirrorAgentReplyToTaskComment(messageRows[0]);
@@ -5613,13 +5697,15 @@ async function handleAgentJobStep(ws, message) {
  if (!content) return;
  const step = agentStepParts(message);
  const metadata = parseJsonObject(job.metadata);
- // Steps hang off the reply's THREAD ROOT, not off the reply itself. When the
- // turn is already happening inside a thread, the "Thinking …" placeholder is
- // itself a thread reply, so parenting steps to it buried them two levels deep —
- // the thread panel renders one level, so every chip was invisible exactly when
- // the human was watching the thread. Resolving to the placeholder's own parent
- // keeps steps as its siblings, in the thread already on screen. At top level the
- // placeholder has no parent, so steps still nest directly under it as before.
+ // Steps hang off the reply's THREAD ROOT, not off the reply itself. The
+ // "Thinking …" placeholder is itself a thread reply (a channel turn works in the
+ // thread on the human's message — see resolveWorkThreadParent — and a thread turn
+ // already did), so parenting steps to it buried them two levels deep: the thread
+ // panel renders one level, so every chip was invisible exactly when the human was
+ // watching the thread. Resolving to the placeholder's own parent keeps steps as
+ // its SIBLINGS, in the thread already on screen — the same thread the reply will
+ // be broadcast from. A placeholder with no parent at all (a session with nothing
+ // to hang a work thread off) still nests steps directly under it as before.
  // Missing responseMessageId means the reply bubble is unknown; post the step at
  // the top level rather than dropping it.
  const responseMessageId = metadata.responseMessageId || null;
@@ -5721,7 +5807,12 @@ async function handleAgentJobSegment(ws, message) {
  );
  if (segmentRows.length === 0) return; // the job already finished; the segment is stale
  const senderName = job.agent_name || auth.name || auth.handle || 'Agent';
- let threadParentId = metadata.threadParentId || null;
+ // Blocks and the next placeholder belong in the WORK thread, not at the dispatch
+ // level: a channel turn works inside the thread on the human's message and only
+ // its final answer is broadcast, so falling back to metadata.threadParentId (null
+ // for a channel turn) would drop every intermediate block into the channel. The
+ // row-derived parent below still wins whenever a placeholder exists.
+ let threadParentId = metadata.workThreadParentId || metadata.threadParentId || null;
  if (responseMessageId) {
   const finalizedRows = await getDb().unsafe(
    `update messages
@@ -10625,6 +10716,9 @@ module.exports = {
   BOOTSTRAP_LIMITS,
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
+  resolveWorkThreadParent,
+  loadChannelMessages,
+  sanitizeRealtimeRow,
   CHANNEL_CONTEXT_MAX_BYTES,
   agentContextBytes,
   boundAgentContextMessages,

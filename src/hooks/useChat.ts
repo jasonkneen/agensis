@@ -4,6 +4,7 @@ import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiS
 import { computeThreadDivergence } from '../lib/threadMerge';
 import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
+import { channelMessages } from '../components/chat/channelView';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -258,7 +259,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // Copy only top-level messages (not in-session sub-thread replies). The
     // backendClient query builder has no `.is()`, so filter client-side exactly
     // like the main view does (see topLevelMessages below).
-    const topLevel = ((sourceMessages || []) as Message[]).filter(m => !m.thread_parent_id);
+    const topLevel = channelMessages((sourceMessages || []) as Message[]);
     if (topLevel.length > 0) {
       // Every copy MUST carry the same keys: both backends derive the INSERT
       // column list from the first row only, so a key that is absent from
@@ -306,8 +307,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     return updateSession(id, { archived_at: archived ? new Date().toISOString() : null });
   }, [updateSession]);
 
-  // Top-level messages (no thread parent)
-  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
+  // What the CHANNEL shows: top-level messages PLUS thread replies explicitly
+  // broadcast to the channel. An agent works inside a thread now (placeholder,
+  // tool chips, intermediate blocks all stay there) and only its final answer is
+  // flagged, so filtering on thread_parent_id alone would leave the channel empty
+  // apart from the human's own messages. See components/chat/channelView.ts.
+  const topLevelMessages = useMemo(() => channelMessages(messages), [messages]);
 
   // Thread messages for the active thread
   const threadMessages = useMemo(() => activeThreadId
@@ -337,7 +342,13 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     session: ChatSession,
     content: string,
     threadParentId?: string | null,
+    broadcastToChannel?: boolean,
   ): Promise<{ message: Message | null; error: { message: string; code?: string | null } | null }> => {
+    // "Send to channel" from the thread composer. Only meaningful for a reply that
+    // has a thread to be broadcast OUT of — a top-level message is already in the
+    // channel, and flagging it would just make it render its own "from a thread"
+    // affordance pointing nowhere.
+    const broadcast = Boolean(broadcastToChannel && threadParentId);
     const userMsg: Message = {
       id: crypto.randomUUID(),
       session_id: session.id,
@@ -345,6 +356,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       content,
       sender_name: currentUserName || null,
       thread_parent_id: threadParentId ?? null,
+      broadcast_to_channel: broadcast,
       created_at: new Date().toISOString(),
     };
 
@@ -358,6 +370,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     };
     if (currentUserName) insertPayload.sender_name = currentUserName;
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
+    if (broadcast) insertPayload.broadcast_to_channel = true;
     const { error } = await backendClient.from('messages').insert(insertPayload);
 
     // backendClient swallows HTTP failures into { error } instead of throwing,
@@ -625,12 +638,13 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     agent?: WorkspaceAgent | null,
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
+    broadcastToChannel?: boolean,
   ) => {
     const session = targetSession ?? activeSession;
     if (!session) return;
 
     if (!navigator.onLine) {
-      await insertUserMessage(session, content, threadParentId);
+      await insertUserMessage(session, content, threadParentId, broadcastToChannel);
       const offlineReply: Message = {
         id: crypto.randomUUID(),
         session_id: session.id,
@@ -643,7 +657,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       return;
     }
 
-    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId);
+    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel);
     // The message never reached the DB (viewer role, rate limit, server error).
     // The optimistic row is already rolled back; say why and abort before
     // dispatch/stream run against a messageId the server has never seen.
@@ -679,7 +693,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     if (threadParentId) {
       contextMessages = sessionMessages.filter((m: Message) => m.thread_parent_id === threadParentId || m.id === threadParentId);
     } else {
-      contextMessages = sessionMessages.filter((m: Message) => !m.thread_parent_id);
+      // Mirror the server's channel-level context (loadChannelMessages): top-level
+      // plus broadcast thread replies. Without the broadcast half, a channel whose
+      // agents work in threads would look to the model like nobody ever answered.
+      contextMessages = channelMessages(sessionMessages);
     }
 
     const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
@@ -775,8 +792,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       backendClient.from('messages').select('*').eq('session_id', parentId).order('created_at', { ascending: true }),
       backendClient.from('messages').select('*').eq('session_id', fork.id).order('created_at', { ascending: true }),
     ]);
-    const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
-    const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
+    // Channel view, not strictly top level: an agent's answer is now a BROADCAST
+    // thread reply, so a top-level-only diff would show the two branches' human
+    // prompts and none of the answers the merge is supposed to reconcile.
+    const parentTop = channelMessages((parentRes.data || []).filter((m: Message) => !m.deleted_at));
+    const forkTop = channelMessages((forkRes.data || []).filter((m: Message) => !m.deleted_at));
     // Divergence by set-difference of the shared (copied) history — clock-skew
     // safe (M7); see computeThreadDivergence.
     const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);

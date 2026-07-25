@@ -88,6 +88,12 @@ export interface Message {
  message_kind?: string | null;
  tool_name?: string | null;
  tool_detail?: string | null;
+ // "Send to channel": a thread reply that is ALSO shown in the channel/DM view.
+ // An agent works inside a thread and flags only its final answer; a human can
+ // flag a reply from the thread composer. The row KEEPS its thread_parent_id, so a
+ // broadcast reply shows in BOTH views (see isChannelMessage in
+ // components/chat/channelView.ts).
+ broadcast_to_channel?: boolean | null;
  created_at: string;
 }
 

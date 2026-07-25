@@ -231,16 +231,20 @@ function buildTools() {
    await assertChannelInWorkspace(db, channelId, identity.workspaceId);
    const rows = threadParentId
     ? await db.unsafe(
-     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, created_at
+     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
                from messages
               where session_id = $1 and (id = $2 or thread_parent_id = $2)
               order by created_at desc limit $3`,
      [channelId, threadParentId, limit],
     )
+    // Channel scope is "top level OR broadcast to the channel" — the same predicate
+    // the UI and loadChannelMessages use. An agent now WORKS in a thread and only
+    // broadcasts its answer, so a top-level-only read would show this client the
+    // humans' messages and none of the replies.
     : await db.unsafe(
-     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, created_at
+     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
                from messages
-              where session_id = $1 and thread_parent_id is null
+              where session_id = $1 and (thread_parent_id is null or broadcast_to_channel)
               order by created_at desc limit $2`,
      [channelId, limit],
     );

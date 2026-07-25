@@ -77,6 +77,7 @@ import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIG
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
+import { channelMessages } from './components/chat/channelView';
 import { useChat } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
@@ -1536,9 +1537,11 @@ function AppContent() {
     docs?: Document[],
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
+    // Thread composer's "Send to channel" switch (messages.broadcast_to_channel).
+    broadcastToChannel?: boolean,
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession);
+    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleCreateCustomApplet = useCallback(async () => {
@@ -3032,7 +3035,10 @@ function InactiveChatWindow({
   onOpenThread: (messageId: string) => void;
 }) {
   const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
-  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
+  // Same channel view as useChat: top level PLUS broadcast thread replies. Agents
+  // work in threads now, so a top-level-only filter would show this window the
+  // humans' messages and no answers at all.
+  const topLevelMessages = useMemo(() => channelMessages(messages), [messages]);
   const threadReplyCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     messages.forEach(m => {
