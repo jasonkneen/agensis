@@ -8,7 +8,8 @@ import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
-import { computeGroupRole } from './lib/windowGroups';
+import { computeGroupBounds, computeGroupRole } from './lib/windowGroups';
+import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
@@ -1925,6 +1926,8 @@ function AppContent() {
                   onUpdateWindow={updateWindow}
                   onMinimizeWindow={minimizeWindow}
                   onMinimizeWindowGroup={minimizeWindowGroup}
+                  onUngroupTiledWindows={ungroupTiledWindows}
+                  onFocusWindowGroup={focusWindowGroup}
                   onShareWindow={handleShareWindow}
                   onSendMessage={wrappedSendMessage}
                   onSetActiveSession={setActiveSession}
@@ -2221,6 +2224,8 @@ function CanvasLayerScene({
   onUpdateWindow,
   onMinimizeWindow,
   onMinimizeWindowGroup,
+  onUngroupTiledWindows,
+  onFocusWindowGroup,
   onShareWindow,
   onSendMessage,
   onSetActiveSession,
@@ -2310,6 +2315,8 @@ function CanvasLayerScene({
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimizeWindow: (id: string) => void;
   onMinimizeWindowGroup: (groupId: string) => void;
+  onUngroupTiledWindows: (groupId: string) => void;
+  onFocusWindowGroup: (groupId: string, leadId: string) => void;
   onShareWindow: (title: string) => void;
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
   onSetActiveSession: (session: ChatSession) => void;
@@ -2353,6 +2360,17 @@ function CanvasLayerScene({
     [windows],
   );
 
+  // One frame per visible group, drawn behind its members at their union box.
+  const groupFrames = useMemo(() => {
+    const ids = new Set(renderedWindows.map(w => w.groupId).filter(Boolean) as string[]);
+    return [...ids].map(groupId => {
+      const bounds = computeGroupBounds(groupId, renderedWindows);
+      if (!bounds) return null;
+      const members = renderedWindows.filter(w => w.groupId === groupId && !w.minimized);
+      return { groupId, bounds, members, baseZIndex: Math.min(...members.map(w => w.zIndex)) };
+    }).filter(Boolean) as Array<{ groupId: string; bounds: NonNullable<ReturnType<typeof computeGroupBounds>>; members: FloatingWindow[]; baseZIndex: number }>;
+  }, [renderedWindows]);
+
   const groupRoleByWindowId = useMemo(
     () => new Map(windows.map(w => [w.id, computeGroupRole(w, windows)])),
     [windows],
@@ -2385,6 +2403,20 @@ function CanvasLayerScene({
 
       <CanvasSelectionLayer />
 
+      {groupFrames.map(frame => (
+        <WindowGroupFrame
+          key={`group-${frame.groupId}`}
+          groupId={frame.groupId}
+          bounds={frame.bounds}
+          members={frame.members}
+          baseZIndex={frame.baseZIndex}
+          onMinimizeGroup={onMinimizeWindowGroup}
+          onUngroup={onUngroupTiledWindows}
+          onCloseGroup={gid => renderedWindows.filter(w => w.groupId === gid).forEach(w => onCloseWindow(w.id))}
+          onFocusGroup={onFocusWindowGroup}
+        />
+      ))}
+
       {renderedWindows.map(win => {
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
@@ -2401,7 +2433,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2516,7 +2547,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2559,7 +2589,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2597,7 +2626,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2629,7 +2657,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2673,7 +2700,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2706,7 +2732,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2749,7 +2774,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2784,7 +2808,6 @@ function CanvasLayerScene({
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
-              onMinimizeGroup={onMinimizeWindowGroup}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
