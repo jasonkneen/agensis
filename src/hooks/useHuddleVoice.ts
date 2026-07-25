@@ -249,18 +249,6 @@ const SPEECH_RATE = 1.05;
 // mutes the microphone with "Paused while the reply plays" forever.
 const SPEECH_START_TIMEOUT_MS = 1500;
 
-// Temporary, deliberate diagnostics. The pure logic is proven correct against
-// real production rows, so any remaining failure is browser-runtime only — and
-// speechSynthesis fails silently, which is exactly what makes it undebuggable
-// from here. These lines let the user's console say where it stops.
-function voiceLog(stage: string, detail: Record<string, unknown>) {
-  // Flat string, NOT an object: Chrome collapses objects to "Object" in the
-  // console and the useful fields are invisible unless expanded.
-  try {
-    const parts = Object.entries(detail).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
-    console.info(`[huddle-voice] ${stage} ${parts.join(' ')}`);
-  } catch { /* never break on logging */ }
-}
 
 export interface SpeechOutputState {
   /** '' when speech output can run; otherwise the reason it cannot. */
@@ -313,8 +301,8 @@ export function useSpeechOutput(
   // closure an old utterance holds behaves identically to a fresh one.
   function pump() {
     const synth = typeof window === 'undefined' ? null : window.speechSynthesis;
-    if (!synth) { voiceLog('pump-blocked', { why: 'no speechSynthesis' }); return; }
-    if (utteranceRef.current) { voiceLog('pump-blocked', { why: 'utterance in flight' }); return; }
+    if (!synth) return;
+    if (utteranceRef.current) return; // one voice at a time
     const next = queueRef.current.shift();
     if (!next) {
       setSpeakingName('');
@@ -358,7 +346,6 @@ export function useSpeechOutput(
     // The guard engages only once speech ACTUALLY starts, so an utterance that
     // never plays cannot mute the mic.
     utterance.onstart = () => {
-      voiceLog('onstart', { chars: next.text.length });
       clearWatchdog();
       if (utteranceRef.current === utterance) setSpeakingName(next.speaker);
     };
@@ -367,14 +354,6 @@ export function useSpeechOutput(
     // Chrome parks speechSynthesis in a paused state after periods of inactivity;
     // speak() then queues silently and no event ever fires.
     try { synth.resume(); } catch { /* not all engines implement resume */ }
-    voiceLog('speak', {
-      chars: next.text.length,
-      voice: utterance.voice ? utterance.voice.name : '(platform default)',
-      voicesLoaded: synth.getVoices().length,
-      speaking: synth.speaking,
-      paused: synth.paused,
-      pending: synth.pending,
-    });
     synth.speak(utterance);
 
     // If onstart has not fired by now the utterance is never going to play.
@@ -389,9 +368,6 @@ export function useSpeechOutput(
   }
 
   const stopSpeaking = useCallback(() => {
-    if (queueRef.current.length || pendingRef.current.size) {
-      voiceLog('stop-wipes', { queued: queueRef.current.length, pending: pendingRef.current.size });
-    }
     queueRef.current = [];
     pendingRef.current.clear();
     if (settleTimerRef.current !== null) {
@@ -416,11 +392,7 @@ export function useSpeechOutput(
     pendingRef.current.delete(id);
     const chunk = nextSpeechChunk(entry.item.text, spokenTextRef.current.get(id) || '');
     spokenTextRef.current.set(id, entry.item.text);
-    if (!chunk) {
-      voiceLog('flush-empty', { id: id.slice(0, 8), already: (spokenTextRef.current.get(id) || '').length });
-      return;
-    }
-    voiceLog('flush', { id: id.slice(0, 8), chars: chunk.length, queued: queueRef.current.length + 1 });
+    if (!chunk) return;
     queueRef.current.push({ ...entry.item, text: chunk });
     pump();
     // `pump` is a per-render function statement over refs — intentionally not a dep.
@@ -441,15 +413,6 @@ export function useSpeechOutput(
   }, [flush]);
 
   const deduper = useRealtimeDeduper();
-  useEffect(() => {
-    voiceLog('output-state', {
-      enabled,
-      unavailable: unavailable || '(ok)',
-      sessionId: sessionId ? String(sessionId).slice(0, 8) : null,
-      joinedAtMs,
-      subscribed: enabled && !unavailable && !!sessionId,
-    });
-  }, [enabled, unavailable, sessionId, joinedAtMs]);
 
   useTableSubscription<VoiceMessage>(
     {
@@ -485,15 +448,6 @@ export function useSpeechOutput(
       }
 
       const item = speechItemFor(row, joinedAtMs);
-      voiceLog('row', {
-        id: id.slice(0, 8),
-        sender: row.sender_kind,
-        kind: row.message_kind,
-        createdMs,
-        joinedAtMs,
-        tooOld: Number.isFinite(createdMs) && createdMs < joinedAtMs,
-        item: item ? item.text.slice(0, 40) : null,
-      });
       if (!item) {
         // A placeholder ("Thinking 0s") or a tool chip. It may still grow into a
         // real message, so drop it from pending and wait for the next update.
