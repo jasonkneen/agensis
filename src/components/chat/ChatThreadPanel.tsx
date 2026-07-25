@@ -10,6 +10,43 @@ import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '
 import { ModelSelector } from './ModelSelector';
 import { availableChatModelId } from '../../lib/sharedModels';
 import { Button } from '@/components/ui/button';
+
+/** Roughly how much of the thread parent to show before offering "Show more". */
+const PARENT_PREVIEW_CHARS = 220;
+
+/**
+ * Clip to the last whole markdown block that fits, so a preview can never end
+ * inside a table row or a code fence. Returns the full text when it already fits
+ * (callers use length equality to decide whether "Show more" is needed).
+ *
+ * Blocks are separated by blank lines. A fenced block is kept whole or dropped
+ * entirely — half a fence renders as an unterminated code block and swallows
+ * everything after it.
+ */
+function clipToBlockBoundary(text: string, budget: number) {
+  if (text.length <= budget) return text;
+
+  const blocks = text.split(/\n{2,}/);
+  const kept: string[] = [];
+  let used = 0;
+  let insideFence = false;
+
+  for (const block of blocks) {
+    const fenceCount = (block.match(/```/g) || []).length;
+    const opensFence = fenceCount % 2 === 1;
+    // Never stop while a fence is open — finish it or drop it with the rest.
+    if (used + block.length > budget && kept.length > 0 && !insideFence) break;
+    kept.push(block);
+    used += block.length + 2;
+    if (opensFence) insideFence = !insideFence;
+    if (used >= budget && !insideFence) break;
+  }
+
+  // A single opening block longer than the budget would otherwise render whole;
+  // fall back to a hard cut, but only when there is no block boundary to use.
+  if (kept.length === 0) return `${text.slice(0, budget)}…`;
+  return kept.join('\n\n');
+}
 import {
   Empty,
   EmptyDescription,
@@ -208,9 +245,15 @@ function ThreadBubble({
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
-  const content = isParent && rawContent.length > 220
-    ? `${rawContent.slice(0, 220)}...`
-    : rawContent;
+  // The thread parent is shown as a compact header, but a blind character cut
+  // lands mid-markdown — a 1355-char reply got sliced 16 chars into a table row
+  // and rendered as "| Control |...", which reads as a broken/incomplete message.
+  // A real user reported it as one and burned a round trip asking the agent why.
+  // So: clip on a BLOCK boundary, never inside a table or fence, and let it expand.
+  const [expanded, setExpanded] = useState(false);
+  const clipped = isParent ? clipToBlockBoundary(rawContent, PARENT_PREVIEW_CHARS) : null;
+  const canExpand = !!clipped && clipped.length < rawContent.length;
+  const content = isParent && clipped && !expanded ? clipped : rawContent;
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
@@ -252,7 +295,19 @@ function ThreadBubble({
         </div>
         <div className="mt-0.5 text-xs leading-relaxed text-foreground">
           {displayContent ? (
-            <MarkdownContent content={displayContent} compact />
+            <>
+              <MarkdownContent content={displayContent} compact />
+              {canExpand && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded(value => !value)}
+                  aria-expanded={expanded}
+                  className="mt-0.5 rounded text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  {expanded ? 'Show less' : 'Show more'}
+                </button>
+              )}
+            </>
           ) : isStreaming ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
