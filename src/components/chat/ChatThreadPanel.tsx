@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
+import { ThreadWorkBadge } from './AgentWorkBadge';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
@@ -136,6 +137,9 @@ export function ChatThreadPanel({
         <span className="text-xs text-muted-foreground">
           {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
         </span>
+        {/* Same live working state as the "N replies" chip in the channel, so the
+            open panel doesn't look idle while its agent is still going. */}
+        <ThreadWorkBadge parentMessageId={parentMessage.id} className="text-xs" />
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close thread">
           <X />
         </Button>

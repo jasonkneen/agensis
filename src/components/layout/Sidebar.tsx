@@ -60,7 +60,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentStatusFeed } from './AgentStatusFeed';
+import { SessionWorkBadge } from '../chat/AgentWorkBadge';
 import { APP_VERSION, BUILD_ID } from '../../lib/appVersion';
+import { useAgentWorkFeed } from '../../hooks/useAgentWork';
 import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 
 /**
@@ -295,6 +297,11 @@ export const Sidebar = React.memo(function Sidebar({
  notificationsSlot,
  presenceSlot,
 }: SidebarProps) {
+ // Feeds the agent-work store for every live-elapsed badge in the app (sidebar
+ // rows AND the thread indicator). Mounted here because the sidebar is the one
+ // component that is always mounted inside a workspace — even collapsed, and
+ // even behind the closed mobile drawer. It holds no state of its own.
+ useAgentWorkFeed(workspace?.id);
  const [accountDialogOpen, setAccountDialogOpen] = React.useState(false);
  const [accountDialogTab, setAccountDialogTab] = React.useState<'profile' | 'billing'>('profile');
  const openAccountDialog = (tab: 'profile' | 'billing') => {
@@ -1202,6 +1209,9 @@ function DirectAgentRow({
      </span>
     </span>
    </button>
+   {/* Most agent work happens in DMs, so the elapsed badge belongs here too —
+       keyed on the DM's session, same store, same conditional mount. */}
+   {agent.session ? <SessionWorkBadge sessionId={agent.session.id} /> : null}
    <DropdownMenu>
     <DropdownMenuTrigger asChild>
      <Button
@@ -1668,6 +1678,10 @@ function SessionRow({
        </span>
       )}
       <span className="min-w-0 flex-1 truncate text-left">{session.title}</span>
+      {/* "# general   5m 55s" while an agent is working in this session. Mounts
+          its own 1s clock only while there IS work, so an idle sidebar runs no
+          timers; the row itself never re-renders on that tick. */}
+      <SessionWorkBadge sessionId={session.id} />
       {presenceUsers.length > 0 && (
        <span className="ml-auto flex shrink-0 items-center gap-0.5">
         {presenceUsers.slice(0, 3).map(person => (

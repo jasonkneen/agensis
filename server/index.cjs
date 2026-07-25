@@ -4502,10 +4502,15 @@ async function finalizeStuckJob(job, reason) {
    // one-active-job unique index won't bounce the retry. A running-only guard
    // matched zero rows there, leaving the queued row holding the
    // (session_id, agent_id) active slot and silently dropping the next message.
-   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning id`,
+   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
    [job.id, `Agent stopped responding (${reason})`],
   );
   if (updated.length === 0) return; // a real result already finalized it
+  // The only job-terminating path that never notified subscribers. A wedged job's
+  // elapsed badge would otherwise tick forever, because the client never learns the
+  // job stopped — the timeout, dropped daemon, phantom cleanup and restart reconcile
+  // all land here.
+  notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
   // A timeout, a dropped daemon, a phantom cleanup and a backend restart all land
   // here — each one frees the agent's active-job slot, and each one used to strand
   // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
@@ -6980,7 +6985,7 @@ async function deliverNextFlowWebhook() {
 // broadcast is the real network win — otherwise every UPSERT fans the full body
 // (plus ~1/s heartbeat re-syncs) to every subscribed client. Keep the row shape
 // otherwise intact so list metadata (path, byte_size, summary, version) updates.
-const REALTIME_HEAVY_FIELDS = { agent_memory_files: ['content_cache'] };
+const REALTIME_HEAVY_FIELDS = { agent_memory_files: ['content_cache'], agent_jobs: ['prompt', 'response'] };
 function sanitizeRealtimeRow(table, row) {
  const heavy = REALTIME_HEAVY_FIELDS[table];
  if (!heavy || !row || typeof row !== 'object') return row;
