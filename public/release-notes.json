@@ -1,5 +1,31 @@
 [
   {
+    "version": "2026.07.25",
+    "date": "2026-07-25",
+    "title": "Stability: the app, your agents, and stuck chats",
+    "summary": "A round of fixes to things that were quietly broken — a blank app page, a dead Disconnect button, chats that hung on “Thinking…” forever, and workspaces that failed to open.",
+    "highlights": [
+      "Opening agensis.io/app/ no longer shows a blank page",
+      "Chats no longer hang on “Thinking…” — a stalled agent now times out and tells you",
+      "Fixed workspaces failing to load with a server error",
+      "The agent Disconnect button works again",
+      "Canvases you create are now visible to your teammates, not just you",
+      "Deleting a file now actually frees the storage it was using",
+      "The server no longer drops every live connection when a bad message arrives"
+    ]
+  },
+  {
+    "version": "agents-card-redesign",
+    "date": "2026-07-25",
+    "title": "Redesigned agent cards",
+    "summary": "The agents grid has cleaner cards with a centred avatar, presence dot and model, plus an inline “New agent” tile.",
+    "highlights": [
+      "Centred avatar with a presence dot on the corner",
+      "“+ New agent” now sits inline at the end of the grid",
+      "Full detail (description, mode, connections, webhooks) is one click away in the detail panel"
+    ]
+  },
+  {
     "version": "agent-0.1.24",
     "date": "2026-07-19",
     "title": "Agents can start conversations + reliability fixes",

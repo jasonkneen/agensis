@@ -94,6 +94,16 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   also clear the `agensis_tour_complete` / `agensis_getstarted_*` localStorage keys
   (or use incognito) — onboarding state is client-side only.
 
+## Release notes (user-visible changes)
+
+`public/release-notes.json` is **hand-maintained** — nothing generates it. It feeds
+the "A new version is available" panel, so if you ship a user-visible change and
+don't add an entry, users are shown stale notes for a build that no longer exists
+(this went six days and a dozen deploys unnoticed). Newest entry first; keep the
+language plain and user-facing — what changed for them, not the commit subject.
+`tests/release-notes.test.cjs` only guards the file's shape and ordering; it cannot
+tell that you forgot to write one.
+
 ## Verify before you ship (every change)
 
 ```bash
