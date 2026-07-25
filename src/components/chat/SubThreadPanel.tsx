@@ -2,6 +2,8 @@ import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Bot, MessageSquare, Mic, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
+import { ToolStepGroup } from './ToolStepGroup';
+import { buildTranscriptRows } from './toolSteps';
 import {
   ComposerAddContent,
   FileChip,
@@ -98,6 +100,9 @@ export function SubThreadPanel({
 
   const participants = Array.isArray(session.participants) ? session.participants : [];
   const agentParticipants = participants.filter(p => p.kind === 'agent');
+  // Consecutive tool steps collapse into one chip row here too — same rules as the
+  // channel transcript, just the compact spacing of a side panel.
+  const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of messages) {
@@ -245,16 +250,26 @@ export function SubThreadPanel({
                 </Empty>
               ) : (
                 <div className="flex min-w-0 flex-col gap-1">
-                  {messages.map((msg, idx) => (
-                    <MessageScrollerItem key={msg.id} scrollAnchor={idx === messages.length - 1}>
-                      <SubThreadBubble
-                        msg={msg}
-                        accent={resolveMessageAccent?.(msg)}
-                        onAgentProfile={onAgentProfile}
-                        isStreaming={streaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                      />
-                    </MessageScrollerItem>
-                  ))}
+                  {messageRows.map(row => {
+                    const isLastRow = row.index === messages.length - 1;
+                    if (row.kind === 'steps') {
+                      return (
+                        <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
+                          <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} compact />
+                        </MessageScrollerItem>
+                      );
+                    }
+                    return (
+                      <MessageScrollerItem key={row.message.id} scrollAnchor={isLastRow}>
+                        <SubThreadBubble
+                          msg={row.message}
+                          accent={resolveMessageAccent?.(row.message)}
+                          onAgentProfile={onAgentProfile}
+                          isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                        />
+                      </MessageScrollerItem>
+                    );
+                  })}
                 </div>
               )}
             </MessageScrollerContent>

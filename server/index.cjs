@@ -797,6 +797,14 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    -- Agent tool steps (2026-07): one row per tool call, rendered as a compact
+    -- chip instead of a full chat bubble. message_kind='tool_step' is the
+    -- discriminator; tool_name/tool_detail are the structured halves of the
+    -- human-readable content line, which stays populated as the fallback for
+    -- older clients and for rows written before these columns existed.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_kind text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_name text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_detail text DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
     CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
     -- Trigram indexes so MCP search_messages / search_docs (leading-wildcard
@@ -2629,7 +2637,7 @@ function validUuid(value) {
 async function inferThreadAgentTarget(sessionId, threadParentId) {
  if (!sessionId || !threadParentId) return null;
  const rows = await getDb().unsafe(
-  `select id, sender_kind, sender_id, sender_name, content, created_at
+  `select id, sender_kind, sender_id, sender_name, content, message_kind, tool_name, tool_detail, created_at
      from messages
      where session_id = $1
        and(id = $2 or thread_parent_id = $2)
@@ -3026,7 +3034,7 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
 async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
  const rows = threadParentId
   ? await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, created_at
          from messages
          where session_id = $1 and (id = $2 or thread_parent_id = $2) and deleted_at is null
          order by created_at desc
@@ -3034,7 +3042,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
    [sessionId, threadParentId, limit],
   )
   : await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, created_at
          from messages
          where session_id = $1 and thread_parent_id is null and deleted_at is null
          order by created_at desc
@@ -4863,13 +4871,23 @@ async function handleAgentJobDelta(ws, message) {
  await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
 }
 
-// Render one step as a single plain-text line, e.g. `Read · src/App.tsx`. Either
-// half may be missing (a tool with no arguments, or a daemon that sent no detail);
-// a step carrying neither is not worth a message.
-function agentStepContent(message) {
+// The two halves of a step, normalized to one clipped line each: the tool name
+// (`Read`) and its detail (`src/App.tsx`). Stored as their own columns so the UI
+// can render a compact chip instead of re-parsing the joined `content` line.
+function agentStepParts(message) {
  const name = textFromValue(message?.name).replace(/\s+/g, ' ').trim();
  const rawDetail = textFromValue(message?.detail).replace(/\s+/g, ' ').trim();
  const detail = rawDetail.length > 160 ? `${rawDetail.slice(0, 159)}…` : rawDetail;
+ return { name, detail };
+}
+
+// Render one step as a single plain-text line, e.g. `Read · src/App.tsx`. Either
+// half may be missing (a tool with no arguments, or a daemon that sent no detail);
+// a step carrying neither is not worth a message. This stays the human-readable
+// FALLBACK: clients that predate tool_name/tool_detail (and rows inserted before
+// those columns existed) still read sensibly off `content` alone.
+function agentStepContent(message) {
+ const { name, detail } = agentStepParts(message);
  if (name && detail) return `${name} · ${detail}`;
  return name || detail;
 }
@@ -4896,6 +4914,7 @@ async function handleAgentJobStep(ws, message) {
  if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
  const content = agentStepContent(message);
  if (!content) return;
+ const step = agentStepParts(message);
  const metadata = parseJsonObject(job.metadata);
  // Missing responseMessageId means the reply bubble is unknown; post the step at
  // the top level rather than dropping it.
@@ -4922,9 +4941,9 @@ async function handleAgentJobStep(ws, message) {
  );
  if (stepRows.length === 0) return; // the job already finished; the step is stale
  const messageRows = await getDb().unsafe(
-  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-     values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
-  [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent'],
+  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
+     values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
+  [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', step.name, step.detail],
  );
  notifyDbSubscribers('messages', 'INSERT', messageRows);
 }
@@ -9712,6 +9731,7 @@ module.exports = {
   handleAgentJobDelta,
   handleAgentJobStep,
   agentStepContent,
+  agentStepParts,
   handleAgentCapabilitiesSync,
   resolveWorkspaceAgentByHandle,
   registerAgentRequest,

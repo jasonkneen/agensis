@@ -128,11 +128,19 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
 
+-- message_kind/tool_name/tool_detail carry agent tool steps: message_kind
+-- 'tool_step' marks a row the UI renders as a compact chip rather than a full
+-- chat bubble, and the two tool_* halves are the structured form of the
+-- human-readable `content` line, which stays populated as the fallback. All
+-- three default to '' so every pre-existing row stays valid.
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
   content text NOT NULL DEFAULT '',
+  message_kind text DEFAULT '',
+  tool_name text DEFAULT '',
+  tool_detail text DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 

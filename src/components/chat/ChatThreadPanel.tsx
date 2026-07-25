@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
+import { ToolStepGroup } from './ToolStepGroup';
+import { buildTranscriptRows } from './toolSteps';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
@@ -66,6 +68,9 @@ export function ChatThreadPanel({
   const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
   const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
+  // Steps land here (threaded under the agent's reply), so they must be chips in the
+  // panel too — a run of four is four chips, not four bubbles.
+  const replyRows = buildTranscriptRows(replies);
 
   useEffect(() => {
     if (models) setModel(current => availableChatModelId(current, models));
@@ -116,16 +121,26 @@ export function ChatThreadPanel({
                 </Empty>
               ) : (
                 <div className="flex min-w-0 flex-col gap-1">
-                  {replies.map((msg, idx) => (
-                    <MessageScrollerItem key={msg.id} scrollAnchor={idx === replies.length - 1}>
-                      <ThreadBubble
-                        msg={msg}
-                        accent={resolveMessageAccent?.(msg)}
-                        onAgentProfile={onAgentProfile}
-                        isStreaming={streaming && idx === replies.length - 1 && msg.role === 'assistant'}
-                      />
-                    </MessageScrollerItem>
-                  ))}
+                  {replyRows.map(row => {
+                    const isLastRow = row.index === replies.length - 1;
+                    if (row.kind === 'steps') {
+                      return (
+                        <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
+                          <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} compact />
+                        </MessageScrollerItem>
+                      );
+                    }
+                    return (
+                      <MessageScrollerItem key={row.message.id} scrollAnchor={isLastRow}>
+                        <ThreadBubble
+                          msg={row.message}
+                          accent={resolveMessageAccent?.(row.message)}
+                          onAgentProfile={onAgentProfile}
+                          isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                        />
+                      </MessageScrollerItem>
+                    );
+                  })}
                 </div>
               )}
             </MessageScrollerContent>

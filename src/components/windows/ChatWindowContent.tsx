@@ -62,6 +62,8 @@ import {
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { ToolStepGroup } from '../chat/ToolStepGroup';
+import { buildTranscriptRows } from '../chat/toolSteps';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
   BUILTIN_SLASH_ITEMS,
@@ -765,6 +767,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [displayMessages, clearCutoffMs],
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
+  // Consecutive tool steps collapse into one chip row; every other message keeps its
+  // own row at its original position. Order is never changed.
+  const shownRows = useMemo(() => buildTranscriptRows(shownMessages), [shownMessages]);
 
   // Slash menu: built-ins that actually have a home here + the enumerated inserts,
   // fuzzy-ranked and grouped for display. `/split` only when splitting is wired;
@@ -1466,13 +1471,23 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                         </Button>
                       </div>
                     )}
-                    {shownMessages.map((msg, idx) => (
-                      <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={idx === shownMessages.length - 1}>
+                    {shownRows.map(row => {
+                      const isLastRow = row.index === shownMessages.length - 1;
+                      if (row.kind === 'steps') {
+                        return (
+                          <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
+                            <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} />
+                          </MessageScrollerItem>
+                        );
+                      }
+                      const msg = row.message;
+                      return (
+                      <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
                         <ChatMessageBubble
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
                           accent={resolveMessageAccent(msg, agentAccentLookup)}
-                          isStreaming={streaming && idx === shownMessages.length - 1 && msg.role === 'assistant'}
+                          isStreaming={streaming && isLastRow && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
                           replySummary={threadReplySummaries[msg.id]}
                           isEditing={editingMessageId === msg.id}
@@ -1497,7 +1512,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
                         />
                       </MessageScrollerItem>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </MessageScrollerContent>
