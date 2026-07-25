@@ -230,6 +230,12 @@ type ParticipantCandidate = ChannelParticipant & {
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
 type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
 
+// The chat column: message list and composer share ONE width so they line up.
+// They were independent before — the composer was centred at max-w-[800px] while
+// the message list ran the full width of the window, so messages sat left of the
+// input they belong to. Change this in one place or they drift apart again.
+const CHAT_COLUMN_CLASS = 'mx-auto w-full max-w-[800px]';
+
 export const ChatWindowContent = React.memo(function ChatWindowContent({
   messages,
   topLevelMessages,
@@ -1398,7 +1404,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
-              <MessageScrollerContent className="min-h-full gap-0 py-2">
+              <MessageScrollerContent className={cn('min-h-full gap-0 py-2', CHAT_COLUMN_CLASS)}>
                 {clearedAt && hiddenCount > 0 && (
                   <button
                     type="button"
@@ -1543,7 +1549,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </div>
               )}
 
-              <div className="relative mx-auto w-full max-w-[800px]" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+              <div className={cn('relative', CHAT_COLUMN_CLASS)} onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
                 {showSlashPicker && (
                   <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                     <CommandList className="max-h-[min(260px,44vh)]">
