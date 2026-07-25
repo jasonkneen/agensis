@@ -194,7 +194,7 @@ export function ThreadWidgetRail({
                 <button
                   key={kind}
                   type="button"
-                  className="pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                  className="control-outer-ring pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
                   title={`Add ${KIND_META[kind].label} widget`}
                   onClick={() => addWidget(kind)}
                 >

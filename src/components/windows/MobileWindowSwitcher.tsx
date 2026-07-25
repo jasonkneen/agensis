@@ -39,7 +39,7 @@ export function MobileWindowSwitcher({ windows, activeWindowId, onFocus, onClose
       <button
         type="button"
         onClick={onOpenMenu}
-        className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background/60 text-muted-foreground hover:text-foreground"
+        className="control-outer-ring flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background/60 text-muted-foreground hover:text-foreground"
         aria-label="Open menu"
       >
         <Menu size={16} />
@@ -52,7 +52,7 @@ export function MobileWindowSwitcher({ windows, activeWindowId, onFocus, onClose
           <div
             key={win.id}
             className={cn(
-              'group flex h-8 shrink-0 items-center gap-1.5 rounded-lg border pl-2 pr-1 text-xs transition-colors',
+              'control-outer-ring group flex h-8 shrink-0 items-center gap-1.5 rounded-lg border pl-2 pr-1 text-xs transition-colors',
               isActive
                 ? 'border-primary/70 bg-primary/15 text-foreground'
                 : 'border-border bg-background/60 text-muted-foreground',
