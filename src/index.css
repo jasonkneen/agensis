@@ -3431,6 +3431,31 @@ body {
  }
 }
 
+/* ---- dark-mode outer ring on light-lined controls -------------------------
+   Lifted from the presence/avatar cluster, which is the only place that
+   already reads right on a mid-tone panel: an avatar carries a light 1px
+   INNER line (avatar.tsx — `after:border after:border-border`) *and* a dark
+   OUTER ring (`ring-2 ring-background` on AvatarGroup / AvatarBadge). The
+   outer ring is what stops the control dissolving into the surface behind it.
+
+   One token + one utility instead of a per-site box-shadow. The ring is the
+   page colour, held slightly translucent so it composites over whatever
+   surface the control happens to sit on. It resolves sensibly for every
+   theme: each dark seed's `paper` becomes --background, and every derived
+   surface (card / raised / muted / popover) is paper lifted toward primary —
+   see expand() in showcase/neoThemes.ts — so --background is always the
+   darkest colour in a dark palette, never lighter than the control's fill.
+
+   Light mode is deliberately untouched: the utility only emits inside
+   [data-theme="dark"], so in light mode the class is inert. */
+:root[data-theme="dark"] {
+ --control-outer-ring: color-mix(in srgb, var(--background) 82%, transparent);
+}
+
+@utility control-outer-ring {
+ @apply dark:ring-1 dark:ring-[color:var(--control-outer-ring)];
+}
+
 .presence-avatar-group {
  gap: 0;
  isolation: isolate;
