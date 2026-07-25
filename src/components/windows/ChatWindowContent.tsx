@@ -153,6 +153,7 @@ import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '..
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
+import { useSharedNow } from '../../hooks/useSharedNow';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
@@ -2051,6 +2052,80 @@ function ThinkingIndicator({ text = 'Thinking…' }: { text?: string }) {
   );
 }
 
+/**
+ * The "3 replies · last reply 24 minutes ago" chip under a threaded message.
+ *
+ * Split out of ChatMessageBubble purely so the relative time can stay live: it
+ * subscribes to the shared minute clock, and a tick re-renders every subscriber.
+ * Kept at this leaf, a tick re-renders one small chip per threaded message —
+ * not the message rows themselves (avatars, markdown, artifacts).
+ */
+function ThreadReplySummaryButton({
+  replyCount,
+  summary,
+  onOpenThread,
+}: {
+  replyCount: number;
+  summary?: ThreadReplySummary;
+  onOpenThread: () => void;
+}) {
+  const now = useSharedNow();
+
+  // replyCount stays authoritative for the number; summary only decorates it
+  // (who spoke, how long ago) and can be absent for windows that were handed
+  // counts but not the messages behind them.
+  const replyLabel = `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
+  const replyParticipants = summary?.participants ?? [];
+  const replyOverflow = summary?.overflow ?? 0;
+  const lastReplyLabel = formatLastReplyTime(summary?.lastReplyAt, now);
+
+  return (
+    <button
+      type="button"
+      className="mt-1 -ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+      onClick={onOpenThread}
+      aria-label={lastReplyLabel
+        ? `Open thread — ${replyLabel}, last reply ${lastReplyLabel}`
+        : `Open thread — ${replyLabel}`}
+    >
+      {replyParticipants.length > 0 ? (
+        <span className="flex shrink-0 items-center">
+          {replyParticipants.map((participant, index) => (
+            <span
+              key={participant.key}
+              className={cn(
+                'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background',
+                index > 0 && '-ml-1.5',
+              )}
+              title={participant.name}
+            >
+              <MessageAvatar
+                avatar={participant.avatar}
+                initials={participant.name.slice(0, 2).toUpperCase()}
+                isAgent={participant.isAgent}
+              />
+            </span>
+          ))}
+          {replyOverflow > 0 && (
+            <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background">
+              +{replyOverflow}
+            </span>
+          )}
+        </span>
+      ) : (
+        <CornerDownRight className="size-3 shrink-0" />
+      )}
+      <span className="shrink-0 font-medium">{replyLabel}</span>
+      {lastReplyLabel && (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
+          <span className="truncate text-muted-foreground/70">last reply {lastReplyLabel}</span>
+        </>
+      )}
+    </button>
+  );
+}
+
 function ChatMessageBubble({
   msg,
   avatar,
@@ -2124,14 +2199,6 @@ function ChatMessageBubble({
   const reactions = msg.reactions ?? {};
   const uid = currentUserId || 'me';
 
-  // Reply summary. replyCount stays authoritative for the number; replySummary
-  // only decorates it (who spoke, how long ago) and can be absent for windows
-  // that were handed counts but not the messages behind them.
-  const replyLabel = `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
-  const replyParticipants = replySummary?.participants ?? [];
-  const replyOverflow = replySummary?.overflow ?? 0;
-  const lastReplyLabel = formatLastReplyTime(replySummary?.lastReplyAt);
-
   return (
     <div
       className={cn('chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 hover:bg-muted/40', widgetsActive ? 'pr-[300px]' : 'pr-20')}
@@ -2195,49 +2262,11 @@ function ChatMessageBubble({
           </div>
         )}
         {replyCount && onOpenThread ? (
-          <button
-            type="button"
-            className="mt-1 -ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-            onClick={onOpenThread}
-            aria-label={lastReplyLabel
-              ? `Open thread — ${replyLabel}, last reply ${lastReplyLabel}`
-              : `Open thread — ${replyLabel}`}
-          >
-            {replyParticipants.length > 0 ? (
-              <span className="flex shrink-0 items-center">
-                {replyParticipants.map((participant, index) => (
-                  <span
-                    key={participant.key}
-                    className={cn(
-                      'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background',
-                      index > 0 && '-ml-1.5',
-                    )}
-                    title={participant.name}
-                  >
-                    <MessageAvatar
-                      avatar={participant.avatar}
-                      initials={participant.name.slice(0, 2).toUpperCase()}
-                      isAgent={participant.isAgent}
-                    />
-                  </span>
-                ))}
-                {replyOverflow > 0 && (
-                  <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background">
-                    +{replyOverflow}
-                  </span>
-                )}
-              </span>
-            ) : (
-              <CornerDownRight className="size-3 shrink-0" />
-            )}
-            <span className="shrink-0 font-medium">{replyLabel}</span>
-            {lastReplyLabel && (
-              <>
-                <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
-                <span className="truncate text-muted-foreground/70">last reply {lastReplyLabel}</span>
-              </>
-            )}
-          </button>
+          <ThreadReplySummaryButton
+            replyCount={replyCount}
+            summary={replySummary}
+            onOpenThread={onOpenThread}
+          />
         ) : null}
         {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -2263,9 +2292,13 @@ function ChatMessageBubble({
               // not it had anything to do with a sub-thread, which made it the
               // loudest repeated element in the timeline. Opacity (not `hidden`)
               // so revealing it doesn't reflow the row under the cursor.
+              // `pointer-coarse:opacity-70` is the escape hatch: a touch device
+              // never fires hover, so hover-only here means unreachable (this app
+              // ships a mobile layer). Coarse pointers get it permanently visible
+              // but dimmed, so it stays quiet on desktop where hover works.
               <button
                 type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
                 onClick={onCreateSubThread}
               >
                 <Plus className="size-3" />
