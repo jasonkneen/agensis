@@ -4863,6 +4863,72 @@ async function handleAgentJobDelta(ws, message) {
  await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
 }
 
+// Render one step as a single plain-text line, e.g. `Read · src/App.tsx`. Either
+// half may be missing (a tool with no arguments, or a daemon that sent no detail);
+// a step carrying neither is not worth a message.
+function agentStepContent(message) {
+ const name = textFromValue(message?.name).replace(/\s+/g, ' ').trim();
+ const rawDetail = textFromValue(message?.detail).replace(/\s+/g, ' ').trim();
+ const detail = rawDetail.length > 160 ? `${rawDetail.slice(0, 159)}…` : rawDetail;
+ if (name && detail) return `${name} · ${detail}`;
+ return name || detail;
+}
+
+// A daemon turn that reads files, greps and runs bash produces no text at all, so
+// the delta pump (text only) leaves the human staring at the "Thinking …"
+// placeholder in silence. Each step lands as its OWN message threaded under the
+// agent's reply — one row per round trip, never an update of the placeholder.
+async function handleAgentJobStep(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+ const jobId = String(message.jobId || '');
+ if (!jobId) throw badRequest('jobId is required');
+ const rows = await getDb().unsafe(
+  `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+  [jobId, auth.agentId, auth.workspaceId],
+ );
+ const job = rows[0];
+ if (!job) throw forbidden('Agent job not found');
+ if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
+ const content = agentStepContent(message);
+ if (!content) return;
+ const metadata = parseJsonObject(job.metadata);
+ // Missing responseMessageId means the reply bubble is unknown; post the step at
+ // the top level rather than dropping it.
+ const threadParentId = metadata.responseMessageId || null;
+ // A tool step is the agent demonstrably doing work, so — unlike a content-free
+ // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
+ // and sets lastContentAt exactly like a content-bearing delta does. `response` is
+ // deliberately left alone: only the delta pump and the final result own it.
+ const nextMetadata = {
+  ...metadata,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+ };
+ nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+ const stepRows = await getDb().unsafe(
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
+  [jobId, nextMetadata],
+ );
+ if (stepRows.length === 0) return; // the job already finished; the step is stale
+ const messageRows = await getDb().unsafe(
+  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+     values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
+  [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent'],
+ );
+ notifyDbSubscribers('messages', 'INSERT', messageRows);
+}
+
 async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
  const apiKey = await getAnthropicApiKey(workspaceId);
  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
@@ -6405,6 +6471,10 @@ function attachRealtime(server) {
     }
     if (message.action === 'agent_job_delta') {
      await handleAgentJobDelta(ws, message);
+     return;
+    }
+    if (message.action === 'agent_job_step') {
+     await handleAgentJobStep(ws, message);
      return;
     }
     if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {
@@ -9640,6 +9710,8 @@ module.exports = {
   getFarmAgentJob,
   cancelFarmAgentJob,
   handleAgentJobDelta,
+  handleAgentJobStep,
+  agentStepContent,
   handleAgentCapabilitiesSync,
   resolveWorkspaceAgentByHandle,
   registerAgentRequest,
