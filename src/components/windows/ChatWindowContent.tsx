@@ -208,7 +208,6 @@ interface ChatWindowContentProps {
   subThreadStreaming?: boolean;
   onOpenSubThread?: (session: ChatSession) => void;
   onCloseSubThread?: () => void;
-  onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
   onSendSubThreadMessage?: (content: string) => void;
   onSplitThread?: () => void;
   currentUserId?: string;
@@ -282,12 +281,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   subThreadStreaming = false,
   onOpenSubThread,
   onCloseSubThread,
-  onCreateSubThread,
   onSendSubThreadMessage,
   onSplitThread,
   currentUserId = '',
 }: ChatWindowContentProps) {
-  const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState(() => getSettings().ai_default_model || 'auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
@@ -1506,7 +1503,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           onAgentProfile={openAgentProfilePanel}
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
-                          onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
                           widgetsActive={widgetsActive}
                           currentUserId={currentUserId}
                           onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
@@ -2012,44 +2008,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={Boolean(subThreadPickerMessageId)} onOpenChange={open => { if (!open) setSubThreadPickerMessageId(null); }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Dispatch background task to…</DialogTitle>
-            <p className="mt-1 text-xs text-muted-foreground">The agent receives this message as a task and works autonomously. View progress in the Threads panel.</p>
-          </DialogHeader>
-          <div className="flex flex-col gap-1 py-2">
-            {agents.filter(a => a.enabled !== false).map(agent => (
-              <button
-                key={agent.id}
-                type="button"
-                className="flex items-center gap-3 rounded-md px-3 py-2.5 text-left hover:bg-muted"
-                onClick={() => {
-                  if (subThreadPickerMessageId && onCreateSubThread) {
-                    const parentMsg = visibleMessages.find(m => m.id === subThreadPickerMessageId);
-                    const content = parentMsg ? (typeof parentMsg.content === 'string' ? parentMsg.content : JSON.stringify(parentMsg.content)) : undefined;
-                    onCreateSubThread(subThreadPickerMessageId, agent, content);
-                  }
-                  setSubThreadPickerMessageId(null);
-                  setSidePanel('sub-threads');
-                }}
-              >
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                  <Bot className="size-3.5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{agent.name}</div>
-                  {agent.handle && <div className="truncate text-xs text-muted-foreground">@{agent.handle}</div>}
-                </div>
-              </button>
-            ))}
-            {agents.filter(a => a.enabled !== false).length === 0 && (
-              <p className="px-3 py-2 text-sm text-muted-foreground">No agents available in this workspace.</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       <ConnectFlowsDialog
         workspaceId={workspaceId || null}
         channelId={flowConnectChannelId}
@@ -2177,7 +2135,6 @@ function ChatMessageBubble({
   onAgentProfile,
   subThreads,
   onOpenSubThread,
-  onCreateSubThread,
   widgetsActive,
   currentUserId,
   onToggleReaction,
@@ -2201,7 +2158,6 @@ function ChatMessageBubble({
   onAgentProfile?: (agentIdOrHandle: string) => void;
   subThreads?: ChatSession[];
   onOpenSubThread?: (session: ChatSession) => void;
-  onCreateSubThread?: () => void;
   widgetsActive?: boolean;
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
@@ -2299,7 +2255,7 @@ function ChatMessageBubble({
             onOpenThread={onOpenThread}
           />
         ) : null}
-        {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
+        {subThreads && subThreads.length > 0 ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {(subThreads || []).map(session => {
               const agentParticipants = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
@@ -2318,24 +2274,6 @@ function ChatMessageBubble({
                 </button>
               );
             })}
-            {onCreateSubThread && (
-              // Hover-only: this used to sit under every single message whether or
-              // not it had anything to do with a sub-thread, which made it the
-              // loudest repeated element in the timeline. Opacity (not `hidden`)
-              // so revealing it doesn't reflow the row under the cursor.
-              // `pointer-coarse:opacity-70` is the escape hatch: a touch device
-              // never fires hover, so hover-only here means unreachable (this app
-              // ships a mobile layer). Coarse pointers get it permanently visible
-              // but dimmed, so it stays quiet on desktop where hover works.
-              <button
-                type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
-                onClick={onCreateSubThread}
-              >
-                <Plus className="size-3" />
-                Sub-thread
-              </button>
-            )}
           </div>
         ) : null}
         {/* Reaction pills — always visible when reactions exist */}
