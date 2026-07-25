@@ -137,8 +137,24 @@ export function DrawingLayer({
       delete element.dataset.baseTransform;
       element.style.transform = baseTransform && baseTransform !== 'none' ? baseTransform : '';
       element.style.transformOrigin = '';
-      element.style.width = '';
-      element.style.height = '';
+      // RESTORE, never blank. This helper runs on every drag-end — including a
+      // plain click, which goes through the full drag lifecycle and commits an
+      // identical x/y, so React's style diff sees no change and never re-writes
+      // width/height. Blanking them here therefore left the element with NO
+      // width at all (its inline px size is React's only source; there is no
+      // CSS fallback), collapsing every clicked widget to a sliver.
+      // Only the applet branch of previewResizeToPosition ever sets these, so
+      // when there is no stash we must leave React's values untouched.
+      const baseWidth = element.dataset.baseWidth;
+      const baseHeight = element.dataset.baseHeight;
+      if (baseWidth !== undefined) {
+        element.style.width = baseWidth;
+        delete element.dataset.baseWidth;
+      }
+      if (baseHeight !== undefined) {
+        element.style.height = baseHeight;
+        delete element.dataset.baseHeight;
+      }
     });
   }, [getCanvasItemElements]);
 
@@ -265,6 +281,15 @@ export function DrawingLayer({
       element.style.transformOrigin = 'top left';
       if (snapshot.objectType === 'applet') {
         // Iframes reflow when width/height change directly; CSS scale squishes them.
+        // Stash what React had inline BEFORE overwriting it, exactly as
+        // baseTransform does above — clearCanvasItemTransform restores from this.
+        // Without the stash there is nothing to put back, and blanking these is
+        // not harmless: React owns width/height as inline px derived from the
+        // object's percentage size, so a blanked value has no CSS fallback.
+        if (element.dataset.baseWidth === undefined) {
+          element.dataset.baseWidth = element.style.width;
+          element.dataset.baseHeight = element.style.height;
+        }
         const newW = (next.width / 100) * snapshot.canvasRect.width;
         const newH = (next.height / 100) * snapshot.canvasRect.height;
         element.style.transform = `translate3d(${tx}px, ${ty}px, 0) ${baseTransform}`.trim();
