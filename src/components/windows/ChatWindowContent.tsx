@@ -478,6 +478,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     inputRef.current?.focus();
   };
 
+  // A huddle utterance takes exactly the composer's path: a normal message,
+  // which dispatches the agent exactly as typing would. Deliberately NOT gated
+  // on `streaming` — in a live call you talk over the agent's last answer, and
+  // a dropped sentence is invisible to someone who is looking away.
+  const sendTranscript = useCallback((text: string) => {
+    onSendMessage(text, selectedModel);
+  }, [onSendMessage, selectedModel]);
+
   const insertComposerText = (text: string) => {
     const target = inputRef.current;
     const start = target?.selectionStart ?? input.length;
@@ -1450,7 +1458,13 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             </DropdownMenu>
           </div>
         </div>
-        {showHuddleCard && <HuddleCard workspaceId={workspaceId} sessionId={inferredSessionId} />}
+        {showHuddleCard && (
+          <HuddleCard
+            workspaceId={workspaceId}
+            sessionId={inferredSessionId}
+            onTranscript={sendTranscript}
+          />
+        )}
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
