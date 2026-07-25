@@ -35,6 +35,8 @@ export type ChatWindowBodyProps = Omit<
     docs?: Document[],
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
+    // Thread composer's "Send to channel": also show this reply in the channel.
+    broadcastToChannel?: boolean,
   ) => void;
   onSetActiveSession: (session: ChatSession) => void;
   onAppSplitThread: (source: ChatSession) => void;
@@ -59,9 +61,9 @@ export function ChatWindowBody({
   );
 
   const handleSendThreadReply = useCallback(
-    (content: string, model: string) => {
+    (content: string, model: string, broadcastToChannel?: boolean) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null);
+      onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage, memoryFacts, activeThreadId],
   );
