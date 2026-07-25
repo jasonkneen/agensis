@@ -12,7 +12,6 @@ export const CATEGORY_RANK: Record<InboxCategory, number> = {
   error: 1,
   mention: 2,
   comment: 3,
-  activity: 4,
 };
 
 export const CATEGORY_LABEL: Record<InboxCategory, string> = {
@@ -20,7 +19,6 @@ export const CATEGORY_LABEL: Record<InboxCategory, string> = {
   error: 'Error',
   mention: 'Mention',
   comment: 'Comment',
-  activity: 'Activity',
 };
 
 export const INBOX_FILTERS: Array<{ id: InboxFilter; label: string }> = [
@@ -29,7 +27,6 @@ export const INBOX_FILTERS: Array<{ id: InboxFilter; label: string }> = [
   { id: 'comment', label: 'Comments' },
   { id: 'mention', label: 'Mentions' },
   { id: 'error', label: 'Errors' },
-  { id: 'activity', label: 'Activity' },
 ];
 
 /**
@@ -183,11 +180,6 @@ export function inboxEmptyState(filter: InboxFilter): { title: string; descripti
         title: 'No failed agent runs',
         description: 'A job that errors out lands here with its thread, so you can restart it from the source.',
       };
-    case 'activity':
-      return {
-        title: 'No recent activity',
-        description: 'Workspace events — documents, tasks, joins — appear here as they happen.',
-      };
     default:
       return {
         title: 'Inbox zero',
@@ -204,7 +196,6 @@ export function countByCategory(groups: InboxGroup[]): Record<InboxFilter, numbe
     comment: 0,
     mention: 0,
     error: 0,
-    activity: 0,
   };
   for (const group of groups) counts[group.category] += 1;
   return counts;
