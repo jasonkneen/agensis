@@ -195,6 +195,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
   const [filter, setFilter] = useState<AssignmentFilter>('all');
+  const [hideDone, setHideDone] = useState(false);
   const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('list');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
@@ -212,15 +213,18 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
   const filteredTopLevel = useMemo(() => {
     const me = currentUserId || members.find(member => member.email === currentUserEmail)?.user_id || '';
+    let list = allTopLevel;
     if (filter === 'mine') {
-      if (!me) return [];
-      return allTopLevel.filter(task => task.assignee_id === me);
+      list = me ? allTopLevel.filter(task => task.assignee_id === me) : [];
+    } else if (filter === 'others') {
+      list = allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
     }
-    if (filter === 'others') {
-      return allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
+    // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
+    if (hideDone) {
+      list = list.filter(task => task.status !== 'done');
     }
-    return allTopLevel;
-  }, [allTopLevel, filter, members, currentUserEmail, currentUserId]);
+    return list;
+  }, [allTopLevel, filter, hideDone, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -295,16 +299,19 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
   useEffect(() => {
     if (!focusRowId) return;
-    // The current assignment filter may hide the focused task's row entirely.
-    if (filter !== 'all' && !filteredTopLevel.some(task => task.id === focusRowId)) {
-      setFilter('all');
+    // The current assignment filter or "hide done" toggle may hide the focused
+    // task's row entirely — e.g. jumping in from a comment/@mention link on a
+    // task that's already done.
+    if (!filteredTopLevel.some(task => task.id === focusRowId)) {
+      if (filter !== 'all') setFilter('all');
+      if (hideDone) setHideDone(false);
       return; // re-run once the wider list renders
     }
     const node = document.getElementById(`task-row-${focusRowId}`);
     if (!node) return;
     node.scrollIntoView({ behavior: 'smooth', block: 'center' });
     onFocusTaskConsumed?.();
-  }, [focusRowId, filter, filteredTopLevel, onFocusTaskConsumed]);
+  }, [focusRowId, filter, hideDone, filteredTopLevel, onFocusTaskConsumed]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
@@ -322,6 +329,16 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
           <ToggleGroupItem value="others" title="Assigned to other workspace members">Others</ToggleGroupItem>
         </ToggleGroup>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => setHideDone(v => !v)}
+          title={hideDone ? 'Show done tasks' : 'Hide done tasks'}
+          className={cn(hideDone && 'text-primary')}
+        >
+          {hideDone ? 'Show done' : 'Hide done'}
+        </Button>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
         <ToggleGroup
           type="single"
