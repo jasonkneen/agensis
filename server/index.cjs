@@ -3420,7 +3420,8 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, started_at, metadata)
        values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
        returning *`,
-   [workspaceId, agent.id, sessionId, createdBy, '', JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin' })],
+   // Object, not JSON.stringify — same double-encode trap as the daemon insert below.
+   [workspaceId, agent.id, sessionId, createdBy, '', { handle, threadParentId: threadParentId || null, mode: 'builtin' }],
   );
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
@@ -3547,7 +3548,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    sessionId,
    createdBy,
    daemonPrompt,
-   JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' }),
+   // Pass the OBJECT (not JSON.stringify'd) — see the identical note on the MCP
+   // insert above. Stringifying binds a jsonb STRING scalar, so every delta's
+   // `metadata || ...` APPENDED instead of merging and metadata became an array;
+   // metadata->>'responseMessageId' then returned null and finalizeStuckJob could
+   // never clear the "Thinking …" placeholder, hanging the thread forever.
+   { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' },
   ],
   responseMessageId,
  );
@@ -3797,8 +3803,21 @@ async function failConnectionJobs(connectionId, reason) {
  }
 }
 
-// Backstop: time out jobs whose result/progress has gone stale. Farm coding jobs
-// share the CLI's 30-minute budget; chat turns retain the faster four-minute guard.
+// Backstop: time out jobs whose result/progress has gone stale.
+//
+// Staleness is measured from the last delta that carried actual CONTENT, not from
+// updated_at. A waiting daemon sends a content-free "Thinking Ns" tick every second,
+// and each one bumps updated_at — so an updated_at-based guard never fires and a
+// wedged agent spins forever (observed live: 8 minutes, 0 bytes of response, the
+// reaper never touched it). The earlier started_at-based guard had the opposite
+// bug: it killed healthy turns that were streaming happily at the 4-minute mark.
+// lastContentAt is written by handleAgentJobDelta only when the delta has text.
+//
+// The window is 10 minutes rather than 4: a coding agent can legitimately think
+// for minutes without emitting a token, and killing those was the original
+// complaint. NO_PROGRESS covers "alive but producing nothing"; HARD_CEILING is an
+// absolute stop measured from started_at, so no amount of ticking can keep a job
+// alive indefinitely. Farm coding jobs keep sharing the CLI's 30-minute budget.
 async function reapStuckAgentJobs() {
  try {
   const rows = await getDb().unsafe(
@@ -3806,7 +3825,13 @@ async function reapStuckAgentJobs() {
        where status = 'running'
          and (
            ((metadata->>'mode') = 'farm' and updated_at < now() - interval '31 minutes')
-           or (coalesce(metadata->>'mode', '') <> 'farm' and coalesce(updated_at, started_at) < now() - interval '240 seconds')
+           or (
+             coalesce(metadata->>'mode', '') <> 'farm'
+             and (
+               coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - interval '10 minutes'
+               or started_at < now() - interval '30 minutes'
+             )
+           )
          )`,
   );
   for (const job of rows) await finalizeStuckJob(job, 'timed out');
@@ -4764,17 +4789,37 @@ async function handleAgentJobDelta(ws, message) {
  if (!job) throw forbidden('Agent job not found');
  const metadata = parseJsonObject(job.metadata);
  const responseMessageId = metadata.responseMessageId || null;
+ const deltaText = textFromValue(message.content ?? message.response ?? '').trim();
+ // lastDeltaAt marks "the daemon is alive"; lastContentAt marks "the agent produced
+ // something". Only the latter counts as progress for the stuck-job reaper — a
+ // waiting daemon ticks once a second with empty content, and treating that as
+ // progress is what let a wedged turn spin forever.
+ const nextMetadata = {
+  ...metadata,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+ };
+ if (deltaText) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
  const deltaRows = await getDb().unsafe(
   `update agent_jobs
      set response = $2,
          updated_at = now(),
-         metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb
+         metadata = $3::jsonb
      where id = $1 and status in ('queued', 'running')
      returning id`,
   [
    jobId,
-   textFromValue(message.content ?? message.response ?? '').trim(),
-   JSON.stringify({ lastDeltaAt: new Date().toISOString(), elapsedMs: Number(message.elapsedMs || 0) }),
+   deltaText,
+   // Write the whole merged object rather than SQL-side `metadata || patch`.
+   // `||` only merges when BOTH sides are jsonb objects; a metadata column that
+   // was double-encoded into a jsonb STRING scalar appends instead, turning the
+   // column into an array — after which metadata->>'mode' and
+   // metadata->>'lastContentAt' both read NULL in SQL. `metadata` here comes from
+   // parseJsonObject(), which already flattens that corruption back into an
+   // object, so writing it wholesale also self-heals any row still in the bad
+   // shape. Pass the OBJECT: postgres.js encodes it as real jsonb, whereas a
+   // JSON.stringify'd value re-creates the string-scalar bug.
+   nextMetadata,
   ],
  );
  if (deltaRows.length === 0) return;
