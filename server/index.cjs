@@ -869,6 +869,27 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_comments(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
+
+    -- Notes on an activity log entry ("comment I can look at later"), anchored to
+    -- the activity_events row itself rather than the underlying entity, so a note
+    -- left on e.g. a "message sent" log line doesn't require the message to carry
+    -- comment support of its own. Mirrors memory_file_comments' shape so it drops
+    -- straight into the generic useRealtimeComments hook.
+    CREATE TABLE IF NOT EXISTS activity_event_comments (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      event_id uuid NOT NULL REFERENCES activity_events(id) ON DELETE CASCADE,
+      user_id uuid,
+      parent_id uuid REFERENCES activity_event_comments(id) ON DELETE CASCADE,
+      content text NOT NULL,
+      resolved boolean DEFAULT false,
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_event_comments(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
   `);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS workspace_secrets (

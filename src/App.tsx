@@ -2715,6 +2715,8 @@ function CanvasLayerScene({
                 <ActivityWindowContent
                   events={activityEvents}
                   loading={activityLoading}
+                  workspaceId={workspaceId}
+                  currentUserId={userId}
                 />
               </Suspense>
             </FloatingWindowShell>

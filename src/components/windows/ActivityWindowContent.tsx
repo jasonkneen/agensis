@@ -7,6 +7,7 @@ import {
   MessageCircle,
   MessageSquare,
   Palette,
+  Send,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -23,11 +24,15 @@ import {
 import { Marker, MarkerContent } from '@/components/ui/marker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { useActivityEventComments } from '../../hooks/useActivityEventComments';
 
 interface ActivityWindowContentProps {
   events: ActivityEvent[];
   loading: boolean;
+  workspaceId?: string | null;
+  currentUserId?: string | null;
 }
 
 function iconFor(type: ActivityEventType): React.ReactNode {
@@ -88,7 +93,72 @@ function groupByDay(events: ActivityEvent[]): Array<{ label: string; items: Acti
   return Object.entries(groups).map(([label, items]) => ({ label, items }));
 }
 
-export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading }: ActivityWindowContentProps) {
+// Notes left on a log entry ("look at this later"). Keyed by event id from the
+// parent so switching the selected row remounts this with fresh input state
+// instead of leaking a draft between entries.
+function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventId: string; workspaceId?: string | null; currentUserId?: string | null }) {
+  const { topLevel, loading, createComment } = useActivityEventComments(eventId, workspaceId ?? null, currentUserId ?? undefined);
+  const [draft, setDraft] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    const content = draft.trim();
+    if (!content || submitting) return;
+    setSubmitting(true);
+    try {
+      await createComment({ content });
+      setDraft('');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        Comments{topLevel.length > 0 ? ` (${topLevel.length})` : ''}
+      </div>
+      {loading ? (
+        <div className="text-xs text-muted-foreground">Loading…</div>
+      ) : topLevel.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No comments yet. Leave one to check back on later.</div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {topLevel.map(comment => (
+            <div key={comment.id} className="rounded-lg border bg-muted/30 p-2">
+              <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className="font-medium text-foreground">{comment.user_id === currentUserId ? 'You' : 'Teammate'}</span>
+                <span>·</span>
+                <span>{formatFullDate(comment.created_at)}</span>
+              </div>
+              <p className="whitespace-pre-wrap text-xs">{comment.content}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <Textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="Leave a note on this entry…"
+          className="min-h-16 text-xs"
+          onKeyDown={e => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <Button type="button" size="sm" onClick={submit} disabled={!draft.trim() || submitting} className="self-end">
+          <Send data-icon="inline-start" />
+          Comment
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading, workspaceId, currentUserId }: ActivityWindowContentProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedEvent = selectedId ? events.find(e => e.id === selectedId) ?? null : null;
 
@@ -198,6 +268,9 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                   </pre>
                 </div>
               )}
+              <div className="border-t pt-3">
+                <ActivityEventComments key={selectedEvent.id} eventId={selectedEvent.id} workspaceId={workspaceId} currentUserId={currentUserId} />
+              </div>
             </div>
           </ScrollArea>
         </div>
