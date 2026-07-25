@@ -382,7 +382,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
       {view === 'list' ? (
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col gap-4 p-3">
+          <div className="flex flex-col gap-3 p-3">
             {filteredTopLevel.length === 0 ? (
               <Empty className="min-h-80 border-0">
                 <EmptyHeader>
@@ -398,8 +398,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 const items = grouped[status];
                 if (items.length === 0) return null;
                 return (
-                  <section key={status} className="flex flex-col gap-2">
-                    <Marker variant="separator">
+                  <section key={status} className="flex flex-col gap-1.5">
+                    <Marker variant="separator" className="min-h-0 text-xs">
                       <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
                     </Marker>
                     <ItemGroup className="gap-1">
