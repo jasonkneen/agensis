@@ -1854,6 +1854,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           {sidePanel === 'profile' ? (
             <AgentProfileSidePanel
               agent={profileAgent}
+              currentUserId={currentUserId}
               participant={profileParticipant}
               connections={agentConnections}
               lookupKey={profileAgentKey || directProfileKey}
@@ -2982,11 +2983,13 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
 
 function AgentProfileSidePanel({
   agent,
+  currentUserId,
   participant,
   connections,
   lookupKey,
   onClose,
 }: {
+  currentUserId?: string;
   agent: WorkspaceAgent | null;
   participant: ChannelParticipant | null;
   connections: AgentConnection[];
@@ -3052,6 +3055,18 @@ function AgentProfileSidePanel({
             <AgentProfileField label="Handle" value={handle ? `@${handle}` : ''} />
             <AgentProfileField label="Agent ID" value={agent?.id ? shortId(agent.id) : ''} title={agent?.id} />
             <AgentProfileField label="Workspace ID" value={agent?.workspace_id ? shortId(agent.workspace_id) : ''} title={agent?.workspace_id} />
+            {/* Whose agent this is. In a shared workspace it is the difference
+                between "the AI said" and "Jason's agent said" — accountability
+                when an agent does something surprising. */}
+            <AgentProfileField
+              label="Managed by"
+              value={
+                agent?.created_by
+                  ? (currentUserId && agent.created_by === currentUserId ? 'you' : shortId(agent.created_by))
+                  : ''
+              }
+              title={agent?.created_by || undefined}
+            />
             <AgentProfileField label="Version" value={agent?.version ? `v${agent.version}` : ''} />
             <AgentProfileField label="Created" value={formatDateTime(agent?.created_at)} />
             <AgentProfileField label="Updated" value={formatDateTime(agent?.updated_at)} />

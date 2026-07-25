@@ -2172,7 +2172,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -2183,7 +2183,7 @@ async function verifyAgentConnectToken(token, req = null) {
   const { workspaceId, agentId } = agentIdsFromWsRequest(req);
   if (workspaceId && agentId) {
    const fallbackRows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -2533,7 +2533,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -8422,7 +8422,7 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
          from workspace_agents
          where workspace_id = $1
          order by created_at asc, name asc`,
