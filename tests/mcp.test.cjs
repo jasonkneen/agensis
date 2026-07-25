@@ -22,6 +22,15 @@ const FLOW_CHANNEL = {
   scopes: ['channels:read', 'messages:read', 'messages:write', 'agents:read', 'agents:dispatch'],
 };
 
+// Task rows the fake DB serves. t-root -> t-child -> t-grand is a 3-deep tree
+// in WS; t-other belongs to OTHER_WS and must never be reachable as a parent.
+const TASK_ROWS = {
+  't-root': { id: 't-root', workspace_id: WS, parent_id: null, title: 'Root' },
+  't-child': { id: 't-child', workspace_id: WS, parent_id: 't-root', title: 'Child' },
+  't-grand': { id: 't-grand', workspace_id: WS, parent_id: 't-child', title: 'Grandchild' },
+  't-other': { id: 't-other', workspace_id: OTHER_WS, parent_id: null, title: 'Foreign' },
+};
+
 // Minimal fake postgres client. Recognizes only the statements the MCP tools
 // under test issue; everything else returns []. Channels: ch-1 in WS, ch-x in OTHER_WS.
 function makeDb() {
@@ -49,6 +58,24 @@ function makeDb() {
         return [row];
       }
       if (n.startsWith('update chat_sessions set updated_at')) return [];
+      // Tasks. Tree in WS: t-root -> t-child -> t-grand. t-other lives in OTHER_WS.
+      if (n.startsWith('select id, parent_id from tasks where id = $1 and workspace_id = $2')
+        || n.startsWith('select parent_id from tasks where id = $1 and workspace_id = $2')) {
+        const [id, ws] = params;
+        const row = TASK_ROWS[id];
+        return (row && row.workspace_id === ws) ? [{ id: row.id, parent_id: row.parent_id }] : [];
+      }
+      if (n.startsWith('insert into tasks')) {
+        const row = { id: 't-new', workspace_id: params[0], title: params[2], parent_id: params[8] };
+        db.inserted.push(row);
+        return [row];
+      }
+      if (n.startsWith('update tasks set')) {
+        return [{ id: params[0], workspace_id: params[1], parent_id: params[8] }];
+      }
+      if (n.startsWith('select * from tasks where workspace_id = $1')) {
+        return Object.values(TASK_ROWS).filter((r) => r.workspace_id === params[0]);
+      }
       return [];
     },
   };
@@ -542,4 +569,108 @@ test('a viewer invite CAN still read via a read-only tool (fix did not over-broa
     })
   });
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+});
+
+// --- Task nesting (parent_id) ----------------------------------------------
+// tasks.parent_id is ON DELETE CASCADE, so an unvalidated parent is not merely
+// untidy: a cross-workspace parent leaks across tenants, and a cycle makes a
+// subtree that cascades into itself.
+
+async function callTask(name, args, token = 'good-token') {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token, body: rpc('tools/call', { name, arguments: args }) });
+  return { db, res };
+}
+
+test('create_task and update_task expose parent_id in their input schemas', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { body: rpc('tools/list') });
+  const byName = Object.fromEntries(res.body.result.tools.map((t) => [t.name, t]));
+  assert.ok(byName.create_task.inputSchema.properties.parent_id, 'create_task must accept parent_id');
+  assert.ok(byName.update_task.inputSchema.properties.parent_id, 'update_task must accept parent_id');
+});
+
+test('create_task nests under a parent in the same workspace', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Sub', parent_id: 't-root' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
+  assert.ok(insert, 'must reach the insert');
+  assert.ok(insert.n.includes('parent_id'), 'insert must name the parent_id column');
+  assert.equal(insert.params[8], 't-root');
+  assert.equal(JSON.parse(res.body.result.content[0].text).task.parent_id, 't-root');
+});
+
+test('create_task without parent_id still writes a top-level task (null parent)', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Top level' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
+  assert.equal(insert.params[8], null);
+});
+
+test('create_task rejects a parent in ANOTHER workspace — before any insert', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Leaky', parent_id: 't-other' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /parent task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('insert into tasks')), 'must not reach the insert');
+});
+
+test('create_task rejects a parent id that does not exist at all', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Ghost', parent_id: 't-nope' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /parent task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('insert into tasks')), 'must not reach the insert');
+});
+
+test('update_task can re-parent a task inside the workspace', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-grand', parent_id: 't-root' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const update = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.ok(update.n.includes('parent_id = $9'), 'update must set parent_id');
+  assert.equal(update.params[8], 't-root');
+});
+
+test('update_task with parent_id "" un-nests the task to top level', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: '' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  assert.equal(db.calls.find((c) => c.n.startsWith('update tasks set')).params[8], null);
+});
+
+test('update_task without parent_id leaves the existing parent untouched', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-child', status: 'done' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  assert.equal(db.calls.find((c) => c.n.startsWith('update tasks set')).params[8], 't-root');
+});
+
+test('update_task rejects self-parenting — before any update', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: 't-child' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cannot be its own parent/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a cycle (parenting a task under its own descendant)', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-root', parent_id: 't-grand' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cycle/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a cross-workspace parent — before any update', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 't-child', parent_id: 't-other' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /parent task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('list_tasks returns parent_id so an agent can rebuild the tree', async () => {
+  const { res } = await callTask('list_tasks', {});
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const { tasks } = JSON.parse(res.body.result.content[0].text);
+  const child = tasks.find((t) => t.id === 't-child');
+  assert.equal(child.parent_id, 't-root');
+  assert.ok(!tasks.some((t) => t.id === 't-other'), 'must not leak another workspace');
 });

@@ -785,6 +785,12 @@ async function ensureRuntimeSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
+    -- Sub-tasks / nesting. The column shipped in database/neon-schema.sql only,
+    -- so a DB built from migrations + this bootstrap never got it; MCP now
+    -- writes parent_id, which would fail there. Idempotent, so a no-op on any
+    -- DB that already has it.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
