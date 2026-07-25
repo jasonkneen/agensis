@@ -534,6 +534,74 @@ export interface AgentWebhook {
  updated_at: string;
 }
 
+/** A huddle row — an ad-hoc voice call bound to the channel it happened in. */
+export interface Huddle {
+ id: string;
+ workspace_id: string;
+ session_id: string;
+ /** Namespaced 'agensis-<huddleId>': the LiveKit project is shared with other apps. */
+ room_name: string;
+ started_by: string | null;
+ started_at: string;
+ ended_at: string | null;
+}
+
+/**
+ * One APPEND-ONLY huddle event. Never updated, never deleted — participant
+ * state is folded from the log (see lib/huddleState), which is what lets the
+ * card survive a reconnect and out-of-order delivery with no reconciliation.
+ */
+export interface HuddleEvent {
+ id: string;
+ huddle_id: string;
+ workspace_id: string;
+ session_id: string;
+ kind: 'started' | 'participant_joined' | 'participant_left' | 'ended';
+ /** Server-assigned LiveKit identity, 'user:<userId>'. Never client-supplied. */
+ identity: string;
+ display_name: string;
+ event_id: string;
+ seq: number | string;
+ created_at: string;
+}
+
+export interface HuddleParticipant {
+ identity: string;
+ userId: string;
+ name: string;
+ joinedAt: string | null;
+}
+
+/** Folded huddle state — the shape both the server route and the client fold return. */
+export interface HuddleState {
+ id: string;
+ workspaceId: string;
+ sessionId: string;
+ roomName: string;
+ startedBy: string | null;
+ startedAt: string | null;
+ endedAt: string | null;
+ active: boolean;
+ participants: HuddleParticipant[];
+ /** Exactly participants.length. An ended huddle reports 0 — never a phantom 1. */
+ participantCount: number;
+ /** Truthful "how busy did it get": max concurrent participants seen in the log. */
+ peakParticipants: number;
+ /** Distinct people who joined at any point. */
+ everJoinedCount: number;
+}
+
+/** What the start/join routes hand back. The API secret never leaves the server. */
+export interface HuddleJoinGrant {
+ huddle: HuddleState | null;
+ /** Short-lived, room-scoped LiveKit access token minted server-side. */
+ token: string;
+ /** Public LiveKit wss:// endpoint. */
+ url: string;
+ identity: string;
+ roomName: string;
+}
+
 export interface OnboardingStep {
  id: number;
  title: string;

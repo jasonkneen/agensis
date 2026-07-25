@@ -733,3 +733,43 @@ DO $$ BEGIN
       CHECK (interval_seconds >= 60 AND interval_seconds <= 2592000);
   END IF;
 END $$;
+
+-- Huddles: ad-hoc voice calls inside a channel, carried by LiveKit. Mirrors the
+-- runtime bootstrap DDL in server/huddles.cjs (HUDDLES_SCHEMA_SQL) so a fresh
+-- neon-push has the tables too. room_name is namespaced 'agensis-<huddleId>'
+-- because the LiveKit project is shared with other apps.
+-- idx_huddles_one_live_per_session is load-bearing, not an optimisation: it is
+-- what makes two people pressing "Huddle" at the same moment land in ONE room.
+CREATE TABLE IF NOT EXISTS huddles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  room_name text NOT NULL UNIQUE,
+  started_by uuid,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
+
+-- APPEND-ONLY. Participant state is folded from this log (foldHuddleState in
+-- server/huddles.cjs), never stored denormalised, so the card survives a
+-- reconnect and out-of-order webhook delivery with no reconciliation pass.
+-- Nothing may UPDATE or DELETE a row here. event_id is LiveKit's own event id;
+-- the partial unique index makes a redelivered webhook a no-op.
+CREATE TABLE IF NOT EXISTS huddle_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  huddle_id uuid NOT NULL REFERENCES huddles(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL,
+  identity text NOT NULL DEFAULT '',
+  display_name text NOT NULL DEFAULT '',
+  event_id text NOT NULL DEFAULT '',
+  seq bigserial,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, created_at, seq);
+CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';

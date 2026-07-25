@@ -48,6 +48,13 @@ const ALLOWED_TABLES = new Set([
  'memory_file_comments',
  'thread_items',
  'activity_event_comments',
+ // Huddles are READ through the generic /db path (and, more importantly,
+ // subscribed to over realtime db_changes so the channel card is live). Every
+ // write goes through the dedicated /backend/workspaces/:id/.../huddle routes in
+ // server/huddles.cjs — see DB_TABLE_ACCESS below, which gates generic writes to
+ // 'manage' so the token-minting and webhook-authority paths cannot be bypassed.
+ 'huddles',
+ 'huddle_events',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -121,6 +128,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
+ 'huddles', 'huddle_events',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -173,6 +181,14 @@ const DB_TABLE_ACCESS = {
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
  activity_event_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+ // Read-only to the client on purpose. Huddle rows are created/ended by the
+ // dedicated routes (which mint the LiveKit join token) and huddle_events is
+ // APPEND-ONLY, written only by those routes and by the signed LiveKit webhook.
+ // If a browser could insert a huddle_events row it could claim someone was in a
+ // call, which is exactly the server-side-authority property this feature has.
+ // 'manage' (not 'write') so an editor cannot reach these through /backend/db.
+ huddles: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ huddle_events: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
