@@ -17,6 +17,18 @@ const commitRef = process.env.COMMIT_REF || process.env.VITE_COMMIT_REF || '';
 const BUILD_ID = commitRef || `dev-${Date.now()}`;
 const BUILT_AT = new Date().toISOString();
 
+// Only the desktop shell loads dist/index.html off disk over file://, and only
+// it needs relative asset URLs. scripts/desktop-build.mjs and
+// scripts/electron-build.mjs are the sole callers that set
+// VITE_BACKEND_BASE_URL when they invoke `vite build`; the web build (`npm run
+// build`, what Netlify runs) never sets it (see the deploy env table in
+// AGENTS.md). AGENSIS_DESKTOP_BUILD=1 is an explicit override for either.
+// Only the desktop packager sets this (scripts/desktop-build.mjs). It is NOT
+// keyed off VITE_BACKEND_BASE_URL: a web deploy may bake a backend URL too, and
+// giving that build relative asset URLs breaks /app/ — the assets resolve under
+// the sub-path, re-enter the SPA rewrite, and return text/html instead of JS.
+const isDesktopBuild = process.env.AGENSIS_DESKTOP_BUILD === '1';
+
 // Emits dist/version.json at build time (build only — absent in dev, where the
 // client's fetch simply no-ops). Kept out of the Workbox precache because it's
 // JSON (globPatterns below only precaches js/css/html/svg/png/woff2), so the
@@ -39,9 +51,13 @@ export default defineConfig({
     __BUILD_ID__: JSON.stringify(BUILD_ID),
     __APP_VERSION__: JSON.stringify(pkgVersion),
   },
-  // Use relative asset URLs so the same bundle works when served from a web
-  // root and when loaded from disk inside the Electron desktop wrapper.
-  base: './',
+  // Desktop gets relative asset URLs (file:// has no origin to resolve `/`
+  // against). The web build MUST stay root-absolute: netlify.toml 200-rewrites
+  // /app/* and /integrations/* to this same index.html, so a relative
+  // "./assets/index-*.js" would resolve *under* the sub-path, re-enter the
+  // catch-all rewrite and come back as text/html — the module script is then
+  // rejected for a MIME mismatch and the page renders blank.
+  base: isDesktopBuild ? './' : '/',
   build: {
     rollupOptions: {
       output: {
@@ -126,18 +142,23 @@ export default defineConfig({
         // pre-landing-page ones that served the SPA shell at /) gets replaced
         // without user action — the browser's routine update check fetches the
         // new sw.js, and skipWaiting/clientsClaim activate + claim immediately.
-        // The next navigation then follows THIS worker's rules (incl. the `/`
-        // denylist below → network → landing page). The running tab keeps its
-        // already-loaded assets; AppUpdateManager's version.json check still
-        // surfaces the "what's new" recap after the swap.
+        // The next navigation then follows THIS worker's rules (incl. the
+        // allowlist below, which leaves `/` to the network → landing page). The
+        // running tab keeps its already-loaded assets; AppUpdateManager's
+        // version.json check still surfaces the "what's new" recap after the
+        // swap.
         skipWaiting: true,
         clientsClaim: true,
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
-        // The public landing routes must always reach their static HTML instead
-        // of being replaced with the SPA shell by a controlling service worker.
-        // Same for the SEO/share statics (robots, sitemap, og-image, 404) —
-        // without this, a returning visitor's SW serves the app shell for them.
-        navigateFallbackDenylist: [/^\/$/, /^\/landing(?:\/|$)/, /^\/(robots\.txt|sitemap\.xml|llms\.txt|og-image\.png|404\.html)$/],
+        // Allowlist, not denylist: Workbox matches these against
+        // `url.pathname + url.search`, so a denylist entry like /^\/$/ misses
+        // `/?utm_source=x` and the SW would hand a returning visitor the SPA
+        // shell instead of the landing page. Naming only the routes the SPA
+        // actually owns also stops unknown paths (/pricing, typos) falling back
+        // to index.html, so they reach Netlify's real 404 instead of a
+        // soft-404 app shell. Everything else — `/`, /landing, robots.txt,
+        // sitemap.xml, llms.txt, og-image.png, 404.html — goes to the network.
+        navigateFallbackAllowlist: [/^\/app(?:\/|$)/, /^\/integrations(?:\/|$)/],
         // Never precache the version manifest or release notes — they must be
         // fetched fresh so the update check reflects the true latest deploy.
         globIgnores: ['**/version.json', '**/release-notes.json', '**/agent-avatars/**', '**/og-image.png', '**/*cyrillic*.woff2', '**/*greek*.woff2', '**/*vietnamese*.woff2'],

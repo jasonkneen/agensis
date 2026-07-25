@@ -50,3 +50,26 @@
   for = "/release-notes.json"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# Baseline security headers for every response.
+#
+# The ENFORCED CSP is deliberately limited to directives that cannot break a
+# working page: nothing embeds the app in a frame, no form posts cross-origin,
+# there are no <object>/<embed>, and no <base> tag. These are safe to turn on
+# blind.
+#
+# The full policy ships as Report-Only first. script-src/style-src cannot drop
+# 'unsafe-inline' (index.html carries an inline theme script, the landing page
+# is one inline <style> + inline <script>), and chat artifacts / canvas applets
+# are srcdoc iframes running agent-authored HTML that inherits this policy — so
+# an enforced default-src/script-src could silently break them. Watch the
+# report-only violations, then rename the header to Content-Security-Policy.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Content-Security-Policy = "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"

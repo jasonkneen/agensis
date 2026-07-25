@@ -74,11 +74,15 @@ test('both HTML entry points load the shared routing guard', () => {
 test('the service worker never substitutes the SPA shell for landing routes', () => {
   const viteConfig = fs.readFileSync(path.join(repoRoot, 'vite.config.ts'), 'utf8');
 
+  // An allowlist, not a denylist: Workbox matches these against
+  // `pathname + search`, so a denylist entry for `/` missed `/?utm_source=x`
+  // and unknown paths still fell back to the SPA shell (soft-404).
   assert.ok(
     viteConfig.includes(
-      'navigateFallbackDenylist: [/^\\/$/, /^\\/landing(?:\\/|$)/, /^\\/(robots\\.txt|sitemap\\.xml|llms\\.txt|og-image\\.png|404\\.html)$/]',
+      'navigateFallbackAllowlist: [/^\\/app(?:\\/|$)/, /^\\/integrations(?:\\/|$)/]',
     ),
   );
+  assert.ok(!viteConfig.includes('navigateFallbackDenylist'));
 });
 
 test('the public landing page keeps /app as an explicit user choice', () => {

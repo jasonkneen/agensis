@@ -27,12 +27,22 @@ export default tseslint.config(
   },
   {
     // Backend/tooling: plain Node CJS/ESM, not covered by the TS block above.
-    files: ['server/**/*.cjs', 'scripts/**/*.cjs', 'shared/**/*.mjs', 'netlify/functions/**/*.mjs', 'electron/**/*.cjs'],
+    // `shared/**/*.cjs` matters: backend-core.cjs holds auth, RBAC and the rate
+    // limiters, and the old `shared/**/*.mjs`-only glob never matched it, so the
+    // most security-sensitive file in the repo was linted by zero rules.
+    files: ['server/**/*.cjs', 'scripts/**/*.cjs', 'shared/**/*.{mjs,cjs}', 'netlify/functions/**/*.mjs', 'electron/**/*.cjs'],
     extends: [js.configs.recommended],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'commonjs',
       globals: { ...globals.node },
+    },
+    rules: {
+      // A leading underscore is this repo's existing marker for a deliberately
+      // unused binding (destructured-to-discard, signature-shape params). Honour
+      // it instead of leaving 6 permanent errors that make the lint job red on
+      // every push — a check nobody can ever get to green is a check nobody reads.
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
     },
   },
   {

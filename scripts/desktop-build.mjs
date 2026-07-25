@@ -54,7 +54,12 @@ console.log(`[desktop:build] package target=${target}`);
 
 // 1. app icon  2. web bundle with hosted backend URL  3. native package
 run(npmCmd, ['run', 'icon']);
-run(npmCmd, ['run', 'build'], { env: { VITE_BACKEND_BASE_URL: BACKEND_URL } });
+// AGENSIS_DESKTOP_BUILD is what switches Vite to relative asset URLs (`base:
+// './'`) for the file:// shell. It is deliberately separate from
+// VITE_BACKEND_BASE_URL: a WEB deploy may legitimately bake a backend URL, and
+// relative asset URLs break the /app sub-path there (they resolve under /app/
+// and come back as the SPA shell instead of JS).
+run(npmCmd, ['run', 'build'], { env: { VITE_BACKEND_BASE_URL: BACKEND_URL, AGENSIS_DESKTOP_BUILD: '1' } });
 run('zig', ['build', 'package', `-Dpackage-target=${target}`, '-Doptimize=ReleaseFast'], {
   cwd: desktopDir,
   env: { ZIG_GLOBAL_CACHE_DIR },

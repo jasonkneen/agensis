@@ -1051,6 +1051,25 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }));
   };
 
+  // M9: an override is only a stand-in while the write is in flight. Left in place
+  // it would mask every later realtime UPDATE for that row (someone else reacting,
+  // unpinning, editing) for the lifetime of the window, so drop the keys we wrote
+  // optimistically as soon as the server acknowledges and let realtime own the row
+  // again. Only the keys this action touched are cleared, so a concurrent
+  // in-flight action on the same message keeps its own override.
+  const clearMessageOverride = (messageId: string, keys: Array<keyof (Partial<ChatMessage> & { deleted?: boolean })>) => {
+    setMessageOverrides(prev => {
+      const current = prev[messageId];
+      if (!current) return prev;
+      const remaining = { ...current };
+      for (const key of keys) delete remaining[key];
+      const next = { ...prev };
+      if (Object.keys(remaining).length === 0) delete next[messageId];
+      else next[messageId] = remaining;
+      return next;
+    });
+  };
+
   const handleTogglePin = async (message: ChatMessage) => {
     const nextPinned = !message.pinned;
     setMessageOverride(message.id, { pinned: nextPinned });
@@ -1061,6 +1080,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .eq('id', message.id)
       .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { pinned: message.pinned });
+    else clearMessageOverride(message.id, ['pinned']);
     setMessageActionBusy(null);
   };
 
@@ -1080,6 +1100,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .eq('id', message.id)
       .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { reactions: message.reactions });
+    else clearMessageOverride(message.id, ['reactions']);
   };
 
   const handleStartEdit = (message: ChatMessage) => {
@@ -1106,6 +1127,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (previous?.session_id) updateQuery.eq('session_id', previous.session_id);
     const { error } = await updateQuery;
     if (error && previous) setMessageOverride(messageId, { content: previous.content });
+    else if (!error) clearMessageOverride(messageId, ['content']);
     setMessageActionBusy(null);
     setEditingMessageId(null);
     setEditingContent('');
@@ -1126,6 +1148,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .delete()
       .eq('id', message.id)
       .eq('session_id', message.session_id);
+    // M9 does not apply to the delete override: the row is gone, so no later
+    // realtime UPDATE can be masked by it. Clearing it here would only resurrect
+    // the message until the realtime DELETE lands (forever, if realtime is down).
     if (error) setMessageOverride(message.id, { deleted: false });
     setMessageActionBusy(null);
   };

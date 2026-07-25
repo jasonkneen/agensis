@@ -72,13 +72,19 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,
-  mock DBs). ~363 tests.
-- `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure). ~207.
+  mock DBs). 330 tests. Note the glob is **top-level only** — a `.test.cjs` in a
+  subdirectory is never run (`visual-editor/test/` is invisible to both runners).
+- `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure). 205.
 - Keep both green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
   selectors exist in source — if you remove/rename a selector it references,
   update the tour JSON (`public/.well-known/cursorbuddy.json`) + that test.
-- Known: `npm run lint` has ~6 PRE-EXISTING errors in `server/index.cjs`
-  (`_`-prefixed unused vars). Don't claim a clean lint run; verify your own files.
+- `npm run lint` is **0 errors / 35 warnings** and must stay at 0 errors. The old
+  6 `_`-prefixed unused-var errors are gone: `no-unused-vars` now honours a
+  leading `_` for backend files, and the backend glob covers `shared/**/*.cjs`,
+  so `backend-core.cjs` (auth, RBAC, rate limiters) is finally linted at all.
+- CI (`.github/workflows/test.yml`) runs lint in a **separate job** from the
+  tests. It used to run before them in the same job, and because lint exited 1,
+  neither suite had ever executed on main or any PR.
 - Onboarding testing: `npm run reset:test-account` wipes `testing@bouncingfish.com`
   (user + all their workspaces) so the onboarding tour can be re-run from scratch;
   also clear the `agensis_tour_complete` / `agensis_getstarted_*` localStorage keys

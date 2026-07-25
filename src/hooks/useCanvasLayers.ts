@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { backendClient } from '../lib/backendClient';
 
 export interface CanvasLayer {
   id: string;
@@ -54,6 +55,48 @@ function generateLayerId() {
   return `canvas_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// STOPGAP. Layer definitions live in this browser's localStorage, but the objects
+// drawn on them live in the SHARED canvas_objects table keyed by that
+// browser-generated layer_id — and the canvas only renders objects whose layer_id
+// matches a layer this browser knows about. So a layer created by user A is
+// invisible to teammate B: B's localStorage has no such layer, B falls back to
+// `base`, and A's shapes are unreachable (not lost). Until layers get a real
+// workspace-scoped canvas_layers table, union the locally-known layers with every
+// layer id that actually has objects in the DB so the work stays reachable.
+function nextDerivedLayerName(used: Set<string>) {
+  let index = 1;
+  while (used.has(`Shared workspace ${index}`)) index += 1;
+  const name = `Shared workspace ${index}`;
+  used.add(name);
+  return name;
+}
+
+function mergeDerivedLayers(known: CanvasLayer[], layerIds: string[]): CanvasLayer[] {
+  const knownIds = new Set(known.map(layer => layer.id));
+  const missing: string[] = [];
+  for (const layerId of layerIds) {
+    if (!layerId || layerId === BASE_LAYER_ID || knownIds.has(layerId)) continue;
+    knownIds.add(layerId);
+    missing.push(layerId);
+  }
+  // Same set of ids sorts the same way in every browser, so the generated names
+  // are stable across clients until someone renames the layer locally.
+  if (missing.length === 0) return known;
+  missing.sort();
+  const usedNames = new Set(known.map(layer => layer.name));
+  return [
+    ...known,
+    ...missing.map(layerId => ({
+      id: layerId,
+      name: nextDerivedLayerName(usedNames),
+      minimized: true,
+      background_opacity: 0.42,
+      background_image: '',
+      version: 1,
+    })),
+  ];
+}
+
 export function useCanvasLayers(workspaceId: string | null) {
   const [layers, setLayers] = useState<CanvasLayer[]>(() => loadLayers(workspaceId));
   const [activeLayerId, setActiveLayerId] = useState<string>(() => {
@@ -76,6 +119,27 @@ export function useCanvasLayers(workspaceId: string | null) {
       || nextLayers[0]?.id
       || BASE_LAYER_ID;
     setActiveLayerId(nextActive);
+  }, [workspaceId]);
+
+  // Pull the layer ids that actually have objects in the shared DB and fold the
+  // ones this browser has never heard of into the list (see mergeDerivedLayers).
+  // This can't read the canvas objects the app already loaded: useCanvasObjects
+  // is fed this hook's activeLayerId, so it only runs after this hook. It's a
+  // single layer_id-only select per workspace, strictly smaller than the object
+  // fetch that follows it.
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void (async () => {
+      const { data } = await backendClient
+        .from('canvas_objects')
+        .select('layer_id')
+        .eq('workspace_id', workspaceId);
+      if (cancelled || !Array.isArray(data)) return;
+      const layerIds = (data as { layer_id?: string | null }[]).map(row => row.layer_id || BASE_LAYER_ID);
+      setLayers(prev => mergeDerivedLayers(prev, layerIds));
+    })();
+    return () => { cancelled = true; };
   }, [workspaceId]);
 
   useEffect(() => {

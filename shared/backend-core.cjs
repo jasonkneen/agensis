@@ -181,7 +181,85 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'content_sha256',
   'type',
  ]),
+ // M6 (2026-07 review): the generic gate authorizes a workspaces UPDATE on the
+ // 'manage' capability, and 'admin' is an invitable role that HAS 'manage' — so
+ // without a column guard any admin could POST /backend/db/update
+ // {table:'workspaces', values:{user_id:'<their id>'}} and take ownership, or
+ // rewrite the MCP client credential. Ownership transfer and MCP credentials
+ // have their own dedicated routes; they are never a generic column write.
+ workspaces: new Set([
+  'user_id',
+  'mcp_token_hash',
+  'mcp_auto_approve',
+ ]),
 };
+
+// Columns a generic /backend/db write MAY still set, but only for a caller who
+// has 'manage' on the workspace. Unlike PRIVILEGED_DB_COLUMNS_BY_TABLE (which is
+// stripped outright), these back real product features whose ONLY writer is the
+// generic db route, so blocking them would break the feature:
+//
+//   workspace_agents.metadata carries `host_folders`, which dispatch forwards to
+//   the daemon and buildAgentCommand turns into `--add-dir <path>` for the coding
+//   CLI. A member with only 'write' could otherwise widen an agent's filesystem
+//   access to `/` or `~/.ssh` (H3, 2026-07 review). sandbox_provider /
+//   sandbox_config likewise choose where and how agent code executes.
+const MANAGE_ONLY_DB_COLUMNS_BY_TABLE = {
+ workspace_agents: new Set([
+  'metadata',
+  'sandbox_provider',
+  'sandbox_config',
+ ]),
+};
+
+// True when `values` actually SETS one of the manage-only columns. A key that is
+// absent, null, an empty string or an empty object does not count: the Agents
+// window sends `sandbox_provider: null` / `sandbox_config: {}` on every agent
+// create, and clearing a value is never an escalation. A JSON *string* payload
+// (the jsonb columns accept one) is treated as a real value.
+function setsManageOnlyDbColumn(table, values) {
+ const elevated = MANAGE_ONLY_DB_COLUMNS_BY_TABLE[table];
+ if (!elevated) return false;
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return false;
+ for (const key of elevated) {
+  if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+  const value = values[key];
+  if (value == null) continue;
+  if (typeof value === 'string' && value.trim() === '') continue;
+  if (typeof value === 'object' && Object.keys(value).length === 0) continue;
+  return true;
+ }
+ return false;
+}
+
+// Columns a generic /backend/db/select may return, per table. Tables with no
+// entry are unrestricted (unchanged behaviour). app_users is listed because the
+// gate below deliberately allows a self-scoped SELECT, and the select handlers
+// honour `columns: "*"` — which returned the caller's scrypt password_hash and
+// the token_version that gates session revocation straight to the browser
+// (M7, 2026-07 review).
+const SELECTABLE_COLUMNS_BY_TABLE = {
+ app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+};
+
+/**
+ * Project a select's requested columns down to what the table allows. Returns a
+ * comma-separated column list (the same shape both backends' normalizeColumns
+ * already accepts) so callers wrap it: normalizeColumns(safeSelectColumns(...)).
+ * Throws 403 when a column outside the allow-list is asked for by name, so the
+ * denial is visible rather than a silently missing field.
+ */
+function safeSelectColumns(table, columns) {
+ const allowed = SELECTABLE_COLUMNS_BY_TABLE[table];
+ if (!allowed) return columns;
+ if (!columns || columns === '*') return allowed.join(', ');
+ const requested = String(columns).split(',').map((column) => column.trim()).filter(Boolean);
+ if (requested.length === 0) return allowed.join(', ');
+ for (const column of requested) {
+  if (!allowed.includes(column)) throw forbidden(`Column ${table}.${column} is not selectable`);
+ }
+ return requested.join(', ');
+}
 
 function stripPrivilegedDbValues(table, values) {
  if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
@@ -564,6 +642,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  // H3: setting a manage-only column (agent metadata/host_folders, sandbox
+  // config) needs 'manage' on top of the table's normal write capability.
+  if (setsManageOnlyDbColumn(table, values)) {
+   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
+  }
   await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
   return;
  }
@@ -573,6 +656,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { values: row }, db);
   if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  // H3: same elevation on INSERT — creating an agent that already carries
+  // host_folders (or a sandbox target) is the same escalation as setting them.
+  if (setsManageOnlyDbColumn(table, row)) {
+   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
+  }
   // H1-insert (F7 review): a child INSERT may carry a cross-tenant parent ref
   // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
   // reuse the UPDATE tenancy guard so the parent must live in this workspace.
@@ -794,6 +882,73 @@ function evaluatePasswordServerSide(password) {
  return { valid, classesMet, longEnough, message };
 }
 
+// ----------------------------------------------------------------------------
+// Workspace secret vault (M5, 2026-07 review).
+//
+// Both backends write the SAME workspace_secrets rows in the SAME Neon DB, but
+// only server/index.cjs encrypted them: it stores AES-256-GCM ciphertext in
+// `secret_cipher` with `value = ''`, and PREFERS secret_cipher on read. The
+// Netlify mirror wrote the raw key into `value` and never touched
+// secret_cipher, so a key rotated through Netlify left plaintext-new next to
+// stale-cipher and Fly kept serving the OLD key. One implementation, here, so
+// the two can't drift again.
+//
+// The key material must match on both sides: a dedicated SECRETS_ENCRYPTION_KEY
+// if set (so secrets survive an AUTH_SECRET rotation), else the HMAC auth
+// secret — which AGENTS.md already requires to be identical on Fly and Netlify.
+// `getAuthSecret` is injected (sync or async) because each runtime resolves it
+// differently (env-only on Netlify, env-or-DB on Fly).
+// ----------------------------------------------------------------------------
+
+async function vaultSecretKey(getAuthSecret) {
+ const dedicated = String(process.env.SECRETS_ENCRYPTION_KEY || '').trim();
+ const material = dedicated || `auth-fallback:${await getAuthSecret()}`;
+ return crypto.createHash('sha256').update(`agensis-workspace-vault:${material}`).digest();
+}
+
+async function encryptVaultSecret(value, { getAuthSecret }) {
+ const iv = crypto.randomBytes(12);
+ const cipher = crypto.createCipheriv('aes-256-gcm', await vaultSecretKey(getAuthSecret), iv);
+ const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+ return [iv, cipher.getAuthTag(), encrypted].map((part) => part.toString('base64url')).join('.');
+}
+
+async function decryptVaultSecret(value, { getAuthSecret }) {
+ const [iv, tag, encrypted] = String(value || '').split('.').map((part) => Buffer.from(part, 'base64url'));
+ if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted vault secret');
+ const decipher = crypto.createDecipheriv('aes-256-gcm', await vaultSecretKey(getAuthSecret), iv);
+ decipher.setAuthTag(tag);
+ return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+async function getWorkspaceSecretValue(workspaceId, key, { db, getAuthSecret }) {
+ if (!workspaceId) return '';
+ const rows = await db(
+  'select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
+  [workspaceId, key],
+ );
+ if (!rows[0]) return '';
+ // Prefer the encrypted column; fall back to the legacy plaintext value for rows
+ // written before encryption-at-rest landed (they get re-encrypted on next write).
+ if (rows[0].secret_cipher) {
+  try { return await decryptVaultSecret(rows[0].secret_cipher, { getAuthSecret }); } catch { return ''; }
+ }
+ return rows[0].value || '';
+}
+
+async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSecret, userId = null, description = null }) {
+ const cipher = value ? await encryptVaultSecret(value, { getAuthSecret }) : '';
+ await db(
+  `insert into workspace_secrets (workspace_id, key, value, secret_cipher, description, updated_by, updated_at)
+     values ($1, $2, '', $3, coalesce($4, ''), $5, now())
+     on conflict (workspace_id, key)
+     do update set value = '', secret_cipher = excluded.secret_cipher,
+       description = coalesce($4, workspace_secrets.description),
+       updated_by = excluded.updated_by, updated_at = now()`,
+  [workspaceId, key, cipher, description ?? null, userId || null],
+ );
+}
+
 module.exports = {
  verifyAuthToken,
  issueAuthToken,
@@ -811,7 +966,15 @@ module.exports = {
  WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS,
  PRIVILEGED_DB_COLUMNS_BY_TABLE,
+ MANAGE_ONLY_DB_COLUMNS_BY_TABLE,
+ setsManageOnlyDbColumn,
+ SELECTABLE_COLUMNS_BY_TABLE,
+ safeSelectColumns,
  stripPrivilegedDbValues,
+ encryptVaultSecret,
+ decryptVaultSecret,
+ getWorkspaceSecretValue,
+ setWorkspaceSecretValue,
  storagePathBelongsToWorkspace,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
