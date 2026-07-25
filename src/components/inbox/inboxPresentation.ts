@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { Activity, AtSign, Hand, MessageCircle, TriangleAlert } from 'lucide-react';
+import { AtSign, Hand, MessageCircle, TriangleAlert } from 'lucide-react';
 import type { InboxCategory } from '../../types';
 
 // ---------------------------------------------------------------------------
@@ -21,7 +21,6 @@ export const CATEGORY_ICON: Record<InboxCategory, ComponentType<{ className?: st
   error: TriangleAlert,
   mention: AtSign,
   comment: MessageCircle,
-  activity: Activity,
 };
 
 /**

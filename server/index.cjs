@@ -2635,7 +2635,7 @@ const INBOX_CATEGORY_BRANCHES = 7;
 const INBOX_LOOKBACK_DAYS = 30;
 const INBOX_TITLE_CHARS = 160;
 const INBOX_BODY_CHARS = 280;
-const INBOX_FILTERS = new Set(['all', 'blocker', 'comment', 'mention', 'error', 'activity']);
+const INBOX_FILTERS = new Set(['all', 'blocker', 'comment', 'mention', 'error']);
 
 // The @handle a message would use to mention this user. Users have no handle
 // column, so it is derived the same way the composer renders them: display name
@@ -2675,10 +2675,11 @@ function buildInboxSql(perCategory) {
                ti.session_id::text as session_id,
                'thread_item'::text as entity_type,
                ti.id::text as entity_id,
-               coalesce(ti.created_by_agent, '')::text as actor_name,
+               coalesce(nullif(wa.name, ''), nullif(ti.created_by_agent, ''), '')::text as actor_name,
                ti.created_at as created_at
           from thread_items ti
           join chat_sessions cs on cs.id = ti.session_id and cs.deleted_at is null
+          left join workspace_agents wa on wa.id::text = ti.created_by_agent
          where ti.workspace_id = $1::uuid
            and ti.kind = 'blocker'
            and ti.status <> 'dismissed'
@@ -2790,26 +2791,12 @@ function buildInboxSql(perCategory) {
          order by coalesce(j.finished_at, j.updated_at, j.created_at) desc
          limit ${cap}
       )
-      union all
-      (
-        select 'activity:' || ae.id::text,
-               'activity'::text,
-               ${title('ae.title')},
-               ''::text,
-               'activity:' || ae.id::text,
-               case when ae.entity_type = 'chat' then nullif(ae.entity_id, '') else null::text end,
-               ae.entity_type,
-               ae.entity_id,
-               coalesce(nullif(u.display_name, ''), u.email, '')::text,
-               ae.created_at
-          from activity_events ae
-          left join app_users u on u.id = ae.user_id
-         where ae.workspace_id = $1::uuid
-           and ae.event_type <> 'message_sent'
-           and ae.created_at > ${window}
-         order by ae.created_at desc
-         limit ${cap}
-      )
+      /* No activity branch, deliberately. Raw workspace events — "@scout
+         connected", "@coder disconnected", "Task created: …", "New document" —
+         are telemetry, not things addressed to a person. Including them drowned
+         the inbox: 44 of 50 rows were connection churn, and the one real blocker
+         sat under a wall of it. Activity has its own home in
+         ActivityWindowContent / useActivity; the inbox is only what needs YOU. */
     )
     select i.id, i.category, i.title, i.body, i.context_key, i.session_id,
            i.entity_type, i.entity_id, i.actor_name, i.created_at,

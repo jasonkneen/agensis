@@ -24,7 +24,7 @@ import { InboxList } from '../../src/components/inbox/InboxWindowContent';
 
 function item(overrides: Partial<InboxItem> & { id: string; createdAt: string }): InboxItem {
   return {
-    category: 'activity' as InboxCategory,
+    category: 'mention' as InboxCategory,
     title: `title ${overrides.id}`,
     body: '',
     contextKey: `thread:${overrides.id}`,
@@ -84,9 +84,9 @@ describe('groupInboxItems', () => {
 
   it('takes the most urgent category present in a mixed group', () => {
     const groups = groupInboxItems([
-      item({ id: 'x1', createdAt: T(9), contextKey: 'thread:abc', category: 'activity' }),
+      item({ id: 'x1', createdAt: T(9), contextKey: 'thread:abc', category: 'mention' }),
       item({ id: 'x2', createdAt: T(30), contextKey: 'thread:abc', category: 'blocker', title: 'need a call' }),
-      item({ id: 'x3', createdAt: T(1), contextKey: 'thread:abc', category: 'activity' }),
+      item({ id: 'x3', createdAt: T(1), contextKey: 'thread:abc', category: 'mention' }),
     ]);
     expect(groups[0].category).toBe('blocker');
     // The row reads as the blocker, not as the chatty tail that arrived after it.
@@ -165,7 +165,7 @@ describe('relativeTime', () => {
 
 describe('inboxEmptyState', () => {
   it('says something useful per filter instead of "No items"', () => {
-    const filters = ['all', 'blocker', 'comment', 'mention', 'error', 'activity'] as const;
+    const filters = ['all', 'blocker', 'comment', 'mention', 'error'] as const;
     const titles = filters.map(f => inboxEmptyState(f).title);
     expect(new Set(titles).size).toBe(filters.length);
     for (const filter of filters) {

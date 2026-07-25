@@ -310,7 +310,7 @@ export interface ActivityEvent {
 
 /** Triage categories, most urgent first. `blocker` is the one an agent raises
  *  when it hits a decision it cannot make — that is what the inbox exists for. */
-export type InboxCategory = 'blocker' | 'comment' | 'mention' | 'error' | 'activity';
+export type InboxCategory = 'blocker' | 'comment' | 'mention' | 'error';
 
 export type InboxFilter = 'all' | InboxCategory;
 
