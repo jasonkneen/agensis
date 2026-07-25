@@ -51,6 +51,25 @@ export function HuddleBar({
   const [connected, setConnected] = useState(false);
   const [failed, setFailed] = useState('');
 
+  // These MUST be stable. LiveKitRoom re-runs its connect effect when a handler
+  // prop changes identity, so inline arrows here produced a feedback loop:
+  // render -> new arrow -> effect re-runs -> room.connect() -> onConnected ->
+  // setConnected -> render. The console filled with "already connected to room"
+  // ~80 times in a few seconds, and the constant re-rendering also tore down the
+  // speech effects before any utterance could play, which is why replies were
+  // silent. Shipped that; this is the fix.
+  const handleConnected = useCallback(() => {
+    setConnected(true);
+    setFailed('');
+  }, []);
+  const handleError = useCallback((error: Error) => {
+    setFailed(error.message || 'Could not connect');
+  }, []);
+  const roomClassName = useMemo(
+    () => cn('flex min-w-0 items-center gap-2', className),
+    [className],
+  );
+
   return (
     <LiveKitRoom
       token={connection.token}
@@ -58,10 +77,10 @@ export function HuddleBar({
       connect
       audio
       video={false}
-      className={cn('flex min-w-0 items-center gap-2', className)}
-      onConnected={() => { setConnected(true); setFailed(''); }}
+      className={roomClassName}
+      onConnected={handleConnected}
       onDisconnected={onLeave}
-      onError={(error) => setFailed(error.message || 'Could not connect')}
+      onError={handleError}
     >
       {/* Plays every remote participant's audio. Without this the call is silent. */}
       <RoomAudioRenderer />
