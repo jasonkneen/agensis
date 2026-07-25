@@ -5171,9 +5171,24 @@ async function handleAgentJobStep(ws, message) {
  if (!content) return;
  const step = agentStepParts(message);
  const metadata = parseJsonObject(job.metadata);
+ // Steps hang off the reply's THREAD ROOT, not off the reply itself. When the
+ // turn is already happening inside a thread, the "Thinking …" placeholder is
+ // itself a thread reply, so parenting steps to it buried them two levels deep —
+ // the thread panel renders one level, so every chip was invisible exactly when
+ // the human was watching the thread. Resolving to the placeholder's own parent
+ // keeps steps as its siblings, in the thread already on screen. At top level the
+ // placeholder has no parent, so steps still nest directly under it as before.
  // Missing responseMessageId means the reply bubble is unknown; post the step at
  // the top level rather than dropping it.
- const threadParentId = metadata.responseMessageId || null;
+ const responseMessageId = metadata.responseMessageId || null;
+ let threadParentId = responseMessageId;
+ if (responseMessageId) {
+  const parentRows = await getDb().unsafe(
+   'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
+   [responseMessageId, job.session_id],
+  );
+  if (parentRows[0] && parentRows[0].thread_parent_id) threadParentId = parentRows[0].thread_parent_id;
+ }
  // A tool step is the agent demonstrably doing work, so — unlike a content-free
  // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
  // and sets lastContentAt exactly like a content-bearing delta does. `response` is
