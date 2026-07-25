@@ -243,6 +243,11 @@ export function useSpeechInput(
 //      turn, where no successor row is ever written.
 const SETTLE_MS = 700;
 const SPEECH_RATE = 1.05;
+// How long to wait for speechSynthesis to actually START before giving up on an
+// utterance. speechSynthesis fails silently in several real cases, and without a
+// ceiling a dropped utterance blocks the queue and latches the echo guard, which
+// mutes the microphone with "Paused while the reply plays" forever.
+const SPEECH_START_TIMEOUT_MS = 1500;
 
 export interface SpeechOutputState {
   /** '' when speech output can run; otherwise the reason it cannot. */
@@ -286,6 +291,7 @@ export function useSpeechOutput(
   // not repeated. See nextSpeechChunk.
   const spokenTextRef = useRef(new Map<string, string>());
   const settleTimerRef = useRef<number | null>(null);
+  const watchdogRef = useRef<number | null>(null);
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
@@ -307,18 +313,57 @@ export function useSpeechOutput(
     // usually a legacy system voice, while Edge/Chrome ship Microsoft's free
     // "Natural" voices through the same API — the single biggest quality lever
     // here, and free. Null means nothing better than the default was available.
-    const voice = pickSpeechVoice(window.speechSynthesis.getVoices());
+    const voice = pickSpeechVoice(synth.getVoices());
     if (voice) utterance.voice = voice;
+
+    // A silent speak() must never wedge the pipeline. onend/onerror used to be
+    // the ONLY things that cleared utteranceRef, and speechSynthesis fails
+    // QUIETLY in several real cases (voice list not yet populated, the tab's
+    // synth left in a paused state, an utterance dropped on a background tab).
+    // When that happened the queue stalled forever AND — because the echo guard
+    // keys off speakingName — the microphone stayed paused with
+    // "Paused while the reply plays", so the whole huddle went dead. Shipped
+    // that; this is the fix.
+    let settled = false;
+    const clearWatchdog = () => {
+      if (watchdogRef.current !== null) {
+        window.clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+    };
     const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearWatchdog();
       if (utteranceRef.current !== utterance) return; // superseded by a stop()
       utteranceRef.current = null;
+      setSpeakingName('');
       pump();
     };
     utterance.onend = finish;
     utterance.onerror = finish;
+    // The guard engages only once speech ACTUALLY starts, so an utterance that
+    // never plays cannot mute the mic.
+    utterance.onstart = () => {
+      clearWatchdog();
+      if (utteranceRef.current === utterance) setSpeakingName(next.speaker);
+    };
     utteranceRef.current = utterance;
-    setSpeakingName(next.speaker);
+
+    // Chrome parks speechSynthesis in a paused state after periods of inactivity;
+    // speak() then queues silently and no event ever fires.
+    try { synth.resume(); } catch { /* not all engines implement resume */ }
     synth.speak(utterance);
+
+    // If onstart has not fired by now the utterance is never going to play.
+    // Drop it and move on rather than blocking the queue and the microphone.
+    watchdogRef.current = window.setTimeout(() => {
+      watchdogRef.current = null;
+      if (settled || utteranceRef.current !== utterance) return;
+      console.warn('[huddle] speech never started — skipping this reply');
+      try { synth.cancel(); } catch { /* best effort */ }
+      finish();
+    }, SPEECH_START_TIMEOUT_MS);
   }
 
   const stopSpeaking = useCallback(() => {
