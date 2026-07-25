@@ -30,6 +30,7 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
+import { COMPOSER_ADDON_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 
 interface ChatThreadPanelProps {
   parentMessage: ChatMessage;
@@ -155,14 +156,10 @@ export function ChatThreadPanel({
               placeholder="Reply in thread... @agent, / commands"
               disabled={streaming}
               rows={1}
-              className="max-h-24 min-h-12"
-              onInput={e => {
-                const el = e.currentTarget;
-                el.style.height = 'auto';
-                el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
-              }}
+              className={COMPOSER_TEXTAREA_CLASS}
+              onInput={e => autosizeComposer(e.currentTarget)}
             />
-            <InputGroupAddon align="block-end" className="min-h-10 justify-between gap-2 border-t px-2 py-1.5">
+            <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <ModelSelector value={model} onChange={setModel} models={models} />
               <Button
                 type="button"

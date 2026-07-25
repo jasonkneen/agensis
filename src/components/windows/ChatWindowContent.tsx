@@ -156,6 +156,7 @@ import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
+import { COMPOSER_ADDON_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -1706,14 +1707,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                       : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
                     disabled={streaming}
                     rows={1}
-                    className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
-                    onInput={e => {
-                      const el = e.currentTarget;
-                      el.style.height = 'auto';
-                      el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
-                    }}
+                    className={COMPOSER_TEXTAREA_CLASS}
+                    onInput={e => autosizeComposer(e.currentTarget)}
                   />
-                  <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+                  <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
                     <div className="flex items-center gap-1">
                       <Popover open={addContextOpen} onOpenChange={(open) => {
                         setAddContextOpen(open);
