@@ -1,25 +1,27 @@
 import { useState } from 'react';
-import { Check, ExternalLink, X } from 'lucide-react';
+import { ArrowLeft, Check, ExternalLink, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { CATEGORY_ICON, MICRO_LABEL, PANE_HEADER, categoryAccent } from './inboxPresentation';
 import {
-  CATEGORY_ICON,
-  MICRO_LABEL,
-  categoryAccent,
-} from './inboxPresentation';
-import {
-  CATEGORY_LABEL,
   absoluteTime,
+  inboxPreview,
+  inboxTypeLabel,
   relativeTime,
+  senderInitials,
+  senderLabel,
   type InboxGroup,
 } from './inboxModel';
 
 // ---------------------------------------------------------------------------
-// The reading pane. Same shape as any inbox: a header that answers "what is
-// this, who sent it, when, and what can I do about it" without scrolling, then
-// the body, then the tail of the thread.
+// The reading pane.
+//
+// Its header is the SAME 36px band as the list header, so the two line up
+// pixel-for-pixel across the divider. Everything expensive lives here and
+// nothing leaks back into the row: the blocker answer box, the raw entity ids,
+// the thread tail.
 //
 // `now` is the same timestamp the list rows were formatted against — the pane
 // never reads the clock itself, so nothing here can start a re-render loop.
@@ -28,12 +30,21 @@ import {
 interface InboxDetailProps {
   group: InboxGroup;
   now: number;
+  /** Container-query class that reveals the back arrow in single-column mode. */
+  backButtonClass?: string;
   onClose: () => void;
   onOpenSession?: (sessionId: string) => void;
   onResolveBlocker?: (entityId: string, status: 'answered' | 'dismissed', response?: string) => Promise<boolean>;
 }
 
-export function InboxDetail({ group, now, onClose, onOpenSession, onResolveBlocker }: InboxDetailProps) {
+export function InboxDetail({
+  group,
+  now,
+  backButtonClass,
+  onClose,
+  onOpenSession,
+  onResolveBlocker,
+}: InboxDetailProps) {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -50,58 +61,91 @@ export function InboxDetail({ group, now, onClose, onOpenSession, onResolveBlock
     if (ok) onClose();
     else { setFailed(true); setBusy(false); }
   };
+
   const Icon = CATEGORY_ICON[group.category];
   const accent = categoryAccent(group.category);
+  const label = inboxTypeLabel(group);
+  const sender = senderLabel(group);
+  const initials = senderInitials(sender);
+  const body = inboxPreview(group);
   const earlier = group.items.slice(1);
   const canOpen = !!group.sessionId && !!onOpenSession;
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-card">
-      <header className="shrink-0 border-b border-border px-3 pb-2.5 pt-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Icon aria-hidden="true" className={cn('size-3.5 shrink-0', accent || 'text-muted-foreground')} />
-          <span className={cn(MICRO_LABEL, 'shrink-0')}>{CATEGORY_LABEL[group.category]}</span>
-          <span aria-hidden="true" className="shrink-0 text-muted-foreground/50">·</span>
-          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
-            {absoluteTime(group.latestAt)}
-          </span>
-          <div className="flex-1" />
-          {canOpen && (
-            <Button
-              type="button"
-              size="xs"
-              className="shrink-0"
-              onClick={() => onOpenSession?.(group.sessionId as string)}
-            >
-              <ExternalLink data-icon="inline-start" />
-              Open chat
-            </Button>
-          )}
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+      <header className={PANE_HEADER}>
+        {backButtonClass && (
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="shrink-0"
+            className={cn('shrink-0', backButtonClass)}
             onClick={onClose}
-            aria-label="Close detail"
+            aria-label="Back to inbox list"
           >
-            <X />
+            <ArrowLeft />
           </Button>
-        </div>
-
-        <h3 className="mt-1.5 text-sm font-semibold leading-snug tracking-tight">{group.title}</h3>
-        {group.actorName && (
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{group.actorName}</p>
         )}
+        <Icon aria-hidden="true" className={cn('size-3.5 shrink-0', accent || 'text-muted-foreground')} />
+        <span className="min-w-0 truncate text-[13px] font-semibold leading-4 tracking-tight text-foreground">
+          {label.chip ? `${label.text} ${label.chip}` : label.text}
+        </span>
+        <div className="flex-1" />
+        {canOpen && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="shrink-0 text-muted-foreground"
+            onClick={() => onOpenSession?.(group.sessionId as string)}
+          >
+            <ExternalLink data-icon="inline-start" />
+            Open chat
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="shrink-0"
+          onClick={onClose}
+          aria-label="Close detail"
+        >
+          <X />
+        </Button>
       </header>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 p-3">
+        <div className="flex flex-col gap-3 px-3 py-3">
+          {/* Same face, same left edge, same type sizes as the row it came from
+              — opening an item should feel like the row grew, not like a jump
+              to a different screen. */}
+          <div className="flex min-w-0 items-start gap-2.5">
+            <span
+              aria-hidden="true"
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground"
+            >
+              {initials || <Icon className="size-3.5" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold leading-4 text-foreground">{sender}</div>
+              <div className="mt-0.5 truncate text-[11px] leading-[13px] text-muted-foreground">
+                {absoluteTime(group.latestAt)}
+              </div>
+            </div>
+          </div>
+
+          {/* The question comes BEFORE the answer box. Reading order is the whole
+              job of this pane — an answer field above the thing being asked is
+              how you get replies to a question nobody read. */}
+          {body && (
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">{body}</p>
+          )}
+
           {group.category === 'blocker' && (
             <div className="flex flex-col gap-2 rounded-md border-l-2 border-amber-500 bg-amber-500/[0.06] px-2.5 py-2">
-              <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-300">
-                An agent stopped here and needs a decision from you. Your answer is saved on the
-                blocker and the agent reads it back — that is what wakes it up.
+              <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300/90">
+                The agent is waiting on this. It reads your answer back to unblock itself.
               </p>
 
               {onResolveBlocker && group.entityId && (
@@ -144,14 +188,35 @@ export function InboxDetail({ group, now, onClose, onOpenSession, onResolveBlock
             </div>
           )}
 
-          {group.body && (
-            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
-              {group.body}
-            </p>
+          {/* The blocker's own body field carries the answer already given, which
+              is not the same thing as the question shown above it. */}
+          {group.category === 'blocker' && group.body.trim() && (
+            <div className="rounded-md bg-muted/50 px-2.5 py-2">
+              <div className={cn(MICRO_LABEL, 'mb-1')}>Answer on file</div>
+              <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+                {group.body}
+              </p>
+            </div>
+          )}
+
+          {earlier.length > 0 && (
+            <div className="flex flex-col">
+              <div className={cn(MICRO_LABEL, 'mb-1.5')}>Earlier in this thread ({earlier.length})</div>
+              {/* Denser than a list row and, like the list, drawn with no rules
+                  between entries. */}
+              {earlier.map(item => (
+                <div key={item.id} className="flex min-w-0 items-baseline gap-2 rounded-md px-1 py-1 text-[13px] hover:bg-muted/50">
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{item.title}</span>
+                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+                    {relativeTime(item.createdAt, now)}
+                  </span>
+                </div>
+              ))}
+            </div>
           )}
 
           {(group.entityType || group.entityId) && (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border pt-3 text-[11px]">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-3 text-[11px]">
               {group.entityType && (
                 <>
                   <dt className="text-muted-foreground">Entity</dt>
@@ -166,39 +231,8 @@ export function InboxDetail({ group, now, onClose, onOpenSession, onResolveBlock
               )}
             </dl>
           )}
-
-          {earlier.length > 0 && (
-            <div className="flex flex-col border-t border-border pt-3">
-              <div className={cn(MICRO_LABEL, 'mb-1')}>Earlier in this thread ({earlier.length})</div>
-              {earlier.map(item => {
-                const ItemIcon = CATEGORY_ICON[item.category];
-                return (
-                  <div
-                    key={item.id}
-                    className="flex h-7 min-w-0 items-center gap-2 border-b border-border/60 text-[13px] last:border-b-0"
-                  >
-                    <ItemIcon
-                      aria-hidden="true"
-                      className={cn(
-                        'size-3.5 shrink-0',
-                        categoryAccent(item.category) || 'text-muted-foreground/70',
-                      )}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-foreground/70">{item.title}</span>
-                    <span className="w-[4.25rem] shrink-0 text-right tabular-nums text-muted-foreground">
-                      {relativeTime(item.createdAt, now)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {!group.body && earlier.length === 0 && !canOpen && (
-            <p className="text-xs text-muted-foreground">Nothing more to show for this one.</p>
-          )}
         </div>
       </ScrollArea>
-    </div>
+    </section>
   );
 }
