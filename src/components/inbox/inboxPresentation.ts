@@ -52,6 +52,17 @@ export const ROW_WASH_SELECTED = 'color-mix(in oklab, var(--card) 91%, var(--for
 /** Row metrics. ~90px: three text lines against a 32px face. */
 export const ROW_PADDING = 'px-3 py-3';
 
+/**
+ * Caps and centres the row column, same move as the chat window's
+ * CHAT_COLUMN_CLASS (src/components/windows/ChatWindowContent.tsx). Without
+ * it, the single-column view (no item selected) stretches rows edge-to-edge
+ * across the whole floating window — three short lines of text on a 32px face
+ * reading as a thin ribbon across 900+px looks like a bug, not restraint. Has
+ * no visible effect in two-pane mode, where the list pane itself is already
+ * narrower than this (MAX_LIST_WIDTH in InboxWindowContent.tsx).
+ */
+export const LIST_COLUMN_CLASS = 'mx-auto w-full max-w-[640px]';
+
 /** Drawn inside the row so an adjacent row never clips it. */
 export const FOCUS_RING =
   'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2';
