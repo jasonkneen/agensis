@@ -254,7 +254,12 @@ const SPEECH_START_TIMEOUT_MS = 1500;
 // speechSynthesis fails silently, which is exactly what makes it undebuggable
 // from here. These lines let the user's console say where it stops.
 function voiceLog(stage: string, detail: Record<string, unknown>) {
-  try { console.info(`[huddle-voice] ${stage}`, detail); } catch { /* never break on logging */ }
+  // Flat string, NOT an object: Chrome collapses objects to "Object" in the
+  // console and the useful fields are invisible unless expanded.
+  try {
+    const parts = Object.entries(detail).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`);
+    console.info(`[huddle-voice] ${stage} ${parts.join(' ')}`);
+  } catch { /* never break on logging */ }
 }
 
 export interface SpeechOutputState {
@@ -308,8 +313,8 @@ export function useSpeechOutput(
   // closure an old utterance holds behaves identically to a fresh one.
   function pump() {
     const synth = typeof window === 'undefined' ? null : window.speechSynthesis;
-    if (!synth) return;
-    if (utteranceRef.current) return; // one voice at a time
+    if (!synth) { voiceLog('pump-blocked', { why: 'no speechSynthesis' }); return; }
+    if (utteranceRef.current) { voiceLog('pump-blocked', { why: 'utterance in flight' }); return; }
     const next = queueRef.current.shift();
     if (!next) {
       setSpeakingName('');
@@ -384,6 +389,9 @@ export function useSpeechOutput(
   }
 
   const stopSpeaking = useCallback(() => {
+    if (queueRef.current.length || pendingRef.current.size) {
+      voiceLog('stop-wipes', { queued: queueRef.current.length, pending: pendingRef.current.size });
+    }
     queueRef.current = [];
     pendingRef.current.clear();
     if (settleTimerRef.current !== null) {
@@ -408,7 +416,11 @@ export function useSpeechOutput(
     pendingRef.current.delete(id);
     const chunk = nextSpeechChunk(entry.item.text, spokenTextRef.current.get(id) || '');
     spokenTextRef.current.set(id, entry.item.text);
-    if (!chunk) return;
+    if (!chunk) {
+      voiceLog('flush-empty', { id: id.slice(0, 8), already: (spokenTextRef.current.get(id) || '').length });
+      return;
+    }
+    voiceLog('flush', { id: id.slice(0, 8), chars: chunk.length, queued: queueRef.current.length + 1 });
     queueRef.current.push({ ...entry.item, text: chunk });
     pump();
     // `pump` is a per-render function statement over refs — intentionally not a dep.
