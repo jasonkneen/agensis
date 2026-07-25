@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const http = require('http');
 const net = require('net');
 const os = require('os');
+const dns = require('dns').promises;
+const net = require('net');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const express = require('express');
@@ -6323,6 +6325,88 @@ function attachRealtime(server) {
  return wss;
 }
 
+// --- Outbound SSRF guard for operator-supplied URLs ------------------------
+//
+// `base_url` is attacker-controlled in the sense that matters: any workspace
+// member with the `manage` role can set it, and the server then fetches it from
+// inside Fly's network with no egress restrictions. Unvalidated, that turns a
+// normal product feature into a request forgery primitive against the cloud
+// metadata endpoint (169.254.169.254), localhost admin ports, and anything else
+// reachable from the machine — with the response body streamed back to the
+// caller through the SSE relay.
+//
+// LIMITS — what this does NOT catch:
+//   * DNS rebinding. We re-resolve immediately before the fetch, but Node's
+//     global fetch gives no hook to pin the resolved address for the actual
+//     connection, so a hostname whose TTL expires between our lookup and
+//     undici's can still move. Closing that needs a custom dispatcher; the
+//     remaining window is small and every direct-address attack is blocked.
+//   * Open redirects at the upstream. We do not follow redirects to a private
+//     address because we do not follow redirects at all (see `redirect: 'error'`
+//     at the call site).
+//   * Operator-supplied `headers`, which are still passed through verbatim.
+const BLOCKED_IPV4_RANGES = [
+ ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+ ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16],
+ ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4],
+];
+
+function ipv4ToInt(address) {
+ return address.split('.').reduce((acc, octet) => ((acc << 8) + Number(octet)) >>> 0, 0);
+}
+
+function isBlockedAddress(address) {
+ if (net.isIPv4(address)) {
+  const value = ipv4ToInt(address);
+  return BLOCKED_IPV4_RANGES.some(([base, bits]) => {
+   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+   return (value & mask) === (ipv4ToInt(base) & mask);
+  });
+ }
+ if (!net.isIPv6(address)) return true; // unparseable — refuse rather than guess
+ const lower = address.toLowerCase();
+ // IPv4-mapped (::ffff:a.b.c.d) must be judged on the embedded v4 address.
+ const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+ if (mapped) return isBlockedAddress(mapped[1]);
+ if (lower === '::' || lower === '::1') return true;
+ if (/^f[cd]/.test(lower)) return true;                 // fc00::/7 unique-local
+ if (/^fe[89ab]/.test(lower)) return true;              // fe80::/10 link-local
+ if (lower.startsWith('ff')) return true;               // ff00::/8 multicast
+ return false;
+}
+
+// Throws a 400-shaped Error when the URL must not be fetched server-side.
+// Returns the normalized origin+path with any trailing slashes removed.
+async function assertSafeOutboundUrl(rawUrl, label = 'base_url') {
+ const reject = (message) => {
+  const error = new Error(`${label} ${message}`);
+  error.status = 400;
+  throw error;
+ };
+ let url;
+ try { url = new URL(String(rawUrl || '').trim()); } catch { return reject('must be a valid absolute URL'); }
+ if (url.protocol !== 'https:' && url.protocol !== 'http:') reject('must use http or https');
+ if (url.username || url.password) reject('must not embed credentials');
+
+ const host = url.hostname.replace(/^\[|\]$/g, '');
+ let addresses;
+ if (net.isIP(host)) {
+  addresses = [host];
+ } else {
+  try {
+   addresses = (await dns.lookup(host, { all: true, verbatim: true })).map(entry => entry.address);
+  } catch {
+   return reject('host could not be resolved');
+  }
+ }
+ if (!addresses.length) reject('host could not be resolved');
+ // ALL resolved addresses must be public — a host that returns one public and
+ // one private address is a rebinding attempt, not a misconfiguration.
+ if (addresses.some(isBlockedAddress)) reject('must not resolve to a private, loopback, link-local or reserved address');
+
+ return url.toString().replace(/\/+$/, '');
+}
+
 function createApp() {
  const app = express();
  app.use(cors());
@@ -7300,12 +7384,12 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    const name = String(req.body?.name || 'Gateway').trim().slice(0, 120) || 'Gateway';
-   const baseUrl = String(req.body?.base_url || req.body?.baseUrl || '').trim().slice(0, 500);
+   const rawBaseUrl = String(req.body?.base_url || req.body?.baseUrl || '').trim().slice(0, 500);
    const model = String(req.body?.model || '').trim().slice(0, 200);
    const apiKey = String(req.body?.api_key || req.body?.apiKey || '');
    const headers = parseJsonObject(req.body?.headers);
-   if (!baseUrl) return jsonError(res, 400, new Error('base_url is required'));
-   assertSafeGatewayBaseUrl(baseUrl);
+   if (!rawBaseUrl) return jsonError(res, 400, new Error('base_url is required'));
+   const baseUrl = await assertSafeOutboundUrl(rawBaseUrl);
    const cipher = apiKey ? await encryptVaultSecret(apiKey) : '';
    const rows = await getDb().unsafe(
     `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
@@ -7330,9 +7414,7 @@ function createApp() {
    const push = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
    if (req.body?.name !== undefined) push('name', String(req.body.name).trim().slice(0, 120) || 'Gateway');
    if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) {
-    const nextBaseUrl = String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500);
-    assertSafeGatewayBaseUrl(nextBaseUrl);
-    push('base_url', nextBaseUrl);
+    push('base_url', await assertSafeOutboundUrl(String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500)));
    }
    if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
    if (req.body?.headers !== undefined) { params.push(JSON.stringify(parseJsonObject(req.body.headers))); sets.push(`headers = $${params.length}::jsonb`); }
@@ -9059,6 +9141,14 @@ function createApp() {
     const route = await resolveGatewayRoute(workspaceId, gatewayId);
     if (!route) return jsonError(res, 404, new Error('Gateway is not available'));
     if (!route.baseUrl || !route.model) return jsonError(res, 400, new Error('Gateway is missing a base URL or model'));
+    // Re-validate at use time, not just at write time: rows created before this
+    // guard existed are still in the table, and a hostname's DNS answer can
+    // change after it was accepted.
+    try {
+     await assertSafeOutboundUrl(route.baseUrl);
+    } catch {
+     return jsonError(res, 400, new Error(`Gateway ${route.name || route.id} has an unsafe base URL and was not called`));
+    }
     const controller = new AbortController();
     let completed = false;
     bindInferenceAbort(req, res, controller, () => completed);
@@ -9070,6 +9160,9 @@ function createApp() {
       // but a permitted host could still 302 this request onto an internal address.
       redirect: 'error',
       signal: controller.signal,
+      // A redirect is how a validated public host reaches a private one. Fail
+      // instead of following — see the LIMITS note on assertSafeOutboundUrl.
+      redirect: 'error',
       headers: {
        'Content-Type': 'application/json',
        ...(route.apiKey ? { Authorization: `Bearer ${route.apiKey}` } : {}),
@@ -9314,6 +9407,8 @@ module.exports = {
  __test: {
   allowLoopbackAgentDevFallback,
   appendWorkspaceAccessClause,
+  assertSafeOutboundUrl,
+  isBlockedAddress,
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,

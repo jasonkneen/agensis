@@ -72,19 +72,23 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,
-  mock DBs). 330 tests. Note the glob is **top-level only** — a `.test.cjs` in a
+  mock DBs). 334 tests. Note the glob is **top-level only** — a `.test.cjs` in a
   subdirectory is never run (`visual-editor/test/` is invisible to both runners).
 - `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure). 205.
 - Keep both green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
   selectors exist in source — if you remove/rename a selector it references,
   update the tour JSON (`public/.well-known/cursorbuddy.json`) + that test.
-- `npm run lint` is **0 errors / 35 warnings** and must stay at 0 errors. The old
-  6 `_`-prefixed unused-var errors are gone: `no-unused-vars` now honours a
-  leading `_` for backend files, and the backend glob covers `shared/**/*.cjs`,
-  so `backend-core.cjs` (auth, RBAC, rate limiters) is finally linted at all.
-- CI (`.github/workflows/test.yml`) runs lint in a **separate job** from the
-  tests. It used to run before them in the same job, and because lint exited 1,
-  neither suite had ever executed on main or any PR.
+- `npm run lint` is now clean and exits 0. The 6 previously-documented
+  `_`-prefixed unused-var errors are fixed by an `argsIgnorePattern: '^_'` rule
+  on the backend block in `eslint.config.js`. **A red lint is now a real
+  regression — don't wave it through.**
+- `tests/lint-coverage.test.cjs` asserts that every security-critical backend
+  file is actually matched by an eslint config block. It exists because
+  `shared/backend-core.cjs` — auth, RBAC allowlists, both rate limiters — had
+  **zero rules applied** for months: the config globbed `shared/**/*.mjs` and the
+  file is `.cjs`. eslint reports nothing for a file it doesn't match, so "green"
+  and "never looked" are indistinguishable unless you ask. If you add a backend
+  entry point, add it to `MUST_BE_LINTED` in that test.
 - Onboarding testing: `npm run reset:test-account` wipes `testing@bouncingfish.com`
   (user + all their workspaces) so the onboarding tour can be re-run from scratch;
   also clear the `agensis_tour_complete` / `agensis_getstarted_*` localStorage keys
@@ -93,12 +97,31 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 ## Verify before you ship (every change)
 
 ```bash
-npm run typecheck            # tsc, must be 0
-node --check server/index.cjs        # if you touched the server
+npm run ci                   # typecheck + both suites + lint, in that order
+node --check server/index.cjs                # if you touched the server
 node --check netlify/functions/backend.mjs   # if you touched netlify
-npm test && npm run test:unit
-npm run build
+npm run build                                # if you touched the frontend
 ```
+
+`npm run ci` is the single gate. Run it locally — **do not infer "tests passed"
+from GitHub Actions.** Actions is not currently a working gate on this repo: runs
+finish in seconds with zero steps executed, which means no runner is being
+assigned (an Actions minutes / spending-limit problem, not a workflow bug).
+Confirm with `gh run view <id> --json jobs` — `steps: []` is the signature.
+
+### Optional pre-push hook
+
+`.githooks/pre-push` runs typecheck + both suites before a push. Enable it with:
+
+```bash
+npm run hooks:install        # git config core.hooksPath .githooks
+```
+
+**If you are an automated pusher, you must set `AGENSIS_SKIP_HOOKS=1`** for WIP
+checkpoint pushes — a red hook would otherwise wedge an unattended loop with
+nobody watching. Do NOT set it when merging to main. Humans can use
+`git push --no-verify` for a one-off. `core.hooksPath` is repo-level config, so
+enabling it affects every worktree including the shared checkout.
 
 ## Deploy targets
 
