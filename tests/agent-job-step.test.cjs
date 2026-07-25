@@ -135,7 +135,10 @@ test('a valid step inserts a new message threaded under the job responseMessageI
   assert.equal(senderId, 'agent-1');
   assert.equal(senderName, 'Coder');
   assert.match(inserts[0].n, /role, content, thread_parent_id/);
-  assert.match(inserts[0].n, /values \(\$1, 'assistant', \$2, \$3, 'agent', \$4, \$5\)/);
+  // The trailing message_kind/tool_name/tool_detail binds are pinned separately
+  // in tests/message-tool-steps.test.cjs; what matters here is that the row is
+  // still an agent-authored assistant message threaded under the reply.
+  assert.match(inserts[0].n, /values \(\$1, 'assistant', \$2, \$3, 'agent', \$4, \$5[,)]/);
 
   // The placeholder must survive untouched — a step is an extra message, not an
   // edit of the reply bubble.

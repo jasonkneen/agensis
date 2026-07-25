@@ -81,6 +81,13 @@ export interface Message {
  pinned?: boolean;
  reactions?: Record<string, string[]>;
  deleted_at?: string | null;
+ // '' or absent for a normal message, 'tool_step' for one agent tool call. Steps
+ // render as compact chips instead of full message rows (components/chat/toolSteps.ts).
+ // `content` keeps its human-readable fallback ("Bash · cd ~/repo && git log") so
+ // rows written before these columns existed still read sensibly.
+ message_kind?: string | null;
+ tool_name?: string | null;
+ tool_detail?: string | null;
  created_at: string;
 }
 
