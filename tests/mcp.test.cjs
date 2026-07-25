@@ -24,11 +24,17 @@ const FLOW_CHANNEL = {
 
 // Task rows the fake DB serves. t-root -> t-child -> t-grand is a 3-deep tree
 // in WS; t-other belongs to OTHER_WS and must never be reachable as a parent.
+// d-a -> d-b -> d-c is a dependency CHAIN in WS (d-b depends_on d-a, etc.) —
+// the shape an agent produces when it plans "Ship UI work / 1..3". Making d-a
+// depend on d-c would close the loop and hang any topological layout.
 const TASK_ROWS = {
   't-root': { id: 't-root', workspace_id: WS, parent_id: null, title: 'Root' },
   't-child': { id: 't-child', workspace_id: WS, parent_id: 't-root', title: 'Child' },
   't-grand': { id: 't-grand', workspace_id: WS, parent_id: 't-child', title: 'Grandchild' },
   't-other': { id: 't-other', workspace_id: OTHER_WS, parent_id: null, title: 'Foreign' },
+  'd-a': { id: 'd-a', workspace_id: WS, parent_id: null, title: 'Step 1', depends_on: [] },
+  'd-b': { id: 'd-b', workspace_id: WS, parent_id: null, title: 'Step 2', depends_on: ['d-a'] },
+  'd-c': { id: 'd-c', workspace_id: WS, parent_id: null, title: 'Step 3', depends_on: ['d-b'] },
   // A chain longer than MAX_TASK_DEPTH (64): deep-0 -> deep-1 -> … -> deep-79.
   // deep-0 is the ROOT of it, so walking up from deep-79 takes 79 hops and
   // blows past the cap. The old guard exited the loop quietly at 64 and
@@ -87,6 +93,13 @@ function makeDb() {
       }
       if (n.startsWith('select * from tasks where workspace_id = $1')) {
         return Object.values(TASK_ROWS).filter((r) => r.workspace_id === params[0]);
+      }
+      // The dependency-graph read: proves every proposed id lives in THIS
+      // workspace and supplies the edges the cycle walk follows.
+      if (n.startsWith('select id, depends_on from tasks where workspace_id = $1')) {
+        return Object.values(TASK_ROWS)
+          .filter((r) => r.workspace_id === params[0])
+          .map((r) => ({ id: r.id, depends_on: r.depends_on || [] }));
       }
       return [];
     },
@@ -708,4 +721,187 @@ test('list_tasks returns parent_id so an agent can rebuild the tree', async () =
   const child = tasks.find((t) => t.id === 't-child');
   assert.equal(child.parent_id, 't-root');
   assert.ok(!tasks.some((t) => t.id === 't-other'), 'must not leak another workspace');
+});
+
+// --- Dates + dependencies (start_date / due_date / depends_on) --------------
+// Before this, NOTHING wrote these three columns, so the Gantt had nothing to
+// draw and every task collapsed to an identical marker at created_at. Agents
+// are the main authors of task plans, so the MCP surface has to accept them —
+// and has to refuse a cycle, because the timeline walks depends_on to lay out
+// bars and a loop never terminates.
+
+// Param positions in the update_task statement (1-indexed $n -> 0-indexed).
+const U_DUE_DATE = 7;
+const U_START_DATE = 10;
+const U_DEPENDS_ON = 11;
+const U_DEPENDS_GUARD = 12;
+
+test('create_task and update_task expose start_date/due_date/depends_on in their schemas', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { body: rpc('tools/list') });
+  const byName = Object.fromEntries(res.body.result.tools.map((t) => [t.name, t]));
+  for (const tool of ['create_task', 'update_task']) {
+    const props = byName[tool].inputSchema.properties;
+    assert.ok(props.start_date, `${tool} must accept start_date`);
+    assert.ok(props.due_date, `${tool} must accept due_date`);
+    assert.equal(props.depends_on.type, 'array', `${tool} depends_on must be an array`);
+    assert.equal(props.depends_on.items.type, 'string', `${tool} depends_on items must be strings`);
+  }
+});
+
+test('update_task writes start_date and due_date as normalized ISO', async () => {
+  const { db, res } = await callTask('update_task', {
+    task_id: 'd-a', start_date: '2026-08-03', due_date: '2026-08-07T00:00:00.000Z',
+  });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.ok(upd.n.includes('start_date = coalesce($11, start_date)'), 'must set start_date');
+  assert.equal(upd.params[U_START_DATE], new Date('2026-08-03').toISOString());
+  assert.equal(upd.params[U_DUE_DATE], '2026-08-07T00:00:00.000Z');
+});
+
+test('update_task leaves both dates alone when the caller omits them', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', status: 'in_progress' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(upd.params[U_START_DATE], null, 'null start_date => coalesce keeps the column');
+  assert.equal(upd.params[U_DUE_DATE], null, 'null due_date => coalesce keeps the column');
+});
+
+test('update_task REJECTS an unparseable start_date before any write', async () => {
+  // Passing it through would either store garbage or blow up mid-statement as
+  // an opaque -32603. The caller gets told which argument is wrong instead.
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', start_date: 'next tuesday-ish' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /start_date is not a parseable date/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task REJECTS an unparseable due_date before any write', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', due_date: 'whenever' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /due_date is not a parseable date/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task sets depends_on as a PG array literal with a uuid[] cast', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-c', depends_on: ['d-a', 'd-b'] });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  // A raw JS array bound to an untyped $n serializes as `a,b`, not `{a,b}` —
+  // postgres.js does not array-serialize through .unsafe().
+  assert.ok(upd.n.includes('depends_on = case when $13 then $12::uuid[] else depends_on end'), 'must cast the literal to uuid[]');
+  assert.equal(upd.params[U_DEPENDS_ON], '{"d-a","d-b"}');
+  assert.equal(upd.params[U_DEPENDS_GUARD], true);
+});
+
+test('update_task with depends_on [] CLEARS the list (guard on, empty literal)', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-c', depends_on: [] });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(upd.params[U_DEPENDS_ON], '{}');
+  assert.equal(upd.params[U_DEPENDS_GUARD], true, 'an explicit [] is still the caller mentioning depends_on');
+});
+
+test('update_task without depends_on leaves the column untouched', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-c', status: 'done' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(upd.params[U_DEPENDS_GUARD], false, 'the guard must be OFF when the caller never mentions depends_on');
+  assert.ok(upd.n.includes('else depends_on end'), 'must fall back to the row\'s own depends_on');
+});
+
+test('update_task rejects a self-dependency before any write', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['d-a'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cannot depend on itself/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a DIRECT 2-cycle (a<->b)', async () => {
+  // d-b already depends on d-a, so d-a depending on d-b closes the loop.
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['d-b'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cycle/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a TRANSITIVE cycle (a -> c where c -> b -> a)', async () => {
+  // The interesting case: nothing about d-c mentions d-a directly, so a
+  // one-hop check would wave this through and the layout would never terminate.
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['d-c'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cycle/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a cycle even when it hides among legal dependencies', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['t-root', 'd-c'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /cycle/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task ACCEPTS a forward dependency that does not close a loop', async () => {
+  // d-c -> d-a is redundant (already transitive through d-b) but not a cycle.
+  const { db, res } = await callTask('update_task', { task_id: 'd-c', depends_on: ['d-a'] });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const upd = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.equal(upd.params[U_DEPENDS_ON], '{"d-a"}');
+});
+
+test('update_task rejects a dependency in ANOTHER workspace before any write', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['t-other'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /dependency task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a dependency id that does not exist at all', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: ['d-nope'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /dependency task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a non-array depends_on', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: 'd-b' });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /depends_on must be an array/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('update_task rejects a depends_on entry that is not a string', async () => {
+  const { db, res } = await callTask('update_task', { task_id: 'd-a', depends_on: [42] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /depends_on must contain task id strings/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('update tasks set')), 'must not reach the update');
+});
+
+test('create_task writes start_date and a depends_on array literal', async () => {
+  const { db, res } = await callTask('create_task', {
+    title: 'Step 4', start_date: '2026-08-10', due_date: '2026-08-12', depends_on: ['d-c'],
+  });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
+  assert.ok(insert.n.includes('start_date'), 'insert must name start_date');
+  assert.ok(insert.n.includes('$11::uuid[]'), 'depends_on must be cast to uuid[]');
+  assert.equal(insert.params[9], new Date('2026-08-10').toISOString());
+  assert.equal(insert.params[10], '{"d-c"}');
+});
+
+test('create_task rejects a dependency outside the workspace before any insert', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Leaky', depends_on: ['t-other'] });
+  assert.equal(res.body.result.isError, true);
+  assert.match(res.body.result.content[0].text, /dependency task not found in this workspace/i);
+  assert.ok(!db.calls.some((c) => c.n.startsWith('insert into tasks')), 'must not reach the insert');
+});
+
+test('create_task without depends_on writes an empty array, not a bare JS array', async () => {
+  const { db, res } = await callTask('create_task', { title: 'Plain' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
+  assert.equal(insert.params[10], '{}');
 });
