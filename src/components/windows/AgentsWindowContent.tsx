@@ -1,3 +1,4 @@
+import { useFidgetDrag } from '@/hooks/useFidgetDrag';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -282,6 +283,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   );
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
+  // Cards are draggable and spring back — a fidget, not a layout. One hook for
+  // the whole grid: a pointer drags one card at a time. See useFidgetDrag.
+  const fidget = useFidgetDrag();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
@@ -775,6 +779,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         key={agent.id}
                         type="button"
                         onClick={() => setSelectedAgentId(agent.id)}
+                        {...fidget.handlers}
                         style={agentAccentStyle(agent)}
                         title={[
                           `@${agent.handle || agentHandle(agent.name)}`,
