@@ -88,9 +88,16 @@ test('a declaration racing a human edit retries and honours the fresh lock', asy
 
   // And the identity written on the retry carries the human_set flag the human
   // edit created mid-race — the stale merge would have erased it.
-  const identityParam = updates[1].params.find((p) => typeof p === 'string' && p.includes('human_set'));
+  // Bound as an OBJECT, never a JSON string: on the porsager driver a
+  // stringified bind under ::jsonb arrives as a jsonb STRING SCALAR — the bug
+  // that corrupted identity.human_set into an array and made voice writes
+  // throw. normalizeJsonParam now returns parsed objects, so the param IS the
+  // object here; asserting a string would be asserting the corruption back.
+  const identityParam = updates[1].params.find(
+    (p) => p && typeof p === 'object' && !Array.isArray(p) && 'human_set' in p,
+  );
   assert.ok(identityParam, 'the retry writes the identity jsonb');
-  assert.deepEqual(JSON.parse(identityParam), {
+  assert.deepEqual(identityParam, {
     human_set: { avatar: true },
     voice: { cartesia_voice_id: VOICE_A },
   });
