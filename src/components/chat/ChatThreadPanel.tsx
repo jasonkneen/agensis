@@ -315,10 +315,10 @@ function ThreadBubble({
           )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
-        <div className="mt-0.5 text-xs leading-relaxed text-foreground">
+        <div className="mt-0.5 text-sm leading-relaxed text-foreground">
           {displayContent ? (
             <>
-              <MarkdownContent content={displayContent} compact />
+              <MarkdownContent content={displayContent} />
               {canExpand && (
                 <button
                   type="button"

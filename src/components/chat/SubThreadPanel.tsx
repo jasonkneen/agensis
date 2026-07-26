@@ -498,14 +498,14 @@ function SubThreadBubble({
           )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
-        <div className="mt-0.5 text-xs leading-relaxed text-foreground">
+        <div className="mt-0.5 text-sm leading-relaxed text-foreground">
           {isActivityPlaceholder ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
               {placeholderLabel}
             </span>
           ) : displayContent ? (
-            <MarkdownContent content={displayContent} compact />
+            <MarkdownContent content={displayContent} />
           ) : isStreaming ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
