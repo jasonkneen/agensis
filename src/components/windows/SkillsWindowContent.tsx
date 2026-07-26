@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, Search, Bot, ChevronLeft, FolderTree, Radio, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Sparkles, Search, ChevronLeft, FileText, FolderTree, Info, Radio, X } from 'lucide-react';
 import type { WorkspaceAgent, AgentConnection } from '../../types';
 import type { SystemCapabilities } from '../../lib/backendClient';
 import {
@@ -12,9 +12,22 @@ import {
   SKILLS_SPLIT_MIN_WIDTH,
   toggleSkillsSelection,
   type LibraryEntry,
+  type SkillAgentRef,
   type SkillEntry,
   type SkillsSelection,
 } from '../../lib/skillsView';
+import {
+  SKILL_CONTENT_MAX_BYTES,
+  describeSkillSource,
+  describeSkillUnavailable,
+  fetchSkillContent,
+  fetchSkillLibrary,
+  fetchSkillLibraryEntry,
+  formatSkillBytes,
+  type SkillContentResult,
+  type SkillLibraryListing,
+} from '../../lib/skillContent';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,10 +40,54 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty';
 
+// One agent on a skill row. Initials on the agent's own accent colour — the
+// Slack-style identity the workspace tiles and agent avatars already use, and
+// never an emoji.
+//
+// The advertised/configured distinction is FILL vs OUTLINE, because it is the
+// answer to "which agents can actually use this": a filled chip is a live
+// daemon that reported the skill itself, an outlined one is a claim on a
+// profile that nothing has confirmed. Same information the connected dot in the
+// detail pane carries, at list level where the comparison happens.
+function AgentChip({ agent, onOpen }: { agent: SkillAgentRef; onOpen: () => void }) {
+  const advertised = agent.source === 'advertised';
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={event => { event.stopPropagation(); onOpen(); }}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+      }}
+      title={advertised
+        ? `${agent.name} advertises this skill from a connected machine`
+        : `${agent.name} has this skill configured — nothing is connected to confirm it`}
+      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-[11px] transition-colors ${
+        advertised
+          ? 'bg-muted text-foreground hover:bg-muted/70'
+          : 'border border-dashed border-border text-muted-foreground hover:bg-muted/40'
+      }`}
+    >
+      <span
+        className={`flex size-4 shrink-0 items-center justify-center rounded-full text-[8px] font-semibold leading-none text-white ${advertised ? '' : 'opacity-60'}`}
+        style={{ backgroundColor: agent.color }}
+        aria-hidden="true"
+      >
+        {agent.initials}
+      </span>
+      <span className="truncate">{agent.name}</span>
+    </span>
+  );
+}
+
 interface SkillsWindowContentProps {
   agents: WorkspaceAgent[];
   agentConnections: AgentConnection[];
   systemCapabilities: SystemCapabilities | null;
+  workspaceId: string;
 }
 
 // Consolidated skills view: every skill any agent exposes, grouped by skill name
@@ -44,7 +101,14 @@ interface SkillsWindowContentProps {
 // detail takes the whole surface with a back arrow. Same threshold and the same
 // column width on purpose — it is the same interaction, and two browse surfaces
 // that break at different points feel like two different apps.
-export function SkillsWindowContent({ agents, agentConnections, systemCapabilities }: SkillsWindowContentProps) {
+//
+// The preview shows the skill's REAL text wherever agensis has it — a sandbox
+// skill definition, a body a daemon mirrored up, a file in a library on the
+// backend host. Where it has none it says so and says why (see
+// describeSkillUnavailable): most skill names in this list are names a machine
+// reported, and inventing a plausible body for one would be worse than the
+// empty state.
+export function SkillsWindowContent({ agents, agentConnections, systemCapabilities, workspaceId }: SkillsWindowContentProps) {
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<SkillsSelection>(null);
 
@@ -82,6 +146,57 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
     ? libraries.find(l => l.id === selection.id) ?? null
     : null;
   const hasDetail = !!(selectedSkill || selectedLibrary);
+
+  // The body for whatever is open. Loaded on selection rather than up front —
+  // a skill document is large, most are never opened, and the list itself needs
+  // no content at all to render.
+  const [content, setContent] = useState<SkillContentResult | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [listing, setListing] = useState<SkillLibraryListing | null>(null);
+  const [openEntry, setOpenEntry] = useState('');
+
+  const selectedSkillName = selectedSkill?.name ?? '';
+  const selectedLibraryId = selectedLibrary?.id ?? '';
+
+  // One loader for all three fetches, so the "a slow response must not land on a
+  // selection the user has already moved off" guard exists once instead of three
+  // times. `cancelled` is checked before EVERY setState, including the loading
+  // flag — an early return that leaves the spinner on is the version of this bug
+  // that looks like a hang.
+  const load = useCallback((run: () => Promise<SkillContentResult>) => {
+    let cancelled = false;
+    setContentLoading(true);
+    setContent(null);
+    void run().then(result => {
+      if (cancelled) return;
+      setContent(result);
+      setContentLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSkillName || !workspaceId) { setContent(null); setContentLoading(false); return; }
+    return load(() => fetchSkillContent(workspaceId, selectedSkillName));
+  }, [selectedSkillName, workspaceId, load]);
+
+  // Opening a library lists its entries; the body arrives only once one is
+  // picked. Changing library drops the open entry — keeping it would ask the
+  // next library for a file that belongs to the previous one.
+  useEffect(() => {
+    setOpenEntry('');
+    if (!selectedLibraryId || !workspaceId) { setListing(null); return; }
+    let cancelled = false;
+    void fetchSkillLibrary(workspaceId, selectedLibraryId).then(result => {
+      if (!cancelled) setListing(result);
+    });
+    return () => { cancelled = true; };
+  }, [selectedLibraryId, workspaceId]);
+
+  useEffect(() => {
+    if (!selectedLibraryId || !openEntry || !workspaceId) return;
+    return load(() => fetchSkillLibraryEntry(workspaceId, selectedLibraryId, openEntry));
+  }, [selectedLibraryId, openEntry, workspaceId, load]);
 
   const totalSkills = skillEntries.length;
   const totalLibraryEntries = libraries.reduce((sum, l) => sum + l.count, 0);
@@ -148,21 +263,24 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       <div className="flex items-center gap-2">
                         <Sparkles className="size-3.5 shrink-0 text-primary" />
                         <span className="truncate text-sm font-medium text-foreground">{skill.name}</span>
-                        <Badge variant="secondary" className="ml-auto shrink-0">{skill.agents.length}</Badge>
+                        {skill.agents.length > 0 && (
+                          <Badge variant="secondary" className="ml-auto shrink-0">{skill.agents.length}</Badge>
+                        )}
                       </div>
-                      {/* The agent chips are the row's whole content in the wide
-                          list; beside a detail pane they are noise, since the
-                          pane lists the same agents with more about each. */}
-                      {!compact && (
-                        <div className="mt-1.5 flex flex-wrap gap-1 pl-5.5">
-                          {skill.agents.map(agent => (
-                            <span key={agent.id} className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                              <Bot className="size-3" />
-                              {agent.name}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      {/* The chips ARE the answer to "which agents can do this",
+                          so they stay in the narrow column too — the earlier
+                          version dropped them beside a detail pane, which is
+                          exactly when you are comparing skills and need them. */}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-5.5">
+                        {skill.agents.map(agent => (
+                          <AgentChip key={`${agent.id}:${agent.source}`} agent={agent} onOpen={() => setQuery(agent.name)} />
+                        ))}
+                        {skill.agents.length === 0 && (
+                          <span className="text-[11px] text-muted-foreground">
+                            Available in agensis · no agent has it yet
+                          </span>
+                        )}
+                      </div>
                     </button>
                   );
                 })}
@@ -209,11 +327,53 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
     </>
   );
 
-  // The preview. There is no per-skill document to render — a skill here is a
-  // NAME a machine or a form claims, not a file we hold — so this shows
-  // everything actually known about it rather than inventing a body. The most
-  // useful line is the source: whether a connected machine advertised the skill
-  // itself, or somebody typed it into the agent's form.
+  // The body, a spinner, or a named reason there is none. Untrusted text: it is
+  // a file from somebody's machine or an agent-authored definition, so it goes
+  // through MarkdownContent, which builds elements and never touches innerHTML.
+  const renderContentBlock = (name: string) => {
+    if (contentLoading) {
+      return (
+        <div className="space-y-2" aria-busy="true">
+          <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-full animate-pulse rounded bg-muted" />
+          <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+        </div>
+      );
+    }
+    if (!content) return null;
+    if (!content.available) {
+      const { title, detail } = describeSkillUnavailable(content.reason, { name });
+      return (
+        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Info className="size-3.5 shrink-0 text-muted-foreground" />
+            {title}
+          </p>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{detail}</p>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          {describeSkillSource(content)}
+          {content.byteSize > 0 && ` · ${formatSkillBytes(content.byteSize)}`}
+        </p>
+        {content.path && <p className="break-all font-mono text-[11px] text-muted-foreground">{content.path}</p>}
+        <div className="rounded-lg border border-border bg-card/40 p-3">
+          <MarkdownContent content={content.markdown} compact />
+        </div>
+        {content.truncated && (
+          <p className="text-xs text-muted-foreground">
+            Shown up to {formatSkillBytes(SKILL_CONTENT_MAX_BYTES)} — the file is longer than that on disk.
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  // The preview. Content first, because content is what the pane is for; the
+  // provenance and the agent list are below it as supporting detail.
   const renderDetail = (showBack: boolean) => {
     if (!hasDetail) return null;
     return (
@@ -247,11 +407,20 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
             {selectedSkill && (
               <>
                 <div>
+                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skill content</h4>
+                  {renderContentBlock(selectedSkill.name)}
+                </div>
+
+                <div>
                   <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where this comes from</h4>
-                  {selectedSkill.source === 'synced' ? (
+                  {selectedSkill.advertised ? (
                     <p className="flex items-start gap-2 text-sm text-foreground">
                       <Radio className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
                       <span>A connected daemon advertised this skill itself, so a machine really has it.</span>
+                    </p>
+                  ) : selectedSkill.origin === 'catalog' ? (
+                    <p className="text-sm text-muted-foreground">
+                      A skill agensis ships. No agent in this workspace carries it yet — add its id to an agent&apos;s skills to give the agent its instructions.
                     </p>
                   ) : (
                     <p className="text-sm text-muted-foreground">
@@ -260,28 +429,56 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                   )}
                 </div>
 
-                <div>
-                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents with this skill</h4>
-                  <div className="space-y-1.5">
-                    {selectedSkill.agents.map(agent => (
-                      <div key={agent.id} className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5">
-                        <Bot className="size-3.5 shrink-0 text-muted-foreground" />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-foreground">{agent.name}</div>
-                          {agent.handle && <div className="truncate text-[11px] text-muted-foreground">@{agent.handle}</div>}
+                {selectedSkill.agents.length > 0 && (
+                  <div>
+                    <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents with this skill</h4>
+                    <div className="space-y-1.5">
+                      {selectedSkill.agents.map(agent => (
+                        <div key={`${agent.id}:${agent.source}`} className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5">
+                          <span
+                            className="flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold leading-none text-white"
+                            style={{ backgroundColor: agent.color }}
+                            aria-hidden="true"
+                          >
+                            {agent.initials}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm text-foreground">{agent.name}</div>
+                            {agent.handle && <div className="truncate text-[11px] text-muted-foreground">@{agent.handle}</div>}
+                          </div>
+                          <Badge variant={agent.source === 'advertised' ? 'secondary' : 'outline'} className="shrink-0 text-[11px]">
+                            {agent.source === 'advertised' ? 'advertised' : 'configured'}
+                          </Badge>
+                          <Badge variant="outline" className="shrink-0 text-[11px]">{agent.runMode}</Badge>
+                          {agent.connected && (
+                            <span className="size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-label="Connected" />
+                          )}
                         </div>
-                        <Badge variant="outline" className="shrink-0 text-[11px]">{agent.runMode}</Badge>
-                        {agent.connected && (
-                          <span className="size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-label="Connected" />
-                        )}
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </>
             )}
 
-            {selectedLibrary && (
+            {selectedLibrary && (openEntry ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 h-7 gap-1 px-2 text-xs"
+                  onClick={() => setOpenEntry('')}
+                >
+                  <ChevronLeft className="size-3.5" />
+                  All entries
+                </Button>
+                <div>
+                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{openEntry}</h4>
+                  {renderContentBlock(openEntry)}
+                </div>
+              </>
+            ) : (
               <>
                 <div>
                   <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Location</h4>
@@ -297,11 +494,49 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                     <p className="text-sm text-foreground">{selectedLibrary.type}</p>
                   </div>
                 </div>
+
+                {listing?.available && listing.entries.length > 0 && (
+                  <div>
+                    <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Open one</h4>
+                    <div className="space-y-1">
+                      {listing.entries.map(entry => (
+                        <button
+                          key={entry.entry}
+                          type="button"
+                          onClick={() => setOpenEntry(entry.entry)}
+                          className="flex w-full items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5 text-left transition-colors hover:bg-card/70"
+                        >
+                          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate text-sm text-foreground">{entry.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {listing && listing.available === false && (
+                  <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3">
+                    <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <Info className="size-3.5 shrink-0 text-muted-foreground" />
+                      {describeSkillUnavailable(listing.reason ?? 'not-found', { name: selectedLibrary.label }).title}
+                    </p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                      {describeSkillUnavailable(listing.reason ?? 'not-found', { name: selectedLibrary.label }).detail}
+                    </p>
+                  </div>
+                )}
+
+                {/* This library was found by scanning the machine the agensis
+                    backend runs on — NOT by asking a daemon. On the hosted app
+                    that is a Fly container; run the backend yourself and it is
+                    your own machine. The pane used to claim a daemon reported
+                    it, which sent anyone debugging an empty list to the wrong
+                    place entirely. */}
                 <p className="text-xs text-muted-foreground">
-                  Enumerated on a connected machine. agensis lists what the daemon reported; the files themselves stay on that machine.
+                  Found on the machine running the agensis backend.
                 </p>
               </>
-            )}
+            ))}
           </div>
         </ScrollArea>
       </div>

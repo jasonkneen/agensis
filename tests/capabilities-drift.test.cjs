@@ -59,6 +59,36 @@ test('malformed / never-synced stored capabilities self-heal on a hashed beat', 
   assert.deepEqual(capabilitiesDriftNudges(bad, { capabilitiesHash: 'CAP1' }), ['agent_capabilities_refresh']);
 });
 
+test('skill-document drift nudges only a skills refresh', () => {
+  // capabilities.skills is a list of NAMES; the bodies ride agent_skill_sync into
+  // agent_skill_documents. A daemon can edit a SKILL.md without the name list moving, so
+  // the bodies need a hash of their own — the capabilities hash would not change.
+  const stored = { ...validStored, skillsHash: 'SKILL1' };
+  assert.deepEqual(
+    capabilitiesDriftNudges(stored, { capabilitiesHash: 'CAP1', memoryHash: 'MEM1', skillsHash: 'SKILL2' }),
+    ['agent_skills_refresh'],
+  );
+  assert.deepEqual(
+    capabilitiesDriftNudges(stored, { capabilitiesHash: 'CAP1', memoryHash: 'MEM1', skillsHash: 'SKILL1' }),
+    [],
+  );
+});
+
+test('a daemon that never sends skillsHash is never nudged for skills', () => {
+  // Every daemon in the field today. Nudging one for a channel it does not implement
+  // would be a refresh storm answered by silence, every beat, forever.
+  assert.deepEqual(capabilitiesDriftNudges(validStored, { capabilitiesHash: 'CAP1', memoryHash: 'MEM1' }), []);
+});
+
+test('the first skillsHash a daemon ever sends forces the initial push', () => {
+  // Nothing stored yet: the reference is undefined, so any hash is drift and the
+  // documents arrive on the next round-trip rather than after some later edit.
+  assert.deepEqual(
+    capabilitiesDriftNudges(validStored, { skillsHash: 'SKILL1' }),
+    ['agent_skills_refresh'],
+  );
+});
+
 test('capabilitiesShapeValid enforces the format we need', () => {
   assert.equal(capabilitiesShapeValid(validStored), true);
   assert.equal(capabilitiesShapeValid({ skills: [], clis: [], mcpServers: [], memoryRoot: null }), true);
