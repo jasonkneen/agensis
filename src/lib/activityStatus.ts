@@ -53,3 +53,30 @@ export function activityLine(verb: string, content: string): string {
   const rest = content.trim().slice(verb.length).trim();
   return rest ? `${capitalized} ${rest}…` : `${capitalized}…`;
 }
+
+// The server writes the heartbeat as `Thinking ${formatElapsedMs(...)}` — "0s",
+// "43s", "1m 4s" — and nothing else. Matching that shape exactly means prose that
+// merely opens with the word "thinking" can never be mistaken for a duration.
+const THINKING_ELAPSED_RE = /^thinking\s+((?:\d+m\s+)?\d+s)$/i;
+
+/** "Thinking 1m 4s" -> "1m 4s". Empty when the placeholder carries no duration. */
+export function activityElapsed(content: string): string {
+  const match = THINKING_ELAPSED_RE.exec(content.trim());
+  return match ? match[1].replace(/\s+/g, ' ') : '';
+}
+
+/**
+ * Label for the LIVE chip. Unlike `activityLine` — which pins "thinking" to one
+ * fixed string so the sidebar status feed doesn't retype once a second — the chip
+ * is the one surface that exists to show the clock, so it keeps the elapsed.
+ */
+export function activityChipLabel(content: string): string {
+  const elapsed = activityElapsed(content);
+  if (elapsed) return `Thinking ${elapsed}`;
+  return activityLine(extractActivityVerb(content), content);
+}
+
+/** The same period once it's over: "1m 4s" -> "Thought for 1m 4s". */
+export function thoughtChipLabel(elapsed: string): string {
+  return `Thought for ${elapsed}`;
+}

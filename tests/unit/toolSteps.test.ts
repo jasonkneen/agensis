@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   TOOL_STEP_STALE_MS,
   bucketToolSteps,
   buildTranscriptRows,
+  clearThinkingElapsed,
   isStaleStepGroup,
   isToolStepMessage,
+  recallThinkingElapsed,
+  rememberThinkingElapsed,
   toolStepParts,
 } from '../../src/components/chat/toolSteps';
+import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../src/lib/activityStatus';
 import type { Message } from '../../src/types';
 
 let seq = 0;
@@ -26,6 +30,15 @@ function msg(overrides: Partial<Message> = {}): Message {
 function step(overrides: Partial<Message> = {}): Message {
   return msg({ message_kind: 'tool_step', sender_id: 'agent-1', ...overrides });
 }
+
+/** The daemon's in-progress placeholder: an agent message whose whole body is a verb. */
+function thinking(seconds = '4s', overrides: Partial<Message> = {}): Message {
+  return msg({ sender_kind: 'agent', sender_id: 'agent-1', content: `Thinking ${seconds}`, ...overrides });
+}
+
+afterEach(() => {
+  clearThinkingElapsed();
+});
 
 describe('isToolStepMessage', () => {
   it('only matches the tool_step kind', () => {
@@ -178,8 +191,149 @@ describe('isStaleStepGroup', () => {
     expect(isStaleStepGroup(steps, now)).toBe(false);
   });
 
-  it('leaves the quiet timer in charge when the timestamp is unusable', () => {
+  it('assumes still-live when the timestamp is unusable', () => {
     expect(isStaleStepGroup([step({ created_at: 'not a date' })], now)).toBe(false);
     expect(isStaleStepGroup([], now)).toBe(false);
+  });
+
+  it('finds the newest member wherever it sits, not just at the tail', () => {
+    // A thinking placeholder is inserted at dispatch, so it can be appended to the
+    // group AFTER steps that are newer than it.
+    const steps = [
+      step({ created_at: new Date(now - 500).toISOString() }),
+      thinking('2m 0s', { created_at: new Date(now - 10 * TOOL_STEP_STALE_MS).toISOString() }),
+    ];
+    expect(isStaleStepGroup(steps, now)).toBe(false);
+  });
+});
+
+describe('activityElapsed', () => {
+  it('reads the duration the server baked into the placeholder', () => {
+    expect(activityElapsed('Thinking 0s')).toBe('0s');
+    expect(activityElapsed('Thinking 43s')).toBe('43s');
+    expect(activityElapsed('Thinking 1m 4s')).toBe('1m 4s');
+    expect(activityElapsed('  thinking 12s  ')).toBe('12s');
+  });
+
+  it('refuses anything that is not a bare duration', () => {
+    expect(activityElapsed('Thinking')).toBe('');
+    expect(activityElapsed('Thinking about the schema')).toBe('');
+    expect(activityElapsed('reading src/App.tsx')).toBe('');
+    expect(activityElapsed('')).toBe('');
+  });
+});
+
+describe('chip labels', () => {
+  it('keeps the clock on the live chip', () => {
+    expect(activityChipLabel('Thinking 1m 4s')).toBe('Thinking 1m 4s');
+  });
+
+  it('falls back to the shared status line when there is no clock', () => {
+    expect(activityChipLabel('thinking')).toBe('Thinking…');
+    expect(activityChipLabel('reading src/App.tsx')).toBe('Reading src/App.tsx…');
+  });
+
+  it('puts the finished period in the past tense', () => {
+    expect(thoughtChipLabel('1m 4s')).toBe('Thought for 1m 4s');
+  });
+});
+
+describe('thinking elapsed memo', () => {
+  it('remembers the last elapsed seen for a placeholder', () => {
+    rememberThinkingElapsed('m-1', '3s');
+    rememberThinkingElapsed('m-1', '9s');
+    expect(recallThinkingElapsed('m-1')).toBe('9s');
+  });
+
+  it('ignores an empty id or elapsed instead of storing a blank', () => {
+    rememberThinkingElapsed('', '9s');
+    rememberThinkingElapsed('m-2', '');
+    expect(recallThinkingElapsed('m-2')).toBe('');
+  });
+
+  it('evicts the least recently touched entry once it is full', () => {
+    for (let index = 0; index < 300; index += 1) rememberThinkingElapsed(`k${index}`, `${index}s`);
+    expect(recallThinkingElapsed('k0')).toBe('');
+    expect(recallThinkingElapsed('k299')).toBe('299s');
+  });
+});
+
+describe('buildTranscriptRows — thinking placeholders', () => {
+  it('folds a live placeholder into the run instead of breaking it into a bubble', () => {
+    const rows = buildTranscriptRows([step(), thinking(), step()]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe('steps');
+    if (rows[0].kind !== 'steps') return;
+    expect(rows[0].steps).toHaveLength(2);
+    expect(rows[0].thinking).toHaveLength(1);
+  });
+
+  it('opens a group on a placeholder that arrives before any tool call', () => {
+    const rows = buildTranscriptRows([thinking('0s'), step()]);
+    expect(rows).toHaveLength(1);
+    if (rows[0].kind !== 'steps') throw new Error('expected a step row');
+    expect(rows[0].thinking).toHaveLength(1);
+    expect(rows[0].steps).toHaveLength(1);
+  });
+
+  it('never counts a placeholder as a tool call', () => {
+    const rows = buildTranscriptRows([thinking(), thinking('9s')]);
+    if (rows[0].kind !== 'steps') throw new Error('expected a step row');
+    expect(rows[0].steps).toEqual([]);
+    expect(bucketToolSteps(rows[0].steps)).toEqual([]);
+  });
+
+  it('does not merge a placeholder into another agent\'s run', () => {
+    const rows = buildTranscriptRows([step({ sender_id: 'a' }), thinking('1s', { sender_id: 'b' })]);
+    expect(rows.map(row => row.kind)).toEqual(['steps', 'steps']);
+  });
+
+  it('hands the elapsed on as a settled thought once the placeholder becomes the reply', () => {
+    const reply = msg({ sender_kind: 'agent', sender_id: 'agent-1', content: 'Here is the answer' });
+    const rows = buildTranscriptRows([step(), reply], id => (id === reply.id ? '15s' : ''));
+    expect(rows.map(row => row.kind)).toEqual(['steps', 'message']);
+    if (rows[0].kind !== 'steps') return;
+    expect(rows[0].thoughts).toEqual([{ id: reply.id, elapsed: '15s' }]);
+  });
+
+  it('gives the thought a chip row of its own when no run precedes the reply', () => {
+    const reply = msg({ sender_kind: 'agent', sender_id: 'agent-1', content: 'Here is the answer' });
+    const rows = buildTranscriptRows(
+      [msg({ role: 'user', sender_id: 'user-1' }), reply],
+      id => (id === reply.id ? '15s' : ''),
+    );
+    expect(rows.map(row => row.kind)).toEqual(['message', 'steps', 'message']);
+    if (rows[1].kind !== 'steps') return;
+    // Sits directly above the reply, and never steals the scroll anchor from it.
+    expect(rows[1].thoughts).toEqual([{ id: reply.id, elapsed: '15s' }]);
+    expect(rows[1].index).toBe(-1);
+    expect(rows[2].kind === 'message' && rows[2].message.id).toBe(reply.id);
+  });
+
+  it('does not attach a thought to a run belonging to a different sender', () => {
+    const reply = msg({ sender_kind: 'agent', sender_id: 'agent-2', content: 'done' });
+    const rows = buildTranscriptRows([step({ sender_id: 'agent-1' }), reply], id => (id === reply.id ? '15s' : ''));
+    expect(rows.map(row => row.kind)).toEqual(['steps', 'steps', 'message']);
+    if (rows[0].kind !== 'steps') return;
+    expect(rows[0].thoughts).toEqual([]);
+  });
+
+  it('reads the memo the live chip wrote when no lookup is supplied', () => {
+    const reply = msg({ sender_kind: 'agent', sender_id: 'agent-1', content: 'done' });
+    rememberThinkingElapsed(reply.id, '7s');
+    const rows = buildTranscriptRows([step(), reply]);
+    if (rows[0].kind !== 'steps') throw new Error('expected a step row');
+    expect(rows[0].thoughts).toEqual([{ id: reply.id, elapsed: '7s' }]);
+  });
+
+  it('shows no thought chip for a run this client never watched', () => {
+    const rows = buildTranscriptRows([step(), msg({ sender_id: 'agent-1', content: 'done' })]);
+    if (rows[0].kind !== 'steps') throw new Error('expected a step row');
+    expect(rows[0].thoughts).toEqual([]);
+  });
+
+  it('still marks a run ended once its placeholder has turned into a reply', () => {
+    const rows = buildTranscriptRows([thinking(), step(), msg({ sender_id: 'agent-1', content: 'done' })]);
+    expect(rows[0].kind === 'steps' && rows[0].endedByReply).toBe(true);
   });
 });

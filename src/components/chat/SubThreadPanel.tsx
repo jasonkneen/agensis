@@ -100,8 +100,9 @@ export function SubThreadPanel({
 
   const participants = Array.isArray(session.participants) ? session.participants : [];
   const agentParticipants = participants.filter(p => p.kind === 'agent');
-  // Consecutive tool steps collapse into one chip row here too — same rules as the
-  // channel transcript, just the compact spacing of a side panel.
+  // Consecutive tool steps — and the live "Thinking …" placeholder between them —
+  // collapse into one chip row here too: same rules as the channel transcript, just
+  // the compact spacing of a side panel.
   const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
@@ -255,7 +256,7 @@ export function SubThreadPanel({
                     if (row.kind === 'steps') {
                       return (
                         <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
-                          <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} compact />
+                          <ToolStepGroup row={row} compact />
                         </MessageScrollerItem>
                       );
                     }

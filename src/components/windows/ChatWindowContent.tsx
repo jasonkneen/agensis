@@ -1528,7 +1528,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                       if (row.kind === 'steps') {
                         return (
                           <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
-                            <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} />
+                            <ToolStepGroup row={row} />
                           </MessageScrollerItem>
                         );
                       }
@@ -2326,6 +2326,10 @@ function ChatMessageBubble({
           </div>
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
+            {/* buildTranscriptRows now diverts activity placeholders into the chip
+                strip, so this branch no longer fires from the transcript. Kept as the
+                floor: anything that renders a bubble straight from a message (a thread
+                parent, a future surface) must not print "Thinking 15s" as prose. */}
             {isThinkingPlaceholder ? (
               <ThinkingIndicator text={placeholderText} />
             ) : displayContent ? (

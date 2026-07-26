@@ -113,7 +113,9 @@ export function ChatThreadPanel({
   const [broadcastToChannel, setBroadcastToChannel] = useState(false);
   const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
   // Steps land here (threaded under the agent's reply), so they must be chips in the
-  // panel too — a run of four is four chips, not four bubbles.
+  // panel too — a run of four is one summary chip, not four bubbles. The agent's
+  // "Thinking …" placeholder rides in that same strip rather than as a bubble of
+  // its own; three of those stacked in a thread was the whole reason for this.
   const replyRows = buildTranscriptRows(replies);
 
   useEffect(() => {
@@ -174,7 +176,7 @@ export function ChatThreadPanel({
                     if (row.kind === 'steps') {
                       return (
                         <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
-                          <ToolStepGroup steps={row.steps} endedByReply={row.endedByReply} compact />
+                          <ToolStepGroup row={row} compact />
                         </MessageScrollerItem>
                       );
                     }
