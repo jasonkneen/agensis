@@ -13,15 +13,19 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useThreadItems } from '@/hooks/useThreadItems';
+import { RAIL_ANIMATION_MS, type RailLayout } from '@/lib/threadWidgetRail';
 import type { ThreadItem, ThreadItemKind } from '@/types';
 
 // ---------------------------------------------------------------------------
-// Floating widget overlay — cards float over the empty right gutter of the
+// Floating widget overlay — cards float in the empty right gutter of the
 // message list (NOT a side panel). The overlay wrapper is click-through
 // (pointer-events-none); only the cards themselves capture events, so the
-// messages underneath stay scrollable/clickable in the gaps. The parent
-// reserves matching right padding on the message column so a card never sits
-// on top of message text.
+// messages underneath stay scrollable/clickable in the gaps.
+//
+// Whether the rail is open at all, and whether the chat body makes room for it
+// or it floats on top, is decided by the parent from `src/lib/threadWidgetRail`
+// — this component reports the two facts that decision needs (does the session
+// have any items, how wide is the message surface) and renders the answer.
 //
 // Layout (which widgets, their size + order) persists per session in
 // localStorage so the arrangement survives reloads without a backend table.
@@ -52,6 +56,11 @@ function layoutKey(sessionId: string) {
   return `thread-widgets:${sessionId}`;
 }
 
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+}
+
 function loadWidgets(sessionId: string): WidgetLayout[] {
   try {
     const raw = localStorage.getItem(layoutKey(sessionId));
@@ -74,8 +83,14 @@ interface ThreadWidgetRailProps {
   sessionId: string | null;
   userId?: string;
   accent?: string;
-  collapsed: boolean;
-  onTooNarrowChange?: (tooNarrow: boolean) => void;
+  /** Decided by the parent via `resolveRailState`. */
+  open: boolean;
+  /** `gutter` = the chat body made room; `overlay` = we're floating on top of it. */
+  layout: RailLayout;
+  /** Width of the message surface, so the parent can pick the layout. */
+  onSurfaceWidthChange?: (width: number) => void;
+  /** Whether this session has any widget items — drives the auto-show. */
+  onContentChange?: (hasContent: boolean) => void;
   onJumpToMessage?: (messageId: string) => void;
   onBlockerAnswered?: (item: ThreadItem, response: string) => void;
 }
@@ -85,12 +100,14 @@ export function ThreadWidgetRail({
   sessionId,
   userId,
   accent,
-  collapsed,
-  onTooNarrowChange,
+  open,
+  layout,
+  onSurfaceWidthChange,
+  onContentChange,
   onJumpToMessage,
   onBlockerAnswered,
 }: ThreadWidgetRailProps) {
-  const { byKind, loading, toggleDone, answerBlocker, deleteItem } = useThreadItems(
+  const { items, byKind, loading, toggleDone, answerBlocker, deleteItem } = useThreadItems(
     workspaceId,
     sessionId,
     userId,
@@ -108,23 +125,52 @@ export function ThreadWidgetRail({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  // Responsive: when the chat surface is too narrow for the cards to float
-  // without covering messages, hide the whole rail behind the reopen button.
+  // Report the message surface's width up so the parent can decide whether the
+  // rail sits beside the conversation, floats over it, or stays hidden. The
+  // observed element is the surface itself — never the padded scroll viewport,
+  // or reserving space for the rail would shrink the thing we're measuring.
   const rootRef = useRef<HTMLDivElement>(null);
-  const [tooNarrow, setTooNarrow] = useState(false);
   useEffect(() => {
     const host = rootRef.current?.parentElement;
     if (!host || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(entries => {
-      for (const e of entries) {
-        const narrow = e.contentRect.width < 520;
-        setTooNarrow(narrow);
-        onTooNarrowChange?.(narrow);
-      }
+      for (const e of entries) onSurfaceWidthChange?.(e.contentRect.width);
     });
     ro.observe(host);
     return () => ro.disconnect();
-  }, [sessionId, onTooNarrowChange]);
+  }, [sessionId, onSurfaceWidthChange]);
+
+  // The auto-show signal: any item of any kind counts, including done ones —
+  // a finished checklist is still something the reader may want to see.
+  const hasContent = items.length > 0;
+  useEffect(() => {
+    onContentChange?.(hasContent);
+  }, [hasContent, onContentChange]);
+
+  // Slide/fade in and out. `rendered` keeps the cards mounted through the exit
+  // transition; `shown` drives the classes one frame later so the browser has a
+  // start state to animate FROM. Under prefers-reduced-motion both flip at once
+  // and the CSS transition is off, so the rail is simply present or absent.
+  const [rendered, setRendered] = useState(open);
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (prefersReducedMotion()) {
+      setRendered(open);
+      setShown(open);
+      return;
+    }
+    if (open) {
+      setRendered(true);
+      let inner = 0;
+      const outer = requestAnimationFrame(() => {
+        inner = requestAnimationFrame(() => setShown(true));
+      });
+      return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+    }
+    setShown(false);
+    const timer = window.setTimeout(() => setRendered(false), RAIL_ANIMATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [open]);
 
   // Load the saved arrangement whenever the thread changes.
   useEffect(() => {
@@ -177,24 +223,38 @@ export function ThreadWidgetRail({
 
   if (!sessionId || !workspaceId) return null;
 
-  const hidden = collapsed || tooNarrow;
-
   return (
     // Click-through overlay pinned to the right gutter of the message surface.
-    // The container stays mounted even when hidden so the ResizeObserver keeps
-    // reporting width; the toggle now lives in the chat header (not here), so
+    // The container stays mounted even when closed so the ResizeObserver keeps
+    // reporting width; the toggle lives in the channel toolbar (not here), so
     // it no longer clashes with the per-message action toolbar.
-    <div ref={rootRef} className="thread-widget-overlay pointer-events-none absolute inset-y-0 right-2 z-10 flex w-[272px] flex-col gap-2 px-3 py-3">
-      {!hidden && (
+    <div
+      ref={rootRef}
+      data-rail-layout={layout}
+      className={cn(
+        'thread-widget-overlay pointer-events-none absolute inset-y-0 right-2 z-10 flex w-[272px] flex-col gap-2 px-3 py-3',
+        // `translate`, not `transform` — Tailwind v4's translate-* utilities set
+        // the standalone `translate` property, so a transform transition here
+        // would fade the rail in while snapping it sideways.
+        'transition-[opacity,translate] ease-out motion-reduce:transition-none',
+        shown ? 'translate-x-0 opacity-100' : 'translate-x-6 opacity-0',
+      )}
+      style={{ transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+      // `inert` rather than aria-hidden: the cards stay mounted through the
+      // 200ms exit, and aria-hidden over something still tabbable is the one
+      // combination screen readers and Chrome both complain about.
+      inert={!shown}
+    >
+      {rendered && (
         <>
           {/* re-add chips for any widget the user has closed */}
           {closedKinds.length > 0 && (
-            <div className="pointer-events-auto flex shrink-0 flex-wrap items-center justify-end gap-1">
+            <div className={cn('flex shrink-0 flex-wrap items-center justify-end gap-1', shown ? 'pointer-events-auto' : 'pointer-events-none')}>
               {closedKinds.map(kind => (
                 <button
                   key={kind}
                   type="button"
-                  className="control-outer-ring pointer-events-auto flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                  className="control-outer-ring flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
                   title={`Add ${KIND_META[kind].label} widget`}
                   onClick={() => addWidget(kind)}
                 >
@@ -205,7 +265,10 @@ export function ThreadWidgetRail({
             </div>
           )}
 
-          <div className="pointer-events-auto grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:clamp(116px,26vh,180px)]">
+          <div className={cn(
+            'grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:clamp(116px,26vh,180px)]',
+            shown ? 'pointer-events-auto' : 'pointer-events-none',
+          )}>
             {widgets.map((w, index) => (
               <WidgetCard
                 key={w.kind}
