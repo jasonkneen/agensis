@@ -42,6 +42,8 @@ const {
  createDbRateLimiter,
  evaluatePasswordServerSide,
  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
+ normalizeFeedbackSubmission,
+ insertFeedbackReport,
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 
@@ -1085,6 +1087,46 @@ async function ensureRuntimeSchema() {
   console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
  }
 
+ // In-app feedback -> System workspace.
+ //
+ // The System workspace is an ORDINARY workspace carrying `is_system = true`, so
+ // membership, roles, invites and the whole task UI apply to it unchanged. The
+ // PARTIAL unique index is what makes "the System workspace" singular and makes
+ // ensureSystemWorkspace race-safe across Fly machines and Netlify lambdas: two
+ // concurrent first-ever submissions cannot create two of them.
+ //
+ // tasks.source_type gains 'feedback' because a report IS a task — reusing the
+ // existing table is what gives assignment and agent dispatch for free. The
+ // CHECK is dropped and re-added rather than altered (Postgres has no ALTER
+ // CONSTRAINT for CHECK); the name is deterministic for both an inline column
+ // check and this statement, so it stays idempotent across re-runs.
+ await db.unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
+
+    ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
+    ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
+      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+
+    CREATE TABLE IF NOT EXISTS feedback_reports (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      task_id uuid REFERENCES tasks(id) ON DELETE CASCADE,
+      reporter_id uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      source_workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      description text NOT NULL DEFAULT '',
+      page jsonb NOT NULL DEFAULT '{}'::jsonb,
+      selections jsonb NOT NULL DEFAULT '[]'::jsonb,
+      diagnostics jsonb,
+      build_id text DEFAULT '',
+      user_agent text DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_workspace_id ON feedback_reports(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_task_id ON feedback_reports(task_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);
+  `);
+
  // Huddle tables live in server/huddles.cjs so the LiveKit surface stays in one
  // module, but the DDL runs HERE so the three-place rule holds and a fresh Fly
  // boot provisions them like everything else.
@@ -1537,6 +1579,7 @@ const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // CSP violation reports are browser-generated and unauthenticated, so they are
 // keyed per-IP and kept cheap — a page in a redirect loop can emit a lot.
 const cspReportRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -1547,6 +1590,10 @@ const cspReportRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const dbQuery = (sql, params) => getDb().unsafe(sql, params);
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'dispatch' });
+// Feedback: any signed-in user may submit, so this is the only thing standing
+// between one account and an unbounded write into the System workspace's task
+// list. Tight on purpose — nobody files five genuine bug reports a minute.
+const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
 
 // Async layered gate: returns true (and writes 429) when EITHER layer blocks.
 // Callers MUST `await` this — an un-awaited call returns a truthy Promise and
@@ -9445,6 +9492,54 @@ function createApp() {
     [String(req.userId), workspaceId, contextKey, readAt.toISOString()],
    );
    res.json({ data: { ok: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- In-app feedback -------------------------------------------------------
+ //
+ // SUBMIT is open to any authenticated user and rate limited; READ is not here
+ // at all. Reports are read as ordinary rows of the System workspace through
+ // the generic /backend/db gate, so "only members of the System workspace can
+ // see feedback" is the same membership check as every other table rather than
+ // a second authorization path written by hand.
+ //
+ // The client does NOT choose the destination workspace. It cannot: the body
+ // has no workspace field for the report's home, only `sourceWorkspaceId`
+ // (where the user was standing), which is recorded as context and never used
+ // for authorization. ensureSystemWorkspace resolves the target server-side.
+ app.post('/backend/feedback', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, feedbackRateLimiter, feedbackDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   // Re-validate, re-clamp and RE-REDACT. The browser already redacted before
+   // sending, but a request that did not come from our client would not have,
+   // and a feedback endpoint that trusts the caller to have scrubbed its own
+   // console is not a control at all.
+   const submission = normalizeFeedbackSubmission(req.body);
+   const sourceWorkspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim() || null;
+   const result = await insertFeedbackReport({
+    db: dbQuery,
+    // postgres.js: bind the OBJECT. JSON.stringify here would store a jsonb
+    // string scalar and every `diagnostics->>'…'` would silently return NULL.
+    // Verified against the live database — see insertFeedbackReport's comment.
+    jsonParam: (value) => value,
+    userId: req.userId,
+    sourceWorkspaceId,
+    submission,
+   });
+   // Fan the new task out to anyone with the System workspace open, so a report
+   // appears in the review list without a reload. Re-selected rather than
+   // returned from the insert because the fanout carries the whole row, and the
+   // insert only needs the id. Fly only: Netlify has no WebSocket layer.
+   // Never lets a broadcast failure fail an accepted report.
+   try {
+    const taskRows = await dbQuery('select * from tasks where id = $1', [result.taskId]);
+    if (taskRows.length > 0) notifyDbSubscribers('tasks', 'INSERT', taskRows);
+   } catch (error) {
+    console.warn('[feedback] realtime fanout failed:', error.message || error);
+   }
+   res.json({ data: { ok: true, taskId: result.taskId }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

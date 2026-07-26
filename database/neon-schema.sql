@@ -810,3 +810,50 @@ CREATE TABLE IF NOT EXISTS huddle_events (
 CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, created_at, seq);
 CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
+
+-- ---------------------------------------------------------------------------
+-- In-app feedback -> the System workspace.
+--
+-- A feedback report is an ORDINARY task in an ORDINARY workspace: the only new
+-- concept is `workspaces.is_system`, a flag on one workspace that the app
+-- routes reports into. Members, roles, invites, assignment and agent dispatch
+-- all work on it unchanged, and there is no second todo system to keep in sync.
+--
+-- The PARTIAL unique index is what makes "the System workspace" singular, and
+-- what makes ensureSystemWorkspace (shared/backend-core.cjs) race-safe: two
+-- concurrent first-ever submissions cannot create two of them.
+-- ---------------------------------------------------------------------------
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
+
+-- 'feedback' provenance. Dropped and re-added because Postgres has no ALTER for
+-- a CHECK constraint; the name is deterministic (matching the inline column
+-- check above), so re-running this file is idempotent.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
+  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+
+-- The bulky half of a report. Kept out of `tasks` deliberately: task rows are
+-- fanned out over realtime to every workspace client, and a few hundred console
+-- lines per row does not belong in that broadcast. `tasks.source_id` holds this
+-- row's id, so the task alone is enough to find the diagnostics.
+CREATE TABLE IF NOT EXISTS feedback_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  task_id uuid REFERENCES tasks(id) ON DELETE CASCADE,
+  reporter_id uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  -- The workspace the reporter was LOOKING AT, which is not the workspace the
+  -- report lands in. Nullable and ON DELETE SET NULL: reports outlive it.
+  source_workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  description text NOT NULL DEFAULT '',
+  page jsonb NOT NULL DEFAULT '{}'::jsonb,
+  selections jsonb NOT NULL DEFAULT '[]'::jsonb,
+  diagnostics jsonb,
+  build_id text DEFAULT '',
+  user_agent text DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_workspace_id ON feedback_reports(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_task_id ON feedback_reports(task_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);

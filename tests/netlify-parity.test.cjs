@@ -92,6 +92,10 @@ const PROTECTED_ROUTES = [
   ['POST', '/backend/ai-chat'],
   ['POST', '/backend/agent-webhooks'],
   ['POST', '/backend/agents/agent-123/connection-command'],
+  // Feedback submission is open to ANY signed-in user, which makes it easy to
+  // mistake for a public endpoint. It is not: it writes a task into the System
+  // workspace, so it must still refuse an anonymous caller.
+  ['POST', '/backend/feedback'],
 ];
 
 for (const [method, pathname] of PROTECTED_ROUTES) {
