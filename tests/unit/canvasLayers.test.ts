@@ -28,7 +28,7 @@ describe('rowToCanvasLayer', () => {
 
   it('fills the defaults the canvas renders against', () => {
     const result = rowToCanvasLayer({ layer_id: 'base', name: null, background_opacity: null, background_image: null })
-    expect(result.name).toBe('Workspace')
+    expect(result.name).toBe('Desktop')
     expect(result.background_opacity).toBe(0.42)
     expect(result.background_image).toBe('')
     expect(result.sort_order).toBe(0)
@@ -73,7 +73,7 @@ describe('layersToAdopt', () => {
     // stranded just because this browser never heard of it.
     const adopt = layersToAdopt([layer({ id: 'base' })], [], ['base', 'canvas_x', 'canvas_x'], false)
     expect(adopt.map(l => l.id)).toEqual(['canvas_x'])
-    expect(adopt[0].name).toBe('Shared workspace 1')
+    expect(adopt[0].name).toBe('Shared desktop 1')
   })
 
   it('adopts nothing when every layer already has a row', () => {
@@ -82,8 +82,8 @@ describe('layersToAdopt', () => {
   })
 
   it('names derived layers deterministically and past the names already taken', () => {
-    const adopt = layersToAdopt([layer({ id: 'base', name: 'Shared workspace 1' })], [], ['b_two', 'a_one'], false)
-    expect(adopt.map(l => l.name)).toEqual(['Shared workspace 2', 'Shared workspace 3'])
+    const adopt = layersToAdopt([layer({ id: 'base', name: 'Shared desktop 1' })], [], ['b_two', 'a_one'], false)
+    expect(adopt.map(l => l.name)).toEqual(['Shared desktop 2', 'Shared desktop 3'])
     // Sorted by id, so two clients derive the same name for the same layer.
     expect(adopt.map(l => l.id)).toEqual(['a_one', 'b_two'])
   })

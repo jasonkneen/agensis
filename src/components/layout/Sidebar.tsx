@@ -151,6 +151,7 @@ function AgentStatusFeedOverlay({
 }
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
+import { partitionSidebarSessions } from '../../lib/sidebarSessions';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 
@@ -194,8 +195,6 @@ type SidebarMessageTarget = SidebarAgentTarget & {
 interface SidebarProps {
  workspace: Workspace | null;
  activeLayerName?: string;
- /** Active canvas layer (project) id. Channel/thread sessions are scoped to it; a null session canvas_id is unassigned and shown in every project. */
- activeCanvasId?: string | null;
  collapsed: boolean;
  // Phone drawer mode: the sidebar floats as an off-canvas overlay, so it must
  // NOT inset the workspace viewport — the canvas keeps the full screen width.
@@ -261,7 +260,6 @@ interface SidebarProps {
 export const Sidebar = React.memo(function Sidebar({
  workspace,
  activeLayerName,
- activeCanvasId,
  collapsed,
  overlay = false,
  titlebarInset = 0,
@@ -373,25 +371,17 @@ export const Sidebar = React.memo(function Sidebar({
   () => buildDirectAgents(agents, agentConnections, favoriteAgentKeys),
   [agents, agentConnections, favoriteAgentKeys],
  );
- const inActiveCanvas = React.useCallback((session: ChatSession) => {
-  // A session with no canvas_id is unassigned and shows in every project.
-  // When no active canvas is known, don't hide anything.
-  if (!activeCanvasId) return true;
-  const canvas = session.canvas_id ?? null;
-  return canvas === null || canvas === activeCanvasId;
- }, [activeCanvasId]);
+ // Channels, DMs and threads belong to the WORKSPACE and are listed on every
+ // desktop of it. A desktop is a window/wallpaper configuration, not a place
+ // content lives, so nothing here is filtered by the open desktop — see
+ // partitionSidebarSessions for why that filter was removed.
  const { activeChannelSessions, directSessions, threadSessions } = React.useMemo(() => {
-  const activeSessions = uniqueSessions.filter(session => !session.archived_at);
-  // Channels and threads belong to a project; DMs are agent-keyed and stay
-  // global across projects, so only channels/threads are canvas-scoped.
-  const direct = activeSessions.filter(isDirectSession);
-  const threads = activeSessions.filter(session => !isDirectSession(session) && isThreadSession(session) && inActiveCanvas(session));
-  return {
-   activeChannelSessions: activeSessions.filter(session => !isDirectSession(session) && !isThreadSession(session) && inActiveCanvas(session)),
-   directSessions: direct,
-   threadSessions: threads,
-  };
- }, [uniqueSessions, inActiveCanvas]);
+  const { channels, direct, threads } = partitionSidebarSessions(uniqueSessions, {
+   isDirect: isDirectSession,
+   isThread: isThreadSession,
+  });
+  return { activeChannelSessions: channels, directSessions: direct, threadSessions: threads };
+ }, [uniqueSessions]);
  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
  // A split of a DM is itself a DM session (same agent participant), so the
  // per-agent dedup in buildDirectMessageTargets would otherwise swallow it and
@@ -499,9 +489,12 @@ export const Sidebar = React.memo(function Sidebar({
      <PanelLeft />
     </Button>
     <Separator />
-    <SidebarRailButton icon={<Layers3 />} title="Switch workspace" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
+    {/* Desktops, not workspaces: this opens the desktop grid, and the workspace
+        rail immediately to the left is what switches workspaces. Labelling both
+        "workspace" is what made the two concepts indistinguishable. */}
+    <SidebarRailButton icon={<Layers3 />} title="Switch desktop" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
     <SidebarRailButton icon={<Plus />} title="Create workspace" onClick={onCreateWorkspace} />
-    <SidebarRailButton icon={<Settings />} title="Workspace settings" onClick={onOpenSettings} />
+    <SidebarRailButton icon={<Settings />} title="Desktop settings" onClick={onOpenSettings} />
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
@@ -591,7 +584,7 @@ export const Sidebar = React.memo(function Sidebar({
        type="button"
        className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
        onClick={onOpenWorkspaceGrid || onCreateWorkspace}
-       aria-label="Switch workspace"
+       aria-label="Switch desktop"
       >
        <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
       </button>

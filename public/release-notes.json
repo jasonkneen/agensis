@@ -1,5 +1,19 @@
 [
   {
+    "version": "workspaces-and-desktops",
+    "date": "2026-07-26",
+    "title": "Workspaces and desktops, told apart at last",
+    "summary": "A workspace is a project — its own agents, its own setup. A desktop is one arrangement of windows and wallpaper inside it. Both used to be called \"workspace\", and the full-screen switcher showed you desktops under the heading \"All workspaces\". It now shows your workspaces along the top and the desktops of whichever one you pick below them.",
+    "highlights": [
+      "Pick a workspace at the top; its desktops appear underneath, always under that workspace's name",
+      "Your channels, DMs, documents, tasks and agents belong to the workspace — they are on every desktop of it now, instead of vanishing when you switched desktop",
+      "\"New workspace\" makes a project; \"New desktop\" makes an arrangement of windows — no more guessing which",
+      "The first desktop in a workspace is called \"Main\"; extra ones are \"Desktop 2\", \"Desktop 3\"",
+      "The sidebar's layers button now says \"Switch desktop\", since the left rail is what switches workspaces",
+      "Nothing was renamed for you — desktops you have already named keep their names"
+    ]
+  },
+  {
     "version": "filters-persist",
     "date": "2026-07-26",
     "title": "Your filters stay put",
