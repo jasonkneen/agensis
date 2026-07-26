@@ -15,8 +15,9 @@ export interface Workspace {
   * The System workspace: where in-app feedback reports land as ordinary tasks.
   * A flag, not a type — it has members, roles and invites like any other
   * workspace, and only one row may carry it (partial unique index
-  * `uq_workspaces_system`). Absent from the `/backend/workspaces` projection,
-  * which lists its columns explicitly; present on generic `select('*')` reads.
+  * `uq_workspaces_system`). Included in the `/backend/workspaces` projection
+  * (which lists its columns explicitly) so the workspace rail can group it
+  * below a divider; also present on generic `select('*')` reads.
   */
  is_system?: boolean;
  version?: number;

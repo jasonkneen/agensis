@@ -729,6 +729,10 @@ function publicWorkspace(row) {
   id: row.id,
   name: row.name,
   description: row.description || '',
+  // Mirrors server/index.cjs — the workspace rail paints `icon` and groups
+  // `is_system` apart, and it reads whichever backend answered.
+  icon: row.icon || '',
+  is_system: row.is_system === true,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -871,7 +875,7 @@ async function ensureCursorBuddyConnectionKeyTables() {
 
 async function handleWorkspaces(userId) {
  const rows = await query(
-  `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+  `select w.id, w.name, w.description, w.icon, w.is_system, w.local_path, w.project_kind, w.git_root, w.git_remote,
             w.created_at, w.updated_at,
             case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
      from workspaces w

@@ -1762,6 +1762,12 @@ function publicWorkspace(row) {
   id: row.id,
   name: row.name,
   description: row.description || '',
+  // The workspace switcher rail paints `icon` (an emoji) on each tile and
+  // groups `is_system` apart. Both must survive this projection — the rail
+  // reads the list route, and a dropped column shows up as a wall of
+  // identical initials rather than as an error.
+  icon: row.icon || '',
+  is_system: row.is_system === true,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -8809,7 +8815,7 @@ function createApp() {
  app.get('/backend/workspaces', requireAuth, async (req, res) => {
   try {
    const rows = await getDb().unsafe(
-    `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+    `select w.id, w.name, w.description, w.icon, w.is_system, w.local_path, w.project_kind, w.git_root, w.git_remote,
                 w.created_at, w.updated_at,
                 case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
          from workspaces w

@@ -170,9 +170,11 @@ const SIDEBAR_FRAME_STYLE: React.CSSProperties = {
  height: '100%',
 };
 
-// Width of the macOS traffic-light cluster in the hidden_inset_tall band. The
-// expanded header row (collapse button + workspace pill) is inset by this on the
-// desktop shell so those controls sit just to the right of the window buttons.
+// Width of the macOS traffic-light cluster in the hidden_inset_tall band, from
+// the WINDOW's left edge. The expanded header row (collapse button + workspace
+// pill) is inset by this on the desktop shell so those controls sit just to the
+// right of the window buttons — less whatever chrome (the workspace rail) is
+// already covering that band to the sidebar's left.
 const SIDEBAR_TITLEBAR_LEFT_INSET = 78;
 
 type SidebarAgentTarget = {
@@ -201,6 +203,12 @@ interface SidebarProps {
  // Desktop shell traffic-light band (~52px). Padded into the sidebar header so
  // the workspace controls sit below the macOS window buttons.
  titlebarInset?: number;
+ // Width of chrome pinned to the LEFT of this sidebar — currently the workspace
+ // switcher rail. The sidebar owns `--workspace-viewport-left`, which it derives
+ // arithmetically from its own width; without this the fallback would be short
+ // by the rail's width and every window measured from that fallback would land
+ // one rail too far left.
+ leadingInset?: number;
  onToggleCollapse: () => void;
  onOpenCommandPalette: () => void;
  onOpenWorkspaceGrid?: () => void;
@@ -257,6 +265,7 @@ export const Sidebar = React.memo(function Sidebar({
  collapsed,
  overlay = false,
  titlebarInset = 0,
+ leadingInset = 0,
  onToggleCollapse,
  onOpenCommandPalette,
  onOpenWorkspaceGrid,
@@ -417,13 +426,19 @@ export const Sidebar = React.memo(function Sidebar({
  const focusedWindowType = focusedWindow?.type;
  const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
+ // Traffic-light clearance measured from the sidebar's OWN left edge: the rail
+ // to its left already covers that much of the band, so inset by the remainder
+ // or the header ends up parked 52px further right than the window buttons.
+ const titlebarLeftInset = titlebarInset ? Math.max(0, SIDEBAR_TITLEBAR_LEFT_INSET - leadingInset) : 0;
+
  const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
   // Overlay (phone drawer): the sidebar floats above the canvas, so the
   // viewport's left inset is just the chrome gap — never the sidebar width.
   const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width);
   // Sidebar is flush to the left edge now, so the canvas starts one chrome gap
   // to the right of it (previously two gaps straddled a floating panel).
-  const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP;
+  // `leadingInset` is anything pinned further left still — the workspace rail.
+  const left = overlay ? WORKSPACE_CHROME_GAP : leadingInset + sidebarFrameWidth + WORKSPACE_CHROME_GAP;
   document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
   // Canvas viewport clears only the chrome gap at top now — the titlebar band
   // is over the sidebar (left), not the canvas column, so panels reach the top
@@ -431,7 +446,7 @@ export const Sidebar = React.memo(function Sidebar({
   document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
- }, [collapsed, overlay, titlebarInset]);
+ }, [collapsed, overlay, titlebarInset, leadingInset]);
 
  React.useEffect(() => {
   setWorkspaceViewportLeft(sidebarWidth);
@@ -556,10 +571,10 @@ export const Sidebar = React.memo(function Sidebar({
      data-sidebar-titlebar
      className="px-2 pt-2 pb-3"
      style={{
-      paddingLeft: titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : undefined,
+      paddingLeft: titlebarLeftInset || undefined,
       // Desktop traffic-light clearance, also exposed as a CSS var so themes
       // that reset the titlebar padding (neo/brutal) can still honour it.
-      '--sidebar-titlebar-inset': `${titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : 0}px`,
+      '--sidebar-titlebar-inset': `${titlebarLeftInset}px`,
      } as React.CSSProperties}
     >
      <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">

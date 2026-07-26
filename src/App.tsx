@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
+import { WorkspaceRail } from './components/layout/WorkspaceRail';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
@@ -74,7 +75,8 @@ import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
-import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT, WORKSPACE_RAIL_WIDTH } from './lib/workspaceLayout';
+import { pickInitialWorkspaceId } from './lib/workspaceRail';
 import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -125,6 +127,7 @@ const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowCont
 
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
+const ACTIVE_WORKSPACE_KEY = 'agensis_active_workspace';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
@@ -589,13 +592,17 @@ export default function App() {
   );
 }
 
-const LAST_WORKSPACE_KEY = 'agensis.workspace.last';
-
 function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth, authNotice, dismissAuthNotice } = useAuth();
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
+  // Seeded from the last workspace this browser was in, so a reload lands you
+  // back where you were instead of always on workspaces[0]. The stored id is a
+  // hint, not a promise — the effect below re-resolves it once the list arrives
+  // and falls back to the first workspace if it names one you no longer have.
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(
+    () => localStorage.getItem(ACTIVE_WORKSPACE_KEY) || '',
+  );
   const [showTour, setShowTour] = useState(false);
   const isMobile = useIsMobile();
   // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
@@ -635,23 +642,21 @@ function AppContent() {
   );
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || defaultWorkspace;
 
-  // Remember where you were. Without this the app re-picks a default on every
-  // load, so any change to the ordering — a new workspace, a touched
-  // updated_at — silently moves you to a different workspace, which reads as
-  // your data having disappeared.
-  useEffect(() => {
-    if (!activeWorkspaceId) return;
-    try { localStorage.setItem(LAST_WORKSPACE_KEY, activeWorkspaceId); } catch { /* best effort */ }
-  }, [activeWorkspaceId]);
-
   useEffect(() => {
     if (wsLoading || workspaces.length === 0) return;
-    if (workspaces.find(w => w.id === activeWorkspaceId)) return;
-    let remembered = '';
-    try { remembered = localStorage.getItem(LAST_WORKSPACE_KEY) || ''; } catch { /* ignore */ }
-    const restored = remembered && workspaces.find(w => w.id === remembered);
-    setActiveWorkspaceId((restored || defaultWorkspace)?.id || '');
-  }, [wsLoading, workspaces, activeWorkspaceId, defaultWorkspace]);
+    // One picker, tested in workspaceRail.ts: keep the id you were in if it
+    // still exists, else the first NON-SYSTEM workspace. Two competing copies of
+    // this rule is how you get an app that disagrees with its own sidebar.
+    const resolved = pickInitialWorkspaceId(activeWorkspaceId, workspaces);
+    if (resolved && resolved !== activeWorkspaceId) setActiveWorkspaceId(resolved);
+  }, [wsLoading, workspaces, activeWorkspaceId]);
+
+  // Remember the switch. Only writes ids that resolved to a real workspace —
+  // the '' bootstrap value would otherwise stomp a perfectly good stored id on
+  // every cold load, before the list has come back.
+  useEffect(() => {
+    if (activeWorkspaceId) localStorage.setItem(ACTIVE_WORKSPACE_KEY, activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   const { data: workspaceBootstrap } = useWorkspaceBootstrap(activeWorkspaceId || null);
 
@@ -1810,12 +1815,27 @@ function AppContent() {
           )}
           style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
         >
+          {/* Workspace switcher, pinned outside the sidebar. On desktop the
+              wrapper is `contents`, so this is a direct flex child of the shell
+              row and lands at the far left; on phone it rides inside the
+              off-canvas drawer beside the sidebar rather than eating screen
+              width the canvas needs. */}
+          <WorkspaceRail
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSelectWorkspace={setActiveWorkspaceId}
+            onCreateWorkspace={handleCreateWorkspace}
+            titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+          />
           <Sidebar
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
             activeCanvasId={activeLayerId}
             overlay={isMobile}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+            // The rail sits left of the sidebar, so the canvas viewport's left
+            // inset is rail + sidebar, not sidebar alone.
+            leadingInset={isMobile ? 0 : WORKSPACE_RAIL_WIDTH}
             collapsed={isMobile ? false : sidebarCollapsed}
             onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
             onOpenCommandPalette={handleOpenCommandPalette}
