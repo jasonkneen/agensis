@@ -91,11 +91,25 @@ CREATE TRIGGER trg_workspaces_reject_parent_cycle
   WHEN (NEW.parent_id IS NOT NULL)
   EXECUTE FUNCTION workspaces_reject_parent_cycle();
 
+-- THE WORKSPACE VAULT. One table, four namespaces: a platform-managed key
+-- (ANTHROPIC_API_KEY), `sandbox:<provider>:<credential>` for a provider skill's
+-- API key, `orb:<webhook id>` for an orb's signing secret, and anything else as a
+-- user-defined shared secret. Classification lives in shared/backend-core.cjs
+-- (classifyVaultKey) so both backends agree on what an entry is.
+--
+-- Deliberately NOT in the backendClient allowlists (ALLOWED_TABLES): the only
+-- doors are the dedicated manage-role routes, and none of them returns a value.
+-- The read path used by the UI is VAULT_META_SELECT, which does not select the
+-- secret columns at all.
 CREATE TABLE IF NOT EXISTS workspace_secrets (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   key text NOT NULL,
   -- Legacy plaintext column. Encrypted rows leave this empty and carry the
-  -- AES-256-GCM ciphertext in secret_cipher instead.
+  -- AES-256-GCM ciphertext in secret_cipher instead. Rows written before
+  -- encryption-at-rest landed still hold plaintext here; they are re-encrypted on
+  -- boot by reencryptLegacyPlaintextSecrets (server/index.cjs) rather than by a
+  -- migration, because the key is derived in the app from
+  -- SECRETS_ENCRYPTION_KEY/AUTH_SECRET and Postgres has no access to it.
   value text NOT NULL DEFAULT '',
   secret_cipher text DEFAULT '',
   description text DEFAULT '',

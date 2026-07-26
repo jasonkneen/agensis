@@ -25,9 +25,12 @@ const {
  PROVIDER_CALL_REDIRECT_NOTE,
  SANDBOX_VAULT_PREFIX,
  applyProviderCredential,
+ bundledCredentialEnvVar,
  describeProviderCall,
+ envConfiguredCredentialKeys,
  fenceProviderOutput,
  parseSandboxCredentialKey,
+ providerCredentialSlots,
  planProviderCall,
  redactSandboxSecrets,
  renderSandboxSkillPrompt,
@@ -91,6 +94,17 @@ const {
  insertFeedbackReport,
  assertWorkspaceRole: sharedAssertWorkspaceRole,
  userCanAccessWorkspace: sharedUserCanAccessWorkspace,
+ // The vault surface — one classification, shared with the Netlify mirror.
+ VAULT_KEY_RE,
+ VAULT_SECRET_COLUMNS,
+ classifyVaultKey,
+ credentialLabel,
+ listWorkspaceVaultEntries,
+ listWorkspaceSecretMeta,
+ encryptVaultSecret: coreEncryptVaultSecret,
+ decryptVaultSecret: coreDecryptVaultSecret,
+ getWorkspaceSecretValue: coreGetWorkspaceSecretValue,
+ setWorkspaceSecretValue: coreSetWorkspaceSecretValue,
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
@@ -194,12 +208,6 @@ function loadEnvFile() {
 // in this list is rejected so the endpoint can't write arbitrary settings.
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
 
-function maskSecret(value) {
- if (!value) return '';
- if (value.length <= 8) return '••••••';
- return `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
-
 // Global settings are persisted in app_settings. Workspace-managed secrets live
 // in workspace_secrets so member roles can gate reads/writes per workspace.
 async function getSettingValue(key) {
@@ -225,7 +233,19 @@ async function resolveSecret(key, workspaceId = null) {
  return dbValue || process.env[key] || '';
 }
 
+// Managed-key STATE, never any part of a value.
+//
+// This used to return `preview: maskSecret(value)`, and when the workspace had no
+// key of its own that preview was of the PLATFORM key — so every workspace
+// owner was shown the first four and last four characters of the app-level
+// ANTHROPIC_API_KEY. `scope` already says which key is in play; the preview only
+// leaked. Same rule as every other vault entry now: configured, when, nothing else.
 async function listManagedSecrets(workspaceId = null) {
+ const meta = new Map();
+ if (workspaceId) {
+  const rows = await listWorkspaceSecretMeta(workspaceId, { db: dbUnsafe }).catch(() => []);
+  for (const row of rows) meta.set(row.key, row);
+ }
  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
   const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
   const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
@@ -233,8 +253,8 @@ async function listManagedSecrets(workspaceId = null) {
   return {
    key,
    configured: !!value,
-   preview: maskSecret(value),
    scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+   updated_at: meta.get(key)?.updated_at || null,
   };
  }));
 }
@@ -555,6 +575,54 @@ function getDatabaseUrl() {
 function getAnthropicApiKey(workspaceId = null) {
  // DB-stored key first (set via Settings → Secret keys), env var as fallback.
  return resolveSecret('ANTHROPIC_API_KEY', workspaceId);
+}
+
+/**
+ * Encryption-at-rest backfill for the workspace vault.
+ *
+ * The write path has encrypted for a while (setWorkspaceSecretValue stores
+ * AES-256-GCM ciphertext in `secret_cipher` and writes `value = ''`), but rows
+ * created BEFORE that landed still hold plaintext in `value`, and the read path
+ * still falls back to it. Nothing re-encrypted them: a legacy row was only fixed
+ * if someone happened to re-enter that secret. This closes the gap on boot.
+ *
+ * A SQL migration cannot do this — the encryption key is derived in the app from
+ * SECRETS_ENCRYPTION_KEY/AUTH_SECRET, which Postgres has no access to. So it is
+ * runtime work, idempotent (the WHERE clause matches only unencrypted rows, and
+ * each row it fixes stops matching), and silent about content: the count is
+ * logged, never a key's value, and the plaintext is overwritten with '' in the
+ * same statement that stores the cipher.
+ */
+async function reencryptLegacyPlaintextSecrets(db) {
+ try {
+  const rows = await db.unsafe(
+   `select workspace_id, key, value from workspace_secrets
+      where coalesce(value, '') <> '' and coalesce(secret_cipher, '') = ''`,
+  );
+  if (rows.length === 0) return 0;
+  let fixed = 0;
+  for (const row of rows) {
+   try {
+    const cipher = await encryptVaultSecret(row.value);
+    await db.unsafe(
+     `update workspace_secrets set secret_cipher = $3, value = ''
+        where workspace_id = $1 and key = $2`,
+     [row.workspace_id, row.key, cipher],
+    );
+    fixed += 1;
+   } catch {
+    // One unencryptable row must not stop the rest, and must not print anything:
+    // the row's KEY is safe to name but its value is not, and an error object from
+    // this path could carry the input. A count is enough to act on.
+   }
+  }
+  console.log(`[vault] re-encrypted ${fixed} legacy plaintext secret row(s)`);
+  return fixed;
+ } catch {
+  // A schema that predates secret_cipher, or a DB that is not reachable yet, must
+  // not wedge boot. The read path still handles a plaintext row.
+  return 0;
+ }
 }
 
 async function ensureRuntimeSchema() {
@@ -1113,6 +1181,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
+ await reencryptLegacyPlaintextSecrets(db);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS gateway_configs (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1561,59 +1630,51 @@ function flowConnectionRecord(row) {
   createdAt: Date.parse(row.created_at),
  };
 }
+// Both vault helpers delegate to shared/backend-core.cjs. They used to be a
+// second copy of the same SQL + the same AES-256-GCM derivation, which is how the
+// Netlify mirror once ended up writing plaintext next to a stale cipher. One
+// implementation, two callers. `loadEnvFile()` first because a locally-run server
+// reads SECRETS_ENCRYPTION_KEY out of `.env`, and the core reads only process.env.
 async function getWorkspaceSecretValue(workspaceId, key) {
- if (!workspaceId) return '';
- const rows = await getDb().unsafe(
-  'select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
-  [workspaceId, key],
- );
- if (!rows[0]) return '';
- // Prefer the encrypted column; fall back to the legacy plaintext value for rows
- // written before encryption-at-rest landed (they get re-encrypted on next write).
- if (rows[0].secret_cipher) {
-  try { return await decryptVaultSecret(rows[0].secret_cipher); } catch { return ''; }
- }
- return rows[0].value || '';
+ loadEnvFile();
+ return coreGetWorkspaceSecretValue(workspaceId, key, { db: dbUnsafe, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId, description) {
- const cipher = value ? await encryptVaultSecret(value) : '';
- await getDb().unsafe(
-  `insert into workspace_secrets (workspace_id, key, value, secret_cipher, description, updated_by, updated_at)
-     values ($1, $2, '', $3, coalesce($4, ''), $5, now())
-     on conflict (workspace_id, key)
-     do update set value = '', secret_cipher = excluded.secret_cipher,
-       description = coalesce($4, workspace_secrets.description),
-       updated_by = excluded.updated_by, updated_at = now()`,
-  [workspaceId, key, cipher, description ?? null, userId || null],
- );
+ loadEnvFile();
+ await coreSetWorkspaceSecretValue(workspaceId, key, value, {
+  db: dbUnsafe,
+  getAuthSecret,
+  userId: userId || null,
+  description: description ?? null,
+ });
+}
+
+// The shared core takes a `db(sql, params)` function; this server holds a
+// postgres.js instance whose `.unsafe` has that shape.
+function dbUnsafe(sql, params) {
+ return getDb().unsafe(sql, params);
 }
 async function flowSecretKey() {
  const authSecret = await getAuthSecret();
  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
 }
-// Generic AES-256-GCM key for workspace vault secrets. Prefers a dedicated
-// SECRETS_ENCRYPTION_KEY so secrets survive an AUTH_SECRET rotation; falls back to
-// AUTH_SECRET only when unset. Rotating whichever key is in use re-locks stored
-// secrets, which must then be re-entered.
-async function vaultSecretKey() {
- loadEnvFile();
- const dedicated = String(process.env.SECRETS_ENCRYPTION_KEY || '').trim();
- const material = dedicated || `auth-fallback:${await getAuthSecret()}`;
- return crypto.createHash('sha256').update(`agensis-workspace-vault:${material}`).digest();
-}
+// AES-256-GCM at rest for the workspace vault (and for gateway api_key_cipher,
+// which shares the derivation). The derivation itself lives in the shared core:
+// it prefers a dedicated SECRETS_ENCRYPTION_KEY so secrets survive an AUTH_SECRET
+// rotation, and falls back to AUTH_SECRET only when unset. Both hosts must derive
+// the SAME key or a secret written on one is undecryptable on the other — the
+// Netlify write lane refuses rather than risk it (see backend.mjs).
+//
+// `loadEnvFile()` first: a locally-run server keeps SECRETS_ENCRYPTION_KEY in
+// `.env`, and the core reads only process.env.
 async function encryptVaultSecret(value) {
- const iv = crypto.randomBytes(12);
- const cipher = crypto.createCipheriv('aes-256-gcm', await vaultSecretKey(), iv);
- const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
- return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString('base64url')).join('.');
+ loadEnvFile();
+ return coreEncryptVaultSecret(value, { getAuthSecret });
 }
 async function decryptVaultSecret(value) {
- const [iv, tag, encrypted] = String(value || '').split('.').map(part => Buffer.from(part, 'base64url'));
- if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted vault secret');
- const decipher = crypto.createDecipheriv('aes-256-gcm', await vaultSecretKey(), iv);
- decipher.setAuthTag(tag);
- return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+ loadEnvFile();
+ return coreDecryptVaultSecret(value, { getAuthSecret });
 }
 
 async function encryptFlowSecret(value) {
@@ -4524,6 +4585,33 @@ async function listConfiguredSandboxCredentialKeys(workspaceId, wanted = []) {
  }
 }
 
+// Every agent-authored provider skill definition in the workspace, so the vault
+// surface can offer a credential slot for a provider this workspace added without
+// a release (metadata.sandbox_skills — the no-DDL route host_folders took).
+//
+// Definitions only; no credential is read here.
+async function workspaceAuthoredProviderSkills(workspaceId) {
+ if (!workspaceId) return [];
+ try {
+  const rows = await getDb().unsafe(
+   'select metadata from workspace_agents where workspace_id = $1',
+   [String(workspaceId)],
+  );
+  const out = [];
+  for (const row of rows) {
+   const metadata = row?.metadata && typeof row.metadata === 'object'
+    ? row.metadata
+    : (() => { try { return JSON.parse(row?.metadata || 'null'); } catch { return null; } })();
+   const authored = Array.isArray(metadata?.sandbox_skills) ? metadata.sandbox_skills : [];
+   for (const skill of authored) out.push(skill);
+  }
+  return out;
+ } catch {
+  // The bundled slots still render — an operator can always set a Box key.
+  return [];
+ }
+}
+
 // The sandbox skill layer as one prompt block, or '' for every agent that does
 // not carry it (which is every agent that exists today). Both lanes get the same
 // text — builtin through the system prompt, daemon through the daemon prompt —
@@ -4531,10 +4619,17 @@ async function listConfiguredSandboxCredentialKeys(workspaceId, wanted = []) {
 async function loadSandboxSkillNote(workspaceId, agent) {
  const resolved = sandboxSkillsForAgent(agent);
  if (resolved.skills.length === 0) return '';
- const configuredKeys = await listConfiguredSandboxCredentialKeys(
+ const vaultKeys = await listConfiguredSandboxCredentialKeys(
   workspaceId,
   sandboxCredentialKeysForSkills(resolved.skills),
  );
+ // A locally-run server can resolve a credential from its own environment
+ // (callProviderOperation's documented fallback). Without counting those, the
+ // prompt would tell the agent the credential is missing while the proxy would in
+ // fact find it, and it would refuse work it can do. The vault still comes first
+ // everywhere it matters — this only affects what the agent is TOLD.
+ const envKeys = envConfiguredCredentialKeys(resolved.skills);
+ const configuredKeys = [...new Set([...vaultKeys, ...envKeys])];
  return renderSandboxSkillPrompt({ ...resolved, configuredKeys });
 }
 
@@ -4607,7 +4702,7 @@ async function readCappedResponseText(response, maxBytes) {
 // and any header — the metadata blob is built from describeProviderCall, which
 // has no field that could carry a credential, and the whole title goes through
 // redactSandboxSecrets with the live secret as a known value as a last net.
-async function logProviderCallActivity({ workspaceId, agent, plan, status, outcome, detail = '', durationMs = 0, knownSecrets = [] }) {
+async function logProviderCallActivity({ workspaceId, agent, plan, status, outcome, detail = '', durationMs = 0, knownSecrets = [], credentialSource = '' }) {
  try {
   if (!workspaceId || !plan) return;
   const described = describeProviderCall(plan);
@@ -4625,6 +4720,10 @@ async function logProviderCallActivity({ workspaceId, agent, plan, status, outco
    outcome,
    detail: redactSandboxSecrets(String(detail || ''), knownSecrets).slice(0, 300),
    duration_ms: Math.max(0, Math.round(durationMs)),
+   // WHERE the credential came from — 'vault' or 'env' — so "why is it still using
+   // the old key" is answerable from the audit trail. A source, never a value and
+   // never the vault key.
+   credential_source: credentialSource === 'vault' || credentialSource === 'env' ? credentialSource : '',
   };
   const inserted = await getDb().unsafe(
    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
@@ -4744,15 +4843,36 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
  // 4. The credential. Read by the key the DEFINITION names, from the workspace the
  //    TOKEN names. Not configured is the honest, actionable answer — and the one
  //    the skill prompt already told the agent to expect.
+ //
+ //    THE VAULT WINS. The host env var is a fallback for a server run on someone's
+ //    own machine, where the key is already in `.env`; on Fly nothing sets it, so
+ //    the vault is the only source that exists there. An operator who rotates a key
+ //    in the vault must not keep getting a stale value out of the environment, so
+ //    the order is vault, then env — never the reverse.
+ //
+ //    The env NAME comes from the BUNDLED definition, not from `plan.credentialEnv`,
+ //    which an agent-authored skill can set to any env-var-shaped string. Trusting
+ //    the plan's name would let an agent that can write its own metadata name
+ //    `AUTH_SECRET` (or `DATABASE_URL`) and have the server attach that value as a
+ //    Bearer token to the definition's own base URL.
  let secret = '';
+ let credentialSource = '';
  if (plan.credentialKey) {
   secret = await getWorkspaceSecretValue(workspaceId, plan.credentialKey).catch(() => '');
+  if (secret) credentialSource = 'vault';
   if (!secret) {
+   const envName = bundledCredentialEnvVar(plan.credentialKey);
+   const fromEnv = envName ? String(process.env[envName] || '').trim() : '';
+   if (fromEnv) { secret = fromEnv; credentialSource = 'env'; }
+  }
+  if (!secret) {
+   // Names the VAULT, because that is where an operator fixes this. Naming an env
+   // var here would send them to edit a file the deployed server never reads.
    return {
     ok: false,
     credential_configured: false,
     call: describeProviderCall(plan),
-    error: `The \`${plan.provider}\` credential is not configured, so this call cannot be made. An operator sets it in Settings as the workspace vault key \`${plan.credentialKey}\`${plan.credentialEnv ? ` (its value is the ${plan.credentialEnv})` : ''}. Report this and stop; do not retry.`,
+    error: `The \`${plan.provider}\` credential is not configured, so this call cannot be made. An operator adds it to the workspace vault as \`${plan.credentialKey}\` in Settings -> Vault, under ${plan.provider}. Report this, name that key, and stop; do not retry.`,
    };
   }
  }
@@ -4765,7 +4885,7 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
   await assertSafeOutboundUrl(plan.url, 'the provider URL');
  } catch (error) {
   const detail = String(error?.message || 'is not a safe outbound target');
-  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'blocked', detail, knownSecrets });
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'blocked', detail, knownSecrets, credentialSource });
   return { ok: false, call: describeProviderCall(plan), error: `Refused before calling: ${detail}. This is a problem with the provider skill definition, not with your request.` };
  }
 
@@ -4789,7 +4909,7 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
   // the header, but redact against the live secret anyway — the cost of being
   // wrong here is the credential in a channel.
   const detail = redactSandboxSecrets(String(error?.message || 'request failed'), knownSecrets).slice(0, 300);
-  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'error', detail, durationMs, knownSecrets });
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'error', detail, durationMs, knownSecrets, credentialSource });
   return { ok: false, call: describeProviderCall(plan), error: `The provider could not be reached: ${detail}` };
  }
 
@@ -4827,6 +4947,7 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
   detail: truncated ? `response truncated at ${PROVIDER_CALL_MAX_RESPONSE_BYTES} bytes` : '',
   durationMs,
   knownSecrets,
+  credentialSource,
  });
 
  return {
@@ -8882,7 +9003,20 @@ async function deliverNextFlowWebhook() {
 // broadcast is the real network win — otherwise every UPSERT fans the full body
 // (plus ~1/s heartbeat re-syncs) to every subscribed client. Keep the row shape
 // otherwise intact so list metadata (path, byte_size, summary, version) updates.
-const REALTIME_HEAVY_FIELDS = { agent_memory_files: ['content_cache'], agent_jobs: ['prompt', 'response'] };
+// Fields stripped from the realtime fanout. Mostly heavy bodies — and, for
+// workspace_secrets, the two columns that hold secret material.
+//
+// No client can subscribe to workspace_secrets at all (authorizeRealtimeBinding
+// calls ensureTable, and the table is deliberately absent from ALLOWED_TABLES),
+// and the vault routes broadcast `{ workspace_id, key }` rather than a row. This
+// is the third layer, and the one that survives someone later passing a full row:
+// a secret riding a broadcast into every subscribed browser is the worst outcome
+// this feature has, so it is stripped structurally rather than by convention.
+const REALTIME_HEAVY_FIELDS = {
+ agent_memory_files: ['content_cache'],
+ agent_jobs: ['prompt', 'response'],
+ workspace_secrets: VAULT_SECRET_COLUMNS,
+};
 function sanitizeRealtimeRow(table, row) {
  const heavy = REALTIME_HEAVY_FIELDS[table];
  if (!heavy || !row || typeof row !== 'object') return row;
@@ -13042,36 +13176,60 @@ function createApp() {
   }
  });
 
- // --- Workspace vault: arbitrary encrypted shared secrets --------------------
- // Values are AES-256-GCM encrypted at rest and NEVER returned in full — reads
- // return only a masked preview. Manage-role only, per workspace.
+ // --- The workspace vault ----------------------------------------------------
+ // ONE surface for every credential the workspace holds, including the namespaced
+ // ones. Manage-role only, per workspace, and WRITE-ONLY: this route decrypts
+ // nothing and its SQL does not select `value` or `secret_cipher` at all
+ // (VAULT_META_SELECT in shared/backend-core.cjs asks Postgres for a boolean).
+ // A masked preview used to be returned here; it is gone. A preview leaks a key's
+ // prefix and length, and for a credential an operator can simply re-paste that is
+ // a poor trade for a bit of UI reassurance — the same reasoning the
+ // /sandbox-credentials read already applied.
+ //
+ // Namespaced entries are no longer EXCLUDED, they are CLASSIFIED: each entry
+ // carries its group ('managed' | 'provider' | 'orb' | 'shared'), the thing that
+ // owns it, and the write lane that may change it. That is what makes showing them
+ // safe — `orb:<id>` arrives with lane 'none' and a name, so it reads as part of
+ // that orb rather than as a loose row someone might delete.
  app.get('/backend/workspaces/:id/vault', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const rows = await getDb().unsafe(
-    `select key, description, secret_cipher, value, updated_at, updated_by
-           from workspace_secrets where workspace_id = $1 order by key asc`,
-    [workspaceId],
-   );
-   // Exclude the platform-managed keys (surfaced via /settings/secrets) so the
-   // vault UI only shows user-defined shared secrets. `orb:<id>` keys are
-   // platform-owned too (orb signing secrets, managed from the orb's own panel);
-   // the colon also keeps them out of reach of the PUT/DELETE routes below, whose
-   // key pattern allows only [A-Za-z0-9_.-]. `sandbox:<provider>:<key>` is the
-   // same arrangement for provider provisioning credentials — managed by the
-   // /sandbox-credentials routes below, which never return a value at all (this
-   // route's masked preview is more than a provisioning credential should give up).
-   const managed = new Set(MANAGED_SECRET_KEYS);
-   const data = [];
-   for (const row of rows) {
-    if (managed.has(row.key) || row.key.startsWith('orb:') || row.key.startsWith(SANDBOX_VAULT_PREFIX)) continue;
-    let plain = '';
-    if (row.secret_cipher) { try { plain = await decryptVaultSecret(row.secret_cipher); } catch { plain = ''; } }
-    else plain = row.value || '';
-    data.push({ key: row.key, description: row.description || '', preview: maskSecret(plain), configured: !!plain, updated_at: row.updated_at });
+   const stored = await listWorkspaceVaultEntries(workspaceId, {
+    db: dbUnsafe,
+    managedKeys: MANAGED_SECRET_KEYS,
+   });
+
+   // Provider credential SLOTS — the fix for "there is no way to enter Box's key".
+   // A stored row is the only thing a list of rows can show, so before any
+   // `sandbox:box:api_key` existed there was nothing to render and nowhere to type.
+   // The skill definitions know which credentials exist, so unset slots are listed
+   // too, each with the provider it belongs to and the env var name (a NAME, never
+   // a value) the same credential would come from on a machine that has one.
+   const byKey = new Map(stored.map((entry) => [entry.key, entry]));
+   for (const slot of providerCredentialSlots(await workspaceAuthoredProviderSkills(workspaceId))) {
+    const existing = byKey.get(slot.key);
+    const merged = {
+     ...(existing || {
+      ...classifyVaultKey(slot.key, { managedKeys: MANAGED_SECRET_KEYS }),
+      description: '',
+      configured: false,
+      legacy_plaintext: false,
+      updated_at: null,
+     }),
+     ownerLabel: slot.providerName,
+     label: credentialLabel(slot.credential),
+     skill_id: slot.skillId,
+     env: slot.env,
+     docs_url: slot.docsUrl,
+    };
+    byKey.set(slot.key, merged);
    }
+
+   const data = [...byKey.values()].sort((a, b) => (
+    a.group === b.group ? a.key.localeCompare(b.key) : a.group.localeCompare(b.group)
+   ));
    res.json({ data, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -13083,7 +13241,13 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    const key = String(req.params.key || '').trim();
    if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
-   if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) return jsonError(res, 400, new Error('key must be 1-128 chars of letters, digits, _ . -'));
+   // The charset is the namespace guard: no colon means this route can never
+   // reach a `sandbox:` or `orb:` entry, whatever the caller sends.
+   if (!VAULT_KEY_RE.test(key)) {
+    return jsonError(res, 400, new Error(key.includes(':')
+     ? 'Namespaced vault entries are set by the surface that owns them: a provider credential through /sandbox-credentials, an orb signing secret from the orb panel.'
+     : 'key must be 1-128 chars of letters, digits, _ . -'));
+   }
    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    const value = typeof req.body?.value === 'string' ? req.body.value : '';
@@ -13101,6 +13265,7 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    const key = String(req.params.key || '').trim();
    if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
+   if (!VAULT_KEY_RE.test(key)) return jsonError(res, 400, new Error('key must be 1-128 chars of letters, digits, _ . -'));
    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
@@ -13608,6 +13773,15 @@ module.exports = {
   resolveWorkThreadParent,
   loadChannelMessages,
   sanitizeRealtimeRow,
+  // The vault: encryption at rest, the legacy-plaintext backfill, and the
+  // managed-key state shape (which must never carry a preview again).
+  encryptVaultSecret,
+  decryptVaultSecret,
+  getWorkspaceSecretValue,
+  setWorkspaceSecretValue,
+  reencryptLegacyPlaintextSecrets,
+  listManagedSecrets,
+  MANAGED_SECRET_KEYS,
   CHANNEL_CONTEXT_MAX_BYTES,
   agentContextBytes,
   boundAgentContextMessages,

@@ -507,20 +507,28 @@ test('a disabled agent cannot call a provider', async () => {
 test('an unconfigured credential is a clear refusal naming the vault key, with no call attempted', async () => {
   const db = makeDb({ credential: '' });
   const stub = stubFetch(async () => textResponse(200, '{}'));
+  const prevEnv = process.env.BOX_API_KEY;
+  delete process.env.BOX_API_KEY;
   try {
     const result = await callProvider(db, { skill_id: SANDBOX_BOX_SKILL_ID, operation: 'create' });
     assert.equal(result.ok, false);
     assert.equal(result.credential_configured, false);
     assert.match(result.error, /The `box` credential is not configured/);
     assert.match(result.error, /sandbox:box:api_key/);
-    // The env var name is a hint for the operator, not a value.
-    assert.match(result.error, /BOX_API_KEY/);
+    // THE VAULT, by name, because that is where an operator fixes it. This message
+    // used to name BOX_API_KEY as well, which sends them to edit a file the
+    // deployed server never reads — the env var is a local-run fallback only.
+    assert.match(result.error, /workspace vault/);
+    assert.match(result.error, /Settings -> Vault/);
+    assert.ok(!/BOX_API_KEY/.test(result.error), 'an env var is not the fix on the deployed server');
     assert.match(result.error, /do not retry/);
     // A 401 discovered three calls later is the outcome this replaces.
     assert.equal(stub.calls.length, 0);
     assert.equal(db.activity.length, 0, 'nothing was called, so there is nothing to audit');
   } finally {
     stub.restore();
+    if (prevEnv === undefined) delete process.env.BOX_API_KEY;
+    else process.env.BOX_API_KEY = prevEnv;
   }
 });
 

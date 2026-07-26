@@ -120,13 +120,42 @@ test('agentRuntimePayload does NOT rewrite system_prompt', () => {
 
 // --- 3. Credentials ---------------------------------------------------------
 
-test('the vault list route excludes sandbox credentials', () => {
-  assert.match(
-    SERVER,
-    /row\.key\.startsWith\('orb:'\) \|\| row\.key\.startsWith\(SANDBOX_VAULT_PREFIX\)/,
-    'the vault LIST route returns a masked preview of anything it does not exclude',
-  );
+test('the vault list route shows sandbox credentials without their values', () => {
+  // Previously this route EXCLUDED `sandbox:` keys, because it returned a masked
+  // preview of everything it listed and a provisioning credential should not give
+  // up even a prefix. The preview is gone, so the entries can be shown: the list
+  // no longer decrypts anything, and its SQL does not select the secret columns.
+  const { VAULT_META_SELECT, classifyVaultKey } = require('../shared/backend-core.cjs');
+  // The secret columns may be MENTIONED (a `coalesce(...) <> ''` boolean is how
+  // "configured" is answered without moving the value), but must not be selected.
+  // Parenthesised expressions are collapsed first so only bare projections remain.
+  const projection = VAULT_META_SELECT
+    .slice(VAULT_META_SELECT.indexOf('select') + 'select'.length, VAULT_META_SELECT.indexOf('from'))
+    .replace(/\([^()]*\)/g, 'EXPR');
+  for (const column of ['value', 'secret_cipher']) {
+    assert.ok(
+      !new RegExp(`(^|,)\\s*${column}\\s*(,|$)`).test(projection.trim()),
+      `the vault metadata projection must not select ${column}`,
+    );
+  }
+  assert.ok(!/decryptVaultSecret/.test(vaultListHandler()), 'the vault LIST route must not decrypt');
+  assert.ok(!/preview/.test(vaultListHandler()), 'the vault LIST route must not return a preview');
+
+  const entry = classifyVaultKey('sandbox:box:api_key');
+  assert.equal(entry.group, 'provider');
+  assert.equal(entry.provider, 'box');
+  assert.equal(entry.credential, 'api_key');
+  assert.equal(entry.lane, 'provider');
 });
+
+// The GET /vault handler as source, so an assertion about "this route" cannot pass
+// on the strength of a neighbouring one.
+function vaultListHandler() {
+  const start = SERVER.indexOf("app.get('/backend/workspaces/:id/vault'");
+  const end = SERVER.indexOf("app.put('/backend/workspaces/:id/vault/:key'");
+  assert.ok(start > -1 && end > start, 'expected the vault GET handler to precede the PUT');
+  return SERVER.slice(start, end);
+}
 
 test('the sandbox credential routes exist, are manage-only, and are write-only', () => {
   const routes = [
