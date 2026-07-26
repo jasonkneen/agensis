@@ -26,6 +26,7 @@ import {
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
  normalizeFeedbackSubmission,
  insertFeedbackReport,
+ badRequest,
 } from '../../shared/backend-core.cjs';
 import {
  assertSystemOwner,
@@ -35,6 +36,11 @@ import {
 } from '../../shared/tenant-admin.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 import { markHumanIdentityWrite, identityWriteSql, synthesizeHumanIdentityInsert } from '../../shared/agentIdentity.cjs';
+import {
+ isReservedAgentHandle,
+ reservedAgentHandleMessage,
+ slugMentionHandle,
+} from '../../shared/channelMentions.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
@@ -250,13 +256,11 @@ function verifyPassword(password, passwordHash) {
  return crypto.timingSafeEqual(computed, stored);
 }
 
+// The canonical implementation lives in shared/channelMentions.cjs, beside the
+// mention parser that has to produce the same string from an @mention of a
+// handle this mints. Fly delegates to the same function.
 function slugHandle(value) {
- return String(value || 'agent')
-  .toLowerCase()
-  .replace(/^@+/, '')
-  .replace(/[^a-z0-9_-]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 40) || 'agent';
+ return slugMentionHandle(value);
 }
 
 function hashAgentToken(token) {
@@ -2018,6 +2022,12 @@ async function handleDb(pathname, req, userId) {
     const normalized = normalizeTaskTitle(next.title);
     if (normalized.changed) next = { ...next, title: normalized.title };
    }
+   // Mirrors server/index.cjs: @channel addresses every agent in a channel, so
+   // no agent may answer to `channel`. A guard on one backend only is a rule the
+   // other half of the deployment does not have.
+   if (table === 'workspace_agents' && isReservedAgentHandle(next.handle)) {
+    throw badRequest(reservedAgentHandleMessage(next.handle));
+   }
    // Mirrors server/index.cjs: creation-time identity choices are HUMAN
    // choices — synthesize the human_set locks server-side (discarding any
    // client-supplied ones) so an agent's first connect cannot replace them.
@@ -2057,6 +2067,11 @@ async function handleDb(pathname, req, userId) {
   const tableSql = ensureTable(table);
   if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
   await enforceDbOperationAccess({ userId, table, op: 'update', filters, payload: { values }, db: query });
+  // Mirrors server/index.cjs: renaming an agent INTO the reserved handle is the
+  // same door as creating one there.
+  if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
+   return jsonError(400, new Error(reservedAgentHandleMessage(values.handle)));
+  }
   const safeValues = stripPrivilegedDbValues(table, values);
 
   // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded

@@ -49,6 +49,12 @@ const MUST_BE_LINTED = [
   // name, avatar or voice a person chose. Getting it wrong is silent data loss
   // that looks like the app forgetting, and it runs on every daemon restart.
   'shared/agentIdentity.cjs',
+  // Decides who a message dispatches — including @channel, which addresses every
+  // agent in a channel and therefore spends a paid model turn per member — and
+  // which handle no agent may hold. A mention-parsing mistake here either wakes
+  // agents nobody addressed or lets an agent capture the mention meant for
+  // everyone.
+  'shared/channelMentions.cjs',
   'server/index.cjs',
   'server/mcp.cjs',
   'server/skills.cjs',

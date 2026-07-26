@@ -11,6 +11,21 @@ import {
   channelIconChoices, channelProfileDiff, MAX_DESCRIPTION_CHARS, MAX_INTENT_CHARS,
   normalizeChannelIcon, type ChannelProfileDraft,
 } from '@/lib/channelProfile';
+import { normalizeConversationMode, type ConversationMode } from '@/lib/channelMentions';
+
+/** The two reply timings, in the words a person would use for them. */
+const REPLY_TIMING_CHOICES: Array<{ mode: ConversationMode; title: string; detail: string }> = [
+  {
+    mode: 'auto',
+    title: 'Someone may answer straight away',
+    detail: 'The agent it seems meant for chimes in. Often nobody does.',
+  },
+  {
+    mode: 'mention',
+    title: 'Nobody has to answer',
+    detail: 'The message just sits here until you ask someone. They can pick it up whenever.',
+  },
+];
 
 // ---------------------------------------------------------------------------
 // EDIT CHANNEL — name, description, icon, and the channel's INTENT.
@@ -124,6 +139,40 @@ export function EditChannelDialog({ open, onOpenChange, baseline, onSave, status
                 );
               })}
             </div>
+          </div>
+
+          {/* Reply timing. The point of 'mention' is that posting in a shared
+              channel does not summon an answer — the message is still there, and
+              anyone in the channel can pick it up later when someone asks them
+              to. Named after what a person would notice, not after the column. */}
+          <div className="space-y-1.5">
+            <Label>When you post without naming anyone</Label>
+            <div className="grid gap-1.5">
+              {REPLY_TIMING_CHOICES.map(choice => {
+                const active = normalizeConversationMode(draft.conversation_mode) === choice.mode;
+                return (
+                  <button
+                    key={choice.mode}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setDraft(prev => ({ ...prev, conversation_mode: choice.mode }))}
+                    className={cn(
+                      'rounded-md border px-3 py-2 text-left transition-colors',
+                      active
+                        ? 'border-primary bg-primary/10'
+                        : 'border-border bg-background hover:bg-muted/50',
+                    )}
+                  >
+                    <span className="block text-sm font-medium">{choice.title}</span>
+                    <span className="block text-xs text-muted-foreground">{choice.detail}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Naming someone always reaches them, either way. Use @channel to ask everyone in the
+              channel at once.
+            </p>
           </div>
 
           <div className="space-y-1.5">

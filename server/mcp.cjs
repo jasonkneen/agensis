@@ -10,6 +10,7 @@ const {
 // backend-core (same helper the generic /backend/db path uses).
 const { toPgArrayLiteral } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
+const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 
 // Native MCP (Model Context Protocol) server for agensis.
 //
@@ -501,7 +502,7 @@ function buildTools() {
    properties: {
     title: { type: 'string', description: 'Channel title.' },
     folder: { type: 'string', description: 'Folder to file it under (default "General").' },
-    conversation_mode: { type: 'string', enum: ['mention', 'auto'], description: 'mention (default) or auto (agents may auto-interject).' },
+    conversation_mode: { type: 'string', enum: ['mention', 'auto'], description: 'auto (default; an agent may answer a post that named nobody) or mention (nobody answers unless asked).' },
    },
    required: ['title'],
    additionalProperties: false,
@@ -512,7 +513,13 @@ function buildTools() {
    }
    const title = requireString(args, 'title');
    const folder = typeof args?.folder === 'string' && args.folder.trim() ? args.folder.trim() : 'General';
-   const mode = args?.conversation_mode === 'auto' ? 'auto' : 'mention';
+   // Defaults to 'auto', matching a channel created in the UI. It used to
+   // default to 'mention', which was harmless only because the dispatcher was
+   // ignoring the column entirely — now that it reads it again, that default
+   // would make an agent-created channel silently answer nothing while a
+   // human-created one answers, for no reason the human could see. An explicit
+   // 'mention' still does what it says.
+   const mode = normalizeConversationMode(args?.conversation_mode);
    const rows = await db.unsafe(
     `insert into chat_sessions (workspace_id, title, folder, conversation_mode)
          values ($1, $2, $3, $4) returning *`,

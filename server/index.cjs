@@ -105,6 +105,18 @@ const {
  listTenantAccounts,
  getTenantAccount,
 } = require('../shared/tenant-admin.cjs');
+const {
+ CHANNEL_MENTION_HANDLE,
+ CHANNEL_MENTION_MAX_AGENTS,
+ agentMentionHandles,
+ allowsUnpromptedReply,
+ expandChannelMention,
+ isReservedAgentHandle,
+ mentionsChannel,
+ parseMentionHandles,
+ reservedAgentHandleMessage,
+ slugMentionHandle,
+} = require('../shared/channelMentions.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -1975,13 +1987,13 @@ function formatElapsedMs(ms) {
  return `${seconds}s`;
 }
 
+// The canonical implementation now lives in shared/channelMentions.cjs, beside
+// the mention parser and the reserved-handle check that must agree with it — a
+// handle minted here has to be the same string the parser produces from an
+// @mention of it, and Netlify has to mint it identically. Kept as a wrapper
+// rather than renamed at ~40 call sites.
 function slugHandle(value) {
- return String(value || 'agent')
-  .toLowerCase()
-  .replace(/^@+/, '')
-  .replace(/[^a-z0-9_-]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 40) || 'agent';
+ return slugMentionHandle(value);
 }
 
 function hashAgentToken(token) {
@@ -3354,19 +3366,20 @@ function refreshConnectedAgentConfigs(eventType, rows) {
  }
 }
 
+// Handles naming an INDIVIDUAL agent. `@channel` is excluded here on purpose:
+// it is not a handle, it addresses the session's roster, and every caller of
+// this function looks its results up in a handle->agent map. Leaving it in would
+// mean a mention of everyone resolved to whichever agent happened to be slugged
+// `channel` — which is the hijack isReservedAgentHandle refuses at the door, and
+// this is the second lock on the same door for rows that predate it.
 function parseAgentMentions(content) {
- const out = [];
- const seen = new Set();
- const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
- let match;
- while ((match = re.exec(String(content || '')))) {
-  const handle = slugHandle(match[2]);
-  if (handle && !seen.has(handle)) {
-   seen.add(handle);
-   out.push(handle);
-  }
- }
- return out;
+ return agentMentionHandles(content);
+}
+
+// Every handle, `@channel` included. Only the dispatcher needs this; anything
+// resolving a handle to one agent wants parseAgentMentions.
+function parseAllMentions(content) {
+ return parseMentionHandles(content);
 }
 
 function firstAgentMention(content) {
@@ -4436,12 +4449,33 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  return lines.join('\n');
 }
 
-function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
+// Who a row addresses, in the order the mentions appear. `@channel` expands to
+// `channelAgents` in roster order at the position it was written, so
+// "@scout then @channel" asks Scout first and everyone else after.
+function agentsAddressedByRow(row, byHandle, channelAgents) {
+ const out = [];
+ for (const handle of parseAllMentions(row.content)) {
+  if (handle === CHANNEL_MENTION_HANDLE) {
+   for (const agent of channelAgents) out.push(agent);
+   continue;
+  }
+  const agent = byHandle.get(handle);
+  if (agent) out.push(agent);
+ }
+ return out;
+}
+
+// The ONE agent to run next, or null. Deliberately one: a burst advances by a
+// single turn at a time, each next turn triggered when the previous job
+// finalizes (see the continueConversation call in finalizeAgentJobResult). That
+// is what keeps `@channel` from being a fan-out — N agents answer in sequence,
+// each one bounded by max_agent_turns, the one-active-job-per-(session, agent)
+// index and hasActiveBurstJob, exactly as N separate @mentions already were.
+function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId, channelAgents = []) {
  for (let i = 0; i < burst.length; i++) {
   const row = burst[i];
   const authorAgentId = row.sender_kind === 'agent' ? String(row.sender_id || '') : '';
-  for (const handle of parseAgentMentions(row.content)) {
-   const agent = byHandle.get(handle);
+  for (const agent of agentsAddressedByRow(row, byHandle, channelAgents)) {
    if (!agent || !isAgentEnabled(agent)) continue;
    const agentId = String(agent.id);
    if (authorAgentId && agentId === authorAgentId) continue; // ignore self-mentions
@@ -5111,8 +5145,26 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
      }
     }
    } else {
-    nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
-    if (!nextAgent && agentTurns === 0 && directTarget) {
+    // `@channel` addresses the session's STORED agent roster — never workspace
+    // presence, never every agent in the workspace. Presence leaking into
+    // channel membership is a bug this repo has already shipped once
+    // (buildChannelRoster), and here it would spend a paid model turn per
+    // phantom member. Capped at CHANNEL_MENTION_MAX_AGENTS in roster order.
+    const channelAgents = expandChannelMention({
+     participantAgentIds: [...participantAgentIds],
+     agents,
+     isEnabled: isAgentEnabled,
+     limit: CHANNEL_MENTION_MAX_AGENTS,
+    });
+    nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId, channelAgents);
+    // A channel with exactly ONE agent participant has a directTarget even
+    // though it is not a DM (directAgentParticipantFromSession falls back to the
+    // sole agent), and an un-addressed post there used to wake it
+    // unconditionally. That is the same un-addressed case the mode governs, so
+    // it is gated the same way — otherwise "nobody has to answer" would be a
+    // setting that quietly did nothing until a second agent joined.
+    const unpromptedAllowed = allowsUnpromptedReply({ conversationMode: session.conversation_mode });
+    if (!nextAgent && agentTurns === 0 && directTarget && unpromptedAllowed) {
      nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
       || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
     }
@@ -5123,15 +5175,31 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
        || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
      }
     }
-    // AUTO is always on for channels now (the per-channel toggle was removed).
-    // We're already in the non-DM branch, so any plain human message with no
-    // explicit target enters the context-aware auto-interject. Fires once per
-    // human message (agentTurns === 0, latest author is the human). The candidate
-    // pool is every enabled agent that is a channel participant UNION every agent
-    // that has recently posted here — so a human replying right after an agent
-    // draws that agent back in to decide "is this for me, or pass it on?". A
-    // single cheap Haiku call picks ONE agent or null (fails CLOSED).
-    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '') {
+    // An UN-ADDRESSED post: nobody was @mentioned, there is no direct target and
+    // no thread to answer in. Whether anyone is compelled to reply to it is the
+    // channel's own choice, and conversation_mode is where that choice is stored
+    // — it has been on chat_sessions since the beginning, but the dispatcher
+    // stopped reading it, so every channel behaved as 'auto' whatever it said.
+    //
+    //   'auto'    — the context-aware auto-interject below may draw ONE agent in
+    //               unprompted. One cheap Haiku call picks an agent or null, and
+    //               fails CLOSED. Still the default; unchanged for every
+    //               existing channel.
+    //   'mention' — nobody is dispatched. The message is posted and read like
+    //               any other, and any agent can be pulled in later with an
+    //               @mention or @channel. "They don't have to answer now, but
+    //               they can whenever."
+    //
+    // Only the un-addressed case is governed. An @mention, a DM and a reply in
+    // an agent's thread dispatch in BOTH modes — the mode decides whether
+    // silence is allowed, never whether being asked directly is.
+    //
+    // Fires once per human message (agentTurns === 0, latest author is the
+    // human). The candidate pool is every enabled agent that is a channel
+    // participant UNION every agent that has recently posted here — so a human
+    // replying right after an agent draws that agent back in to decide "is this
+    // for me, or pass it on?".
+    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '' && unpromptedAllowed) {
      const candidateIds = new Set();
      for (const id of participantAgentIds) candidateIds.add(String(id));
      // Recent agent authors (newest first): the last one to speak is the
@@ -6681,6 +6749,12 @@ async function registerAgentRequest({ workspaceId, asHandle = null, name = null,
   }
  }
  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
+ // The one door an UNTRUSTED client chooses its own handle through. @channel is
+ // reserved, so refuse it here rather than write a pending registration that
+ // could only ever be approved into an unmentionable agent. `agent` (an
+ // existing row, resolved by asHandle) cannot be reserved: nothing could have
+ // created it.
+ if (!agent && isReservedAgentHandle(reqHandle)) throw badRequest(reservedAgentHandleMessage(reqHandle));
  // The bare `name` argument is the same field as identity.name and gets the
  // same bound — otherwise this door would be the one way to smuggle an
  // unbounded string into workspace_agents.name.
@@ -11076,8 +11150,12 @@ function createApp() {
     return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
    }
    await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
+   // `folder` is in the projection because the mode gate below needs it to
+   // recognise a legacy 'Direct messages' DM. An explicit column list that omits
+   // a column a decision reads is this repo's blank-column trap — the value
+   // arrives as undefined and the decision silently takes the other branch.
    const sessionRows = await getDb().unsafe(
-    'select id, workspace_id, participants, conversation_mode from chat_sessions where id = $1 limit 1',
+    'select id, workspace_id, participants, conversation_mode, folder from chat_sessions where id = $1 limit 1',
     [sessionId],
    );
    if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
@@ -11097,11 +11175,32 @@ function createApp() {
    const threadTarget = mentions.length === 0 && threadParentId
     ? await inferThreadAgentTarget(sessionId, threadParentId)
     : null;
-   // AUTO is always on for channels: a plain human message (no mention/direct/
-   // thread target) still enters the orchestrator for non-DM channels. A true
-   // 1:1 DM (a participant flagged direct:true) only routes to its own agent.
+   // A true 1:1 DM (a participant flagged direct:true) only routes to its own agent.
    const isDirectMessage = Boolean(directTarget && directTarget.direct);
-   const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget) || !isDirectMessage;
+   // The DM test the MODE GATE uses has to be continueConversation's, not the
+   // narrow one above: it also counts the legacy 'Direct messages' folder, whose
+   // rows never got a direct-flagged participant. Kept separate so the branch
+   // below stays keyed on exactly what it always was.
+   const dmForModeGate = isDirectMessage || sessionRows[0].folder === 'Direct messages';
+   // `@channel` addresses the roster rather than a handle, so it counts as being
+   // addressed even though `mentions` (individual handles) is empty.
+   const addressesChannel = mentionsChannel(content);
+   // A directTarget only counts as ADDRESSED in a DM. In a channel it is the
+   // sole-agent-participant fallback, which is the un-addressed case the mode
+   // governs — see the matching gate in continueConversation.
+   const addressed = mentions.length > 0 || addressesChannel || Boolean(threadTarget)
+    || (Boolean(directTarget) && dmForModeGate);
+   // Nothing and nobody was addressed. Whether that still wakes an agent is the
+   // channel's conversation_mode — the SAME decision continueConversation makes
+   // (allowsUnpromptedReply), asked here only so the client is told the truth
+   // rather than being handed dispatched:true for a post nobody will answer.
+   if (!addressed && !allowsUnpromptedReply({
+    conversationMode: sessionRows[0].conversation_mode,
+    isDirectMessage: dmForModeGate,
+   })) {
+    return res.json({ data: { dispatched: false, reason: 'channel_replies_on_mention_only' }, error: null });
+   }
+   const willDispatch = addressed || !isDirectMessage;
    if (!willDispatch) {
     return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
    }
@@ -11110,7 +11209,13 @@ function createApp() {
    // open for the whole multi-turn chain would block the user's UI.
    void continueConversation({ workspaceId, sessionId, threadParentId: threadParentId || null })
     .catch((error) => console.error('continueConversation (dispatch) failed', error));
-   const dispatchMode = directTarget ? 'direct' : (mentions.length > 0 || threadTarget ? 'mention' : 'auto');
+   // Diagnostic only (nothing branches on it), but ordered the way
+   // pickMentionNextAgent actually decides: an explicit mention outranks the
+   // sole-agent direct fallback, so reporting 'direct' for "@coder look" in a
+   // one-agent channel was simply describing the wrong reason.
+   const dispatchMode = addressesChannel
+    ? 'channel'
+    : (mentions.length > 0 || threadTarget ? 'mention' : (directTarget ? 'direct' : 'auto'));
    return res.json({ data: { dispatched: true, mode: dispatchMode, mentions }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -12111,6 +12216,13 @@ function createApp() {
      const normalized = normalizeTaskTitle(next.title);
      if (normalized.changed) next = { ...next, title: normalized.title };
     }
+    // @channel addresses every agent in a channel, so no agent may answer to
+    // `channel`. Refused rather than mangled: a silently-renamed handle is an
+    // agent nobody can @mention. Mirrored in netlify/functions/backend.mjs and
+    // in registerAgentRequest (the MCP door).
+    if (table === 'workspace_agents' && isReservedAgentHandle(next.handle)) {
+     throw badRequest(reservedAgentHandleMessage(next.handle));
+    }
     // Creation-time identity choices are HUMAN choices: synthesize the
     // human_set locks server-side (discarding any client-supplied ones) so an
     // agent's first connect cannot replace the avatar or profile the human
@@ -12184,6 +12296,11 @@ function createApp() {
    const tableSql = ensureTable(table);
    if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
    await enforceDbOperationAccess(req.userId, table, 'update', { filters, values });
+   // Renaming an agent INTO the reserved handle is the same door as creating one
+   // there. See the insert route above.
+   if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
+    return jsonError(res, 400, new Error(reservedAgentHandleMessage(values.handle)));
+   }
    const safeValues = stripPrivilegedDbValues(table, values);
 
    // A human editing an agent is the OTHER half of the identity precedence rule
@@ -12939,6 +13056,11 @@ module.exports = {
   hasMcpPresence,
   ensureMentionedParticipants,
   parseAgentMentions,
+  parseAllMentions,
+  pickMentionNextAgent,
+  agentsAddressedByRow,
+  slugHandle,
+  continueConversation,
   verifyNetlifyDeploySignature,
   buildSystemPrompt,
   normalizeAiChatMessages,

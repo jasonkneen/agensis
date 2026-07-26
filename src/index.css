@@ -2772,6 +2772,17 @@ button[data-slot="badge"][data-variant="default"]:hover {
  outline: none;
 }
 
+/* @channel — a mention of the room. Reads as a mention, but there is no profile
+   behind it to open, so it takes the colour and weight without the affordance. */
+.chat-mention-everyone {
+ cursor: default;
+}
+
+.chat-mention-everyone:hover,
+.chat-mention-everyone:focus-visible {
+ text-decoration: none;
+}
+
 .chat-markdown {
  display: grid;
  gap: 0.65rem;

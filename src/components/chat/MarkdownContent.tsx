@@ -1,6 +1,7 @@
 import React from 'react';
 import { MermaidDiagram } from './MermaidDiagram';
 import { parseBlocks, parseFrontmatter, closeOpenMarkers, type Block, type FrontmatterValue } from '../../lib/markdownBlocks';
+import { slugMentionHandle, CHANNEL_MENTION_HANDLE } from '../../lib/channelMentions';
 
 interface MarkdownContentProps {
   content: string;
@@ -153,6 +154,11 @@ function renderInline(text: string, onMentionClick?: (mention: string) => void):
   return parts;
 }
 
+// Note the `[^\w]` prefix rather than the dispatcher's `\s`: rendering is
+// deliberately the more permissive of the two, so "(@scout)" still LOOKS like a
+// mention even though the server would not dispatch on it. Who a message
+// dispatches is decided in src/lib/channelMentions.ts; this only decides what
+// reads as a mention.
 function renderPlainText(text: string, keyOffset: number, onMentionClick?: (mention: string) => void): React.ReactNode[] {
   if (!onMentionClick) return [text];
   const parts: React.ReactNode[] = [];
@@ -164,16 +170,27 @@ function renderPlainText(text: string, keyOffset: number, onMentionClick?: (ment
     const handle = match[2];
     const mentionStart = match.index + prefix.length;
     if (mentionStart > lastIndex) parts.push(text.slice(lastIndex, mentionStart));
-    parts.push(
-      <button
-        key={`${keyOffset}-${parts.length}-${handle}`}
-        type="button"
-        className="chat-mention-link"
-        onClick={() => onMentionClick(handle)}
-      >
-        @{handle}
-      </button>,
-    );
+    // `@channel` is a mention of the room, not of anyone whose profile could
+    // open. Styled as a mention, rendered as a span: a button that does nothing
+    // when clicked is worse than plain text that never invited the click.
+    if (slugMentionHandle(handle) === CHANNEL_MENTION_HANDLE) {
+      parts.push(
+        <span key={`${keyOffset}-${parts.length}-channel`} className="chat-mention-link chat-mention-everyone">
+          @{handle}
+        </span>,
+      );
+    } else {
+      parts.push(
+        <button
+          key={`${keyOffset}-${parts.length}-${handle}`}
+          type="button"
+          className="chat-mention-link"
+          onClick={() => onMentionClick(handle)}
+        >
+          @{handle}
+        </button>,
+      );
+    }
     lastIndex = mentionStart + handle.length + 1;
   }
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
