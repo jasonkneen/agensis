@@ -1209,6 +1209,194 @@ async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSec
 }
 
 // ----------------------------------------------------------------------------
+// THE VAULT SURFACE (2026-07).
+//
+// One workspace vault, four namespaces, ONE classification — here, so the Fly
+// route and the Netlify mirror cannot disagree about what an entry IS.
+//
+// Why namespaces existed but were INVISIBLE: the vault list route excluded every
+// `orb:` and `sandbox:` key, because the flat "shared secrets" list it fed had no
+// way to say "this belongs to the Box provider skill" or "this is an orb's
+// signing secret" — an orb secret sitting loose in that list looks deletable, and
+// deleting it silently 503s every delivery. Excluding them made the list honest
+// and the entries unreachable: with no surface of its own, `sandbox:box:api_key`
+// could not be entered at all. This layer is that surface. Each entry says which
+// GROUP it belongs to, which THING owns it, and which write LANE owns it, so a
+// namespaced entry reads as part of its provider/orb instead of a loose row.
+//
+// Every entry here is WRITE-ONLY. `listWorkspaceVaultEntries` does not select
+// `value` or `secret_cipher` at all — not "selects and redacts": a route cannot
+// leak a column it never fetched. `configured` and `legacy_plaintext` are SQL
+// booleans computed in the database, so the plaintext never crosses the wire
+// from Postgres either.
+// ----------------------------------------------------------------------------
+
+// User-definable vault keys. The colon is deliberately excluded so a user key can
+// never collide with (or overwrite) a `sandbox:`/`orb:` namespaced entry through
+// the generic PUT/DELETE routes.
+const VAULT_KEY_RE = /^[A-Za-z0-9_.-]{1,128}$/;
+
+// The two namespace prefixes. Duplicated as literals rather than imported from
+// server/sandbox-skills.cjs because the Netlify function must not pull in the Fly
+// server's module graph; tests/workspace-vault.test.cjs asserts they agree.
+const SANDBOX_VAULT_PREFIX = 'sandbox:';
+const ORB_VAULT_PREFIX = 'orb:';
+
+// The columns that hold secret material. Used by the realtime strip and asserted
+// against every vault SELECT projection in tests.
+const VAULT_SECRET_COLUMNS = ['value', 'secret_cipher'];
+
+// group -> which route may write it. 'orb' has no vault write lane on purpose:
+// an orb's signing secret is rotated from the orb's own panel, where the operator
+// can also re-register it with the provider. Deleting it from a generic secrets
+// list would break every delivery with no hint why.
+const VAULT_WRITE_LANES = {
+ managed: 'managed',
+ provider: 'provider',
+ shared: 'shared',
+ orb: 'none',
+};
+
+function titleCaseSlug(value) {
+ return String(value || '')
+  .split(/[-_]/)
+  .filter(Boolean)
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+}
+
+// 'api_key' -> 'API key'. Credential names are lowercase snake by construction
+// (sandboxCredentialKey enforces it), so this is presentation only.
+function credentialLabel(value) {
+ const slug = String(value || '').trim();
+ if (!slug) return 'Credential';
+ if (slug === 'api_key') return 'API key';
+ const words = slug.split('_').filter(Boolean);
+ return words.map((word, index) => (index === 0
+  ? word.charAt(0).toUpperCase() + word.slice(1)
+  : word)).join(' ');
+}
+
+/**
+ * What IS this vault key? Pure string work — no DB, no secret.
+ *
+ * `managedKeys` is the platform-managed list (ANTHROPIC_API_KEY and friends),
+ * passed in because each backend owns its own MANAGED_SECRET_KEYS constant.
+ */
+function classifyVaultKey(key, { managedKeys = [] } = {}) {
+ const raw = String(key || '');
+ if (managedKeys.includes(raw)) {
+  return {
+   key: raw,
+   group: 'managed',
+   lane: VAULT_WRITE_LANES.managed,
+   owner: '',
+   ownerLabel: 'Platform',
+   label: raw === 'ANTHROPIC_API_KEY' ? 'Anthropic API key' : raw,
+   provider: '',
+   credential: '',
+  };
+ }
+ if (raw.startsWith(SANDBOX_VAULT_PREFIX)) {
+  const [provider, credential, ...rest] = raw.slice(SANDBOX_VAULT_PREFIX.length).split(':');
+  // A malformed namespaced key (extra colons, empty halves) is reported as
+  // unknown rather than guessed at: it has no write lane and no owner, so the
+  // surface shows it as an orphan instead of offering to overwrite the wrong row.
+  if (!provider || !credential || rest.length > 0) {
+   return { key: raw, group: 'unknown', lane: 'none', owner: '', ownerLabel: '', label: raw, provider: '', credential: '' };
+  }
+  return {
+   key: raw,
+   group: 'provider',
+   lane: VAULT_WRITE_LANES.provider,
+   owner: provider,
+   ownerLabel: titleCaseSlug(provider),
+   label: credentialLabel(credential),
+   provider,
+   credential,
+  };
+ }
+ if (raw.startsWith(ORB_VAULT_PREFIX)) {
+  const orbId = raw.slice(ORB_VAULT_PREFIX.length);
+  return {
+   key: raw,
+   group: 'orb',
+   lane: VAULT_WRITE_LANES.orb,
+   owner: orbId,
+   ownerLabel: orbId ? `Orb ${orbId.slice(0, 8)}` : 'Orb',
+   label: 'Signing secret',
+   provider: '',
+   credential: '',
+  };
+ }
+ return {
+  key: raw,
+  group: 'shared',
+  lane: VAULT_WRITE_LANES.shared,
+  owner: '',
+  ownerLabel: '',
+  label: raw,
+  provider: '',
+  credential: '',
+ };
+}
+
+// The metadata projection. `value` and `secret_cipher` are NOT selected; whether
+// a value exists is answered by the database as a boolean. `legacy_plaintext`
+// marks a row written before encryption-at-rest landed — it is a state flag, not
+// a value, and drives the re-encryption backfill.
+const VAULT_META_SELECT = `select key, description, updated_at, updated_by,
+        (coalesce(secret_cipher, '') <> '' or coalesce(value, '') <> '') as configured,
+        (coalesce(value, '') <> '') as legacy_plaintext
+   from workspace_secrets where workspace_id = $1 order by key asc`;
+
+async function listWorkspaceSecretMeta(workspaceId, { db }) {
+ if (!workspaceId) return [];
+ const rows = await db(VAULT_META_SELECT, [String(workspaceId)]);
+ return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Every credential this workspace has stored, as write-only entries.
+ *
+ * Includes the namespaced ones. Orb entries are labelled with their orb's name
+ * (one extra indexed read) so the entry reads as belonging to that orb rather
+ * than as an opaque `orb:<uuid>`.
+ */
+async function listWorkspaceVaultEntries(workspaceId, { db, managedKeys = [] }) {
+ const rows = await listWorkspaceSecretMeta(workspaceId, { db });
+ const entries = rows.map((row) => ({
+  ...classifyVaultKey(row.key, { managedKeys }),
+  description: row.description || '',
+  configured: row.configured === true || row.configured === 't' || row.configured === 1,
+  legacy_plaintext: row.legacy_plaintext === true || row.legacy_plaintext === 't' || row.legacy_plaintext === 1,
+  updated_at: row.updated_at || null,
+ }));
+
+ const orbIds = entries.filter((entry) => entry.group === 'orb' && entry.owner).map((entry) => entry.owner);
+ if (orbIds.length > 0) {
+  // Names only, and only for orbs in THIS workspace — the id came from a row that
+  // is already workspace-scoped, and the where clause re-scopes it anyway.
+  const named = new Map();
+  try {
+   const orbRows = await db(
+    'select id, name from agent_webhooks where workspace_id = $1',
+    [String(workspaceId)],
+   );
+   for (const orb of Array.isArray(orbRows) ? orbRows : []) named.set(String(orb.id), orb.name || '');
+  } catch {
+   // A deployment whose schema predates orbs must still render the vault.
+  }
+  for (const entry of entries) {
+   if (entry.group !== 'orb') continue;
+   const name = named.get(entry.owner);
+   if (name) entry.ownerLabel = name;
+  }
+ }
+ return entries;
+}
+
+// ----------------------------------------------------------------------------
 // IN-APP FEEDBACK (System workspace).
 //
 // Shape of the feature, so the security properties are readable in one place:
@@ -1548,6 +1736,17 @@ module.exports = {
  decryptVaultSecret,
  getWorkspaceSecretValue,
  setWorkspaceSecretValue,
+ // The vault surface. One classification for both backends.
+ VAULT_KEY_RE,
+ VAULT_SECRET_COLUMNS,
+ VAULT_META_SELECT,
+ VAULT_WRITE_LANES,
+ SANDBOX_VAULT_PREFIX,
+ ORB_VAULT_PREFIX,
+ classifyVaultKey,
+ credentialLabel,
+ listWorkspaceSecretMeta,
+ listWorkspaceVaultEntries,
  storagePathBelongsToWorkspace,
  createTokenVersionCache,
  appendWorkspaceAccessClause,

@@ -114,6 +114,31 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
     transient join secret) cannot spend a provider key. Per-agent
     `providerCallRateLimiter` at 20/min on top of `mcpRateLimiter`.
   No schema change — `activity_events` already existed in all three places.
+- **The workspace vault** — `workspace_secrets` is the home of every credential a
+  workspace holds, in four namespaces: the platform-managed keys
+  (`MANAGED_SECRET_KEYS`), `sandbox:<provider>:<credential>` for a provider skill's
+  API key, `orb:<webhook id>` for an orb's signing secret, and anything else as a
+  user-defined shared secret. `classifyVaultKey` in `shared/backend-core.cjs` is the
+  single classification both backends use; it also decides the **write lane**
+  (`managed` → `/settings/secrets`, `provider` → `/sandbox-credentials`, `shared` →
+  `/vault/:key`, `orb` → none, rotated from the orb's own panel). Surfaced in
+  Settings → Vault, grouped by owner.
+  - **WRITE-ONLY.** No route returns a value, in full or masked. The list route
+    neither decrypts nor selects the secret columns — `VAULT_META_SELECT` asks
+    Postgres for `configured` and `legacy_plaintext` as booleans, so there is
+    nothing to redact. `maskSecret` is gone from both backends.
+  - **Encrypted at rest**, always, on both lanes (`setWorkspaceSecretValue` in the
+    shared core writes ciphertext to `secret_cipher` and `''` to `value`). Legacy
+    plaintext rows are re-encrypted on boot by `reencryptLegacyPlaintextSecrets`.
+  - **Not in the backendClient allowlists** — the dedicated manage-role routes are
+    the only doors, and the generic `/vault/:key` charset (`[A-Za-z0-9_.-]`, no
+    colon) means it cannot address a namespaced entry. `sanitizeRealtimeRow` strips
+    `value` + `secret_cipher` as a third layer.
+  - **Vault beats env.** `callProviderOperation` reads the vault first; a host env
+    var is a fallback for a locally-run server, and the env NAME comes from the
+    BUNDLED skill definition (`bundledCredentialEnvVar`), never from an
+    agent-authored one — otherwise an agent that can write its own metadata could
+    name `AUTH_SECRET` and have the server attach it as a Bearer token.
 - **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
   stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
   returned to the client — only `has_key`). Managed in Settings → AI. Selecting a
@@ -210,7 +235,7 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `ANTHROPIC_API_KEY` | ✓ | ✓ | AI chat / built-in agents (per-workspace key overrides it if set) |
 | `AGENSIS_DAEMON_BASE_URL` | ✓ | — | Netlify → the Fly backend's public URL, so generated `agensis connect` commands + farm enrolment point at the WS host, not Netlify (which has no WS) |
 | `COMMIT_REF` | ✓ (build) | — | Netlify sets this automatically; baked into `__BUILD_ID__` + `version.json` for the update check |
-| `SECRETS_ENCRYPTION_KEY` | — | ✓ | Dedicated key for the per-workspace secret vault (else derived from `AUTH_SECRET`) |
+| `SECRETS_ENCRYPTION_KEY` | (see note) | ✓ | Dedicated key for the per-workspace secret vault (else derived from `AUTH_SECRET`). **If set on one host it must be set to the same value on the other**, or a secret written on one is undecryptable on the other. Netlify REFUSES vault writes while it is unset (503) rather than write a row Fly cannot read — reads are unaffected |
 | `WORKSPACE_STORAGE_QUOTA_BYTES` | — | ✓ | Per-workspace upload quota (default 2 GB) |
 | `AGENSIS_CAPABILITIES_TTL_MS` | — | ✓ | TTL for the `/system/capabilities` cache (default 30 s) |
 | `AGENSIS_RUNTIME_SCHEMA` | — | ✓ | Set `false` to disable runtime DDL bootstrap (migrations become the sole schema source) |

@@ -87,7 +87,7 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
-  { id: 'secrets', label: 'Secret keys', icon: <KeyRound /> },
+  { id: 'secrets', label: 'Vault', icon: <KeyRound /> },
   { id: 'usage', label: 'Usage', icon: <Gauge /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
@@ -1245,8 +1245,17 @@ function ConnectionRow({ label, value, secret, copied, onCopy }: { label: string
 interface SecretKeyInfo {
   key: string;
   configured: boolean;
-  preview: string;
   scope?: 'workspace' | 'app' | 'unset';
+  updated_at?: string | null;
+}
+
+// "Set 3 Jul" / "Never set". A vault entry gives up its STATE and nothing else, so
+// this line and the badge are the whole story a reader gets about a stored value.
+function describeLastSet(updatedAt: string | null | undefined): string {
+  if (!updatedAt) return '';
+  const at = new Date(updatedAt);
+  if (Number.isNaN(at.getTime())) return '';
+  return `Set ${at.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`;
 }
 
 function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
@@ -1323,9 +1332,11 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
   return (
     <FieldGroup>
       <FieldDescription>
-        Owner/admin only. Keys are stored for this workspace and never in the browser. Leave a field blank to keep the current value.
+        Owner/admin only. Everything here is stored encrypted for this workspace and is never sent back
+        to the browser — not even masked. Leave a field blank to keep the current value.
       </FieldDescription>
 
+      <div className="text-sm font-semibold">Platform keys</div>
       {keys.map(item => (
         <Field key={item.key}>
           <FieldLabel htmlFor={`secret-${item.key}`}>{labelFor(item.key)}</FieldLabel>
@@ -1349,7 +1360,7 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
             </InputGroupAddon>
           </InputGroup>
           <FieldDescription>
-            {item.configured ? `${scopeLabel(item.scope)} - ${item.preview}` : scopeLabel(item.scope)}
+            {[scopeLabel(item.scope), describeLastSet(item.updated_at)].filter(Boolean).join(' · ')}
           </FieldDescription>
         </Field>
       ))}
@@ -1369,15 +1380,124 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
         )}
       </div>
 
-      <SharedSecretsSection workspaceId={workspaceId} />
+      <VaultSections workspaceId={workspaceId} />
     </FieldGroup>
   );
 }
 
-// User-defined shared secrets (arbitrary keys), encrypted at rest server-side.
-// Values are write-only: the list shows a masked preview, never the full value.
-function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
-  const { secrets, setSecret, deleteSecret } = useWorkspaceVault(workspaceId);
+// ---------------------------------------------------------------------------
+// The vault surface.
+//
+// Every credential the workspace holds, in one place, grouped so a namespaced
+// entry reads as belonging to its provider or its orb rather than sitting loose in
+// a flat list. Each entry is WRITE-ONLY: set it, replace it, delete it. There is
+// no preview and no reveal, because the server has nothing to reveal — the list
+// route neither decrypts nor selects the secret columns.
+// ---------------------------------------------------------------------------
+
+// One row: what it is, whether it is set, when it was last set, and the actions
+// its write lane allows. Shared by all four groups so they read identically.
+function VaultEntryRow({
+  title,
+  subtitle,
+  configured,
+  updatedAt,
+  onSave,
+  onDelete,
+  placeholder,
+  note,
+}: {
+  title: string;
+  subtitle?: string;
+  configured: boolean;
+  updatedAt: string | null;
+  onSave?: (value: string) => Promise<string | null>;
+  onDelete?: () => Promise<void>;
+  placeholder?: string;
+  note?: string;
+}) {
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!onSave || !draft) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const failure = await onSave(draft);
+      if (failure) setErr(failure);
+      else setDraft('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const state = configured
+    ? [describeLastSet(updatedAt) || 'Configured'].filter(Boolean).join('')
+    : 'Not set';
+
+  return (
+    <div className="rounded-md border bg-card/50 px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{title}</div>
+          {subtitle && <div className="truncate font-mono text-xs text-muted-foreground">{subtitle}</div>}
+        </div>
+        <Badge variant={configured ? 'secondary' : 'outline'} className="shrink-0">
+          {configured ? <Check /> : null}
+          {state}
+        </Badge>
+        {onDelete && configured && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Delete ${title}`}
+            onClick={() => void onDelete()}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        )}
+      </div>
+
+      {onSave && (
+        <div className="mt-2 flex gap-2">
+          <Input
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            type="password"
+            autoComplete="off"
+            placeholder={placeholder ?? (configured ? 'Paste a new value to replace' : 'Paste the value')}
+            className="text-xs"
+          />
+          <Button type="button" size="sm" onClick={() => void save()} disabled={busy || !draft}>
+            {busy ? <Spinner data-icon="inline-start" /> : null}
+            {configured ? 'Replace' : 'Save'}
+          </Button>
+        </div>
+      )}
+      {note && <div className="mt-1.5 text-xs text-muted-foreground">{note}</div>}
+      {err && <div className="mt-1.5 text-xs text-destructive">{err}</div>}
+    </div>
+  );
+}
+
+// Exported for tests/unit/vaultPanelRender.test.ts: whether an orb row offers a
+// write it cannot perform, and whether a value ever reaches the DOM, are claims
+// only a mount can settle.
+export function VaultSections({ workspaceId }: { workspaceId: string | null }) {
+  const {
+    sections,
+    loading,
+    error,
+    setSharedSecret,
+    deleteSharedSecret,
+    setProviderCredential,
+    deleteProviderCredential,
+  } = useWorkspaceVault(workspaceId);
+
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
   const [newDesc, setNewDesc] = useState('');
@@ -1388,54 +1508,92 @@ function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
     const key = newKey.trim();
     if (!key || !newValue) return;
     if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) { setErr('Key: letters, digits, _ . - only (max 128)'); return; }
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
-      const ok = await setSecret(key, newValue, newDesc.trim() || undefined);
-      if (!ok) { setErr('Failed to save — owner/admin only'); return; }
+      const failure = await setSharedSecret(key, newValue, newDesc.trim() || undefined);
+      if (failure) { setErr(failure); return; }
       setNewKey(''); setNewValue(''); setNewDesc('');
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <div className="mt-4 border-t border-border pt-4">
-      <div className="mb-1 text-sm font-semibold">Shared secrets</div>
-      <FieldDescription className="mb-3">
-        Store API keys, tokens, and credentials your agents can use. Encrypted at rest; values are never shown again after saving.
-      </FieldDescription>
+  // The managed section is rendered by SecretsPanel above (it has its own route and
+  // its own app-fallback semantics), so it is skipped here.
+  const rendered = sections.filter(section => section.group !== 'managed');
 
-      {secrets.length > 0 && (
-        <div className="mb-3 flex flex-col gap-1.5">
-          {secrets.map(secret => (
-            <div key={secret.key} className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5">
-              <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{secret.key}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {secret.preview}{secret.description ? ` · ${secret.description}` : ''}
-                </div>
-              </div>
-              <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete ${secret.key}`} onClick={() => void deleteSecret(secret.key)}>
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
-          ))}
+  return (
+    <div className="mt-4 flex flex-col gap-4 border-t border-border pt-4">
+      {loading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> Loading the vault
         </div>
       )}
+      {error && <FieldDescription className="text-destructive">{error}</FieldDescription>}
 
-      <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2.5">
-        <div className="flex gap-2">
-          <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="KEY_NAME" className="font-mono text-xs" />
-          <Input value={newValue} onChange={e => setNewValue(e.target.value)} type="password" placeholder="value" autoComplete="off" />
+      {rendered.map(section => (
+        <div key={section.group}>
+          <div className="mb-1 text-sm font-semibold">{section.title}</div>
+          <FieldDescription className="mb-2">
+            {section.group === 'provider' && 'Credentials your agents spend through agensis. An agent never receives the value — it names an operation and the server attaches the key.'}
+            {section.group === 'orb' && 'Owned by their orbs. Rotate one from that orb\'s own panel, where you can also re-register it with the provider.'}
+            {section.group === 'shared' && 'Loose secrets for this workspace.'}
+            {section.group === 'unknown' && 'Entries whose key does not match any known namespace.'}
+          </FieldDescription>
+
+          <div className="flex flex-col gap-2">
+            {section.owners.map(owner => (
+              <div key={`${section.group}:${owner.owner}`} className="flex flex-col gap-1.5">
+                {owner.ownerLabel && (
+                  <div className="text-xs font-medium text-muted-foreground">{owner.ownerLabel}</div>
+                )}
+                {owner.entries.map(entry => (
+                  <VaultEntryRow
+                    key={entry.key}
+                    title={entry.label}
+                    subtitle={entry.key}
+                    configured={entry.configured}
+                    updatedAt={entry.updated_at}
+                    note={[
+                      entry.description,
+                      entry.lane === 'none' ? 'Managed by its orb.' : '',
+                      entry.env ? `Falls back to ${entry.env} when the server runs locally.` : '',
+                      entry.legacy_plaintext ? 'Stored before encryption at rest — replace it to re-encrypt.' : '',
+                    ].filter(Boolean).join(' ') || undefined}
+                    onSave={entry.lane === 'provider'
+                      ? (value: string) => setProviderCredential(entry.provider, entry.credential, value)
+                      : entry.lane === 'shared'
+                        ? (value: string) => setSharedSecret(entry.key, value, entry.description || undefined)
+                        : undefined}
+                    onDelete={entry.lane === 'provider'
+                      ? () => deleteProviderCredential(entry.provider, entry.credential)
+                      : entry.lane === 'shared'
+                        ? () => deleteSharedSecret(entry.key)
+                        : undefined}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
-        <Input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Description (optional)" className="text-xs" />
-        {err && <div className="text-xs text-destructive">{err}</div>}
-        <div className="flex justify-end">
-          <Button type="button" size="sm" onClick={() => void add()} disabled={busy || !newKey.trim() || !newValue}>
-            <Plus data-icon="inline-start" />
-            Add secret
-          </Button>
+      ))}
+
+      <div>
+        <div className="mb-1 text-sm font-semibold">Add a shared secret</div>
+        <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2.5">
+          <div className="flex gap-2">
+            <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="KEY_NAME" className="font-mono text-xs" />
+            <Input value={newValue} onChange={e => setNewValue(e.target.value)} type="password" placeholder="value" autoComplete="off" />
+          </div>
+          <Input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Description (optional)" className="text-xs" />
+          {err && <div className="text-xs text-destructive">{err}</div>}
+          <div className="flex justify-end">
+            <Button type="button" size="sm" onClick={() => void add()} disabled={busy || !newKey.trim() || !newValue}>
+              <Plus data-icon="inline-start" />
+              Add secret
+            </Button>
+          </div>
         </div>
       </div>
     </div>
