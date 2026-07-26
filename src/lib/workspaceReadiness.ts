@@ -31,6 +31,12 @@ export type WorkspaceReadinessStatus =
   | 'unavailable';
 
 export interface WorkspaceReadinessInput {
+  /**
+   * True ONLY when a workspace fetch completed successfully and came back with
+   * zero rows. A failed or skipped fetch must leave this false — see the note
+   * in describeWorkspaceReadiness.
+   */
+  fetchConfirmedEmpty?: boolean;
   /** True while the workspace list request is in flight. */
   loading: boolean;
   /** How many workspaces the client currently knows about. */
@@ -55,6 +61,7 @@ export interface WorkspaceReadiness {
 
 export const WORKSPACE_LOADING_REASON = 'Loading your workspace…';
 export const WORKSPACE_PREPARING_REASON = 'Setting up your workspace — this only takes a moment.';
+export const WORKSPACE_UNREACHABLE_REASON = "We couldn't load your workspaces. They are safe — this is a connection problem, not missing data.";
 
 /** Names the failure rather than hiding it behind "try later". */
 export function workspaceSetupFailedReason(failure: WriteFailure | null): string {
@@ -90,6 +97,28 @@ export function describeWorkspaceReadiness(input: WorkspaceReadinessInput): Work
       // asks, not on every render.
       shouldRepair: false,
       canRetry: input.repairFailure.retryable,
+    };
+  }
+  // An empty list is NOT proof that the account has no workspaces. cachedFetch
+  // returns null when the request fails and no cache is available, and the
+  // caller then leaves `workspaces` at [] while flipping loading off — so a
+  // transient error, a 401 during boot, or a cleared cache all look exactly
+  // like a brand-new account.
+  //
+  // Seeding on that guess created a fresh Personal+Work pair on load after load,
+  // and because the list is ordered by updated_at the newest empty pair sorted
+  // first and became the workspace the user landed in. An account with 64
+  // sessions read as wiped. 26 duplicates before it was caught.
+  //
+  // So repair requires a fetch that actually SUCCEEDED and actually returned
+  // nothing. Anything else is an error to report, never an account to populate.
+  if (!input.fetchConfirmedEmpty) {
+    return {
+      status: 'unavailable',
+      ready: false,
+      reason: WORKSPACE_UNREACHABLE_REASON,
+      shouldRepair: false,
+      canRetry: true,
     };
   }
   return { status: 'missing', ready: false, reason: WORKSPACE_PREPARING_REASON, shouldRepair: true, canRetry: false };

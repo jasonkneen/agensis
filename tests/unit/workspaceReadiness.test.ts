@@ -45,8 +45,10 @@ describe('describeWorkspaceReadiness', () => {
     expect(describeWorkspaceReadiness(input({ loading: true })).shouldRepair).toBe(false);
   });
 
-  it('asks for a workspace to be created once the list settles empty', () => {
-    const readiness = describeWorkspaceReadiness(input({ loading: false, workspaceCount: 0 }));
+  it('asks for a workspace to be created once the list settles CONFIRMED empty', () => {
+    // fetchConfirmedEmpty is required: an empty list on its own can mean the
+    // fetch failed, and seeding on that guess is what duplicated workspaces.
+    const readiness = describeWorkspaceReadiness(input({ loading: false, workspaceCount: 0, fetchConfirmedEmpty: true }));
     expect(readiness.status).toBe('missing');
     expect(readiness.ready).toBe(false);
     expect(readiness.shouldRepair).toBe(true);
@@ -126,5 +128,38 @@ describe('workspaceSetupFailedReason', () => {
 
   it('never renders the bare generic sentence the tour used to show', () => {
     expect(workspaceSetupFailedReason(WORKSPACE_UNAVAILABLE)).not.toMatch(/create it later from the Agents window/i);
+  });
+});
+
+// The bug that made a 64-session account read as wiped.
+//
+// cachedFetch returns null when the request fails and no cache answers, and the
+// caller leaves `workspaces` at [] while flipping loading off. "Empty list" was
+// therefore true for a failed fetch AND for a brand-new account, and seeding on
+// that guess minted a fresh Personal+Work pair on load after load. Ordered by
+// updated_at, the newest empty pair sorted first and became the workspace the
+// user landed in.
+describe('an empty list is not proof of an empty account', () => {
+  const base = { workspaceCount: 0, loading: false, repairing: false, repairFailure: null };
+
+  it('does NOT repair when the fetch did not confirm empty', () => {
+    const r = describeWorkspaceReadiness({ ...base, fetchConfirmedEmpty: false });
+    expect(r.shouldRepair).toBe(false);
+    expect(r.canRetry).toBe(true);
+    expect(r.reason).toMatch(/safe/i);
+  });
+
+  it('treats a missing flag as unconfirmed, not as empty', () => {
+    expect(describeWorkspaceReadiness(base).shouldRepair).toBe(false);
+  });
+
+  it('repairs only when a successful fetch really returned nothing', () => {
+    expect(describeWorkspaceReadiness({ ...base, fetchConfirmedEmpty: true }).shouldRepair).toBe(true);
+  });
+
+  it('never repairs while a workspace is known, however the fetch went', () => {
+    for (const confirmed of [true, false]) {
+      expect(describeWorkspaceReadiness({ ...base, workspaceCount: 3, fetchConfirmedEmpty: confirmed }).shouldRepair).toBe(false);
+    }
   });
 });
