@@ -1406,7 +1406,10 @@
 .sidebar-section-trigger {
  min-height: 1.5rem;
  font-size: 0.6875rem;
- font-weight: 600;
+ /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
+    heavier than the rows below it. The weight is what makes a small quiet
+    label still parse as a HEADING rather than as smaller text. */
+ font-weight: 700;
  letter-spacing: 0.07em;
  text-transform: uppercase;
  /* Mixed from --foreground, not --muted-foreground: several themes put the
