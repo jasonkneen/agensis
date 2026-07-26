@@ -1409,7 +1409,11 @@
    undifferentiated list of buttons. */
 .sidebar-section-trigger {
  min-height: 1.35rem;
- font-size: 0.6875rem;
+ /* 13px. It still sits under the item rows it introduces (14px), so the
+    hierarchy holds, but 11px was small enough that uppercase tracking made it
+    read as fine print rather than as a heading. Case, weight and colour are
+    what separate it from the rows now — not size alone. */
+ font-size: 0.8125rem;
  /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
     heavier than the rows below it. The weight is what makes a small quiet
     label still parse as a HEADING rather than as smaller text. */
@@ -2705,6 +2709,14 @@ button[data-slot="badge"][data-variant="default"]:hover {
 :root[data-ui-theme="neo"] .sidebar-folder-trigger,
 :root[data-ui-theme="neo"] .sidebar-item-row {
  font-size: 0.78rem !important;
+}
+
+/* Section labels take the same 13px as every other theme. Split out because the
+   rule above is shared with folder triggers and item rows — raising that one
+   would have resized the whole neo sidebar — and it carries !important, so
+   nothing less wins here. */
+:root[data-ui-theme="neo"] .sidebar-section-trigger {
+ font-size: 0.8125rem !important;
 }
 
 .file-tree {
@@ -4075,10 +4087,12 @@ select {
  box-shadow: none !important;
  /* Matches the base label scale. Neo keeps its card FRAME around the header —
     that is the theme's identity and worth preserving — but the text inside it
-    is the same small tracked label as everywhere else, so section names read
-    at one size across every theme. This was 0.82rem, which would have won the
-    cascade and left neo with a section name larger than its own items. */
- font-size: 0.6875rem !important;
+    is the same tracked label as everywhere else, so section names read at one
+    size across every theme. Kept in step with the base rule: this selector is
+    more specific AND !important, so whatever it says is what neo actually
+    renders. It was 0.82rem once, which left neo with section names larger than
+    its own items. */
+ font-size: 0.8125rem !important;
  letter-spacing: 0.07em;
 }
 
