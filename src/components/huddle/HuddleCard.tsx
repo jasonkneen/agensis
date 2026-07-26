@@ -116,6 +116,19 @@ export function HuddleCard({
     if (!connection) setLocal(IDLE_LOCAL);
   }, [connection]);
 
+  // The moment OUR WebRTC session is actually up, tell the server — the roster
+  // was fed only by LiveKit's webhook, which requires a dashboard step that in
+  // 48 huddles never happened, so it forever read "Waiting for the first
+  // person to connect" while that person was live and talking. Keyed on the
+  // connection epoch: a retry is the same event, a rejoin is a new one.
+  const confirmedEpochRef = useRef(0);
+  useEffect(() => {
+    if (!connection || !local.connected) return;
+    if (confirmedEpochRef.current === connection.joinedAtMs) return;
+    confirmedEpochRef.current = connection.joinedAtMs;
+    void session?.confirmJoin(connection);
+  }, [connection, local.connected, session]);
+
   // Joining a huddle opens the panel — that is where the conversation is now,
   // and a call whose transcript is behind a control you have to find is a call
   // people will keep holding in the channel instead.

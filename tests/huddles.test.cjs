@@ -1221,3 +1221,74 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   // agent into voice etiquette.
   assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false\)/);
 });
+
+// ---------------------------------------------------------------------------
+// Self-reported presence. In 48 real huddles the LiveKit webhook (an external
+// dashboard step) delivered ZERO participant events, so every roster read
+// "Waiting for the first person to connect" while that person was live and
+// talking. The client now reports its own join/leave; these pin the contract.
+
+test('confirm records participant_joined for the CALLER identity, deduped per connection', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+    for (const epoch of [111, 111, 222]) {
+      const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+        method: 'POST', headers, body: JSON.stringify({ connectionEpoch: epoch }),
+      });
+      assert.equal(res.status, 200);
+    }
+
+    const joins = db.state.events.filter((e) => e.kind === 'participant_joined');
+    // Retry of epoch 111 collapses on event_id; the 222 rejoin is a new row.
+    assert.equal(joins.length, 2);
+    for (const join of joins) {
+      assert.equal(join.identity, `user:${MEMBER}`, 'identity comes from the verified session, never the body');
+    }
+    assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:111`));
+    assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:222`));
+  });
+});
+
+test('leave records participant_left; a huddle that has ended refuses a confirm', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+    const left = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/leave`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(left.status, 200);
+    assert.equal(db.state.events.filter((e) => e.kind === 'participant_left').length, 1);
+
+    db.state.huddles[0].ended_at = new Date().toISOString();
+    const confirm = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 333 }),
+    });
+    assert.equal(confirm.status, 409, 'no joining a huddle that has ended');
+  });
+});
+
+test('a NON-MEMBER cannot report presence into someone else\'s huddle', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(STRANGER, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    for (const door of ['confirm', 'leave']) {
+      const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/${door}`, {
+        method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 1 }),
+      });
+      assert.equal(res.status, 403, door);
+    }
+    assert.equal(db.state.events.length, 0, 'nothing was recorded');
+  });
+});

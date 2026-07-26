@@ -929,6 +929,69 @@ function mountHuddleRoutes(app, deps = {}) {
   }
  });
 
+ // --- self-reported presence ----------------------------------------------
+ //
+ // In 48 huddles the LiveKit webhook delivered ZERO participant events (it has
+ // to be configured in LiveKit Cloud's dashboard, an external step nobody can
+ // automate). The roster therefore always read "Waiting for the first person
+ // to connect" — while the person it was waiting for was live and talking.
+ //
+ // The browser knows its own connection state, so it reports its OWN join and
+ // leave here. The webhook remains the authority for participants this client
+ // cannot see; fold order does not matter because the fold is idempotent per
+ // (kind, identity) and appendEvent dedupes on event_id. A hostile client can
+ // only lie about ITSELF, which the webhook could then contradict — it cannot
+ // add or remove anyone else: identity is derived from the verified session,
+ // never from the body.
+ app.post('/backend/workspaces/:id/huddles/:huddleId/confirm', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const huddleId = String(req.params.huddleId || '').trim();
+   if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+   await ensureSchemaOnce();
+   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
+   const identity = participantIdentity(req.userId);
+   await appendEvent({
+    huddle,
+    kind: 'participant_joined',
+    identity,
+    displayName: await displayNameFor(req.userId),
+    // Per-connection, not per-user: rejoin after a drop is a NEW event, while
+    // the same connection re-confirming (a retry) stays one row.
+    eventId: `self:join:${identity}:${String(req.body?.connectionEpoch || '0')}`,
+   });
+   res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:id/huddles/:huddleId/leave', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const huddleId = String(req.params.huddleId || '').trim();
+   if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+   await ensureSchemaOnce();
+   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   const identity = participantIdentity(req.userId);
+   await appendEvent({
+    huddle,
+    kind: 'participant_left',
+    identity,
+    displayName: await displayNameFor(req.userId),
+    eventId: `self:leave:${identity}:${String(req.body?.connectionEpoch || '0')}`,
+   });
+   res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  // --- end -----------------------------------------------------------------
 
  app.post('/backend/workspaces/:id/huddles/:huddleId/end', requireAuth, async (req, res) => {

@@ -182,11 +182,15 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     if (state && state.id === connection.huddleId && !state.active) setConnection(null);
   }, [state, connection]);
 
-  const post = useCallback(async (path: string): Promise<HuddlePayload | null> => {
+  const post = useCallback(async (path: string, body?: Record<string, unknown>): Promise<HuddlePayload | null> => {
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(apiUrl(path), { method: 'POST', headers: apiAuthHeaders() });
+      const response = await fetch(apiUrl(path), {
+        method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json', ...apiAuthHeaders() } : apiAuthHeaders(),
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         // jsonError() wraps the message in { message, code } — matches useInbox etc.
@@ -225,6 +229,22 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     return null;
   }, [base, post]);
 
+  /**
+   * Tell the server this browser's connection is actually UP. The roster was
+   * fed only by LiveKit's webhook — an external dashboard step that in 48
+   * huddles never delivered one event, so every roster read "Waiting for the
+   * first person to connect" while that person was live and talking. The
+   * client reports its OWN join; the webhook stays the authority for everyone
+   * this client cannot see.
+   */
+  const confirmJoin = useCallback(async (conn: HuddleConnection) => {
+    if (!workspaceId || !conn.huddleId) return;
+    await post(
+      `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(conn.huddleId)}/confirm`,
+      { connectionEpoch: conn.joinedAtMs },
+    );
+  }, [workspaceId, post]);
+
   /** End the huddle for everyone. */
   const end = useCallback(async () => {
     if (!workspaceId || !state?.id) return;
@@ -232,8 +252,20 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     await post(`/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(state.id)}/end`);
   }, [workspaceId, state?.id, post]);
 
-  /** Leave without ending it for anyone else. LiveKit's webhook records the leave. */
-  const leave = useCallback(() => setConnection(null), []);
+  /** Leave without ending it for anyone else, and say so — see confirmJoin. */
+  const leave = useCallback(() => {
+    setConnection(current => {
+      if (current && workspaceId && current.huddleId) {
+        // Fire-and-forget: the UI must drop the call instantly; the roster row
+        // is bookkeeping, and appendEvent dedupes if this ever double-fires.
+        void post(
+          `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(current.huddleId)}/leave`,
+          { connectionEpoch: current.joinedAtMs },
+        );
+      }
+      return null;
+    });
+  }, [workspaceId, post]);
 
   return {
     state,
@@ -245,6 +277,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     error,
     connection,
     startOrJoin,
+    confirmJoin,
     end,
     leave,
     refetch,
