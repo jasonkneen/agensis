@@ -17,8 +17,8 @@ import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../lib/
 import type { Message as ChatMessage } from '../../types';
 import {
   bucketToolSteps,
-  isStaleStepGroup,
   rememberThinkingElapsed,
+  resolveGroupChips,
   toolStepLabel,
   toolStepParts,
   type ThoughtChip as ThoughtChipData,
@@ -84,7 +84,7 @@ function callCountLabel(count: number): string {
  * reads as one continuous strip instead of chips, a bubble, then more chips.
  */
 export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow; compact?: boolean }) {
-  const { steps, thinking, thoughts, endedByReply } = row;
+  const { steps } = row;
   const panelId = useId();
   const [expanded, setExpanded] = useState(false);
   const [openTools, setOpenTools] = useState<string[]>([]);
@@ -93,14 +93,20 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
   const buckets = useMemo(() => bucketToolSteps(steps), [steps]);
   // Liveness is derived, never stored: a new step or a placeholder tick re-renders
   // this and the answer is recomputed. No timer ticks in the background to decide it.
-  const members = useMemo(() => (thinking.length > 0 ? [...steps, ...thinking] : steps), [steps, thinking]);
-  const live = !endedByReply && !isStaleStepGroup(members);
+  // Every chip below is drawn from this one decision, so nothing can claim to be
+  // live while the dot beside it says the run is over.
+  const { live, thinking, thoughts } = resolveGroupChips(row);
 
   const toggleTool = (name: string) => {
     setOpenTools(current => (
       current.includes(name) ? current.filter(entry => entry !== name) : [...current, name]
     ));
   };
+
+  // A settled group whose only member was an undurated placeholder has nothing left
+  // to say — it measured no period and ran no tools. Render the rail and its border
+  // anyway and it reads as an empty box the reader has to wonder about.
+  if (count === 0 && thinking.length === 0 && thoughts.length === 0) return null;
 
   return (
     <div

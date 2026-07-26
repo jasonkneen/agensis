@@ -80,3 +80,70 @@ export function activityChipLabel(content: string): string {
 export function thoughtChipLabel(elapsed: string): string {
   return `Thought for ${elapsed}`;
 }
+
+/**
+ * How long a row may go without a sign of life before every surface must read it
+ * as abandoned rather than in flight.
+ *
+ * Deliberately generous: the timestamps below are the SERVER's and are compared
+ * against the BROWSER's, so a minute of slack keeps ordinary clock skew from
+ * declaring a genuinely live run dead on sight.
+ */
+export const ACTIVITY_STALE_MS = 60000;
+
+const ELAPSED_PART_RE = /(\d+)\s*([ms])/g;
+
+/** "1m 4s" -> 64000. Zero for anything that is not one of the server's durations. */
+export function parseElapsedMs(elapsed: string): number {
+  let total = 0;
+  let matched = false;
+  ELAPSED_PART_RE.lastIndex = 0;
+  for (let part = ELAPSED_PART_RE.exec(elapsed); part; part = ELAPSED_PART_RE.exec(elapsed)) {
+    matched = true;
+    total += Number(part[1]) * (part[2] === 'm' ? 60000 : 1000);
+  }
+  return matched ? total : 0;
+}
+
+/**
+ * When this row was last known to be alive, in epoch ms — `NaN` when it carries
+ * no usable clock at all, which callers read as "assume live".
+ *
+ * `created_at` is the INSERT time and never moves again: the daemon rewrites a
+ * placeholder's content about once a second, but no column records that, so a
+ * turn that reasons for ten minutes without a single tool call would read as
+ * dead after one. The elapsed baked into the content is that missing clock —
+ * "Thinking 2m 11s" means the daemon was still counting 2m11s into the run — so
+ * a live placeholder's seen-at keeps pace with the wall clock while an abandoned
+ * one freezes where it stopped.
+ *
+ * The elapsed is the JOB's, not this row's, so a placeholder that appeared
+ * part-way through a turn overshoots by however long the turn had already been
+ * running. That errs generous, in the same direction as the slack above.
+ */
+export function activitySeenAtMs(
+  message: { created_at?: string | null; content?: unknown } | null | undefined,
+): number {
+  const created = message?.created_at ? new Date(message.created_at).getTime() : Number.NaN;
+  if (!Number.isFinite(created)) return Number.NaN;
+  const content = typeof message?.content === 'string' ? message.content : '';
+  return created + parseElapsedMs(activityElapsed(content));
+}
+
+/**
+ * An activity placeholder that could still be describing work happening NOW.
+ *
+ * A placeholder is only ever a claim about the present tense — "@coder is
+ * thinking" — so one whose run demonstrably ended must stop making it. Some are
+ * left behind for good when a job dies mid-turn, and those would otherwise
+ * announce an agent at work forever.
+ */
+export function isLiveActivityPlaceholder(
+  msg: { sender_kind?: string | null; role?: string | null; content?: unknown; created_at?: string | null },
+  now: number = Date.now(),
+): boolean {
+  if (!isActivityPlaceholderMessage(msg)) return false;
+  const seenAt = activitySeenAtMs(msg);
+  if (!Number.isFinite(seenAt)) return true; // no usable clock — assume still live
+  return now - seenAt <= ACTIVITY_STALE_MS;
+}

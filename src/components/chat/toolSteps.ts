@@ -1,4 +1,9 @@
-import { isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import {
+  ACTIVITY_STALE_MS,
+  activityElapsed,
+  activitySeenAtMs,
+  isActivityPlaceholderMessage,
+} from '../../lib/activityStatus';
 import type { Message as ChatMessage } from '../../types';
 
 /** `messages.message_kind` for one agent tool call. Anything else is a real message. */
@@ -9,11 +14,11 @@ export const TOOL_STEP_KIND = 'tool_step';
  * scrolling back through history, or reopening a finished thread. It stops showing
  * its live marker instead of pulsing forever at a run that ended yesterday.
  *
- * Deliberately generous: `created_at` comes from the server clock and is compared
- * against the browser's, so a minute of slack keeps ordinary skew from declaring a
- * genuinely live run dead on sight.
+ * The window itself is shared with every other surface that reads the same rows
+ * (the composer's "…is thinking" line), so it is defined once in activityStatus,
+ * along with the note on why it is deliberately generous about clock skew.
  */
-export const TOOL_STEP_STALE_MS = 60000;
+export const TOOL_STEP_STALE_MS = ACTIVITY_STALE_MS;
 
 /** Bucket name for a step that carries no recognisable tool name. */
 export const UNNAMED_TOOL_NAME = 'Step';
@@ -157,15 +162,69 @@ export function bucketToolSteps(steps: ChatMessage[]): ToolStepBucket[] {
  * Scans for the MAXIMUM rather than reading the tail: a group also carries its
  * thinking placeholder, which was inserted at dispatch — before every step it
  * precedes — so "last in the array" is not "most recent in time".
+ *
+ * Members are measured by `activitySeenAtMs`, not raw `created_at`, so a turn that
+ * reasons for minutes without emitting a single tool call keeps its placeholder's
+ * own ticking clock as proof of life instead of being declared stale on insert time.
  */
 export function isStaleStepGroup(steps: ChatMessage[], now: number = Date.now()): boolean {
   let newest = Number.NaN;
   for (const step of steps) {
-    const at = step?.created_at ? new Date(step.created_at).getTime() : Number.NaN;
+    const at = activitySeenAtMs(step);
     if (Number.isFinite(at) && (Number.isNaN(newest) || at > newest)) newest = at;
   }
   if (!Number.isFinite(newest)) return false; // no usable clock — assume still live
   return now - newest > TOOL_STEP_STALE_MS;
+}
+
+/** The parts of a step row that decide whether its run is still happening. */
+export type StepGroupLiveness = Pick<TranscriptStepRow, 'steps' | 'thinking' | 'endedByReply'>;
+
+/**
+ * Is this run still happening? Two independent proofs that it is not: the agent has
+ * already posted a real message since (`endedByReply`), or nothing in the group has
+ * shown a sign of life inside the stale window.
+ */
+export function isStepGroupLive(row: StepGroupLiveness, now: number = Date.now()): boolean {
+  if (row.endedByReply) return false;
+  const members = row.thinking.length > 0 ? [...row.steps, ...row.thinking] : row.steps;
+  return !isStaleStepGroup(members, now);
+}
+
+export interface GroupChips {
+  /** Whether the run can still be in flight — the live dot hangs off this. */
+  live: boolean;
+  /** Placeholders to render as LIVE, ticking chips. Always empty once settled. */
+  thinking: ChatMessage[];
+  /** Periods that are over, rendered as quiet "Thought for …" chips. */
+  thoughts: ThoughtChip[];
+}
+
+/**
+ * Decide what a group's chips are allowed to claim.
+ *
+ * A "Thinking 2m 11s" chip is a present-tense assertion, and a job that dies mid-turn
+ * can leave its placeholder in the transcript for good — so a thread opened hours
+ * later showed two of them highlighted and animating as though the agent were working
+ * right this second. Once the run is demonstrably over, its placeholders render as the
+ * settled periods they describe ("Thought for 2m 11s"), which is the honest reading of
+ * exactly the same row.
+ *
+ * A settled placeholder that never recorded a duration is dropped rather than
+ * relabelled: "Thinking…" alone measured nothing, and inventing a period for it would
+ * be a second lie in place of the first. "0s" goes the same way — the built-in chat
+ * inserts a placeholder and streams into it in one breath, so nobody watched anything.
+ */
+export function resolveGroupChips(row: TranscriptStepRow, now: number = Date.now()): GroupChips {
+  const live = isStepGroupLive(row, now);
+  if (live) return { live, thinking: row.thinking, thoughts: row.thoughts };
+  const thoughts = [...row.thoughts];
+  for (const placeholder of row.thinking) {
+    const content = typeof placeholder.content === 'string' ? placeholder.content : '';
+    const elapsed = activityElapsed(content);
+    if (elapsed && elapsed !== '0s') thoughts.push({ id: placeholder.id, elapsed });
+  }
+  return { live, thinking: [], thoughts };
 }
 
 function senderKey(message: ChatMessage): string {

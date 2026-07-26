@@ -5,12 +5,22 @@ import {
   buildTranscriptRows,
   clearThinkingElapsed,
   isStaleStepGroup,
+  isStepGroupLive,
   isToolStepMessage,
   recallThinkingElapsed,
   rememberThinkingElapsed,
+  resolveGroupChips,
   toolStepParts,
+  type TranscriptStepRow,
 } from '../../src/components/chat/toolSteps';
-import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../src/lib/activityStatus';
+import {
+  activityChipLabel,
+  activityElapsed,
+  activitySeenAtMs,
+  isLiveActivityPlaceholder,
+  parseElapsedMs,
+  thoughtChipLabel,
+} from '../../src/lib/activityStatus';
 import type { Message } from '../../src/types';
 
 let seq = 0;
@@ -335,5 +345,190 @@ describe('buildTranscriptRows — thinking placeholders', () => {
   it('still marks a run ended once its placeholder has turned into a reply', () => {
     const rows = buildTranscriptRows([thinking(), step(), msg({ sender_id: 'agent-1', content: 'done' })]);
     expect(rows[0].kind === 'steps' && rows[0].endedByReply).toBe(true);
+  });
+});
+
+describe('parseElapsedMs', () => {
+  it('reads back the durations the server writes', () => {
+    expect(parseElapsedMs('0s')).toBe(0);
+    expect(parseElapsedMs('43s')).toBe(43000);
+    expect(parseElapsedMs('1m 4s')).toBe(64000);
+    expect(parseElapsedMs('12m 0s')).toBe(720000);
+  });
+
+  it('is zero for anything that is not a duration', () => {
+    expect(parseElapsedMs('')).toBe(0);
+    expect(parseElapsedMs('soon')).toBe(0);
+  });
+});
+
+describe('activitySeenAtMs', () => {
+  const created = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const iso = new Date(created).toISOString();
+
+  it('credits a placeholder with the clock ticking inside its own content', () => {
+    // The row is only ever INSERTed once — the daemon rewrites the content about
+    // once a second and no column records that — so the elapsed is the only proof
+    // a long, silent turn is still running.
+    expect(activitySeenAtMs({ created_at: iso, content: 'Thinking 2m 11s' })).toBe(created + 131000);
+  });
+
+  it('falls back to the row\'s own timestamp when there is no duration to read', () => {
+    expect(activitySeenAtMs({ created_at: iso, content: 'Bash · git log' })).toBe(created);
+    expect(activitySeenAtMs({ created_at: iso, content: 'Thinking…' })).toBe(created);
+  });
+
+  it('reports no clock at all rather than guessing one', () => {
+    expect(Number.isNaN(activitySeenAtMs({ created_at: 'not a date', content: 'Thinking 4s' }))).toBe(true);
+    expect(Number.isNaN(activitySeenAtMs({}))).toBe(true);
+  });
+});
+
+describe('isLiveActivityPlaceholder', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const placeholder = (ageMs: number, content = 'Thinking 4s') => ({
+    sender_kind: 'agent',
+    content,
+    created_at: new Date(now - ageMs).toISOString(),
+  });
+
+  it('accepts a placeholder that is still ticking', () => {
+    expect(isLiveActivityPlaceholder(placeholder(1000), now)).toBe(true);
+  });
+
+  it('rejects one whose run demonstrably ended hours ago', () => {
+    // The exact shape that kept the composer claiming "@coder is thinking" long
+    // after the job was gone.
+    expect(isLiveActivityPlaceholder(placeholder(4 * 60 * 60 * 1000, 'Thinking 2m 11s'), now)).toBe(false);
+  });
+
+  it('keeps a long silent run alive on its own elapsed', () => {
+    // Ten minutes since the row was inserted, but the daemon is still counting —
+    // judging on created_at alone would call a healthy turn dead after one minute.
+    expect(isLiveActivityPlaceholder(placeholder(10 * 60 * 1000, 'Thinking 10m 0s'), now)).toBe(true);
+  });
+
+  it('never treats a real message as evidence of work in progress', () => {
+    expect(isLiveActivityPlaceholder({ sender_kind: 'agent', content: 'Here is the answer', created_at: new Date(now).toISOString() }, now)).toBe(false);
+  });
+});
+
+describe('isStepGroupLive', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const at = (ageMs: number) => new Date(now - ageMs).toISOString();
+
+  function group(overrides: Partial<TranscriptStepRow> = {}): TranscriptStepRow {
+    return {
+      kind: 'steps', key: 'k', steps: [], thinking: [], thoughts: [],
+      index: 0, endedByReply: false, senderKey: 'agent-1',
+      ...overrides,
+    };
+  }
+
+  it('is live while the run is still producing steps', () => {
+    expect(isStepGroupLive(group({ steps: [step({ created_at: at(2000) })] }), now)).toBe(true);
+  });
+
+  it('is over once the agent has posted a real message since', () => {
+    expect(isStepGroupLive(group({ steps: [step({ created_at: at(2000) })], endedByReply: true }), now)).toBe(false);
+  });
+
+  it('is over once nothing in it has shown a sign of life inside the window', () => {
+    expect(isStepGroupLive(group({ steps: [step({ created_at: at(TOOL_STEP_STALE_MS + 5000) })] }), now)).toBe(false);
+  });
+
+  it('survives server/browser clock skew inside the slack', () => {
+    // The server stamped created_at 40s ago by its own clock; the browser's is
+    // behind. Tightening the window is what would kill a genuinely live run.
+    expect(isStepGroupLive(group({ steps: [step({ created_at: at(TOOL_STEP_STALE_MS - 20000) })] }), now)).toBe(true);
+    // Even a timestamp from the FUTURE (browser behind the server) stays live.
+    expect(isStepGroupLive(group({ steps: [step({ created_at: at(-5000) })] }), now)).toBe(true);
+  });
+});
+
+describe('resolveGroupChips', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  const at = (ageMs: number) => new Date(now - ageMs).toISOString();
+
+  function group(overrides: Partial<TranscriptStepRow> = {}): TranscriptStepRow {
+    return {
+      kind: 'steps', key: 'k', steps: [], thinking: [], thoughts: [],
+      index: 0, endedByReply: false, senderKey: 'agent-1',
+      ...overrides,
+    };
+  }
+
+  it('leaves a fresh thinking chip live and ticking', () => {
+    const placeholder = thinking('4s', { created_at: at(1000) });
+    const chips = resolveGroupChips(group({ thinking: [placeholder] }), now);
+    expect(chips.live).toBe(true);
+    expect(chips.thinking).toEqual([placeholder]);
+    expect(chips.thoughts).toEqual([]);
+  });
+
+  it('settles a placeholder stranded by a job that never finished', () => {
+    // The reported bug: a thread from hours ago still showing "Thinking 2m 11s"
+    // highlighted and animating, with zero queued or running jobs behind it.
+    const stranded = thinking('2m 11s', { created_at: at(4 * 60 * 60 * 1000) });
+    const chips = resolveGroupChips(group({ thinking: [stranded] }), now);
+    expect(chips.live).toBe(false);
+    expect(chips.thinking).toEqual([]);
+    expect(chips.thoughts).toEqual([{ id: stranded.id, elapsed: '2m 11s' }]);
+    expect(thoughtChipLabel(chips.thoughts[0].elapsed)).toBe('Thought for 2m 11s');
+  });
+
+  it('settles the whole strip once the agent has replied, however recent', () => {
+    const placeholder = thinking('9s', { created_at: at(500) });
+    const chips = resolveGroupChips(group({ thinking: [placeholder], endedByReply: true }), now);
+    expect(chips.live).toBe(false);
+    expect(chips.thoughts).toEqual([{ id: placeholder.id, elapsed: '9s' }]);
+  });
+
+  it('keeps the periods already settled ahead of the ones it just settled', () => {
+    const earlier = { id: 'thought-1', elapsed: '30s' };
+    const stranded = thinking('1m 2s', { created_at: at(6 * 60 * 60 * 1000) });
+    const chips = resolveGroupChips(group({ thoughts: [earlier], thinking: [stranded] }), now);
+    expect(chips.thoughts).toEqual([earlier, { id: stranded.id, elapsed: '1m 2s' }]);
+  });
+
+  it('drops a settled placeholder that measured nothing rather than inventing a period', () => {
+    const noClock = msg({ sender_kind: 'agent', content: 'Thinking…', created_at: at(3 * 60 * 60 * 1000) });
+    const zero = thinking('0s', { created_at: at(3 * 60 * 60 * 1000) });
+    const chips = resolveGroupChips(group({ thinking: [noClock, zero] }), now);
+    expect(chips.live).toBe(false);
+    expect(chips.thinking).toEqual([]);
+    expect(chips.thoughts).toEqual([]);
+  });
+
+  it('does not settle a live run just because its placeholder row is old', () => {
+    // A ten-minute think with no tool calls: created_at is stale, the elapsed is not.
+    const placeholder = thinking('10m 0s', { created_at: at(10 * 60 * 1000) });
+    expect(resolveGroupChips(group({ thinking: [placeholder] }), now).live).toBe(true);
+  });
+});
+
+describe('a job that failed', () => {
+  const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+  // finalizeStuckJob rewrites the placeholder's content in place with this.
+  const FAILURE = '@coder stopped responding (the backend restarted). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.';
+
+  it('reads as a real message, never as an activity placeholder', () => {
+    const failed = msg({ sender_kind: 'agent', sender_id: 'agent-1', content: FAILURE, created_at: new Date(now).toISOString() });
+    expect(isLiveActivityPlaceholder(failed, now)).toBe(false);
+    const rows = buildTranscriptRows([step({ created_at: new Date(now).toISOString() }), failed]);
+    expect(rows.map(row => row.kind)).toEqual(['steps', 'message']);
+    if (rows[1].kind !== 'message') return;
+    expect(rows[1].message.content).toBe(FAILURE);
+  });
+
+  it('ends the run it belonged to, so no chip beside it claims to be working', () => {
+    const rows = buildTranscriptRows([
+      thinking('2m 11s', { created_at: new Date(now).toISOString() }),
+      msg({ sender_kind: 'agent', sender_id: 'agent-1', content: FAILURE, created_at: new Date(now).toISOString() }),
+    ]);
+    if (rows[0].kind !== 'steps') throw new Error('expected a step row');
+    const chips = resolveGroupChips(rows[0], now);
+    expect(chips.live).toBe(false);
+    expect(chips.thinking).toEqual([]);
   });
 });
