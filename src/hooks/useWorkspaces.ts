@@ -27,10 +27,34 @@ export function useWorkspaces(userId: string | undefined) {
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [seedFailure, setSeedFailure] = useState<WriteFailure | null>(null);
-  // One automatic attempt per signed-in user. Without this the seed would fire
-  // again on every render that still sees an empty list — including the renders
-  // that happen while the insert is in flight.
+  // At most ONE automatic seed per user, EVER — persisted, not a ref.
+  //
+  // A ref only survives the mount. On the next page load it is null again, so
+  // any moment where the list read as empty seeded another starter pair: the
+  // fetch resolving `loading` a tick before the rows land is enough. That minted
+  // a fresh Personal+Work on essentially every reload, and because the workspace
+  // list is ordered by updated_at the newest empty pair sorted FIRST and became
+  // the workspace you landed in — an account with real data looked wiped. 13
+  // duplicate workspaces in half an hour before it was caught.
+  //
+  // Seeding is a once-per-account repair, so the record of having done it has to
+  // outlive the mount that did it.
   const seedAttemptedForRef = useRef<string | null>(null);
+  const seedMarkerKey = userId ? `agensis.workspaces.seeded:${userId}` : '';
+  const hasSeededBefore = useCallback(() => {
+    if (!seedMarkerKey) return true;
+    try {
+      return localStorage.getItem(seedMarkerKey) === '1';
+    } catch {
+      // Storage unreachable: refuse to seed rather than risk repeating it. A
+      // missing starter workspace is recoverable by hand; duplicates are not.
+      return true;
+    }
+  }, [seedMarkerKey]);
+  const markSeeded = useCallback(() => {
+    if (!seedMarkerKey) return;
+    try { localStorage.setItem(seedMarkerKey, '1'); } catch { /* best effort */ }
+  }, [seedMarkerKey]);
 
   const fetchWorkspaces = useCallback(async () => {
     if (!userId) {
@@ -93,16 +117,21 @@ export function useWorkspaces(userId: string | undefined) {
   useEffect(() => {
     if (!userId || !readiness.shouldRepair) return;
     if (seedAttemptedForRef.current === userId) return;
+    if (hasSeededBefore()) return;
     seedAttemptedForRef.current = userId;
+    markSeeded();
     void seedStarterWorkspaces();
   }, [userId, readiness.shouldRepair, seedStarterWorkspaces]);
 
   /** Re-run the setup the user just watched fail. */
   const retryWorkspaceSetup = useCallback(async () => {
     if (!userId || seeding) return;
+    // Deliberately ignores the marker: this only runs when the user clicks
+    // retry on a setup they watched fail, which is an explicit request.
     seedAttemptedForRef.current = userId;
+    markSeeded();
     await seedStarterWorkspaces();
-  }, [userId, seeding, seedStarterWorkspaces]);
+  }, [userId, seeding, seedStarterWorkspaces, markSeeded]);
 
   // Returns the failure as well as the row: the dialog must stay open (with the
   // typed name intact) and say why when the insert is rejected, instead of
