@@ -80,6 +80,7 @@ import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { LinkPreviewCards } from '../chat/LinkPreviewCards';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
 import { buildTranscriptRows } from '../chat/toolSteps';
 import { isBroadcastFromThread } from '../chat/channelView';
@@ -2626,6 +2627,13 @@ function ChatMessageBubble({
               <span className="text-muted-foreground">{unavailableMessage}</span>
             )}
             {artifact && <ChatArtifact artifact={artifact} />}
+            {/* Link cards, once the message has settled. Deliberately NOT while
+                streaming: the URL is still being typed a token at a time, so
+                unfurling mid-stream would fire a request for a half-written link
+                and flash a card that is about to be wrong. */}
+            {!isStreaming && !isThinkingPlaceholder && displayContent && (
+              <LinkPreviewCards content={displayContent} />
+            )}
           </div>
         )}
         {isStreaming && msg.content && (

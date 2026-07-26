@@ -6,7 +6,11 @@ export function shouldFetchWithApiAuth(src?: string | null) {
   try {
     const base = typeof window !== 'undefined' ? window.location.href : 'http://localhost';
     const url = new URL(src, base);
-    return url.pathname.includes('/backend/files/') && url.pathname.endsWith('/content');
+    if (url.pathname.includes('/backend/files/') && url.pathname.endsWith('/content')) return true;
+    // Link preview thumbnails come through our own proxy for the same reason
+    // uploaded files do — the route is authenticated, and an <img src> cannot
+    // carry an Authorization header.
+    return url.pathname.includes('/backend/link-previews/') && url.pathname.endsWith('/image');
   } catch {
     return false;
   }

@@ -44,6 +44,20 @@ const {
  parseOrbBody,
  verifyOrbDelivery,
 } = require('./orbs.cjs');
+const {
+ LINK_PREVIEW_MAX_DESCRIPTION_CHARS,
+ LINK_PREVIEW_MAX_PER_REQUEST,
+ LINK_PREVIEW_MAX_SITE_CHARS,
+ LINK_PREVIEW_MAX_TITLE_CHARS,
+ LINK_PREVIEW_MAX_URL_CHARS,
+ LINK_PREVIEW_STATUSES,
+ clampPreviewText,
+ fetchLinkPreview,
+ fetchPreviewImage,
+ linkPreviewCacheKey,
+ linkPreviewTtlMs,
+ normalizeUnfurlUrl,
+} = require('./link-preview.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const {
  ALLOWED_TABLES,
@@ -665,6 +679,38 @@ async function ensureRuntimeSchema() {
       ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
       ON orb_deliveries(webhook_id, created_at DESC);
+
+    -- Link preview (unfurl) cache. Keyed by a hash of the NORMALIZED url and
+    -- deliberately NOT workspace-scoped: the whole point is one outbound fetch
+    -- per URL for the whole install rather than one per workspace, per reader,
+    -- per render. Nothing in a row is private to a workspace — it is metadata a
+    -- public page publishes about itself.
+    --
+    -- The table is absent from ALLOWED_TABLES on purpose, so it is unreachable
+    -- through the generic /backend/db gate and cannot be enumerated. It is read
+    -- only by POST /backend/link-previews, which answers for URLs the caller
+    -- supplied and never lists. (A caller who already knows an exact URL can
+    -- still infer "somebody unfurled this in the last week" from the response
+    -- latency; that oracle is not worth duplicating every fetch per workspace.)
+    --
+    -- expires_at is the TTL: ok/empty rows last a week, failures an hour, so a
+    -- host that was down for one minute is not un-previewable until Tuesday.
+    CREATE TABLE IF NOT EXISTS link_previews (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      url_hash text NOT NULL UNIQUE,
+      url text NOT NULL,
+      final_url text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'ok'
+        CHECK (status IN ('ok', 'empty', 'failed', 'blocked')),
+      title text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '',
+      site_name text NOT NULL DEFAULT '',
+      image_url text NOT NULL DEFAULT '',
+      detail text NOT NULL DEFAULT '',
+      fetched_at timestamptz NOT NULL DEFAULT now(),
+      expires_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_previews_expires ON link_previews(expires_at);
 
     CREATE TABLE IF NOT EXISTS agent_connections (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1808,6 +1854,15 @@ const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // and far below anything worth farming a token from.
 const voiceTokenRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 const voiceStreamRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// Link previews: the only route in the app where a request from a browser makes
+// this machine fetch a URL that browser chose. The cache absorbs the normal case
+// (one fetch per URL for the whole install, for a week), so a caller hitting this
+// limit is a caller feeding it URLs nobody has posted — which is the abuse shape,
+// not the product. 30 requests x 8 URLs a minute is far above scrolling a channel.
+const linkPreviewRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// The image proxy re-fetches on every cache miss in the reader's browser, so its
+// budget is per-image rather than per-batch and sits higher.
+const linkPreviewImageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -1823,6 +1878,11 @@ const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, d
 // list. Tight on purpose — nobody files five genuine bug reports a minute.
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'tenants' });
+// Outbound fetches cost this machine's time and put its IP in someone else's
+// logs, so the unfurl budget is enforced across instances too, not only per warm
+// process.
+const linkPreviewDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'link-preview' });
+const linkPreviewImageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: dbQuery, namespace: 'link-preview-image' });
 
 // Async layered gate: returns true (and writes 429) when EITHER layer blocks.
 // Callers MUST `await` this — an un-awaited call returns a truthy Promise and
@@ -8764,6 +8824,94 @@ async function assertSafeOutboundUrl(rawUrl, label = 'base_url') {
  return url.toString().replace(/\/+$/, '');
 }
 
+// --- Link preview cache rows ------------------------------------------------
+//
+// Listed explicitly, never `select *`: a column added to the table and forgotten
+// here would load blank rather than error, which is the failure mode this repo
+// keeps re-learning (the bootstrap sessions select, the /agents metadata column).
+const LINK_PREVIEW_COLUMNS = 'id, url_hash, url, final_url, status, title, '
+ + 'description, site_name, image_url, detail, fetched_at, expires_at';
+
+// `detail` is our own vocabulary ('timeout', 'http_404', 'too_many_redirects')
+// with ONE exception: `content_type_<type>` carries a media type the remote
+// server chose. Narrow charset, short cap — it is shown to a human as a reason.
+function sanitizePreviewDetail(value) {
+ return String(value == null ? '' : value)
+  .replace(/[^a-zA-Z0-9._+/-]+/g, '_')
+  .slice(0, 80);
+}
+
+/**
+ * Write one unfurl result into the cache, or refresh the row that is there.
+ *
+ * The clamps are applied AGAIN here even though link-preview.cjs already applied
+ * them. These columns are unbounded `text`, so the module being the only thing
+ * standing between a hostile page and a 5MB row would make it load-bearing in a
+ * place it is easy to edit without noticing.
+ *
+ * A refresh overwrites unconditionally, including a failure replacing a card
+ * that previously worked. That is deliberate for now: the failure TTL is an hour,
+ * so a site that blipped is re-tried soon, and "show the last thing we actually
+ * saw" needs conditional SQL that is harder to be sure about than this is.
+ */
+async function upsertLinkPreview(result) {
+ const status = LINK_PREVIEW_STATUSES.includes(result?.status) ? result.status : 'failed';
+ const url = String(result?.url || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS);
+ if (!url) return null;
+ const ttlSeconds = Math.max(60, Math.round(linkPreviewTtlMs(status) / 1000));
+ const rows = await getDb().unsafe(
+  `insert into link_previews
+      (url_hash, url, final_url, status, title, description, site_name, image_url, detail, fetched_at, expires_at)
+    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now() + make_interval(secs => $10::double precision))
+    on conflict (url_hash) do update set
+      url = excluded.url,
+      final_url = excluded.final_url,
+      status = excluded.status,
+      title = excluded.title,
+      description = excluded.description,
+      site_name = excluded.site_name,
+      image_url = excluded.image_url,
+      detail = excluded.detail,
+      fetched_at = excluded.fetched_at,
+      expires_at = excluded.expires_at
+    returning ${LINK_PREVIEW_COLUMNS}`,
+  [
+   linkPreviewCacheKey(url),
+   url,
+   String(result?.finalUrl || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS),
+   status,
+   clampPreviewText(result?.title, LINK_PREVIEW_MAX_TITLE_CHARS),
+   clampPreviewText(result?.description, LINK_PREVIEW_MAX_DESCRIPTION_CHARS),
+   clampPreviewText(result?.siteName, LINK_PREVIEW_MAX_SITE_CHARS),
+   String(result?.imageUrl || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS),
+   sanitizePreviewDetail(result?.detail),
+   ttlSeconds,
+  ],
+ );
+ return rows[0] || null;
+}
+
+/**
+ * The client-facing shape of a cache row.
+ *
+ * `image_url` — the third-party host — is NEVER returned. The client receives
+ * only `imagePath`, a path on our own origin, so there is no way for a card to
+ * end up hotlinking a stranger's CDN even by accident.
+ */
+function publicLinkPreview(row) {
+ return {
+  url: String(row?.url || ''),
+  finalUrl: String(row?.final_url || ''),
+  status: String(row?.status || 'failed'),
+  title: String(row?.title || ''),
+  description: String(row?.description || ''),
+  siteName: String(row?.site_name || ''),
+  imagePath: row?.image_url ? `/backend/link-previews/${row.id}/image` : '',
+  detail: String(row?.detail || ''),
+  fetchedAt: row?.fetched_at ? new Date(row.fetched_at).toISOString() : null,
+ };
+}
+
 function createApp() {
  const app = express();
  app.use(cors());
@@ -10431,6 +10579,127 @@ function createApp() {
     [String(req.userId), workspaceId, contextKey, readAt.toISOString()],
    );
    res.json({ data: { ok: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Link preview cards ----------------------------------------------------
+ //
+ // The browser CANNOT do this itself: it cannot read a cross-origin document
+ // (CORS), and if it could, every reader's IP would be handed to every host
+ // anybody links to. One fetch here, cached, is both the only workable option
+ // and the private one.
+ //
+ // Every security decision lives in server/link-preview.cjs (SSRF gate, budget,
+ // untrusted-text clamp) and is tested there. This route is the boring half:
+ // validate, read cache, fetch the misses, write the cache, answer. Note there
+ // is no jsonb column anywhere in this feature — the whole row is text and
+ // timestamps, so the porsager-stringify trap (tests/jsonb-bind-hygiene) has
+ // nothing to catch here.
+ //
+ // `urls` comes from the client's own extractor (src/lib/linkPreview.ts). It is
+ // re-validated here regardless: a drift between the two extractors can only
+ // change which cards appear, never what this server is willing to fetch.
+ app.post('/backend/link-previews', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, linkPreviewRateLimiter, linkPreviewDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const submitted = Array.isArray(req.body?.urls) ? req.body.urls : [];
+   const wanted = [];
+   const seen = new Set();
+   // Scan a bounded prefix, then keep the first N that survive validation — a
+   // body with 10,000 urls must not become 10,000 URL parses.
+   for (const raw of submitted.slice(0, LINK_PREVIEW_MAX_PER_REQUEST * 4)) {
+    const normalized = normalizeUnfurlUrl(raw);
+    if (!normalized.ok || seen.has(normalized.url)) continue;
+    seen.add(normalized.url);
+    wanted.push(normalized.url);
+    if (wanted.length >= LINK_PREVIEW_MAX_PER_REQUEST) break;
+   }
+   if (!wanted.length) return res.json({ data: { previews: [] }, error: null });
+
+   const hashes = wanted.map(linkPreviewCacheKey);
+   // Explicit placeholders rather than `= any($1::text[])`: postgres.js will not
+   // array-serialize a raw JS array bound through .unsafe (see AGENTS.md), and
+   // with a cap of 8 there is nothing to gain from the array form.
+   const cached = await getDb().unsafe(
+    `select ${LINK_PREVIEW_COLUMNS} from link_previews
+        where url_hash in (${hashes.map((_hash, index) => `$${index + 1}`).join(', ')})
+          and expires_at > now()`,
+    hashes,
+   );
+   const byHash = new Map(cached.map(row => [row.url_hash, row]));
+
+   const misses = wanted.filter(url => !byHash.has(linkPreviewCacheKey(url)));
+   if (misses.length) {
+    // In parallel, bounded by LINK_PREVIEW_MAX_PER_REQUEST. Each fetch carries
+    // its own deadline, so the worst case for this handler is one timeout, not
+    // the sum of them.
+    const fetched = await Promise.all(misses.map(async (url) => {
+     try {
+      return await fetchLinkPreview(url);
+     } catch (error) {
+      // fetchLinkPreview is documented not to throw; if that ever stops being
+      // true, one bad URL must not fail the whole batch.
+      console.warn('[link-preview] unexpected throw:', error?.message || error);
+      return { url, finalUrl: '', status: 'failed', detail: 'internal_error', title: '', description: '', siteName: '', imageUrl: '' };
+     }
+    }));
+    for (const result of fetched) {
+     const row = await upsertLinkPreview(result);
+     if (row) byHash.set(row.url_hash, row);
+    }
+   }
+
+   res.json({
+    data: {
+     previews: wanted
+      .map(url => byHash.get(linkPreviewCacheKey(url)))
+      .filter(Boolean)
+      .map(publicLinkPreview),
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // The image proxy. Direct <img src="https://stranger.example/card.png"> would
+ // hand the reader's IP (and referer, and UA) to that host on every render —
+ // exactly the leak unfurling server-side was meant to avoid — so the bytes come
+ // through here instead.
+ //
+ // A proxy is a second SSRF surface, and this one is deliberately shaped so it
+ // barely is: it takes a PREVIEW ROW ID, never a URL. The set of fetchable
+ // targets is therefore exactly the set already unfurled and validated once, and
+ // fetchPreviewImage re-runs the full gate anyway (DNS can move between the two
+ // requests). Authenticated, rate-limited, image-only content types, 2MB cap.
+ app.get('/backend/link-previews/:id/image', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, linkPreviewImageRateLimiter, linkPreviewImageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const id = String(req.params.id || '');
+   // Checked before the query: an id that is not a uuid would make the ::uuid
+   // cast throw a 500 for what is really a 404.
+   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return jsonError(res, 404, new Error('Preview not found'));
+   }
+   const rows = await getDb().unsafe('select image_url from link_previews where id = $1::uuid limit 1', [id]);
+   const imageUrl = String(rows[0]?.image_url || '');
+   if (!imageUrl) return jsonError(res, 404, new Error('This preview has no image'));
+   const image = await fetchPreviewImage(imageUrl);
+   if (!image.ok) return jsonError(res, 502, new Error('Preview image could not be fetched'));
+   res.setHeader('Content-Type', image.contentType);
+   // Belt and braces on a body we did not author: no sniffing to something
+   // executable, and a CSP that permits nothing at all if it is ever navigated
+   // to directly rather than loaded as an <img>.
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+   // `private` so a shared cache never holds it; a day is well inside the row's
+   // own TTL and keeps a scrolling reader off this route entirely.
+   res.setHeader('Cache-Control', 'private, max-age=86400');
+   res.end(image.bytes);
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
