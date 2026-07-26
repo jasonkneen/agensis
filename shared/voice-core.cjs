@@ -47,6 +47,9 @@ const CARTESIA_OUTPUT = Object.freeze({ container: 'raw', encoding: 'pcm_s16le',
 // The token only has to be valid for the handshake, so this is "long enough to
 // survive a slow connect", not "long enough for a call".
 const CARTESIA_TOKEN_TTL_SECONDS = 120;
+// The exchange itself is bounded too. A hung provider must become a clean 504,
+// not a /voice/tts-token request that never answers the panel.
+const CARTESIA_TOKEN_TIMEOUT_MS = 10_000;
 
 // flux-general-en, not nova-3. Flux is Deepgram's conversational model: it
 // decides when a turn has ENDED and says so (EndOfTurn), where nova-3 only
@@ -191,15 +194,24 @@ async function mintCartesiaToken({ apiKey, expiresIn = CARTESIA_TOKEN_TTL_SECOND
   if (!key) throw Object.assign(new Error('Cartesia is not configured on this server.'), { status: 503 });
   if (typeof fetchImpl !== 'function') throw new Error('mintCartesiaToken requires fetch');
 
-  const response = await fetchImpl(CARTESIA_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Cartesia-Version': CARTESIA_VERSION,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ grants: { tts: true }, expires_in: expiresIn }),
-  });
+  let response;
+  try {
+    response = await fetchImpl(CARTESIA_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'Cartesia-Version': CARTESIA_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ grants: { tts: true }, expires_in: expiresIn }),
+      signal: AbortSignal.timeout(CARTESIA_TOKEN_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw Object.assign(new Error('Cartesia did not respond to the token exchange in time.'), { status: 504 });
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');

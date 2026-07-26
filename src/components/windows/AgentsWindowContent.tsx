@@ -2122,7 +2122,7 @@ export function VoiceSection({
   roster: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
 }) {
-  const { voices, loading, configured } = useCartesiaVoices();
+  const { voices, loading, configured, error: voicesError } = useCartesiaVoices();
   const [query, setQuery] = useState('');
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState('');
@@ -2295,13 +2295,18 @@ export function VoiceSection({
               </Button>
             )}
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={resolved.voiceId}>
+              {/* "The catalogue failed to load" and "there genuinely is no
+                  voice" are different facts — swallowing the error here is how
+                  a Cartesia outage read as a missing feature. */}
               {previewError
                 ? previewError
                 : loading
                   ? 'Loading voices…'
-                  : chosen
-                    ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
-                    : 'No voice available.'}
+                  : voicesError
+                    ? `Could not load voices: ${voicesError}`
+                    : chosen
+                      ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
+                      : 'No voice available.'}
             </span>
           </div>
         </>

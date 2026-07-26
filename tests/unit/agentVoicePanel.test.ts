@@ -132,6 +132,17 @@ describe('the voice section', () => {
     expect(selects()).toHaveLength(0);
   });
 
+  it('surfaces a catalogue failure instead of pretending no voice exists', async () => {
+    // "The provider errored" and "there is no voice" are different facts. The
+    // section used to swallow the error it had in hand and show "No voice
+    // available.", which read as a missing feature during a Cartesia outage.
+    stubVoices({}, false);
+    await render(AGENT);
+    expect(container.textContent).toContain('Could not load voices');
+    expect(container.textContent).toContain('HTTP 500');
+    expect(container.textContent).not.toContain('No voice available');
+  });
+
   it('mounts before the catalogue arrives', async () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
     await render(AGENT);

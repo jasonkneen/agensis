@@ -286,6 +286,25 @@ test('mintCartesiaToken refuses to build a token out of a provider error body', 
   );
 });
 
+test('mintCartesiaToken turns a hung provider into a clean 504, not a request that never returns', async () => {
+  // The exchange runs inside /voice/tts-token; a Cartesia that stops answering
+  // must produce a sentence for the client, not hold the route open forever.
+  await assert.rejects(
+    voiceCore.mintCartesiaToken({
+      apiKey: CARTESIA_KEY,
+      fetchImpl: async () => {
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      },
+    }),
+    (error) => {
+      assert.equal(error.status, 504);
+      assert.match(error.message, /did not respond/);
+      assert.ok(!String(error.message).includes(CARTESIA_KEY));
+      return true;
+    },
+  );
+});
+
 // --- 2. auth and membership -------------------------------------------------
 
 test('minting a voice token requires auth, and never reaches the minter', async () => {

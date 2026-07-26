@@ -75,8 +75,12 @@ test('the catalogue pages through every voice and returns English ids sorted', a
     assert.equal(stub.calls.length, 2, 'should follow the has_more cursor');
     assert.match(stub.calls[0].url, /\/voices\?limit=100$/);
     assert.match(stub.calls[1].url, /starting_after=aaa-11111111/);
+    // These header assertions pin a LIVE-VERIFIED contract, not the code's own
+    // echo: on 2026-07-26, GET /voices with exactly these headers returned 200
+    // against api.cartesia.ai (as did Authorization: Bearer — the API accepts
+    // both, so keeping X-API-Key is a verified choice, not an oversight).
     assert.equal(stub.calls[0].init.headers['X-API-Key'], process.env.CARTESIA_API_KEY);
-    assert.ok(stub.calls[0].init.headers['Cartesia-Version'], 'the version header is required');
+    assert.equal(stub.calls[0].init.headers['Cartesia-Version'], '2026-03-01');
   } finally {
     stub.restore();
   }
@@ -92,7 +96,7 @@ test('the catalogue is cached, so opening the panel does not re-page 800 voices'
   }
 });
 
-test('cartesiaSpeak sends the documented sonic-3.5 request', async () => {
+test('cartesiaSpeak sends the live-verified sonic-3.5 request', async () => {
   const stub = stubFetch(async () => ({
     ok: true, status: 200, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
   }));
@@ -114,8 +118,38 @@ test('cartesiaSpeak sends the documented sonic-3.5 request', async () => {
     // top-level `speed: "fast"` is deprecated and must not be used.
     assert.deepEqual(body.generation_config, { speed: 1.2, emotion: 'contemplative' });
     assert.equal(body.speed, undefined);
-    assert.equal(body.output_format.container, 'mp3');
+    // The full shape, deep-equal, because it is a LIVE-VERIFIED contract: on
+    // 2026-07-26 POST /tts/bytes with exactly this output_format returned 200
+    // audio/mpeg (an ID3-tagged MP3) against api.cartesia.ai. The documented
+    // form ({ container:'mp3', sample_rate:44100, bit_rate:128000 }, no
+    // `encoding`) was accepted too — Cartesia tolerates both, so a mismatch
+    // with the docs here is not a bug. Re-verify live before changing this.
+    assert.deepEqual(body.output_format, { container: 'mp3', encoding: 'mp3', sample_rate: 24000 });
     assert.ok(body.transcript.length > 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('a Cartesia that stops answering becomes a 504 with a sentence, not a hung request', async () => {
+  // Both outbound calls ride cartesiaFetch, whose AbortSignal timeout fires as
+  // a TimeoutError. That must reach the route as a clean, client-safe error —
+  // the preview button and the voice picker both block on these.
+  const timeoutError = () => Object.assign(
+    new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' },
+  );
+  const stub = stubFetch(async () => { throw timeoutError(); });
+  try {
+    await assert.rejects(
+      () => __test.cartesiaSpeak({ voiceId: 'f9fc912e-e650-4766-a20c-5a93a43aa6e3' }),
+      (error) => error.status === 504 && /did not respond/.test(error.message),
+    );
+    // fetchCartesiaVoices directly — cartesiaEnglishVoiceIds would serve the
+    // catalogue this file already cached.
+    await assert.rejects(
+      () => __test.fetchCartesiaVoices(),
+      (error) => error.status === 504 && /did not respond/.test(error.message),
+    );
   } finally {
     stub.restore();
   }
