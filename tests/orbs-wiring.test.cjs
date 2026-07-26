@@ -187,10 +187,16 @@ test('the orb signing secret is never a column on agent_webhooks', () => {
     );
   }
   assert.ok(SERVER.includes("return `orb:${String(webhookId || '')}`"), 'vault key namespace');
-  assert.ok(
-    SERVER.includes("row.key.startsWith('orb:')"),
-    'platform-owned orb secrets must be excluded from the user-facing vault list',
-  );
+  // An orb secret is now SHOWN in the vault surface rather than excluded from it —
+  // but classified, so it arrives labelled with its orb and with no write lane.
+  // Rotation stays in the orb's own panel, where the operator can also re-register
+  // the secret with the provider; a generic secrets list offering "delete" would
+  // silently 503 every delivery.
+  const { classifyVaultKey } = require('../shared/backend-core.cjs');
+  const orbEntry = classifyVaultKey('orb:5f3ab19c-0000-4000-8000-000000000000');
+  assert.equal(orbEntry.group, 'orb');
+  assert.equal(orbEntry.lane, 'none');
+  assert.equal(orbEntry.label, 'Signing secret');
 });
 
 test('the netlify create route agrees with server/orbs.cjs on the provider list', () => {

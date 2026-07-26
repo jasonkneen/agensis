@@ -24,6 +24,9 @@ import {
  safeSelectColumns,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
+ VAULT_KEY_RE,
+ listWorkspaceSecretMeta,
+ listWorkspaceVaultEntries,
  normalizeFeedbackSubmission,
  insertFeedbackReport,
  badRequest,
@@ -622,10 +625,34 @@ async function query(text, params = []) {
  return result.rows;
 }
 
-function maskSecret(value) {
- if (!value) return '';
- if (value.length <= 8) return '••••••';
- return `${value.slice(0, 4)}…${value.slice(-4)}`;
+// ----------------------------------------------------------------------------
+// VAULT WRITES ON THIS LANE.
+//
+// Both hosts read and write the same `workspace_secrets` rows in the same Neon
+// DB, and both derive the AES-256-GCM key the same way (shared/backend-core.cjs):
+// a dedicated SECRETS_ENCRYPTION_KEY if it is set, else the HMAC AUTH_SECRET. Fly
+// HAS SECRETS_ENCRYPTION_KEY; this function historically did not — so a secret
+// written here was encrypted under the auth fallback, and the Fly server, deriving
+// from the dedicated key, could not decrypt it. AES-GCM fails closed, so the
+// symptom was not garbage: the key silently read back as NOT CONFIGURED, and the
+// provider call it was entered for kept refusing.
+//
+// So this lane refuses to WRITE a vault secret unless SECRETS_ENCRYPTION_KEY is
+// set here too — which is the operator saying "I have synced it with the primary".
+// Reads are always served: a metadata list holds no secret material.
+//
+// This is a fail-closed guard, not a capability check: `assertWorkspaceRole(...,
+// 'manage')` still runs on every write. Both must pass.
+function vaultWritesEnabled() {
+ return String(process.env.SECRETS_ENCRYPTION_KEY || '').trim().length > 0;
+}
+
+function vaultWriteUnavailable() {
+ return jsonError(503, new Error(
+  'Vault writes are served by the primary backend. This host has no SECRETS_ENCRYPTION_KEY, '
+  + 'so a secret written here would be encrypted with different key material and would read back '
+  + 'as not configured on the server that uses it. Set the same SECRETS_ENCRYPTION_KEY on both hosts to enable this route.',
+ ));
 }
 
 async function ensureSecretsTables() {
@@ -688,8 +715,18 @@ async function resolveSecret(key, workspaceId = null) {
  return appValue || process.env[key] || '';
 }
 
+// Managed-key STATE, never any part of a value — mirrors the Fly shape. The
+// masked preview both lanes used to return was of the PLATFORM key whenever the
+// workspace had none of its own, which showed every workspace owner four
+// characters of the app-level ANTHROPIC_API_KEY. `scope` already says which key is
+// in play.
 async function listManagedSecrets(workspaceId = null) {
  await ensureSecretsTables();
+ const meta = new Map();
+ if (workspaceId) {
+  const rows = await listWorkspaceSecretMeta(workspaceId, { db: query }).catch(() => []);
+  for (const row of rows) meta.set(row.key, row);
+ }
  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
   const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
   const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
@@ -697,8 +734,8 @@ async function listManagedSecrets(workspaceId = null) {
   return {
    key,
    configured: Boolean(value),
-   preview: maskSecret(value),
    scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+   updated_at: meta.get(key)?.updated_at || null,
   };
  }));
 }
@@ -2495,6 +2532,7 @@ async function route(req) {
   if (!workspaceId) {
    return jsonError(403, new Error('App-level secret management is not available to users'));
   }
+  if (!vaultWritesEnabled()) return vaultWriteUnavailable();
   await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
   const updates = {};
   for (const key of MANAGED_SECRET_KEYS) {
@@ -2509,6 +2547,58 @@ async function route(req) {
   const keys = await listManagedSecrets(workspaceId);
   return json({ data: { keys }, error: null });
  }
+
+ // --- The workspace vault (mirror) -------------------------------------------
+ // Same rows, same classification (shared/backend-core.cjs), same 'manage' gate as
+ // the Fly routes. WRITE-ONLY in the same sense: the list does not decrypt and its
+ // SQL never selects `value` or `secret_cipher`.
+ //
+ // Two deliberate differences from the primary:
+ //   * writes require SECRETS_ENCRYPTION_KEY here (see vaultWritesEnabled), because
+ //     divergent key material writes a secret nothing can read back;
+ //   * unset PROVIDER SLOTS are not listed. Slot enumeration comes from the sandbox
+ //     skill definitions, which live in the Fly server's module graph — and nothing
+ //     on this host makes a provider call, so it has no use for them.
+ if (pathname.startsWith('/backend/workspaces/') && pathname.includes('/vault')) {
+  const rest = pathname.slice('/backend/workspaces/'.length);
+  const [rawWorkspaceId, marker, ...keyParts] = rest.split('/');
+  const workspaceId = decodeURIComponent(rawWorkspaceId || '').trim();
+  if (marker === 'vault' && workspaceId) {
+   const userId = await requireUserId(req);
+   const key = decodeURIComponent(keyParts.join('/') || '').trim();
+
+   if (req.method === 'GET' && !key) {
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    await ensureSecretsTables();
+    const data = await listWorkspaceVaultEntries(workspaceId, { db: query, managedKeys: MANAGED_SECRET_KEYS });
+    return json({ data, error: null });
+   }
+
+   if ((req.method === 'PUT' || req.method === 'DELETE') && key) {
+    // The charset is the namespace guard: no colon, so this route can never reach
+    // a `sandbox:` or `orb:` entry however the caller spells it.
+    if (!VAULT_KEY_RE.test(key)) {
+     return jsonError(400, new Error(key.includes(':')
+      ? 'Namespaced vault entries are set by the surface that owns them.'
+      : 'key must be 1-128 chars of letters, digits, _ . -'));
+    }
+    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(400, new Error('That key is managed elsewhere'));
+    if (!vaultWritesEnabled()) return vaultWriteUnavailable();
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    await ensureSecretsTables();
+    if (req.method === 'DELETE') {
+     await query('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
+     return json({ data: { key }, error: null });
+    }
+    const body = await readBody(req);
+    const value = typeof body?.value === 'string' ? body.value : '';
+    const description = typeof body?.description === 'string' ? body.description.slice(0, 300) : null;
+    await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId, description });
+    return json({ data: { key, configured: Boolean(value) }, error: null });
+   }
+  }
+ }
+
  if (req.method === 'POST' && pathname === '/backend/ai-chat') {
   const userId = await requireUserId(req);
   const blocked = await dbRateLimitBlock(aiChatRateLimiter, aiChatDbRateLimiter, userId || clientIpFromRequest(req));

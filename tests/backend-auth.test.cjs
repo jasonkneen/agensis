@@ -521,7 +521,14 @@ test('settings secrets route is owner/admin only', async () => {
     assert.equal(adminResponse.status, 200);
     assert.equal(adminBody.data.keys[0].configured, true);
     assert.equal(adminBody.data.keys[0].scope, 'workspace');
-    assert.match(adminBody.data.keys[0].preview, /^sk-w/);
+    // WRITE-ONLY: state and nothing more. The masked preview this route used to
+    // return was of the PLATFORM key whenever the workspace had none of its own,
+    // so every workspace owner was shown four characters of it.
+    assert.equal('preview' in adminBody.data.keys[0], false, 'a managed key must not carry a preview');
+    assert.ok(
+      !JSON.stringify(adminBody).includes('sk-w'),
+      'no part of the stored key may appear in the response',
+    );
   });
 });
 
@@ -542,8 +549,10 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
 
     assert.equal(response.status, 200);
     assert.equal(body.data.keys[0].scope, 'workspace');
-    // Round-trips through the read path (preview is masked from the decrypted value).
-    assert.match(body.data.keys[0].preview, /^sk-n/);
+    // The write is confirmed by STATE, not by echoing the value back.
+    assert.equal(body.data.keys[0].configured, true);
+    assert.ok(!JSON.stringify(body).includes('sk-new-workspace-key'), 'the written key must not be echoed');
+    assert.ok(!JSON.stringify(body).includes('sk-n'), 'not even a prefix of the written key');
     const insertCall = fakeDb.calls.find(call => String(call.sql).includes('insert into workspace_secrets'));
     assert.ok(insertCall, 'expected an insert into workspace_secrets');
     // Encryption-at-rest: the value column is a SQL literal '' (not a param), and
