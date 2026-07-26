@@ -59,6 +59,12 @@ const {
  isCartesiaVoiceId,
  CARTESIA_MODEL_ID,
 } = require('../shared/agentIdentity.cjs');
+const {
+ assertSystemOwner,
+ isSystemOwnerUser,
+ listTenantAccounts,
+ getTenantAccount,
+} = require('../shared/tenant-admin.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -1678,6 +1684,11 @@ const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // keyed per-IP and kept cheap — a page in a redirect loop can emit a lot.
 const cspReportRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Tenants (the system-owner admin surface). Every request runs a DB lookup of
+// the caller's own email before it is refused, so the limiter is what stops an
+// authenticated non-owner turning the 403 into a free query loop. Keyed per
+// caller, and low: the owner browses a list, they do not poll it.
+const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -1692,6 +1703,7 @@ const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, d
 // between one account and an unbounded write into the System workspace's task
 // list. Tight on purpose — nobody files five genuine bug reports a minute.
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
+const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'tenants' });
 
 // Async layered gate: returns true (and writes 429) when EITHER layer blocks.
 // Callers MUST `await` this — an un-awaited call returns a truthy Promise and
@@ -9918,6 +9930,59 @@ function createApp() {
     console.warn('[feedback] realtime fanout failed:', error.message || error);
    }
    res.json({ data: { ok: true, taskId: result.taskId }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Tenants (system-owner admin surface) ----------------------------------
+ //
+ // The only routes in this file that read ACROSS workspaces and accounts. They
+ // are authorized by `assertSystemOwner` (shared/tenant-admin.cjs) and by
+ // nothing else — no workspace membership, no role, no allow-list of ids, and
+ // no email taken from the request. The check resolves the caller's email from
+ // their authenticated userId and compares it to AGENSIS_SYSTEM_OWNER_EMAIL;
+ // it refuses when that is unset.
+ //
+ // The Tenants button is hidden from everybody else in the UI. That is a
+ // nicety. THESE THREE CHECKS are the access control, and each route runs its
+ // own — a curl with a valid non-owner token gets 403 from every one of them.
+ //
+ // Read-only, on purpose: upgrades and credits are a later pass and will need
+ // their own audit trail. There is no tenant write route to get wrong yet.
+
+ // Whether the CALLER is the owner. Answers for the caller and nobody else, so
+ // it is safe for any signed-in user to ask — it is how the client decides
+ // whether to render the button at all, and a 403 there would be a console
+ // error on every ordinary user's session.
+ app.get('/backend/tenants/access', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const owner = await isSystemOwnerUser({ userId: req.userId, db: dbQuery });
+   res.json({ data: { owner }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const result = await listTenantAccounts(dbQuery);
+   res.json({ data: result, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants/:id', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const detail = await getTenantAccount(dbQuery, String(req.params.id || ''));
+   if (!detail) return jsonError(res, 404, new Error('No such account'));
+   res.json({ data: detail, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

@@ -27,6 +27,12 @@ import {
  normalizeFeedbackSubmission,
  insertFeedbackReport,
 } from '../../shared/backend-core.cjs';
+import {
+ assertSystemOwner,
+ isSystemOwnerUser,
+ listTenantAccounts,
+ getTenantAccount,
+} from '../../shared/tenant-admin.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 import { markHumanIdentityWrite, identityLockSql } from '../../shared/agentIdentity.cjs';
 
@@ -65,6 +71,11 @@ const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // between one account and an unbounded write into the System workspace's task
 // list. Tight on purpose — nobody files five genuine bug reports a minute.
 const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Tenants (the system-owner admin surface). Mirrors server/index.cjs: every
+// request costs a DB lookup of the caller's own email before it can be refused,
+// so this is what stops an authenticated non-owner turning the 403 into a free
+// query loop.
+const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -93,6 +104,7 @@ function rateLimitBlock(limiter, key) {
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'dispatch' });
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
+const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
 // Callers MUST await it.
@@ -2200,6 +2212,40 @@ async function route(req) {
    submission,
   });
   return json({ data: { ok: true, taskId: result.taskId }, error: null });
+ }
+ // Tenants (system-owner admin surface). Mirrors server/index.cjs exactly — a
+ // route on only one backend is a live 404 for half the deployment, and an
+ // ADMIN route present on one backend and absent on the other is worse: the
+ // half that has it is the half nobody remembers to re-audit.
+ //
+ // Authorization is `assertSystemOwner` and nothing else: the caller's email is
+ // read from app_users by their authenticated userId and compared to
+ // AGENSIS_SYSTEM_OWNER_EMAIL, which must be set. No email is ever taken from
+ // the request, and there is no workspace-membership path to this data.
+ // `/access` answers only about the CALLER, which is why it is not owner-gated.
+ if (req.method === 'GET' && pathname === '/backend/tenants/access') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const owner = await isSystemOwnerUser({ userId, db: query });
+  return json({ data: { owner }, error: null });
+ }
+ if (req.method === 'GET' && pathname === '/backend/tenants') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({ data: await listTenantAccounts(query), error: null });
+ }
+ const tenantDetailMatch = pathname.match(/^\/backend\/tenants\/([^/]+)$/);
+ if (req.method === 'GET' && tenantDetailMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  const detail = await getTenantAccount(query, decodeURIComponent(tenantDetailMatch[1]));
+  if (!detail) return jsonError(404, new Error('No such account'));
+  return json({ data: detail, error: null });
  }
  if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
   return handleCreateAgentWebhook(req, await requireUserId(req));
