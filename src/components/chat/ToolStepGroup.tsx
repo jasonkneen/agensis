@@ -1,5 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useId, useMemo, useState, type ComponentType } from 'react';
 import {
+  Brain,
   ChevronRight,
   FileText,
   FolderTree,
@@ -12,13 +13,16 @@ import {
   Wrench,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../lib/activityStatus';
 import type { Message as ChatMessage } from '../../types';
 import {
-  TOOL_STEP_SETTLE_MS,
   bucketToolSteps,
   isStaleStepGroup,
+  rememberThinkingElapsed,
   toolStepLabel,
   toolStepParts,
+  type ThoughtChip as ThoughtChipData,
+  type TranscriptStepRow,
 } from './toolSteps';
 
 type ToolIcon = ComponentType<{ className?: string }>;
@@ -64,55 +68,33 @@ function callCountLabel(count: number): string {
 }
 
 /**
- * A step group has two lives.
+ * One run of agent work, rendered as a single strip of chips.
  *
- * LIVE — chips flow inline as they stream in so the run is watchable and
- * interruptible. SETTLED — once the run finishes or goes quiet the chips gather
- * into one summary chip, and the detail is available on demand three levels deep:
- * total -> per-tool counts -> individual calls.
+ * The strip is ALWAYS gathered: the summary chip appears on the first step and its
+ * count climbs live ("3 tool calls" -> "4 tool calls") rather than the group sitting
+ * open and tidying itself up afterwards. Detail is available on demand, three levels
+ * deep: total -> per-tool counts -> individual calls.
  *
- * Settling is one-way. It fires on whichever comes first: a later non-step message
- * from the same agent (`endedByReply`), or a quiet window with no new step. Once
- * settled the group never re-expands on its own — from then on it is the reader's
- * choice.
+ * Expansion is therefore only ever the reader's choice. Nothing in here opens or
+ * closes the disclosure on its own, so a group cannot fold shut under someone who
+ * opened it while more steps are still landing.
+ *
+ * Beside the summary sit the agent's thinking chips — live "Thinking 15s" while it
+ * reasons, settled "Thought for 15s" once that period is over — so the whole turn
+ * reads as one continuous strip instead of chips, a bubble, then more chips.
  */
-export function ToolStepGroup({
-  steps,
-  endedByReply = false,
-  compact = false,
-}: {
-  steps: ChatMessage[];
-  endedByReply?: boolean;
-  compact?: boolean;
-}) {
+export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow; compact?: boolean }) {
+  const { steps, thinking, thoughts, endedByReply } = row;
   const panelId = useId();
-  // Scrollback and reopened threads start settled — they were never live here.
-  const [settled, setSettled] = useState(() => endedByReply || isStaleStepGroup(steps));
-  // Mirrors `settled` for the effect below, which must not re-arm a timer after the
-  // group has already gathered up (and must not list `settled` as a dependency,
-  // which would re-run it on the very state change it guards against).
-  const settledRef = useRef(settled);
   const [expanded, setExpanded] = useState(false);
   const [openTools, setOpenTools] = useState<string[]>([]);
 
   const count = steps.length;
   const buckets = useMemo(() => bucketToolSteps(steps), [steps]);
-
-  useEffect(() => {
-    if (settledRef.current) return;
-    if (endedByReply) {
-      settledRef.current = true;
-      setSettled(true);
-      return;
-    }
-    // Re-armed on every new step (count changes) and cleared on unmount, so exactly
-    // one timer is ever outstanding per group.
-    const timer = window.setTimeout(() => {
-      settledRef.current = true;
-      setSettled(true);
-    }, TOOL_STEP_SETTLE_MS);
-    return () => window.clearTimeout(timer);
-  }, [count, endedByReply]);
+  // Liveness is derived, never stored: a new step or a placeholder tick re-renders
+  // this and the answer is recomputed. No timer ticks in the background to decide it.
+  const members = useMemo(() => (thinking.length > 0 ? [...steps, ...thinking] : steps), [steps, thinking]);
+  const live = !endedByReply && !isStaleStepGroup(members);
 
   const toggleTool = (name: string) => {
     setOpenTools(current => (
@@ -123,19 +105,16 @@ export function ToolStepGroup({
   return (
     <div
       role="group"
-      aria-label={`Agent tool activity, ${callCountLabel(count)}`}
+      aria-label={count > 0 ? `Agent activity, ${callCountLabel(count)}` : 'Agent activity'}
       className={cn('chat-tool-steps min-w-0 py-1', compact ? COMPACT_INDENT : CHANNEL_INDENT)}
     >
       <div className="min-w-0 border-l border-border pl-2.5">
-        {!settled ? (
-          <div className="flex min-w-0 flex-wrap items-center gap-1">
-            <LiveDot />
-            {steps.map((step, index) => (
-              <ToolStepChip key={step.id} step={step} active={index === count - 1} />
-            ))}
-          </div>
-        ) : (
-          <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {/* A live thinking chip already says "still moving" — and says it better —
+              so the dot only stands in when there isn't one. */}
+          {live && thinking.length === 0 && <LiveDot />}
+
+          {count > 0 && (
             <button
               type="button"
               aria-expanded={expanded}
@@ -150,53 +129,56 @@ export function ToolStepGroup({
               />
               <span className="truncate">{callCountLabel(count)}</span>
             </button>
+          )}
 
-            {expanded && (
-              <div id={panelId} className="mt-1 min-w-0 space-y-1">
-                <div className="flex min-w-0 flex-wrap items-center gap-1">
-                  {buckets.map(bucket => {
-                    const Icon = toolIcon(bucket.name);
-                    const open = openTools.includes(bucket.name);
-                    return (
-                      <button
-                        key={bucket.name}
-                        type="button"
-                        aria-expanded={open}
-                        aria-controls={open ? `${panelId}-${bucket.name}` : undefined}
-                        onClick={() => toggleTool(bucket.name)}
-                        className={cn(
-                          CHIP_BASE,
-                          'pl-2 pr-2.5',
-                          CHIP_INTERACTIVE,
-                          open ? 'border-ring bg-muted text-foreground' : CHIP_IDLE,
-                        )}
-                      >
-                        <Icon className="size-3 shrink-0 opacity-70" />
-                        <span className="truncate">
-                          {bucket.steps.length} {bucket.name}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+          {thoughts.map(thought => <ThoughtChip key={thought.id} thought={thought} />)}
+          {thinking.map(placeholder => <ThinkingChip key={placeholder.id} placeholder={placeholder} />)}
+        </div>
 
-                {buckets
-                  .filter(bucket => openTools.includes(bucket.name))
-                  .map(bucket => (
-                    <ul
-                      key={bucket.name}
-                      id={`${panelId}-${bucket.name}`}
-                      className="min-w-0 space-y-0.5 border-l border-border/50 pl-2.5"
-                    >
-                      {bucket.steps.map(step => (
-                        <li key={step.id} className="min-w-0">
-                          <ToolStepChip step={step} />
-                        </li>
-                      ))}
-                    </ul>
+        {expanded && count > 0 && (
+          <div id={panelId} className="mt-1 min-w-0 space-y-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              {buckets.map(bucket => {
+                const Icon = toolIcon(bucket.name);
+                const open = openTools.includes(bucket.name);
+                return (
+                  <button
+                    key={bucket.name}
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={open ? `${panelId}-${bucket.name}` : undefined}
+                    onClick={() => toggleTool(bucket.name)}
+                    className={cn(
+                      CHIP_BASE,
+                      'pl-2 pr-2.5',
+                      CHIP_INTERACTIVE,
+                      open ? 'border-ring bg-muted text-foreground' : CHIP_IDLE,
+                    )}
+                  >
+                    <Icon className="size-3 shrink-0 opacity-70" />
+                    <span className="truncate">
+                      {bucket.steps.length} {bucket.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {buckets
+              .filter(bucket => openTools.includes(bucket.name))
+              .map(bucket => (
+                <ul
+                  key={bucket.name}
+                  id={`${panelId}-${bucket.name}`}
+                  className="min-w-0 space-y-0.5 border-l border-border/50 pl-2.5"
+                >
+                  {bucket.steps.map(step => (
+                    <li key={step.id} className="min-w-0">
+                      <ToolStepChip step={step} />
+                    </li>
                   ))}
-              </div>
-            )}
+                </ul>
+              ))}
           </div>
         )}
       </div>
@@ -205,11 +187,58 @@ export function ToolStepGroup({
 }
 
 /**
- * One call. Never wraps internally — the detail truncates and the untruncated text
- * lives in `title`, so four in a row read as four short units rather than four
- * paragraphs of shell.
+ * "Thinking 15s" while the agent reasons — the elapsed is the daemon's own, read
+ * straight off the placeholder it already re-posts about once a second. No clock
+ * runs here.
+ *
+ * It also RECORDS that elapsed. The placeholder row is rewritten in place into the
+ * agent's reply, so this render is the last moment the duration exists anywhere;
+ * the settled chip beside it is drawn from what was captured here.
  */
-function ToolStepChip({ step, active = false }: { step: ChatMessage; active?: boolean }) {
+function ThinkingChip({ placeholder }: { placeholder: ChatMessage }) {
+  const content = typeof placeholder.content === 'string' ? placeholder.content : '';
+  const elapsed = activityElapsed(content);
+
+  useEffect(() => {
+    // "0s" is a period nobody noticed — the built-in chat inserts its placeholder
+    // and streams into it in the same breath — so it leaves no chip behind.
+    if (elapsed !== '0s') rememberThinkingElapsed(placeholder.id, elapsed);
+  }, [placeholder.id, elapsed]);
+
+  return (
+    <span
+      className={cn(
+        CHIP_BASE,
+        'max-w-full pl-2 pr-2.5 whitespace-nowrap',
+        'border-[color:var(--accent-border)] bg-[color:var(--accent-subtle)]',
+        'animate-in fade-in-0 duration-200',
+      )}
+    >
+      <Brain className="size-3 shrink-0 text-[color:var(--accent)]" />
+      {/* The shimmer is the only motion — it reads as alive without a second
+          spinner competing with the chip's own ticking number. */}
+      <span className="text-shimmer truncate font-medium">{activityChipLabel(content)}</span>
+    </span>
+  );
+}
+
+/** The same period once it is over, kept as provenance exactly like a tool call. */
+function ThoughtChip({ thought }: { thought: ThoughtChipData }) {
+  const label = thoughtChipLabel(thought.elapsed);
+  return (
+    <span title={label} className={cn(CHIP_BASE, 'max-w-full pl-2 pr-2.5 whitespace-nowrap', CHIP_IDLE)}>
+      <Brain className="size-3 shrink-0 opacity-70" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+/**
+ * One call, shown only once the reader opens a tool bucket. Never wraps internally —
+ * the detail truncates and the untruncated text lives in `title`, so four in a row
+ * read as four short units rather than four paragraphs of shell.
+ */
+function ToolStepChip({ step }: { step: ChatMessage }) {
   const { name, detail } = toolStepParts(step);
   const Icon = toolIcon(name);
   return (
@@ -219,9 +248,7 @@ function ToolStepChip({ step, active = false }: { step: ChatMessage; active?: bo
         CHIP_BASE,
         'max-w-[22rem] pl-2 pr-2.5 whitespace-nowrap',
         'animate-in fade-in-0 slide-in-from-left-1 duration-200',
-        active
-          ? 'border-[color:var(--accent-border)] bg-[color:var(--accent-subtle)] text-foreground/80'
-          : CHIP_IDLE,
+        CHIP_IDLE,
       )}
     >
       <Icon className="size-3 shrink-0 opacity-70" />
