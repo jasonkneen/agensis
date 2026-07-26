@@ -63,6 +63,10 @@ const MUST_BE_LINTED = [
   // credentials), what a provider credential is named in the vault, and whether
   // a provider API response can climb out of its fence and become instructions.
   'server/sandbox-skills.cjs',
+  // Decides which URLs this machine will fetch on a chat message's behalf — the
+  // SSRF gate for link preview cards, including the per-redirect re-validation.
+  // Anyone who can post a message picks the URL.
+  'server/link-preview.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.

@@ -677,6 +677,33 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
 
+-- Link preview (unfurl) cache. Keyed by a hash of the normalized URL and
+-- deliberately NOT workspace-scoped: one outbound fetch per URL for the whole
+-- install, rather than one per workspace, per reader, per render. Nothing in a
+-- row is private — it is metadata a public page publishes about itself.
+--
+-- Absent from ALLOWED_TABLES on purpose, so it cannot be reached (or enumerated)
+-- through the generic /backend/db gate. Read only by POST /backend/link-previews.
+-- Mirrors the runtime bootstrap in server/index.cjs and
+-- supabase/migrations/20260726190000_link_previews.sql.
+CREATE TABLE IF NOT EXISTS link_previews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  url_hash text NOT NULL UNIQUE,
+  url text NOT NULL,
+  final_url text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'ok'
+    CHECK (status IN ('ok', 'empty', 'failed', 'blocked')),
+  title text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  site_name text NOT NULL DEFAULT '',
+  image_url text NOT NULL DEFAULT '',
+  detail text NOT NULL DEFAULT '',
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  -- ok/empty rows last a week, failures an hour (see linkPreviewTtlMs).
+  expires_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_link_previews_expires ON link_previews(expires_at);
+
 CREATE TABLE IF NOT EXISTS agent_connections (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

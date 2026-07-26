@@ -14,6 +14,19 @@
     ]
   },
   {
+    "version": "link-previews",
+    "date": "2026-07-26",
+    "title": "Links in messages unfurl into a preview card",
+    "summary": "Paste a link into a channel or a DM and it now shows a card underneath the message with the page's title, description, site name and image, instead of sitting there as a bare URL. The page is fetched once by the server and remembered for a week, so it happens the same way for everybody and your browser never contacts the linked site — reading a card does not tell that site who you are or that you saw it. Every site is read the same way, through the standard tags pages already publish about themselves; there is nothing special-cased. When a page publishes nothing to show, or cannot be reached, the card says exactly that in one quiet line rather than leaving something half-drawn.",
+    "highlights": [
+      "Up to two cards per message, with the title, description, site and image",
+      "The link is fetched by the server, never by your browser, so no site learns your address from a card",
+      "Images come through agensis rather than straight from the other site, for the same reason",
+      "\"No preview available\" and \"preview unavailable\" are stated plainly instead of looking broken",
+      "Links inside code blocks are left alone — those are being shown, not shared"
+    ]
+  },
+  {
     "version": "channel-intent",
     "date": "2026-07-26",
     "title": "Edit a channel — and tell the agents how to behave in it",
