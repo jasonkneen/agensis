@@ -26,6 +26,12 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import {
+  activityEntryLabel,
+  activityEntryText,
+  activityMetadataText,
+  hasActivityMetadata,
+} from '../../lib/activityEntry';
 import { useActivityEventComments } from '../../hooks/useActivityEventComments';
 
 interface ActivityWindowContentProps {
@@ -234,7 +240,7 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2">
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
         Comments{topLevel.length > 0 ? ` (${topLevel.length})` : ''}
       </div>
@@ -245,13 +251,13 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
       ) : (
         <div className="flex flex-col gap-2">
           {topLevel.map(comment => (
-            <div key={comment.id} className="rounded-lg border bg-muted/30 p-2">
-              <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div key={comment.id} className="min-w-0 rounded-lg border bg-muted/30 p-2">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                 <span className="font-medium text-foreground">{comment.user_id === currentUserId ? 'You' : 'Teammate'}</span>
                 <span>·</span>
                 <span>{formatFullDate(comment.created_at)}</span>
               </div>
-              <p className="whitespace-pre-wrap text-xs">{comment.content}</p>
+              <p className="whitespace-pre-wrap break-words text-xs">{comment.content}</p>
             </div>
           ))}
         </div>
@@ -342,7 +348,16 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
       )}
 
       <div className="flex min-h-0 flex-1">
-      <ScrollArea className={cn('h-full min-w-0', selectedEvent ? 'w-[46%] shrink-0 border-r' : 'flex-1')}>
+      {/* Radix wraps viewport content in a `display: table` div, which sizes to the
+          widest row instead of to the viewport — so `truncate` never fires and the
+          list silently scrolls sideways by a thousand pixels. Forcing that wrapper
+          to block is the same fix the sidebar already uses. */}
+      <ScrollArea
+        className={cn(
+          'h-full min-w-0 [&_[data-radix-scroll-area-viewport]>div]:!block',
+          selectedEvent ? 'w-[46%] shrink-0 border-r' : 'flex-1',
+        )}
+      >
         <div className="flex flex-col p-1.5">
           {days.length === 0 && (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
@@ -357,12 +372,15 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
               <div className="flex flex-col">
                 {group.items.map(event => {
                   const selected = event.id === selectedId;
+                  // Shortened for the row, full for the tooltip — a shortened path
+                  // is a label, so the exact one stays one hover away.
+                  const full = activityEntryText(event);
                   return (
                     <button
                       key={event.id}
                       type="button"
                       onClick={() => setSelectedId(selected ? null : event.id)}
-                      title={formatFullDate(event.created_at)}
+                      title={`${full}\n${formatFullDate(event.created_at)}`}
                       className={cn(
                         'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-xs transition-colors',
                         selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
@@ -370,8 +388,12 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                     >
                       <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
                       <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{iconFor(event.event_type)}</span>
-                      <span className="min-w-0 flex-1 truncate">{event.title}</span>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">{event.event_type.replace(/_/g, ' ')}</Badge>
+                      <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
+                      {/* Shrinkable, not fixed: the label absorbs every pixel of
+                          shrink first, so this only gives at the 320px window
+                          minimum — where the alternative is the badge hanging
+                          outside the pane. */}
+                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[10px]">{event.event_type.replace(/_/g, ' ')}</Badge>
                     </button>
                   );
                 })}
@@ -384,47 +406,57 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
       {selectedEvent && (
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-            <span className="text-muted-foreground [&_svg]:size-4">{iconFor(selectedEvent.event_type)}</span>
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{selectedEvent.title}</span>
+            <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(selectedEvent.event_type)}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={activityEntryText(selectedEvent)}>
+              {activityEntryLabel(selectedEvent)}
+            </span>
             <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedId(null)} aria-label="Close detail">
               <X />
             </Button>
           </div>
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="flex flex-col gap-3 p-3 text-sm">
+          <ScrollArea className="min-h-0 min-w-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block">
+            {/* min-w-0 all the way down: every child here is a flex item, and a flex
+                item's default `min-width: auto` lets nowrap/pre content push the
+                column wider than the pane instead of wrapping inside it. */}
+            <div className="flex min-w-0 flex-col gap-3 p-3 text-sm">
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant="secondary">{selectedEvent.event_type.replace(/_/g, ' ')}</Badge>
                 <span className="text-xs text-muted-foreground">{formatFullDate(selectedEvent.created_at)}</span>
               </div>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              {/* Ids wrap rather than truncate: a uuid you can only see two thirds
+                  of is worth no more than one you cannot see at all. */}
+              <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
                 {selectedEvent.entity_type && (
                   <>
                     <dt className="text-muted-foreground">Entity type</dt>
-                    <dd className="truncate font-mono">{selectedEvent.entity_type}</dd>
+                    <dd className="min-w-0 break-all font-mono">{selectedEvent.entity_type}</dd>
                   </>
                 )}
                 {selectedEvent.entity_id && (
                   <>
                     <dt className="text-muted-foreground">Entity id</dt>
-                    <dd className="truncate font-mono">{selectedEvent.entity_id}</dd>
+                    <dd className="min-w-0 break-all font-mono">{selectedEvent.entity_id}</dd>
                   </>
                 )}
                 {selectedEvent.user_id && (
                   <>
                     <dt className="text-muted-foreground">User id</dt>
-                    <dd className="truncate font-mono">{selectedEvent.user_id}</dd>
+                    <dd className="min-w-0 break-all font-mono">{selectedEvent.user_id}</dd>
                   </>
                 )}
               </dl>
-              {selectedEvent.metadata && Object.keys(selectedEvent.metadata).length > 0 && (
-                <div>
+              {hasActivityMetadata(selectedEvent.metadata) && (
+                <div className="min-w-0">
                   <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Metadata</div>
-                  <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-2 text-[11px] leading-relaxed">
-                    {JSON.stringify(selectedEvent.metadata, null, 2)}
+                  {/* Wrapped AND capped: pre-wrap so a long value folds into the pane,
+                      break-words so an unbroken uuid cannot widen it, max-h so a big
+                      blob scrolls itself instead of pushing the comments off screen. */}
+                  <pre className="max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-2 text-[11px] leading-relaxed">
+                    {activityMetadataText(selectedEvent.metadata)}
                   </pre>
                 </div>
               )}
-              <div className="border-t pt-3">
+              <div className="min-w-0 border-t pt-3">
                 <ActivityEventComments key={selectedEvent.id} eventId={selectedEvent.id} workspaceId={workspaceId} currentUserId={currentUserId} />
               </div>
             </div>
