@@ -21,6 +21,14 @@ const {
  signFlowWebhook,
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
+const {
+ SANDBOX_VAULT_PREFIX,
+ parseSandboxCredentialKey,
+ renderSandboxSkillPrompt,
+ sandboxCredentialKey,
+ sandboxCredentialKeysForSkills,
+ sandboxSkillsForAgent,
+} = require('./sandbox-skills.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
 const { channelIntentNote } = require('../shared/channelIntent.cjs');
 const {
@@ -4293,9 +4301,53 @@ async function loadChannelIntentNote(sessionId) {
  }
 }
 
-function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false, intentNote = '') {
+// Which of the sandbox credential vault keys actually HAVE a value.
+//
+// Keys only — the values are never read, let alone decrypted, on this path.
+// `secret_cipher` is written as '' when a key is cleared (setWorkspaceSecretValue),
+// so a non-empty cipher is exactly "configured" without touching the plaintext.
+// Deliberately a LIKE on the constant prefix rather than `key = any($2)`: binding
+// a raw JS array through `.unsafe` does not array-serialize (see AGENTS.md), and
+// the prefix is a literal, so there is nothing to bind.
+async function listConfiguredSandboxCredentialKeys(workspaceId, wanted = []) {
+ if (!workspaceId || wanted.length === 0) return [];
+ try {
+  const rows = await getDb().unsafe(
+   `select key, value, secret_cipher from workspace_secrets
+      where workspace_id = $1 and key like '${SANDBOX_VAULT_PREFIX}%'`,
+   [String(workspaceId)],
+  );
+  return rows
+   .filter((row) => wanted.includes(row.key) && Boolean(row.secret_cipher || row.value))
+   .map((row) => row.key);
+ } catch {
+  // Fail closed in the useful direction: the agent is told the credential is
+  // NOT configured, which makes it refuse and name the key, rather than call a
+  // provider API with nothing and report a 401 it cannot explain.
+  return [];
+ }
+}
+
+// The sandbox skill layer as one prompt block, or '' for every agent that does
+// not carry it (which is every agent that exists today). Both lanes get the same
+// text — builtin through the system prompt, daemon through the daemon prompt —
+// exactly as the channel intent and voice notes do.
+async function loadSandboxSkillNote(workspaceId, agent) {
+ const resolved = sandboxSkillsForAgent(agent);
+ if (resolved.skills.length === 0) return '';
+ const configuredKeys = await listConfiguredSandboxCredentialKeys(
+  workspaceId,
+  sandboxCredentialKeysForSkills(resolved.skills),
+ );
+ return renderSandboxSkillPrompt({ ...resolved, configuredKeys });
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false, intentNote = '', sandboxSkillNote = '') {
  const selfHandle = slugHandle(agent.handle || agent.name);
  const lines = [];
+ // Ahead of the transcript: these are the agent's operating instructions for the
+ // whole turn, not context about the request.
+ if (sandboxSkillNote) lines.push(sandboxSkillNote, '');
  // First, before the roster and the transcript: it changes HOW the agent answers,
  // so it must be read before what it is answering.
  // Before the voice note, the roster and the transcript: house style changes
@@ -4646,6 +4698,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  // The channel's house style, for every lane: builtin through the system
  // prompt, daemon/MCP/external through the daemon prompt.
  const intentNote = await loadChannelIntentNote(sessionId);
+ // The sandbox provisioning skill layer, for a Sandbox Agent. '' for every other
+ // agent, so this costs one pure array check per turn and no query.
+ const sandboxSkillNote = await loadSandboxSkillNote(workspaceId, agent);
+ if (sandboxSkillNote && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n${sandboxSkillNote}`.trim();
+ }
  if (intentNote && agentContext) {
   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<channel_intent>\n${intentNote}\n</channel_intent>`.trim();
  }
@@ -4663,7 +4721,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', pendingRows);
-  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote);
+  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
        values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
@@ -4700,7 +4758,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
        returning *`,
    [
     workspaceId, agent.id, sessionId, createdBy,
-    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote),
+    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote),
     { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
    ],
   );
@@ -4858,7 +4916,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  );
  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
- const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote);
+ const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
  const jobRows = await insertActiveAgentJob(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
@@ -12019,11 +12077,14 @@ function createApp() {
    // vault UI only shows user-defined shared secrets. `orb:<id>` keys are
    // platform-owned too (orb signing secrets, managed from the orb's own panel);
    // the colon also keeps them out of reach of the PUT/DELETE routes below, whose
-   // key pattern allows only [A-Za-z0-9_.-].
+   // key pattern allows only [A-Za-z0-9_.-]. `sandbox:<provider>:<key>` is the
+   // same arrangement for provider provisioning credentials — managed by the
+   // /sandbox-credentials routes below, which never return a value at all (this
+   // route's masked preview is more than a provisioning credential should give up).
    const managed = new Set(MANAGED_SECRET_KEYS);
    const data = [];
    for (const row of rows) {
-    if (managed.has(row.key) || row.key.startsWith('orb:')) continue;
+    if (managed.has(row.key) || row.key.startsWith('orb:') || row.key.startsWith(SANDBOX_VAULT_PREFIX)) continue;
     let plain = '';
     if (row.secret_cipher) { try { plain = await decryptVaultSecret(row.secret_cipher); } catch { plain = ''; } }
     else plain = row.value || '';
@@ -12063,6 +12124,84 @@ function createApp() {
    await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
    notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
    res.json({ data: { key }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Sandbox provider credentials ------------------------------------------
+ // A Sandbox Agent's provider API keys. WRITE-ONLY: there is no route, here or
+ // anywhere else, that returns one. The read below reports `configured` and
+ // nothing more — not a masked preview, because a preview leaks a key's prefix
+ // and length, and for a provisioning credential that is a poor trade for a bit
+ // of UI reassurance. Stored in the same AES-256-GCM workspace vault as every
+ // other secret, under `sandbox:<provider>:<key>`; the colons keep the entries
+ // out of the generic vault PUT/DELETE routes (whose key pattern is
+ // [A-Za-z0-9_.-]) and out of the vault LIST above. Fly-only, like the gateway
+ // routes — nothing in the frontend bundle ever holds a provider key, and no
+ // VITE_ var exists for one.
+ app.get('/backend/workspaces/:id/sandbox-credentials', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `select key, value, secret_cipher, updated_at from workspace_secrets
+       where workspace_id = $1 and key like '${SANDBOX_VAULT_PREFIX}%' order by key asc`,
+    [workspaceId],
+   );
+   const data = [];
+   for (const row of rows) {
+    const parsed = parseSandboxCredentialKey(row.key);
+    if (!parsed) continue;
+    data.push({
+     provider: parsed.provider,
+     credential: parsed.key,
+     key: row.key,
+     configured: Boolean(row.secret_cipher || row.value),
+     updated_at: row.updated_at,
+    });
+   }
+   res.json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.put('/backend/workspaces/:id/sandbox-credentials/:provider', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   // The credential name defaults to api_key; both halves are validated by
+   // sandboxCredentialKey, which returns '' rather than building a key it is not
+   // sure about — so a provider name carrying a colon can never forge a
+   // different vault entry (e.g. an ANTHROPIC_API_KEY or an orb signing secret).
+   const key = sandboxCredentialKey(req.params.provider, req.body?.credential || 'api_key');
+   if (!key) return jsonError(res, 400, new Error('provider must be lowercase letters, digits, - or _, and credential must be lowercase letters, digits or _'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const value = typeof req.body?.value === 'string' ? req.body.value.trim() : '';
+   if (!value) return jsonError(res, 400, new Error('value is required — use DELETE to clear a credential'));
+   await setWorkspaceSecretValue(workspaceId, key, value, req.userId, `Sandbox provider credential (${key})`);
+   // Broadcast the KEY only. sanitizeRealtimeRow does not know about this table's
+   // value column, and a fanout carrying the secret would put it in every
+   // subscribed browser — which is the one thing this whole route exists to stop.
+   notifyDbSubscribers('workspace_secrets', 'UPDATE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key, configured: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/sandbox-credentials/:provider', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   const key = sandboxCredentialKey(req.params.provider, req.query?.credential || 'api_key');
+   if (!key) return jsonError(res, 400, new Error('provider and credential must be lowercase letters, digits, - or _'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
+   notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key, configured: false }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

@@ -58,6 +58,11 @@ const MUST_BE_LINTED = [
   // payload can become agent instructions. It is reached by an UNAUTHENTICATED
   // route, so it is the last file in the repo that should run with zero rules.
   'server/orbs.cjs',
+  // Decides whether a provisioning base URL may be called at all (the gateway
+  // base_url SSRF, one field over — 169.254.169.254 serves cloud IAM
+  // credentials), what a provider credential is named in the vault, and whether
+  // a provider API response can climb out of its fence and become instructions.
+  'server/sandbox-skills.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.

@@ -1,5 +1,19 @@
 [
   {
+    "version": "sandbox-agent",
+    "date": "2026-07-26",
+    "title": "A Sandbox Agent you ask for a sandbox, in plain language",
+    "summary": "There is a new agent template whose whole job is provisioning disposable cloud sandboxes. You (or another agent) ask it in chat — \"spin me up a node sandbox\" — and it picks a provider, creates one, and replies with the details: which provider, the sandbox id, its status and runtime, exactly how to connect to it, and exactly how to stop it. Providers are its skills rather than something built into agensis: it ships knowing how to drive Box, and a new provider can be added by writing a skill definition for it, with no update to the app. Provider API keys are stored write-only — once saved, nothing can read one back out, and the agent is told only whether a key is configured, never its value.",
+    "highlights": [
+      "New Sandbox Agent template in the agent gallery — pick it, review the form, create it like any other agent",
+      "It always tells you how to stop the sandbox, because an unstopped one keeps billing",
+      "It says what it cannot do — no provider for what you asked, or a missing key — instead of inventing a connection string",
+      "Box supported out of the box; adding another provider means authoring a skill, not waiting for a release",
+      "Provider keys are write-only and never reach your browser; the panel shows \"configured\" and nothing more",
+      "Anything a provider's API sends back is treated as data, not as instructions to the agent"
+    ]
+  },
+  {
     "version": "channel-intent",
     "date": "2026-07-26",
     "title": "Edit a channel — and tell the agents how to behave in it",
