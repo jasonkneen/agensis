@@ -13,6 +13,19 @@
     ]
   },
   {
+    "version": "workspace-switcher-rail",
+    "date": "2026-07-26",
+    "title": "Switch workspaces from the left rail",
+    "summary": "There's now a strip of workspace icons down the far left. Click one to switch. Until today there was no ordinary way to move between your workspaces at all.",
+    "highlights": [
+      "One tile per workspace — its icon, or its initials if it hasn't got one",
+      "Hover a tile to see the full name; the current workspace is marked",
+      "The workspace you were last in is the one that opens next time",
+      "\"+\" at the bottom creates a new workspace",
+      "Arrow keys move between tiles once the rail has focus"
+    ]
+  },
+  {
     "version": "inbox-read-persists",
     "date": "2026-07-26",
     "title": "The inbox remembers what you've read",
