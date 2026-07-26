@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -77,6 +77,12 @@ import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT, WORKSPACE_RAIL_WIDTH } from './lib/workspaceLayout';
 import { pickInitialWorkspaceId } from './lib/workspaceRail';
+import {
+  buildDesktopOverlay,
+  DESKTOP_TIER_EMPTY_MESSAGE,
+  DESKTOP_TIER_PENDING_MESSAGE,
+  type OverlayWorkspaceTile,
+} from './lib/desktopOverlay';
 import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -702,7 +708,7 @@ function AppContent() {
     // Seed the persisted neo theme so it's ready when the neo family activates.
     applyNeoTheme(settings.ui_neo_theme);
   }, []);
-  const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
+  const { layers, layersWorkspaceId, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
   const {
     windows,
     openWindow,
@@ -1830,7 +1836,6 @@ function AppContent() {
           <Sidebar
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
-            activeCanvasId={activeLayerId}
             overlay={isMobile}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // The rail sits left of the sidebar, so the canvas viewport's left
@@ -2087,13 +2092,18 @@ function AppContent() {
               />
 
               {showCanvasGrid && (
-                <CanvasGridOverlay
+                <WorkspaceDesktopOverlay
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
                   layers={layers}
+                  layersWorkspaceId={layersWorkspaceId}
                   objects={canvasObjects}
                   windows={windows}
                   activeLayerId={activeLayerId}
                   backgroundImage={canvasGridBackground}
                   onClose={handleCloseCanvasGrid}
+                  onSelectWorkspace={setActiveWorkspaceId}
+                  onCreateWorkspace={handleCreateWorkspace}
                   onSelectLayer={handleSelectCanvasFromGrid}
                   onCreateLayer={handleCreateCanvasFromGrid}
                   onDeleteLayer={handleDeleteCanvasFromGrid}
@@ -3560,31 +3570,112 @@ function WorkspacePresenceAvatars({
   );
 }
 
-function CanvasGridOverlay({
+/**
+ * The full-screen switcher: **workspaces** (projects) on top, the selected
+ * workspace's **desktops** below.
+ *
+ * It used to be one tier — a grid of `canvas_layers` under the heading "All
+ * workspaces" — so an account with three workspaces opened it and saw a single
+ * tile called "Workspace 1". Both tiers are now named for what they actually
+ * are, and the hierarchy (a workspace contains desktops) is on screen instead of
+ * being implied.
+ *
+ * Every decision about what a tile says, which one reads as current, and
+ * critically whether a desktop list may be shown under a given workspace's name
+ * lives in `src/lib/desktopOverlay.ts` and is unit-tested there. This is the
+ * painter. The props keep the code's `layer` vocabulary because App's state and
+ * handlers do — only what the user reads says "desktop".
+ *
+ * Selecting a workspace switches the app to it. That is a side effect beyond
+ * this overlay, and it is the deliberate choice: App loads desktops for the
+ * ACTIVE workspace only, so the alternative — fetching another workspace's
+ * desktops just to preview them — means the tier below can disagree with the
+ * tier above, which is the exact confusion this screen was built to remove. It
+ * is also what the user is asking for: you do not browse a workspace's desktops
+ * in order to stay where you are. The one frame where the loaded desktops still
+ * belong to the previous workspace is covered by the model's `pending` state.
+ */
+function WorkspaceDesktopOverlay({
+  workspaces,
+  activeWorkspaceId,
   layers,
+  layersWorkspaceId,
   objects,
   windows,
   activeLayerId,
   backgroundImage,
   onClose,
+  onSelectWorkspace,
+  onCreateWorkspace,
   onSelectLayer,
   onCreateLayer,
   onDeleteLayer,
   onOpenSettings,
   baseLayerId,
 }: {
+  workspaces: Workspace[];
+  activeWorkspaceId: string;
   layers: CanvasLayer[];
+  /** The workspace `layers` was loaded for — NOT necessarily the active one. */
+  layersWorkspaceId: string | null;
   objects: CanvasObject[];
   windows: FloatingWindow[];
   activeLayerId: string;
   backgroundImage: string;
   onClose: () => void;
+  onSelectWorkspace: (id: string) => void;
+  onCreateWorkspace: () => void;
   onSelectLayer: (id: string) => void;
   onCreateLayer: () => void;
   onDeleteLayer: (id: string) => void;
   onOpenSettings: (id: string) => void;
   baseLayerId: string;
 }) {
+  const model = useMemo(
+    () => buildDesktopOverlay({
+      workspaces,
+      selectedWorkspaceId: activeWorkspaceId,
+      desktops: layers,
+      desktopsWorkspaceId: layersWorkspaceId,
+      activeDesktopId: activeLayerId,
+      baseDesktopId: baseLayerId,
+      objects,
+      windows,
+    }),
+    [workspaces, activeWorkspaceId, layers, layersWorkspaceId, activeLayerId, baseLayerId, objects, windows],
+  );
+
+  const renderWorkspaceTile = (tile: OverlayWorkspaceTile) => (
+    <button
+      key={tile.id}
+      type="button"
+      data-overlay-workspace={tile.id}
+      data-active={tile.active ? 'true' : undefined}
+      aria-current={tile.active ? 'true' : undefined}
+      onClick={() => onSelectWorkspace(tile.id)}
+      className={cn(
+        'flex min-w-0 items-center gap-2.5 rounded-xl border bg-card/80 p-2.5 text-left shadow-sm transition-colors',
+        'hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        tile.active && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
+      )}
+    >
+      {/* Initials on a solid colour, the same colour and letters the rail gives
+          this workspace. Never the `icon` column — see workspaceGlyph. */}
+      <span
+        aria-hidden="true"
+        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold tracking-tight text-white"
+        style={{ backgroundColor: tile.color }}
+      >
+        {tile.initials}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{tile.name}</span>
+      {tile.active && <Badge variant="secondary" className="shrink-0">Current</Badge>}
+      {!tile.active && tile.isSystem && (
+        <span className="shrink-0 text-xs text-muted-foreground">System</span>
+      )}
+    </button>
+  );
+
   return (
     <div
       onClick={onClose}
@@ -3595,106 +3686,142 @@ function CanvasGridOverlay({
       <div className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-md" />
       <div
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-full w-full max-w-6xl flex-col gap-5"
+        className="relative flex h-full max-h-full w-full max-w-6xl flex-col gap-4"
       >
-        <header className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">All workspaces</h2>
-            <p className="text-sm text-muted-foreground">Choose a workspace or create a new one</p>
+        <header className="flex shrink-0 items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-2xl font-bold text-foreground">Workspaces and desktops</h2>
+            <p className="text-sm text-muted-foreground">Pick a workspace, then a desktop inside it</p>
           </div>
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenSettings(activeLayerId)}>
               <Settings data-icon="inline-start" className="size-4" />
-              Workspace settings
+              Desktop settings
             </Button>
-            <Button type="button" onClick={onCreateLayer}>
+            <Button type="button" onClick={onCreateLayer} disabled={model.desktopTier === 'pending'}>
               <Layers3 data-icon="inline-start" className="size-4" />
-              New workspace
+              New desktop
             </Button>
           </div>
         </header>
 
-        <ScrollArea className="min-h-0">
-          <div className="grid grid-cols-1 gap-4 pb-1 sm:grid-cols-2 lg:grid-cols-4">
-            {layers.map(layer => {
-              const layerObjects = objects.filter(obj => (obj.layer_id || 'base') === layer.id);
-              const layerWindows = windows.filter(win => (win.canvasId || 'base') === layer.id && !win.minimized);
-              const isActive = layer.id === activeLayerId;
-              const previewCount = Math.min(layerObjects.length, 6);
-              return (
-                <Card
-                  key={layer.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectLayer(layer.id)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') onSelectLayer(layer.id);
-                  }}
-                  className={cn(
-                    'cursor-pointer shadow-lg transition-colors',
-                    isActive && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
-                  )}
-                >
-                  <CardContent className="flex flex-col gap-3 p-3">
-                    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon-xs"
-                        className="absolute top-2 right-2 z-10 bg-popover/90"
-                        onClick={e => {
-                          e.stopPropagation();
-                          onOpenSettings(layer.id);
-                        }}
-                        title="Workspace settings"
-                        aria-label="Workspace settings"
-                      >
-                        <Settings />
-                      </Button>
-                      <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
-                      <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
-                        {Array.from({ length: previewCount }).map((_, index) => (
-                          <span
-                            key={index}
-                            className={cn(
-                              'self-center rounded-md bg-primary/70',
-                              index % 2 === 0 ? 'h-4' : 'h-2',
-                              index % 3 === 0 ? 'rounded-full' : 'rounded-md',
-                            )}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate text-sm font-bold text-foreground">{layer.name}</h3>
-                        <p className="text-xs text-muted-foreground">
-                          {layerObjects.length} items - {layerWindows.length} windows
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {isActive && <Badge variant="secondary">Current</Badge>}
-                        {layer.id !== baseLayerId && (
+        {/* The workspace tier. Capped at a third of the panel rather than given
+            a third: three workspaces in a strip that always reserves 300px
+            leaves a hole between the tiers that reads as a rendering fault. It
+            grows with the list and starts scrolling at the cap, so an account
+            with a dozen workspaces still cannot push the desktops off-screen. */}
+        <section aria-label="Workspaces" className="flex max-h-[33%] min-h-0 shrink-0 flex-col gap-2">
+          <h3 className="shrink-0 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Workspaces</h3>
+          <ScrollArea className="min-h-0">
+            <div className="grid grid-cols-1 gap-2 pb-1 pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {model.workspaces.map(renderWorkspaceTile)}
+              {model.systemWorkspaces.map(renderWorkspaceTile)}
+              <button
+                type="button"
+                onClick={onCreateWorkspace}
+                className="flex min-w-0 items-center gap-2.5 rounded-xl border border-dashed border-border p-2.5 text-left text-muted-foreground transition-colors hover:border-foreground/40 hover:bg-card/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border">
+                  <Plus className="size-4" />
+                </span>
+                <span className="truncate text-sm font-semibold">New workspace</span>
+              </button>
+            </div>
+          </ScrollArea>
+        </section>
+
+        <div aria-hidden="true" className="h-px shrink-0 bg-border" />
+
+        <section aria-label="Desktops" className="flex min-h-0 flex-1 flex-col gap-2">
+          <h3 className="shrink-0 truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Desktops in {model.selectedWorkspaceName}
+          </h3>
+          {model.desktopTier !== 'ready' ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground">
+              {model.desktopTier === 'pending' ? DESKTOP_TIER_PENDING_MESSAGE : DESKTOP_TIER_EMPTY_MESSAGE}
+            </div>
+          ) : (
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="grid grid-cols-1 gap-4 pb-1 pr-1 sm:grid-cols-2 lg:grid-cols-4">
+                {model.desktops.map(tile => {
+                  const previewCount = Math.min(tile.itemCount, 6);
+                  return (
+                    <Card
+                      key={tile.id}
+                      role="button"
+                      tabIndex={0}
+                      data-overlay-desktop={tile.id}
+                      onClick={() => onSelectLayer(tile.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') onSelectLayer(tile.id);
+                      }}
+                      className={cn(
+                        'cursor-pointer shadow-lg transition-colors',
+                        tile.active && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
+                      )}
+                    >
+                      <CardContent className="flex flex-col gap-3 p-3">
+                        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
                           <Button
                             type="button"
-                            variant="destructive"
-                            size="xs"
+                            variant="secondary"
+                            size="icon-xs"
+                            className="absolute top-2 right-2 z-10 bg-popover/90"
                             onClick={e => {
                               e.stopPropagation();
-                              onDeleteLayer(layer.id);
+                              onOpenSettings(tile.id);
                             }}
+                            title="Desktop settings"
+                            aria-label="Desktop settings"
                           >
-                            Delete
+                            <Settings />
                           </Button>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </ScrollArea>
+                          <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
+                          <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
+                            {Array.from({ length: previewCount }).map((_, index) => (
+                              <span
+                                key={index}
+                                className={cn(
+                                  'self-center rounded-md bg-primary/70',
+                                  index % 2 === 0 ? 'h-4' : 'h-2',
+                                  index % 3 === 0 ? 'rounded-full' : 'rounded-md',
+                                )}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-bold text-foreground">{tile.name}</h3>
+                            <p className="text-xs text-muted-foreground">
+                              {tile.itemCount} items - {tile.windowCount} windows
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {tile.active && <Badge variant="secondary">Current</Badge>}
+                            {tile.canDelete && (
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="xs"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  onDeleteLayer(tile.id);
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          )}
+        </section>
       </div>
     </div>
   );

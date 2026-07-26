@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
+import { defaultDesktopName, FIRST_DESKTOP_NAME } from '../lib/desktopOverlay';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 
 export interface CanvasLayer {
@@ -61,8 +62,13 @@ function adoptedStorageKey(workspaceId: string) {
   return `canvas_layers_adopted:${workspaceId}`;
 }
 
+// "Main", not "Workspace 1": a canvas_layers row is one DESKTOP inside a
+// workspace — a window/wallpaper configuration, not a place content lives — and
+// calling every workspace's first one "Workspace 1" is most of why the two
+// concepts were impossible to tell apart. Existing rows keep whatever name they
+// were given; this is only the name a new one gets.
 function defaultLayers(): CanvasLayer[] {
-  return [{ id: BASE_LAYER_ID, name: 'Workspace 1', minimized: false, background_opacity: 0.42, background_image: '', sort_order: 0, version: 1 }];
+  return [{ id: BASE_LAYER_ID, name: FIRST_DESKTOP_NAME, minimized: false, background_opacity: 0.42, background_image: '', sort_order: 0, version: 1 }];
 }
 
 function loadLayers(workspaceId: string | null): CanvasLayer[] {
@@ -95,8 +101,8 @@ function generateLayerId() {
 // someone renames the layer.
 function nextDerivedLayerName(used: Set<string>) {
   let index = 1;
-  while (used.has(`Shared workspace ${index}`)) index += 1;
-  const name = `Shared workspace ${index}`;
+  while (used.has(`Shared desktop ${index}`)) index += 1;
+  const name = `Shared desktop ${index}`;
   used.add(name);
   return name;
 }
@@ -104,7 +110,7 @@ function nextDerivedLayerName(used: Set<string>) {
 export function rowToCanvasLayer(row: CanvasLayerRow): CanvasLayer {
   return {
     id: row.layer_id,
-    name: row.name || 'Workspace',
+    name: row.name || 'Desktop',
     minimized: true,
     description: row.description ?? undefined,
     icon: row.icon ?? undefined,
@@ -229,6 +235,14 @@ export function useCanvasLayers(workspaceId: string | null) {
     return localStorage.getItem(activeStorageKey(workspaceId)) || BASE_LAYER_ID;
   });
   const [loaded, setLoaded] = useState(false);
+  // Which workspace `definitions` actually came from.
+  //
+  // `workspaceId` is the caller's PROP: it changes on the render that switches
+  // workspace, while `definitions` still holds the previous workspace's layers
+  // until the effect below runs. Anything that pairs a layer list with a
+  // workspace name (the canvas overlay) must key off this, not off the prop, or
+  // it paints workspace A's desktops under workspace B's heading for a frame.
+  const [layersWorkspaceId, setLayersWorkspaceId] = useState<string | null>(workspaceId);
 
   const layers = useMemo(
     () => definitions.map(layer => ({ ...layer, minimized: layer.id !== activeLayerId })),
@@ -239,6 +253,7 @@ export function useCanvasLayers(workspaceId: string | null) {
 
   useEffect(() => {
     setDefinitions(loadLayers(workspaceId));
+    setLayersWorkspaceId(workspaceId);
     setLoaded(false);
 
     if (!workspaceId) {
@@ -357,7 +372,7 @@ export function useCanvasLayers(workspaceId: string | null) {
     const nextId = generateLayerId();
     const layer: CanvasLayer = {
       id: nextId,
-      name: name?.trim() || `Workspace ${current.length + 1}`,
+      name: name?.trim() || defaultDesktopName(current),
       minimized: false,
       background_opacity: 0.42,
       background_image: '',
@@ -437,6 +452,7 @@ export function useCanvasLayers(workspaceId: string | null) {
 
   return {
     layers,
+    layersWorkspaceId,
     activeLayer,
     activeLayerId,
     createLayer,

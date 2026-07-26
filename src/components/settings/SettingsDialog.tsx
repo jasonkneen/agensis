@@ -277,7 +277,7 @@ function GeneralPanel({
   return (
     <FieldGroup>
       <ReadOnlyValue label="Account" value={userEmail || 'Not signed in'} />
-      <ReadOnlyValue label="Active workspace" value={workspaceName || 'None'} />
+      <ReadOnlyValue label="Active desktop" value={workspaceName || 'None'} />
       <Field>
         <FieldLabel htmlFor="workspace-local-path">Project folder</FieldLabel>
         <InputGroup>
@@ -840,7 +840,7 @@ function AppearancePanel({
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Workspace background</FieldLabel>
+          <FieldLabel>Desktop background</FieldLabel>
           <Button type="button" variant="outline" size="sm" onClick={() => updateBackgroundImage('')} disabled={!workspace || !backgroundImage}>
             Auto
           </Button>
@@ -886,11 +886,11 @@ function AppearancePanel({
             onChange={handleUploadBackground}
           />
         </div>
-        <FieldDescription>Pick a bundled workspace image or upload a local image for this workspace.</FieldDescription>
+        <FieldDescription>Pick a bundled image or upload a local one. Wallpaper belongs to this desktop, not to the whole workspace.</FieldDescription>
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Workspace background opacity</FieldLabel>
+          <FieldLabel>Desktop background opacity</FieldLabel>
           <Badge variant="secondary">{backgroundOpacity}%</Badge>
         </div>
         <Slider
@@ -904,7 +904,7 @@ function AppearancePanel({
             onUpdateWorkspace(workspace.id, { background_opacity: (value[0] ?? backgroundOpacity) / 100 });
           }}
         />
-        <FieldDescription>Stored on this workspace so every device opens it with the same background strength.</FieldDescription>
+        <FieldDescription>Stored on this desktop so every device opens it with the same background strength.</FieldDescription>
       </Field>
     </FieldGroup>
   );
