@@ -1416,11 +1416,20 @@
  font-weight: 700;
  letter-spacing: 0.07em;
  text-transform: uppercase;
- /* Mixed from --foreground, not --muted-foreground: several themes put the
-    sidebar over glass or a wallpaper, where a muted token can drop under a
-    readable contrast. 62% sits clearly below the item rows (82%) while still
-    being legible on every background we ship. */
- color: color-mix(in srgb, var(--foreground) 62%, transparent);
+ /* Mixed toward --card, NOT toward transparent, and this is the whole point:
+    the sidebar paints bg-card/45, so it is already 45% card over the
+    wallpaper. Alpha text on top of that stacked a SECOND transparency, and the
+    wallpaper showed through the glyphs themselves — which is why these read as
+    dimmed-to-disabled on some themes while staying fine on others. Mixing
+    toward the surface keeps the label sitting back from the item rows without
+    ever letting the image behind it into the letterforms, so contrast no
+    longer depends on which wallpaper is loaded.
+
+    72%, not 62%: a section name is a BUTTON — it collapses the section — and
+    interactive text has to clear a readable contrast in its own right. It
+    still sits below the item rows (82%), which is what keeps a label reading
+    as a heading rather than as another row. */
+ color: color-mix(in srgb, var(--foreground) 72%, var(--card));
 }
 
 .sidebar-section-trigger:hover {
@@ -1432,7 +1441,11 @@
    hovered, but never invisible — a collapsible with no visible handle is a
    feature nobody finds. */
 .sidebar-section-chevron {
- opacity: 0.5;
+ /* 0.5 was the same mistake one element over: opacity composites the wallpaper
+    through the handle. 0.7 keeps it quiet while staying findable — a
+    collapsible whose handle vanishes on a busy wallpaper is a feature nobody
+    finds. */
+ opacity: 0.7;
  transition: opacity 120ms ease;
 }
 
