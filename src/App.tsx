@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, X } from 'lucide-react';
@@ -971,7 +972,7 @@ function AppContent() {
   const viewedLayerId = focusedRemotePresence?.activeLayerId || activeLayerId;
   const viewedLayer = layers.find(layer => layer.id === viewedLayerId) || activeLayer;
   const workspaceBackdropImage = viewedLayer.background_image || activeWorkspace?.background_image || canvasGridBackground;
-  const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42));
+  const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY));
   const workspaceBackdropOverlayOpacity = Math.max(0, 1 - workspaceBackdropOpacity);
   const visibleCanvasObjects = useMemo(
     () => canvasObjects.filter(obj => (obj.layer_id || 'base') === viewedLayerId),
@@ -1055,7 +1056,7 @@ function AppContent() {
       project_kind: settingsLayer.project_kind ?? '',
       git_root: settingsLayer.git_root ?? '',
       git_remote: settingsLayer.git_remote ?? '',
-      background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? 0.42,
+      background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? DEFAULT_BACKGROUND_OPACITY,
       background_image: settingsLayer.background_image ?? activeWorkspace.background_image ?? '',
     };
   }, [activeWorkspace, settingsLayer]);
@@ -2092,7 +2093,7 @@ function AppContent() {
                   focusedAgentKey={focusedAgentKey}
                   systemCapabilities={systemCapabilities}
                   getPresenceMode={getPresenceMode}
-                  backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
+                  backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY}
                   backgroundImage=""
                   contextCounts={contextCounts}
                   contextCountsTitle={contextCountsTitle}

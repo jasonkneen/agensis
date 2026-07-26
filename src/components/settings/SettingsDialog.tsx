@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Bell,
@@ -413,7 +414,7 @@ function AppearancePanel({
   onThemeChange: (mode: ThemeMode) => void;
 }) {
   const initialSettings = getSettings();
-  const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? 0.42) * 100));
+  const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
@@ -462,7 +463,7 @@ function AppearancePanel({
   ];
 
   useEffect(() => {
-    setBackgroundOpacity(Math.round((workspace?.background_opacity ?? 0.42) * 100));
+    setBackgroundOpacity(Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   }, [workspace?.id, workspace?.background_opacity]);
 
   const updateAppearanceSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {

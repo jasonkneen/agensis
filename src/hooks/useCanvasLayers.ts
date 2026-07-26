@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from '../lib/wallpaperDefaults';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { defaultDesktopName, FIRST_DESKTOP_NAME } from '../lib/desktopOverlay';
@@ -68,7 +69,7 @@ function adoptedStorageKey(workspaceId: string) {
 // concepts were impossible to tell apart. Existing rows keep whatever name they
 // were given; this is only the name a new one gets.
 function defaultLayers(): CanvasLayer[] {
-  return [{ id: BASE_LAYER_ID, name: FIRST_DESKTOP_NAME, minimized: false, background_opacity: 0.42, background_image: '', sort_order: 0, version: 1 }];
+  return [{ id: BASE_LAYER_ID, name: FIRST_DESKTOP_NAME, minimized: false, background_opacity: DEFAULT_BACKGROUND_OPACITY, background_image: '', sort_order: 0, version: 1 }];
 }
 
 function loadLayers(workspaceId: string | null): CanvasLayer[] {
@@ -80,7 +81,7 @@ function loadLayers(workspaceId: string | null): CanvasLayer[] {
     if (!Array.isArray(parsed) || parsed.length === 0) return defaultLayers();
     const known = parsed.map(layer => ({
       ...layer,
-      background_opacity: layer.background_opacity ?? 0.42,
+      background_opacity: layer.background_opacity ?? DEFAULT_BACKGROUND_OPACITY,
       background_image: layer.background_image ?? '',
       version: layer.version ?? 1,
     }));
@@ -118,7 +119,7 @@ export function rowToCanvasLayer(row: CanvasLayerRow): CanvasLayer {
     project_kind: row.project_kind ?? undefined,
     git_root: row.git_root ?? undefined,
     git_remote: row.git_remote ?? undefined,
-    background_opacity: row.background_opacity ?? 0.42,
+    background_opacity: row.background_opacity ?? DEFAULT_BACKGROUND_OPACITY,
     background_image: row.background_image ?? '',
     sort_order: typeof row.sort_order === 'number' ? row.sort_order : 0,
     version: row.version ?? 1,
@@ -167,7 +168,7 @@ export function layersToAdopt(
   const orphans = [...new Set(objectLayerIds)].filter(id => id && !knownIds.has(id)).sort();
   for (const id of orphans) {
     knownIds.add(id);
-    adopt.push({ id, name: nextDerivedLayerName(usedNames), minimized: true, background_opacity: 0.42, background_image: '', version: 1 });
+    adopt.push({ id, name: nextDerivedLayerName(usedNames), minimized: true, background_opacity: DEFAULT_BACKGROUND_OPACITY, background_image: '', version: 1 });
   }
   const maxOrder = known.reduce((max, layer) => Math.max(max, layer.sort_order ?? 0), 0);
   return adopt.map((layer, index) => ({
@@ -212,7 +213,7 @@ function layerInsertValues(workspaceId: string, layer: CanvasLayer): Record<stri
     project_kind: layer.project_kind ?? '',
     git_root: layer.git_root ?? '',
     git_remote: layer.git_remote ?? '',
-    background_opacity: layer.background_opacity ?? 0.42,
+    background_opacity: layer.background_opacity ?? DEFAULT_BACKGROUND_OPACITY,
     background_image: layer.background_image ?? '',
   };
 }
@@ -374,7 +375,7 @@ export function useCanvasLayers(workspaceId: string | null) {
       id: nextId,
       name: name?.trim() || defaultDesktopName(current),
       minimized: false,
-      background_opacity: 0.42,
+      background_opacity: DEFAULT_BACKGROUND_OPACITY,
       background_image: '',
       sort_order: current.reduce((max, item) => Math.max(max, item.sort_order ?? 0), 0) + 1,
       version: 1,

@@ -568,7 +568,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_remote text DEFAULT '';
-    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.42;
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.7;
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_image text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
@@ -956,7 +956,7 @@ async function ensureRuntimeSchema() {
       project_kind text DEFAULT '',
       git_root text DEFAULT '',
       git_remote text DEFAULT '',
-      background_opacity double precision DEFAULT 0.42,
+      background_opacity double precision DEFAULT 0.7,
       background_image text DEFAULT '',
       version integer NOT NULL DEFAULT 1,
       created_at timestamptz DEFAULT now(),

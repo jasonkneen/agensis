@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_kind text DEFAULT '',
   git_root text DEFAULT '',
   git_remote text DEFAULT '',
-  background_opacity numeric DEFAULT 0.42,
+  background_opacity numeric DEFAULT 0.7,
   background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
   -- Groupable workspaces. A workspace with children renders as a group, one
@@ -485,7 +485,7 @@ CREATE TABLE IF NOT EXISTS canvas_layers (
   project_kind text DEFAULT '',
   git_root text DEFAULT '',
   git_remote text DEFAULT '',
-  background_opacity double precision DEFAULT 0.42,
+  background_opacity double precision DEFAULT 0.7,
   background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),

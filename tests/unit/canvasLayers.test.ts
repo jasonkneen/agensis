@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_BACKGROUND_OPACITY } from '../../src/lib/wallpaperDefaults';
 import {
   layerRowValues,
   layersToAdopt,
@@ -11,7 +12,7 @@ function layer(partial: Partial<CanvasLayer> & { id: string }): CanvasLayer {
   return {
     name: partial.name || partial.id,
     minimized: true,
-    background_opacity: 0.42,
+    background_opacity: DEFAULT_BACKGROUND_OPACITY,
     background_image: '',
     version: 1,
     ...partial,
@@ -29,7 +30,7 @@ describe('rowToCanvasLayer', () => {
   it('fills the defaults the canvas renders against', () => {
     const result = rowToCanvasLayer({ layer_id: 'base', name: null, background_opacity: null, background_image: null })
     expect(result.name).toBe('Desktop')
-    expect(result.background_opacity).toBe(0.42)
+    expect(result.background_opacity).toBe(DEFAULT_BACKGROUND_OPACITY)
     expect(result.background_image).toBe('')
     expect(result.sort_order).toBe(0)
     expect(result.version).toBe(1)
