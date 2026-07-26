@@ -20,6 +20,7 @@ import {
   Power,
   RefreshCw,
   Rocket,
+  Rows2,
   Save,
   ShieldCheck,
   Share2,
@@ -91,11 +92,19 @@ import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAv
 import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import {
+  AGENT_LAYOUT_VIEW_PREF,
+  AGENTS_SPLIT_HIDE_BELOW,
+  AGENTS_SPLIT_ONLY_BELOW,
+  toggleAgentSelection,
+  type AgentLayoutView,
+} from '../../lib/agentsView';
 
-// Remembered per workspace: how the roster is sliced and drawn. The search box
-// and which agent is open are NOT — those are where you are, not how you look.
+// Remembered per workspace: how the roster is sliced and drawn (the layout
+// view codec lives in lib/agentsView with the rest of the view decisions).
+// The search box and which agent is open are NOT — those are where you are,
+// not how you look.
 const AGENT_OWNER_FILTER_PREF = oneOf<'all' | 'mine'>(['all', 'mine']);
-const AGENT_LAYOUT_VIEW_PREF = oneOf<'grid' | 'network'>(['grid', 'network']);
 const AGENT_STATUS_FILTER_PREF = setOf<AgentPresence>(['busy', 'idle', 'disconnected', 'inactive']);
 const NO_STATUS_FILTER: Set<AgentPresence> = new Set();
 
@@ -278,7 +287,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     viewPreferenceKey('agents.owner-filter', workspaceId), AGENT_OWNER_FILTER_PREF, 'all' as 'all' | 'mine',
   );
   const [layoutView, setLayoutView] = usePersistedPreference(
-    viewPreferenceKey('agents.layout-view', workspaceId), AGENT_LAYOUT_VIEW_PREF, 'grid' as 'grid' | 'network',
+    viewPreferenceKey('agents.layout-view', workspaceId), AGENT_LAYOUT_VIEW_PREF, 'grid' as AgentLayoutView,
   );
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
@@ -429,13 +438,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!createStep && !selectedAgent && agents.length > 0 && (
+          {!createStep && agents.length > 0 && (
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
               <Button type="button" size="icon-sm" variant={layoutView === 'grid' ? 'default' : 'ghost'} onClick={() => setLayoutView('grid')} aria-label="Grid view" aria-pressed={layoutView === 'grid'} title="Grid view">
                 <LayoutGrid />
               </Button>
-              <Button type="button" size="icon-sm" variant={layoutView === 'network' ? 'default' : 'ghost'} onClick={() => setLayoutView('network')} aria-label="Network view" aria-pressed={layoutView === 'network'} title="Network diagram">
+              <Button type="button" size="icon-sm" variant={layoutView === 'network' ? 'default' : 'ghost'} onClick={() => setLayoutView('network')} aria-label="Map view" aria-pressed={layoutView === 'network'} title="Network map">
                 <Share2 />
+              </Button>
+              <Button type="button" size="icon-sm" variant={layoutView === 'both' ? 'default' : 'ghost'} onClick={() => setLayoutView('both')} aria-label="Grid and map view" aria-pressed={layoutView === 'both'} title="Grid and map">
+                <Rows2 />
               </Button>
             </div>
           )}
@@ -608,40 +620,18 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               />
             </div>
           </div>
-        ) : selectedAgent ? (
-          <div className="flex h-full min-h-0 flex-col gap-2">
-            <div className="shrink-0">
-              <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedAgentId(null); setEditingId(null); }}>
-                <ArrowLeft data-icon="inline-start" />
-                All agents
-              </Button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
-              <AgentDetailPane
-                agent={selectedAgent}
-                isEditing={editingId === selectedAgent.id}
-                confirmDelete={confirmDeleteId === selectedAgent.id}
-                onEdit={() => setEditingId(selectedAgent.id)}
-                onCancelEdit={() => setEditingId(null)}
-                onSave={(updates) => {
-                  onUpdateAgent(selectedAgent.id, updates);
-                  setEditingId(null);
-                }}
-                onDelete={() => handleDelete(selectedAgent.id)}
-                onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
-                capabilities={capabilities}
-                webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
-                connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
-                roster={agents}
-                onUpdateAgent={onUpdateAgent}
-                onConnect={() => setConnectAgentId(selectedAgent.id)}
-                onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
-                onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
-              />
-            </div>
-          </div>
         ) : (
-          <div className="flex h-full min-h-0 flex-col">
+          // Master-detail, the inbox's pattern: grid/map stays on the LEFT and
+          // the selected agent's detail opens beside it, one hairline between
+          // them. Below 42rem the detail replaces the list instead, with a
+          // back affordance — the threshold is stated in lib/agentsView.ts.
+          <div className="@container/agentswin flex h-full min-h-0">
+            <section
+              className={cn(
+                'flex min-h-0 min-w-0 flex-1 flex-col',
+                selectedAgent && cn('border-r border-border/60 pr-3', AGENTS_SPLIT_HIDE_BELOW),
+              )}
+            >
             {agents.length > 0 && mineCount > 0 && (
               <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
                 <button
@@ -749,8 +739,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : ownerFilter === 'mine' && statusFilter.size === 0 ? "You haven't created any agents yet." : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : layoutView === 'network' ? (
-              <div className="min-h-0 flex-1 overflow-hidden">
+            ) : (() => {
+              // Grid, map, or both stacked — assembled once here so the three
+              // modes share the same live pieces instead of duplicating them.
+              const diagram = (
                 <AgentNetworkDiagram
                   agents={visibleAgents}
                   connections={connections}
@@ -759,30 +751,41 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   workspaceId={workspaceId}
                   workspaceName={workspaceName}
                   currentUserId={currentUserId}
+                  selectedAgentId={selectedAgentId}
                   onSelectAgent={setSelectedAgentId}
                 />
-              </div>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
+              );
+              if (layoutView === 'network') {
+                return <div className="min-h-0 flex-1 overflow-hidden">{diagram}</div>;
+              }
+              const grid = (
                 <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(148px,1fr))]">
                   {visibleAgents.map(agent => {
                     const accent = agentAccentColor(agent);
                     const presence = presenceByAgent.get(agent.id);
                     const live = presence === 'busy' || presence === 'idle';
                     const active = isAgentActive(agent);
+                    const selected = agent.id === selectedAgentId;
                     return (
                       <button
                         key={agent.id}
                         type="button"
-                        onClick={() => setSelectedAgentId(agent.id)}
+                        // The card is its own toggle: clicking the open agent
+                        // again closes the detail pane (lib/agentsView.ts).
+                        onClick={() => { setSelectedAgentId(prev => toggleAgentSelection(prev, agent.id)); setEditingId(null); }}
                         style={agentAccentStyle(agent)}
+                        data-agent-selected={selected ? 'true' : undefined}
+                        aria-pressed={selected}
                         title={[
                           `@${agent.handle || agentHandle(agent.name)}`,
                           agentTransportLabel(agent.run_mode),
                           agent.description,
                         ].filter(Boolean).join(' · ')}
                         className={cn(
-                          'group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          // agents-list-card carries the selected wash (accent
+                          // over card, index.css) and the neo depth treatment.
+                          'agents-list-card group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          selected && 'border-primary/50',
                           !active && 'opacity-60',
                         )}
                       >
@@ -818,7 +821,49 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     <span className="text-sm font-medium">New agent</span>
                   </button>
                 </div>
-              </div>
+              );
+              if (layoutView === 'both') {
+                // Stacked: the card grid with the live map under it, in ONE
+                // scroll container — a short window scrolls the pair rather
+                // than crushing both into slivers.
+                return (
+                  <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
+                    {grid}
+                    <div className="mt-3 h-[26rem] overflow-hidden rounded-xl border border-border bg-card/40">
+                      {diagram}
+                    </div>
+                  </div>
+                );
+              }
+              return <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">{grid}</div>;
+            })()}
+            </section>
+            {selectedAgent && (
+              <section className="flex min-h-0 w-[clamp(24rem,45%,34rem)] shrink-0 flex-col overflow-hidden pl-3 @max-2xl/agentswin:w-full @max-2xl/agentswin:pl-0">
+                <AgentDetailPane
+                  agent={selectedAgent}
+                  isEditing={editingId === selectedAgent.id}
+                  confirmDelete={confirmDeleteId === selectedAgent.id}
+                  onEdit={() => setEditingId(selectedAgent.id)}
+                  onCancelEdit={() => setEditingId(null)}
+                  onSave={(updates) => {
+                    onUpdateAgent(selectedAgent.id, updates);
+                    setEditingId(null);
+                  }}
+                  onDelete={() => handleDelete(selectedAgent.id)}
+                  onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
+                  capabilities={capabilities}
+                  webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
+                  connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
+                  roster={agents}
+                  onUpdateAgent={onUpdateAgent}
+                  onConnect={() => setConnectAgentId(selectedAgent.id)}
+                  onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
+                  onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+                  onClose={() => { setSelectedAgentId(null); setEditingId(null); }}
+                  backButtonClass={AGENTS_SPLIT_ONLY_BELOW}
+                />
+              </section>
             )}
           </div>
         )}
@@ -1239,6 +1284,8 @@ function AgentDetailPane({
   onConnect,
   onDisconnect,
   onToggleWebhook,
+  onClose,
+  backButtonClass,
 }: {
   agent: WorkspaceAgent | null;
   isEditing: boolean;
@@ -1262,6 +1309,13 @@ function AgentDetailPane({
   onConnect: () => void;
   onDisconnect: () => Promise<unknown>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+  /** Deselects the agent — the split view's close control. */
+  onClose?: () => void;
+  /**
+   * Classes for the back affordance, shown only when the detail has replaced
+   * the list (the narrow fallback) — same contract as InboxDetail's.
+   */
+  backButtonClass?: string;
 }) {
   const [editName, setEditName] = useState('');
   const [editAvatar, setEditAvatar] = useState(DEFAULT_AGENT_AVATAR);
@@ -1476,11 +1530,21 @@ function AgentDetailPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        {onClose && backButtonClass && (
+          <Button type="button" variant="ghost" size="icon-xs" className={cn('shrink-0', backButtonClass)} onClick={onClose} aria-label="Back to all agents">
+            <ArrowLeft />
+          </Button>
+        )}
         <Bot className="size-4 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">Agent details</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} aria-label={`Edit ${agent.name}`}>
           <Pencil />
         </Button>
+        {onClose && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close agent details">
+            <X />
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="agent-detail-summary flex min-w-0 items-stretch gap-3 rounded-lg border bg-muted/25 p-3">
