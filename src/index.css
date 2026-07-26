@@ -1875,6 +1875,40 @@
  color: var(--agent-accent);
 }
 
+/* Huddle agent switcher: the avatars you click (or ⌘1…⌘9) to choose who your
+   voice goes to. The active chip wears the SAME accent recipe as that agent's
+   avatar in the transcript above, so "this one is listening" reads as the same
+   person rather than as a new piece of UI. Mixing against --border/--muted is
+   what makes one rule correct in light, dark and neo. */
+.huddle-agent-chip {
+ border: 1px solid transparent;
+ transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+/* Dimmed enough to read as secondary, not so far that the 10px shortcut digit
+   stops being legible — the number is the whole point of showing it. */
+.huddle-agent-chip[data-active="false"] {
+ opacity: 0.75;
+}
+
+.huddle-agent-chip[data-active="false"]:hover,
+.huddle-agent-chip[data-active="false"]:focus-visible {
+ opacity: 1;
+ background: var(--muted);
+}
+
+.huddle-agent-chip[data-active="true"] {
+ border-color: color-mix(in srgb, var(--agent-accent) 62%, var(--border));
+ background: color-mix(in srgb, var(--agent-accent) 16%, var(--muted));
+ color: var(--agent-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .huddle-agent-chip {
+  transition: none;
+ }
+}
+
 :root[data-theme="dark"] .channel-shell {
  --channel-surface: rgba(9, 9, 9, 0.72);
  --channel-header: rgba(21, 21, 21, 0.68);
