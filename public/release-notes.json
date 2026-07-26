@@ -39,6 +39,19 @@
       "In the second setting your message is still posted and read — any agent can be pulled in later with an @mention",
       "@channel is reserved, so no agent can take the name and answer in place of everyone",
       "Direct messages are unchanged: the agent you are talking to still answers a plain message"
+]
+  },
+  {
+    "version": "page-tips",
+    "date": "2026-07-26",
+    "title": "The Get started panel becomes a tip about whatever you are looking at",
+    "summary": "The checklist in the bottom-left corner used to disappear for good once your setup was done, leaving an empty space. Now it keeps working: when there is no setup left, the same panel shows one short piece of advice about the window you are currently in — open Agents and it talks about how agents run, open a channel and it talks about channels, open the Inbox and it explains what the Inbox actually collects. Unfinished setup still comes first, so nothing covers a step you have not done yet. Closing a tip with the X retires it for good and shows you the next one.",
+    "highlights": [
+      "Advice follows the focused window: the canvas, channels, DMs, documents, Agents, Inbox, Tasks, Activity, Memory, Skills, Users, Schedules and Tenants each have their own",
+      "The Get started checklist still wins whenever any of its steps are outstanding",
+      "A tip you dismiss does not come back, and the next tip for that surface takes its place",
+      "Collapse the panel with the chevron to keep it to a single line",
+      "What you have dismissed is remembered per workspace, so it never carries across accounts sharing a browser"
     ]
   },
   {
