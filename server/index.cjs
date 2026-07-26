@@ -4231,6 +4231,12 @@ const VOICE_HUDDLE_NOTE = [
  'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
  'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
  'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
+ // Spoken aloud, tool narration is worse than useless: the human hears a
+ // minute of "I am calling the create_thread_item MCP tool" and then learns
+ // nothing was created. Announce the OUTCOME, never the mechanism, and never
+ // claim an action before it has actually succeeded.
+ 'Never narrate your tools or plumbing out loud. Do not name tools, MCP servers, function calls, schemas or integrations — the person cannot see any of that and does not need to. Say what you are doing in ordinary words.',
+ 'Do not say you have done something until it has actually succeeded. If a tool is unavailable or a call fails, say plainly in ONE sentence that you cannot do it and what you can do instead. Do not speculate aloud about why, do not describe your own configuration, and do not keep trying in front of the listener.',
 ].join('\n');
 
 // Is a huddle running in this conversation right now? Answered from the huddles

@@ -1096,9 +1096,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // Who a huddle utterance can be addressed to, in roster order. Empty in a DM:
   // the single agent there already answers a plain message, so there is nothing
   // to switch between and nothing to @mention.
+  // A DM's huddle has ONE agent, and it still needs to be in this list. This
+  // returned [] for DMs — no strip is needed when there is no one to choose
+  // between — but the list is also where the SPEAKER finds whose voice to use.
+  // Empty meant activeAgent was null, voiceId fell back to '', and the server
+  // derived a default voice: boris, who has a voice stored, came out sounding
+  // like someone else entirely in every DM. The strip hides itself when there
+  // is nothing to choose (below); the roster stays populated regardless.
   const huddleAgents = useMemo(
-    () => (isDirectMessage ? [] : huddleAgentOptions(agents, persistedParticipants)),
-    [agents, isDirectMessage, persistedParticipants],
+    () => huddleAgentOptions(agents, persistedParticipants),
+    [agents, persistedParticipants],
   );
   // Which agent a huddle utterance is addressed to. Lifted here so the strip in
   // the card and the composer in the panel talk to the SAME agent — two

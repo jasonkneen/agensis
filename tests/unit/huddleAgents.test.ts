@@ -263,3 +263,32 @@ describe('huddleAgentOptions carries the agent voice', () => {
     expect(huddleAgentOptions([], [participant])[0].voiceId).toBe('');
   });
 });
+
+// A DM's huddle has ONE agent, and the roster is where the SPEAKER finds whose
+// voice to use — not just where a strip finds buttons to draw. The DM path
+// passed [] because no choice is needed, so activeAgent was null, voiceId fell
+// back to '', and the server derived a default: boris, who has a voice stored,
+// came out sounding like someone else in every DM.
+describe('huddleAgentOptions for a one-agent (DM) roster', () => {
+  const boris = {
+    id: 'b1', name: 'boris', handle: 'boris',
+    identity: { voice: { cartesia_voice_id: '630ed21c-2c5c-41cf-9d82-10a7fd668370' } },
+  };
+
+  it('returns the sole agent, carrying its stored voice', () => {
+    const options = huddleAgentOptions([boris] as never, [
+      { id: 'agent:b1', kind: 'agent', name: 'boris', agent_id: 'b1' },
+    ] as never);
+    expect(options).toHaveLength(1);
+    expect(options[0].voiceId).toBe('630ed21c-2c5c-41cf-9d82-10a7fd668370');
+  });
+
+  it('the first option is the implicit active agent, so no click is needed', () => {
+    // HuddleCard resolves `agents.find(selected) || agents[0]`, so a populated
+    // one-agent roster speaks in the right voice with no interaction at all.
+    const options = huddleAgentOptions([boris] as never, [
+      { id: 'agent:b1', kind: 'agent', name: 'boris', agent_id: 'b1' },
+    ] as never);
+    expect(options[0]?.id).toBe('b1');
+  });
+});
