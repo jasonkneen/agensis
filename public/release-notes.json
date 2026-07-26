@@ -1,5 +1,17 @@
 [
   {
+    "version": "one-daemon-per-agent",
+    "date": "2026-07-26",
+    "title": "An agent appears once, on the machine actually doing the work",
+    "summary": "If the same agent's daemon was started twice — a second terminal, a machine you had forgotten about — agensis listed that agent twice and gave work to only one of the two. The other sat there heartbeating forever and never did anything, and which of them got the work was arbitrary. Connecting now takes over: the newest connection wins and the older one is told it has been replaced and stops, with the reason in its own log so it does not look like a network fault. Reconnecting after a laptop sleep or a dropped connection is unaffected — that comes straight back online, as before.",
+    "highlights": [
+      "One connection per agent in the agents list, instead of two copies of the same agent",
+      "Starting a daemon for an agent that is already connected hands over cleanly, rather than leaving an idle duplicate",
+      "The replaced daemon says why it stopped, so it is not debugged as a dropped network",
+      "Coming back from sleep or a flaky connection still reconnects immediately"
+]
+  },
+  {
     "version": "skill-content",
     "date": "2026-07-26",
     "title": "Skills your agents can actually use, and a page that shows who can use them",

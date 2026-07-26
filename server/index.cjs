@@ -3012,16 +3012,82 @@ function isAgentEnabled(agent) {
  return agent?.enabled !== false;
 }
 
-async function disconnectAgentDaemons(agentId, workspaceId, reason = 'deactivated') {
- const closeMessage = reason === 'disconnected' ? 'Agent disconnected' : 'Agent deactivated';
+// Close-frame text per disconnect reason. The daemon logs BOTH this and the
+// `agent_disabled` reason it receives first, so an operator whose daemon was
+// dropped can see WHY in its own log instead of debugging a phantom network
+// fault. Keep these strings stable — the released daemon pattern-matches
+// 'Agent deactivated' on the close frame as its independent stop signal.
+//
+// The 'superseded' text deliberately does NOT match that pattern: what stops a
+// superseded daemon is the `agent_disabled` message, which the daemon treats as
+// terminal (agensis-cli: message 'agent_disabled' -> stop(), no reconnect). Do
+// not drop that send in favour of the close alone — the close frame's own text
+// would then have to lie about the reason to be terminal.
+const AGENT_DISCONNECT_CLOSE_MESSAGES = {
+ deactivated: 'Agent deactivated',
+ disconnected: 'Agent disconnected',
+ superseded: 'Replaced by a newer connection for this agent',
+};
+
+// Phase 1 of a daemon disconnect: take this agent's live connections OUT of the
+// map, synchronously, and hand them back for cleanup.
+//
+// Split from the cleanup so a caller that is about to claim the agent's slot
+// (registerAgentConnection) can do take → set with NO await in between. Two
+// registers racing inside the same tick therefore still leave exactly ONE live
+// entry: whichever set() runs last, and the other side is told why.
+//
+// Every stale entry for the agent is taken, INCLUDING one belonging to `keepWs`
+// (a socket that re-registers replaces its own earlier connection row — leaving
+// that entry behind would create exactly the duplicate this is here to prevent).
+// `keepWs` only decides whether the SOCKET is closed; see closeTakenAgentDaemons.
+function takeAgentDaemonConnections(agentId, workspaceId, keepWs = null) {
+ const taken = [];
  for (const [connectionId, entry] of [...connectedAgents.entries()]) {
   if (String(entry.agentId) !== String(agentId)) continue;
   if (String(entry.workspaceId) !== String(workspaceId)) continue;
+  connectedAgents.delete(connectionId);
+  taken.push({ ...entry, keepSocket: Boolean(keepWs) && entry.ws === keepWs });
+ }
+ return taken;
+}
+
+// Phase 2: tell each taken connection why it is going, then run the normal
+// offline bookkeeping (fail its in-flight jobs, settle its row).
+//
+// A connection marked `keepSocket` is the registering socket's own previous
+// registration: its row is retired, but the socket itself is NOT closed and is
+// told nothing — a daemon must never be able to disconnect itself by declaring
+// who it is a second time.
+async function closeTakenAgentDaemons(taken, reason) {
+ if (taken.length === 0) return taken;
+ const closeMessage = AGENT_DISCONNECT_CLOSE_MESSAGES[reason] || AGENT_DISCONNECT_CLOSE_MESSAGES.deactivated;
+ for (const entry of taken) {
+  if (entry.keepSocket) continue;
   sendWs(entry.ws, { type: 'agent_disabled', reason });
   try { entry.ws.close(1008, closeMessage); } catch { /* already closing */ }
-  connectedAgents.delete(connectionId);
-  await markAgentConnectionOffline(entry.ws);
  }
+ for (const entry of taken) await markConnectionOffline(entry.connectionId);
+ // A superseded connection is not merely offline, it has been REPLACED, so its
+ // row goes now instead of sitting in the roster as a second copy of the same
+ // agent until pruneOfflineConnections catches up 120s later. The other reasons
+ // keep their existing behaviour (row stays, offline, and prunes on its own).
+ if (reason === 'superseded') {
+  try {
+   const rows = await getDb().unsafe(
+    `delete from agent_connections where id = any($1::uuid[]) returning *`,
+    [taken.map((entry) => entry.connectionId)],
+   );
+   if (rows.length > 0) notifyDbSubscribers('agent_connections', 'DELETE', rows.map(publicAgentConnection));
+  } catch {
+   // best effort — pruneOfflineConnections is the backstop
+  }
+ }
+ return taken;
+}
+
+async function disconnectAgentDaemons(agentId, workspaceId, reason = 'deactivated') {
+ return closeTakenAgentDaemons(takeAgentDaemonConnections(agentId, workspaceId), reason);
 }
 
 async function disableFarmIntegrationAgents(workspaceId, integrationId) {
@@ -6571,7 +6637,14 @@ async function reapStuckAgentJobs() {
 }
 
 async function markAgentConnectionOffline(ws) {
- const connectionId = ws.agentConnectionId;
+ return markConnectionOffline(ws.agentConnectionId);
+}
+
+// Settle ONE connection id: drop it from the live map, fail what it was running,
+// flip its row offline. Takes the id rather than the socket because a socket that
+// re-registers already points at its NEW connection id — deriving the id from the
+// socket there would offline the wrong (live) row and fail the wrong jobs.
+async function markConnectionOffline(connectionId) {
  if (!connectionId) return;
  connectedAgents.delete(connectionId);
  inferenceBroker.failConnection(connectionId, 'The inference agent connection disconnected.');
@@ -7069,8 +7142,38 @@ async function registerAgentConnection(ws, message) {
  ws.agentConnectionId = connectionId;
  ws.agentId = agentId;
  ws.workspaceId = workspaceId;
- connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, agent: auth.agent });
+ // ONE live daemon per agent. Registering supersedes any older live connection
+ // for the same agent: newest wins, deterministically.
+ //
+ // Why newest rather than keeping the incumbent and refusing this register: a
+ // daemon that dropped through a HALF-OPEN socket (laptop sleep, dead tunnel)
+ // reconnects on a new socket while the server still holds the zombie for up to
+ // ~2x LIVENESS_PING_INTERVAL_MS. Refusing would leave that daemon offline for
+ // the whole window while it retried every 2s. The newest socket is by
+ // definition the one the daemon itself believes in, so it takes over.
+ //
+ // Why this converges instead of thrashing: the loser is sent `agent_disabled`,
+ // which every released daemon treats as TERMINAL — it logs the reason and
+ // stops; it does not reconnect. So two daemons genuinely configured for the
+ // same agent settle on the last one to register rather than flapping every
+ // retry interval. (A daemon under a process supervisor that restarts it will
+ // win the slot back on restart; that is the supervisor's cadence, not a loop
+ // this server can damp further.)
+ //
+ // take → set with NO await between them, so two registers racing inside one
+ // tick still leave exactly one live entry.
+ const superseded = takeAgentDaemonConnections(agentId, workspaceId, ws);
+ connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, host, cwd, agent: auth.agent });
  notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
+ if (superseded.length > 0) {
+  // Name the loser AND the winner: an operator reading this needs to know which
+  // of two machines lost its daemon, not just that something was dropped.
+  for (const entry of superseded) {
+   if (entry.keepSocket) continue;
+   console.log(`[agensis] superseded daemon connection ${entry.connectionId} for @${handle} on ${entry.host || 'unknown host'}:${entry.cwd || '?'} — replaced by a newer register from ${host || 'unknown host'}:${cwd || '?'}`);
+  }
+  await closeTakenAgentDaemons(superseded, 'superseded');
+ }
  void logConnectionActivity(connection, 'agent_connected');
  sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
 }
@@ -14335,6 +14438,13 @@ function registerTestConnectedAgent(entry) {
  return entry;
 }
 
+// Test seam: read the live connection map, so a test can assert how MANY live
+// connections an agent has (the one-live-daemon-per-agent invariant) rather than
+// only whether dispatch happens to find one.
+function listTestConnectedAgents() {
+ return [...connectedAgents.values()];
+}
+
 module.exports = {
  startBackendServer,
  createApp,
@@ -14355,6 +14465,13 @@ module.exports = {
   notifyDbSubscribers,
   relayBroadcast,
   registerTestConnectedAgent,
+  listTestConnectedAgents,
+  // One live daemon per agent: registration supersedes an older live connection.
+  registerAgentConnection,
+  disconnectAgentDaemons,
+  takeAgentDaemonConnections,
+  findConnectedAgent,
+  AGENT_DISCONNECT_CLOSE_MESSAGES,
   insertActiveAgentJob,
   buildWhereClause,
   buildDaemonPrompt,
