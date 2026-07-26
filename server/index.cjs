@@ -22,6 +22,19 @@ const {
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const {
+ ORB_MAX_BODY_BYTES,
+ ORB_MAX_PAYLOAD_FIELDS,
+ ORB_PROVIDERS,
+ ORB_ROUTING_MODES,
+ composeOrbMessage,
+ normalizeOrbProvider,
+ normalizeOrbRateLimit,
+ normalizeOrbRouting,
+ orbDispatchRefusal,
+ parseOrbBody,
+ verifyOrbDelivery,
+} = require('./orbs.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const {
  ALLOWED_TABLES,
@@ -581,6 +594,61 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+    -- Orbs (plans/021): an agent_webhooks row becomes an "orb" — an agent woken
+    -- by a verified external event — once these are set. Defaults reproduce the
+    -- pre-orb behaviour EXACTLY (generic/unsigned, a fresh session per delivery)
+    -- so no existing row changes meaning. The signing secret is NOT stored here:
+    -- this table is in the backendClient allowlists and the frontend does a
+    -- literal select('*'), so any column added here ships to the browser. It
+    -- lives in the workspace vault under the key orb:<webhook id>.
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'generic';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS prompt text NOT NULL DEFAULT '';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS routing text NOT NULL DEFAULT 'new';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS rate_limit_per_hour integer NOT NULL DEFAULT 60;
+    -- ADVISORY UI hint only: "is a signing secret configured for this orb".
+    -- Safe to ship to the browser (it is a boolean, not key material) and it
+    -- survives a reload, which is why it is a column rather than a derived
+    -- response field. The trigger route NEVER consults it — it reads the vault
+    -- entry itself, so a drifted flag can weaken nothing.
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS has_signing_secret boolean NOT NULL DEFAULT false;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS thread_root_message_id uuid REFERENCES messages(id) ON DELETE SET NULL;
+
+    -- Inbound delivery ledger: the deduplication gate AND the delivery log.
+    --
+    -- Dedupe is DB-level on purpose. claimTaskDispatch is a process-local Map
+    -- with a 15s window — right for swallowing one human's double-click, useless
+    -- against a provider retry that lands minutes later, after a Fly restart, or
+    -- on a second machine. This mirrors flow_webhook_deliveries' idempotency
+    -- instead (UNIQUE plus an on-conflict-do-nothing insert), which is the same
+    -- problem solved in the outbound direction.
+    --
+    -- delivery_key is NULL when the provider supplies no delivery id, and the
+    -- unique index is PARTIAL so those rows never claim the idempotency slot:
+    -- a hard uniqueness constraint on body_hash would permanently swallow two
+    -- genuinely distinct byte-identical events. Rejected/throttled rows are also
+    -- written with a NULL key, so a delivery refused now is still accepted when
+    -- the provider retries it legitimately later.
+    CREATE TABLE IF NOT EXISTS orb_deliveries (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      webhook_id uuid NOT NULL REFERENCES agent_webhooks(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      delivery_key text,
+      body_hash text NOT NULL DEFAULT '',
+      event_type text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'accepted'
+        CHECK (status IN ('accepted', 'duplicate', 'rejected', 'throttled', 'failed')),
+      session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
+      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+      detail text NOT NULL DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_orb_deliveries_key
+      ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
+      ON orb_deliveries(webhook_id, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS agent_connections (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1854,6 +1922,109 @@ function inviteTokenLookupParams(token) {
  const hashed = hashAgentToken(token);
  const legacy = /^[a-f0-9]{64}$/i.test(String(token || '')) ? hashed : token;
  return [hashed, legacy];
+}
+
+// An orb's signing secret lives in the workspace vault, NOT on agent_webhooks:
+// that table is in the backendClient allowlists and useAgentWebhooks does a
+// literal select('*'), so any column added to it ships to the browser (this is
+// why gateway_configs stays out of the allowlists entirely). The colon makes the
+// namespace uncollidable with user-defined vault keys, which the vault route
+// restricts to [A-Za-z0-9_.-] — so a user can neither read nor overwrite an orb
+// secret through /backend/workspaces/:id/vault/:key.
+function orbSecretKey(webhookId) {
+ return `orb:${String(webhookId || '')}`;
+}
+
+// Validate operator-supplied orb configuration.
+//
+// `fallback` is the existing row on an update, so an OMITTED field keeps its
+// current value instead of silently resetting to a default.
+//
+// Unknown provider/routing values are REJECTED rather than normalized. The pure
+// helpers in server/orbs.cjs coerce an unrecognised provider to 'generic' —
+// correct when reading a row back (fail soft on data), wrong at the API boundary,
+// because an operator who types "gitlab" would get 'generic', which means
+// UNSIGNED, and would never be told.
+//
+// payload_fields is bound as a JS ARRAY by the caller, never JSON.stringify'd:
+// on this server's porsager driver a stringified $n::jsonb bind lands as a jsonb
+// string scalar (see normalizeJsonParam). The Netlify copy stringifies; the two
+// are deliberately opposite.
+function normalizeOrbConfigInput(body = {}, fallback = null) {
+ let provider = normalizeOrbProvider(fallback?.provider);
+ if (body.provider !== undefined) {
+  const requested = String(body.provider || '').trim().toLowerCase();
+  if (!ORB_PROVIDERS.includes(requested)) {
+   throw badRequest(`Unknown orb provider "${requested}". Supported: ${ORB_PROVIDERS.join(', ')}`);
+  }
+  provider = requested;
+ }
+
+ let routing = normalizeOrbRouting(fallback?.routing);
+ if (body.routing !== undefined) {
+  const requested = String(body.routing || '').trim().toLowerCase();
+  if (!ORB_ROUTING_MODES.includes(requested)) {
+   throw badRequest(`Unknown orb routing "${requested}". Supported: ${ORB_ROUTING_MODES.join(', ')}`);
+  }
+  routing = requested;
+ }
+
+ let prompt = String(fallback?.prompt || '');
+ if (body.prompt !== undefined) {
+  if (typeof body.prompt !== 'string') throw badRequest('prompt must be a string');
+  prompt = body.prompt.slice(0, 4000);
+ }
+
+ let payloadFields = parseJsonArray(fallback?.payload_fields);
+ if (body.payload_fields !== undefined) {
+  const raw = Array.isArray(body.payload_fields)
+   ? body.payload_fields
+   : typeof body.payload_fields === 'string'
+    ? body.payload_fields.split(/[\n,]/)
+    : null;
+  if (!raw) throw badRequest('payload_fields must be an array of dot-paths, or a comma/newline separated string');
+  payloadFields = raw
+   .map((value) => String(value == null ? '' : value).trim())
+   .filter(Boolean)
+   .slice(0, ORB_MAX_PAYLOAD_FIELDS);
+  for (const path of payloadFields) {
+   if (!/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,199}$/.test(path)) {
+    throw badRequest(`"${path.slice(0, 60)}" is not a valid payload field path`);
+   }
+  }
+ }
+
+ const rateLimitPerHour = body.rate_limit_per_hour === undefined
+  ? normalizeOrbRateLimit(fallback?.rate_limit_per_hour)
+  : normalizeOrbRateLimit(body.rate_limit_per_hour);
+
+ return { provider, routing, prompt, payloadFields, rateLimitPerHour };
+}
+
+// Record a REFUSED orb delivery so the operator can see why nothing ran.
+//
+// Two deliberate properties. (1) delivery_key is NULL, so a refusal never claims
+// the idempotency slot — a delivery throttled or unverifiable now must still be
+// accepted when the provider retries it legitimately, which it would not be if
+// the refusal had consumed the unique (webhook_id, delivery_key) row.
+// (2) Coalesced to one row per orb per status per minute, so a flood of forged
+// requests cannot turn a read-only rejection into write amplification.
+async function logOrbRejection({ orb, status, bodyHash = '', eventType = '', detail = '' }) {
+ try {
+  const rows = await getDb().unsafe(
+   `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type, status, detail)
+      select $1, $2, null, $3, $4, $5, $6
+       where not exists (
+         select 1 from orb_deliveries
+          where webhook_id = $1 and status = $5 and created_at > now() - interval '60 seconds'
+       )
+      returning *`,
+   [orb.id, orb.workspace_id, bodyHash, eventType, status, String(detail || '').slice(0, 300)],
+  );
+  if (rows[0]) notifyDbSubscribers('orb_deliveries', 'INSERT', rows);
+ } catch (error) {
+  console.error('orb rejection log failed', error?.message || error);
+ }
 }
 
 function createAgentConnectToken() {
@@ -9351,14 +9522,104 @@ function createApp() {
    // (inviteTokenLookupParams) so legacy plaintext rows keep working during the
    // transition. The plaintext is returned ONCE here, on creation.
    const token = crypto.randomBytes(32).toString('base64url');
+   // Orb config is optional on create (an omitted field keeps the column default,
+   // which reproduces the pre-orb behaviour) but must be settable here, or an orb
+   // created while the config route is unreachable comes back generic/unsigned
+   // with no prompt and the operator cannot tell why.
+   const config = normalizeOrbConfigInput(req.body || {});
    const rows = await getDb().unsafe(
-    `insert into agent_webhooks (workspace_id, agent_id, name, token)
-         values ($1, $2, $3, $4)
+    `insert into agent_webhooks
+         (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
          returning *`,
-    [workspaceId, agentId || null, String(name).trim(), hashAgentToken(token)],
+    [
+     workspaceId,
+     agentId || null,
+     String(name).trim(),
+     hashAgentToken(token),
+     config.provider,
+     config.prompt,
+     config.payloadFields,
+     config.routing,
+     config.rateLimitPerHour,
+    ],
    );
    notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
    res.json({ data: { ...rows[0], token }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Orb configuration (plans/021). Guards are deliberately identical to the create
+ // route above — requireAuth plus enforceWorkspaceRole(..., 'manage') — rather
+ // than a new limiter: 'manage' is already the access level agent_webhooks
+ // carries in DB_TABLE_ACCESS, and the only unauthenticated surface in this
+ // feature is the trigger route, which has webhookRateLimiter plus its own
+ // per-orb hourly cap.
+ //
+ // `signing_secret` is WRITE-ONLY. It goes to the workspace vault, never to a
+ // column on agent_webhooks (which the frontend reads with select('*')), and is
+ // never returned. An empty string clears it.
+ app.put('/backend/agent-webhooks/:id', requireAuth, async (req, res) => {
+  try {
+   const webhookId = String(req.params.id || '').trim();
+   if (!webhookId) return jsonError(res, 400, new Error('webhook id is required'));
+   const existing = await getDb().unsafe('select * from agent_webhooks where id = $1 limit 1', [webhookId]);
+   const orb = existing[0];
+   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
+   await enforceWorkspaceRole(req.userId, orb.workspace_id, 'manage');
+
+   const config = normalizeOrbConfigInput(req.body || {}, orb);
+   let hasSecret = orb.has_signing_secret === true;
+   if (typeof req.body?.signing_secret === 'string') {
+    const secret = req.body.signing_secret.trim();
+    if (secret && secret.length < 16) {
+     return jsonError(res, 400, new Error('A signing secret must be at least 16 characters'));
+    }
+    await setWorkspaceSecretValue(
+     orb.workspace_id,
+     orbSecretKey(orb.id),
+     secret,
+     req.userId,
+     `Signing secret for orb "${String(orb.name || '').slice(0, 80)}"`,
+    );
+    hasSecret = Boolean(secret);
+   }
+   // A non-generic provider with no secret can never verify a delivery, so the
+   // trigger route answers 503. Refuse the configuration that guarantees that
+   // instead of letting the operator discover it from a provider's retry log.
+   if (config.provider !== 'generic' && !hasSecret) {
+    return jsonError(res, 400, new Error(
+     `Provider "${config.provider}" signs its deliveries, so this orb needs a signing secret. `
+     + 'Set signing_secret in the same request, or leave the provider as generic.',
+    ));
+   }
+
+   const name = typeof req.body?.name === 'string' && req.body.name.trim()
+    ? req.body.name.trim().slice(0, 200)
+    : orb.name;
+   const enabled = typeof req.body?.enabled === 'boolean' ? req.body.enabled : orb.enabled;
+   const rows = await getDb().unsafe(
+    `update agent_webhooks
+          set name = $2, enabled = $3, provider = $4, prompt = $5, payload_fields = $6::jsonb,
+              routing = $7, rate_limit_per_hour = $8, has_signing_secret = $9, updated_at = now()
+        where id = $1
+        returning *`,
+    [
+     orb.id,
+     name,
+     enabled,
+     config.provider,
+     config.prompt,
+     config.payloadFields,
+     config.routing,
+     config.rateLimitPerHour,
+     hasSecret,
+    ],
+   );
+   notifyDbSubscribers('agent_webhooks', 'UPDATE', rows);
+   res.json({ data: rows[0], error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -10529,93 +10790,282 @@ function createApp() {
   res.send(renderSkillMd({ baseUrl: skillBaseUrl(req) }));
  });
 
+ // --- Orbs: the event-driven webhook trigger --------------------------------
+ // (plans/021-event-driven-orbs.md)
+ //
+ // What this route used to do, and why all of it had to change:
+ //
+ //   1. It built the prompt as
+ //      `req.body.prompt || .text || .message || JSON.stringify(req.body)` —
+ //      the attacker-controlled payload WAS the entire user turn, delivered to an
+ //      agent whose permission_mode may be 'yolo' (--no-sandbox --yolo).
+ //   2. It called runAnthropicCompletion INLINE, so a daemon or sandbox agent
+ //      never actually ran in its runtime: it got a one-shot built-in completion
+ //      with no tools, no filesystem and no agent_jobs row. The orb never woke.
+ //   3. It awaited that completion before responding, routinely blowing past
+ //      GitHub's ~10s delivery timeout — so the provider retried, and with no
+ //      deduplication each retry created another session and another billed run.
+ //      The synchronous response shape was the retry-storm generator.
+ //   4. Nothing was verified. The token was the only authenticator, so a URL
+ //      leaked into a CI log was an unlimited agent-run button.
+ //
+ // Unauthenticated, so every gate below is load-bearing. The order is
+ // cheap-before-expensive with one deliberate exception: the IP rate limiter runs
+ // FIRST, ahead of the free header checks, because it is the only defence against
+ // volume and a malformed flood is still load.
  app.post('/backend/webhooks/:token', async (req, res) => {
+  const nowMs = Date.now();
   try {
-   // Unauthenticated endpoint: no userId/workspaceId is known before the token
-   // lookup, so rate-limit by caller IP (needs a trusted x-forwarded-for behind
-   // a proxy; falls back to the socket address).
+   // No userId/workspaceId is known before the token lookup, so rate-limit by
+   // caller IP (needs a trusted x-forwarded-for behind a proxy; falls back to the
+   // socket address). This is NOT sufficient on its own for an orb — every GitHub
+   // delivery arrives from GitHub's own address space, which is why there is a
+   // per-orb hourly cap further down.
    if (rateLimitBlocked(res, webhookRateLimiter, clientIpFromReq(req))) return;
-   const token = String(req.params.token || '');
-   const rows = await getDb().unsafe(
-    `select w.*,
-                a.id as agent_row_id,
-                a.name as agent_name,
-                a.handle as agent_handle,
-                a.description as agent_description,
-                a.system_prompt,
-                a.model,
-                a.soul,
-                a.instructions,
-                a.tools,
-                a.skills,
-                a.permission_mode
-         from agent_webhooks w
-         left join workspace_agents a on a.id = w.agent_id
-         where w.token in ($1, $2) and w.enabled = true
-         limit 1`,
-    inviteTokenLookupParams(token),
-   );
-   const webhook = rows[0];
-   if (!webhook) return jsonError(res, 404, new Error('Webhook not found'));
 
-   const prompt = String(req.body?.prompt || req.body?.text || req.body?.message || JSON.stringify(req.body || {})).trim();
-   if (!prompt) return jsonError(res, 400, new Error('Webhook payload did not include prompt, text, or message'));
-
-   const sessionRows = await getDb().unsafe(
-    `insert into chat_sessions (workspace_id, title, model, folder)
-         values ($1, $2, $3, $4)
-         returning *`,
-    [webhook.workspace_id, `Webhook: ${webhook.name}`, webhook.model || 'auto', 'Webhooks'],
-   );
-   const session = sessionRows[0];
-   const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content) values ($1, 'user', $2) returning *`,
-    [session.id, prompt],
-   );
-
-   await getDb().unsafe('update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1', [webhook.id]);
-   notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
-   notifyDbSubscribers('messages', 'INSERT', messageRows);
-
-   let assistantMessage = null;
-   try {
-    const content = await runAnthropicCompletion({
-     model: webhook.model || 'auto',
-     messages: [{ role: 'user', content: prompt }],
-     memory: null,
-     documents: null,
-     workspaceContext: { triggeredBy: 'webhook', webhook: webhook.name },
-     workspaceId: webhook.workspace_id,
-     agentContext: webhook.agent_id ? {
-      id: webhook.agent_row_id,
-      name: webhook.agent_name,
-      handle: webhook.agent_handle || slugHandle(webhook.agent_name || ''),
-      description: webhook.agent_description || '',
-      systemPrompt: webhook.system_prompt,
-      soul: webhook.soul,
-      instructions: webhook.instructions,
-      tools: parseJsonArray(webhook.tools),
-      skills: parseJsonArray(webhook.skills),
-      model: resolveAnthropicModel(webhook.model),
-      permissionMode: normalizeAgentPermissionMode(webhook.permission_mode),
-     } : null,
-    });
-    const assistantRows = await getDb().unsafe(
-     `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
-     [session.id, content],
-    );
-    assistantMessage = assistantRows[0];
-    notifyDbSubscribers('messages', 'INSERT', assistantRows);
-   } catch (error) {
-    const assistantRows = await getDb().unsafe(
-     `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
-     [session.id, `Webhook received, but agent execution failed: ${error.message || error}`],
-    );
-    assistantMessage = assistantRows[0];
-    notifyDbSubscribers('messages', 'INSERT', assistantRows);
+   // A signature is only meaningful over bytes we kept. express.json's `verify`
+   // hook populates req.rawBody and only runs for JSON, so a webhook configured
+   // as application/x-www-form-urlencoded arrives with no rawBody and fails
+   // closed on its own — but say so explicitly, or the operator spends an
+   // afternoon debugging a signature mismatch that is really a content-type
+   // mismatch.
+   if (!String(req.get('content-type') || '').toLowerCase().includes('application/json')) {
+    return jsonError(res, 415, new Error('Orb deliveries must be sent with Content-Type: application/json'));
+   }
+   const rawBody = req.rawBody;
+   if (!Buffer.isBuffer(rawBody)) {
+    return jsonError(res, 400, new Error('Orb delivery body could not be read as raw bytes'));
+   }
+   // express.json's global limit is 50mb, which is right for uploads and absurd
+   // for an unauthenticated webhook.
+   if (rawBody.length > ORB_MAX_BODY_BYTES) {
+    return jsonError(res, 413, new Error(`Orb delivery body exceeds ${ORB_MAX_BODY_BYTES} bytes`));
    }
 
-   res.json({ data: { session, userMessage: messageRows[0], assistantMessage }, error: null });
+   const token = String(req.params.token || '');
+   const rows = await getDb().unsafe(
+    'select * from agent_webhooks where token in ($1, $2) and enabled = true limit 1',
+    inviteTokenLookupParams(token),
+   );
+   const orb = rows[0];
+   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
+
+   // An orb with no agent used to fall through to a promptless built-in
+   // completion that went nowhere. There is nothing to wake, so say so.
+   if (!orb.agent_id) {
+    return jsonError(res, 400, new Error('This webhook has no agent assigned — assign one before triggering it'));
+   }
+   const agentRows = await getDb().unsafe(
+    'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+    [orb.agent_id, orb.workspace_id],
+   );
+   const agent = agentRows[0];
+   if (!agent) return jsonError(res, 404, new Error('The agent this webhook points at no longer exists'));
+   if (!isAgentEnabled(agent)) return jsonError(res, 400, new Error('The agent this webhook points at is deactivated'));
+
+   const provider = normalizeOrbProvider(orb.provider);
+   const secret = await getWorkspaceSecretValue(orb.workspace_id, orbSecretKey(orb.id));
+   const verdict = verifyOrbDelivery({ provider, secret, rawBody, headers: req.headers, nowMs });
+   if (!verdict.ok) {
+    await logOrbRejection({
+     orb,
+     status: 'rejected',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: verdict.reason,
+    });
+    // Fail closed on a misconfiguration rather than degrading to "unsigned":
+    // mirrors the huddles webhook returning 503 when the LiveKit keys are unset.
+    if (verdict.reason === 'unconfigured') {
+     return jsonError(res, 503, new Error(
+      `This orb's provider (${provider}) requires a signing secret and none is configured, `
+      + 'so the delivery cannot be verified. Nothing was run.',
+     ));
+    }
+    return jsonError(res, 401, new Error('Invalid signature'));
+   }
+
+   // The real bound on a successful prompt injection is not the fence in the
+   // composed message, it is the permission mode the agent runs at. An
+   // unauthenticated HTTP request must not reach a --no-sandbox --yolo run.
+   const refusal = orbDispatchRefusal({
+    signatureVerified: verdict.signatureVerified,
+    agentPermissionMode: normalizeAgentPermissionMode(agent.permission_mode),
+   });
+   if (refusal) {
+    await logOrbRejection({
+     orb,
+     status: 'rejected',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: 'unsigned orb, elevated agent permissions',
+    });
+    return jsonError(res, 403, new Error(refusal));
+   }
+
+   // Per-orb hourly cap, checked BEFORE the dedupe claim. Order matters: a
+   // throttled delivery must not consume its (webhook_id, delivery_key)
+   // idempotency slot, or the provider's legitimate retry an hour later would be
+   // answered "duplicate" and silently dropped.
+   //
+   // Only 'accepted' rows count. If throttled rows counted toward their own
+   // limit, an orb over its cap could never recover — every refusal would extend
+   // the window that caused it.
+   const limit = normalizeOrbRateLimit(orb.rate_limit_per_hour);
+   const usage = await getDb().unsafe(
+    `select count(*)::int as used from orb_deliveries
+       where webhook_id = $1 and status = 'accepted' and created_at > now() - interval '1 hour'`,
+    [orb.id],
+   );
+   if (Number(usage[0]?.used || 0) >= limit) {
+    await logOrbRejection({
+     orb,
+     status: 'throttled',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: `exceeded ${limit} deliveries/hour`,
+    });
+    return jsonError(res, 429, new Error(`This orb has reached its limit of ${limit} deliveries per hour`));
+   }
+
+   // Deduplication. DB-level, not the process-local claimTaskDispatch map: a
+   // provider retry can arrive minutes later, after a Fly restart, or on a second
+   // machine, none of which an in-memory window can see.
+   let delivery = null;
+   if (verdict.deliveryKey) {
+    // Exact path — the provider gave us a delivery id. This is also GitHub's
+    // replay guard, since GitHub does not timestamp its signature.
+    const claimed = await getDb().unsafe(
+     `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type)
+          values ($1, $2, $3, $4, $5)
+          on conflict (webhook_id, delivery_key) where delivery_key is not null do nothing
+          returning *`,
+     [orb.id, orb.workspace_id, verdict.deliveryKey, verdict.bodyHash, verdict.eventType],
+    );
+    // 200, not a 4xx: a 4xx tells the provider to keep retrying a delivery that
+    // has already been handled.
+    if (!claimed[0]) return res.status(200).json({ data: { duplicate: true }, error: null });
+    delivery = claimed[0];
+   } else {
+    // Best-effort windowed path — no provider delivery id. Deliberately NOT a
+    // unique constraint on body_hash: two genuinely distinct events can be
+    // byte-identical (a bare "deploy finished" ping) and a hard constraint would
+    // drop the second one forever. Send an Idempotency-Key to get the exact path.
+    const recent = await getDb().unsafe(
+     `select id from orb_deliveries
+        where webhook_id = $1 and delivery_key is null and body_hash = $2
+          and status = 'accepted' and created_at > now() - interval '10 minutes'
+        limit 1`,
+     [orb.id, verdict.bodyHash],
+    );
+    if (recent[0]) return res.status(200).json({ data: { duplicate: true }, error: null });
+    const inserted = await getDb().unsafe(
+     `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type)
+          values ($1, $2, null, $3, $4) returning *`,
+     [orb.id, orb.workspace_id, verdict.bodyHash, verdict.eventType],
+    );
+    delivery = inserted[0];
+   }
+
+   const handle = slugHandle(agent.handle || agent.name);
+   const { content } = composeOrbMessage({
+    orbName: orb.name,
+    agentHandle: handle,
+    prompt: orb.prompt,
+    provider,
+    eventType: verdict.eventType,
+    deliveryKey: verdict.deliveryKey || '',
+    signatureVerified: verdict.signatureVerified,
+    receivedAt: new Date(nowMs).toISOString(),
+    body: parseOrbBody(rawBody),
+    payloadFields: parseJsonArray(orb.payload_fields),
+   });
+
+   const routing = normalizeOrbRouting(orb.routing);
+   let session = null;
+   let threadParentId = null;
+   if (routing === 'thread') {
+    session = await findOrCreateDirectSession(orb.workspace_id, agent);
+    if (session && orb.thread_root_message_id) {
+     // Messages are SOFT-deleted, so the FK alone does not prove the root is
+     // still there — without the deleted_at check the thread reattaches to a
+     // message the human removed.
+     const rootRows = await getDb().unsafe(
+      'select id from messages where id = $1 and session_id = $2 and deleted_at is null limit 1',
+      [orb.thread_root_message_id, session.id],
+     );
+     threadParentId = rootRows[0]?.id || null;
+    }
+   }
+   if (!session) {
+    const sessionRows = await getDb().unsafe(
+     `insert into chat_sessions (workspace_id, title, model, folder)
+          values ($1, $2, $3, $4)
+          returning *`,
+     [orb.workspace_id, `Webhook: ${orb.name}`, agent.model || 'auto', 'Webhooks'],
+    );
+    session = sessionRows[0];
+    notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
+   }
+
+   // sender_kind 'system' / sender_name 'Orb' matches what the schedule runner
+   // already does with 'system'/'Schedule', so the UI never attributes an
+   // external event to a person.
+   const messageRows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_name)
+         values ($1, 'user', $2, $3, 'system', 'Orb')
+         returning *`,
+    [session.id, content, threadParentId],
+   );
+   notifyDbSubscribers('messages', 'INSERT', messageRows);
+   const messageRow = messageRows[0] || null;
+   // Follow postTaskSubthreadMention: the FIRST message becomes its own
+   // subthread root, so the agent's reply lands in the thread instead of
+   // scattering across the DM timeline.
+   if (routing === 'thread' && !threadParentId) threadParentId = messageRow?.id || null;
+
+   const orbRows = routing === 'thread'
+    ? await getDb().unsafe(
+     `update agent_webhooks
+           set last_triggered_at = now(), updated_at = now(),
+               session_id = $2, thread_root_message_id = $3
+         where id = $1 returning *`,
+     [orb.id, session.id, threadParentId],
+    )
+    : await getDb().unsafe(
+     'update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1 returning *',
+     [orb.id],
+    );
+   if (orbRows[0]) notifyDbSubscribers('agent_webhooks', 'UPDATE', orbRows);
+
+   const deliveryRows = await getDb().unsafe(
+    'update orb_deliveries set session_id = $2, message_id = $3 where id = $1 returning *',
+    [delivery.id, session.id, messageRow?.id || null],
+   );
+   notifyDbSubscribers('orb_deliveries', 'INSERT', deliveryRows.length > 0 ? deliveryRows : [delivery]);
+
+   // Fire and DO NOT await. continueConversation is the only door into real
+   // dispatch: it is what routes to a daemon or sandbox agent, takes the
+   // per-thread conversation lock, honours max_agent_turns and writes the
+   // agent_jobs row. Awaiting it is what used to push the response past GitHub's
+   // delivery timeout.
+   continueConversation({ workspaceId: orb.workspace_id, sessionId: session.id, threadParentId })
+    .catch((error) => console.error('orb dispatch failed', error?.message || error));
+
+   // 202, not 200-with-the-answer. This is an intentional break from the old
+   // response shape ({ session, userMessage, assistantMessage } after the model
+   // finished) because that shape is what caused the retries.
+   res.status(202).json({
+    data: {
+     deliveryId: delivery.id,
+     sessionId: session.id,
+     threadParentId,
+     messageId: messageRow?.id || null,
+     signatureVerified: verdict.signatureVerified,
+     duplicate: false,
+    },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, 500, error);
   }
@@ -11512,11 +11962,14 @@ function createApp() {
     [workspaceId],
    );
    // Exclude the platform-managed keys (surfaced via /settings/secrets) so the
-   // vault UI only shows user-defined shared secrets.
+   // vault UI only shows user-defined shared secrets. `orb:<id>` keys are
+   // platform-owned too (orb signing secrets, managed from the orb's own panel);
+   // the colon also keeps them out of reach of the PUT/DELETE routes below, whose
+   // key pattern allows only [A-Za-z0-9_.-].
    const managed = new Set(MANAGED_SECRET_KEYS);
    const data = [];
    for (const row of rows) {
-    if (managed.has(row.key)) continue;
+    if (managed.has(row.key) || row.key.startsWith('orb:')) continue;
     let plain = '';
     if (row.secret_cipher) { try { plain = await decryptVaultSecret(row.secret_cipher); } catch { plain = ''; } }
     else plain = row.value || '';

@@ -1,6 +1,7 @@
 # 021 — Event-driven orbs (external events that wake an agent, safely)
 
-Status: TODO
+Status: SLICE 1 DONE (see "Deviations taken while building slice 1" at the end);
+slices 2-4 TODO
 Priority: P2 (P1 for the two security items it folds in — see "What is actually broken today")
 Effort: M for slice 1, S each for slices 2 and 3
 Depends on: nothing
@@ -572,3 +573,42 @@ Do not regress: vitest 1179, node 674, typecheck 0, eslint 0.
    and `linear` verifiers are cheap to write and should land with tests, but do not
    claim support for a provider whose signature scheme has not been exercised
    against a real delivery.
+
+---
+
+## 11. Deviations taken while building slice 1
+
+Four places where the built code departs from the design above. The code is
+right in each case; this section exists so the plan does not contradict it.
+
+1. **Permission handling: refuse, not clamp.** Section 5.5 layer 3 proposed
+   clamping an unsigned orb's `permission_mode` down to `default`.
+   `orbDispatchRefusal` **refuses the dispatch with 403** instead. Two reasons:
+   `continueConversation` resolves `permission_mode` from the agent row itself,
+   so a clamp would mean threading an override through the whole dispatch path
+   for one caller; and a clamp silently gives the operator something other than
+   what they configured, while a refusal names the fix ("add a signing secret, or
+   lower the agent's permission mode"). Refusal covers `yolo` **and**
+   `accept_edits`, which is the faithful reading of "clamp to at most default".
+
+2. **Gate order: throttle before dedupe, not after.** Section 8 step 4 listed
+   "dedupe claim -> per-orb hourly cap". That order is wrong for exactly the
+   reason the plan gives for rejections: a throttled delivery would consume its
+   `(webhook_id, delivery_key)` idempotency slot, so the provider's legitimate
+   retry an hour later would be answered "duplicate" and dropped. The throttle
+   now runs first. `tests/orbs-wiring.test.cjs` asserts the order.
+
+3. **The hourly cap counts only `accepted` rows.** Section 5.8 said throttled
+   deliveries "still count", so that a flood self-limits. That is a lockout bug:
+   if refusals counted toward their own limit, an orb over its cap could never
+   recover, because every refusal would extend the window that caused it. Volume
+   is already bounded by `webhookRateLimiter`.
+
+4. **`linear` is not shipped, and one column was added.** Providers are
+   `generic`, `github`, `stripe` — Linear's delivery-id header could not be
+   verified against a real delivery, and risk note 5 above says not to claim it.
+   `agent_webhooks.has_signing_secret` was added (not in section 6's list) as an
+   **advisory UI hint**: the panel needs to render an "Unsigned" badge across
+   reloads, and a boolean is not key material. The trigger route never consults
+   it — it reads the vault entry itself, so a drifted flag cannot weaken
+   verification.

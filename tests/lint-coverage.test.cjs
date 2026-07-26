@@ -48,6 +48,10 @@ const MUST_BE_LINTED = [
   'server/skills.cjs',
   // Mints LiveKit join tokens and verifies the LiveKit webhook signature.
   'server/huddles.cjs',
+  // Verifies inbound orb webhook signatures and decides whether a hostile
+  // payload can become agent instructions. It is reached by an UNAUTHENTICATED
+  // route, so it is the last file in the repo that should run with zero rules.
+  'server/orbs.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.

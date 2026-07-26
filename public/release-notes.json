@@ -1,5 +1,20 @@
 [
   {
+    "version": "orbs",
+    "date": "2026-07-26",
+    "title": "Webhooks that actually wake your agent, and can prove who sent them",
+    "summary": "An agent webhook now behaves like a real event listener. Point GitHub or Stripe at it, paste in the signing secret, and deliveries are verified before anything runs, de-duplicated so a provider retry cannot run your agent twice, and answered immediately instead of holding the connection open for the whole reply. Give the webhook a standing instruction and the event payload is passed alongside it as clearly-marked untrusted data, rather than being handed to your agent as if you had typed it.",
+    "highlights": [
+      "Signature verification for GitHub and Stripe, plus a signed generic mode for anything else — a delivery that does not verify is refused, never run \"just in case\"",
+      "Retries are recognised and ignored: the same delivery arriving twice runs your agent once",
+      "Webhooks now genuinely wake the agent in its own runtime with its own tools, instead of a one-shot reply with none of them",
+      "Choose whether each event opens a new conversation or is appended to one ongoing thread",
+      "Give the webhook its own instruction, and narrow the payload to just the fields you care about",
+      "A per-webhook hourly limit, so a misbehaving repository cannot run your agent hundreds of times",
+      "A webhook with no signing secret is marked Unsigned, and will not run an agent that has elevated permissions until you add one"
+    ]
+  },
+  {
     "version": "tenants-admin",
     "date": "2026-07-26",
     "title": "A Tenants view for whoever runs the deployment",

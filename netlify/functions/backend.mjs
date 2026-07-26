@@ -1487,8 +1487,38 @@ async function ensureAgentRuntimeTables() {
       last_triggered_at timestamptz,
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now(),
-      version integer NOT NULL DEFAULT 1
+      version integer NOT NULL DEFAULT 1,
+      provider text NOT NULL DEFAULT 'generic',
+      prompt text NOT NULL DEFAULT '',
+      payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
+      routing text NOT NULL DEFAULT 'new',
+      rate_limit_per_hour integer NOT NULL DEFAULT 60,
+      has_signing_secret boolean NOT NULL DEFAULT false,
+      session_id uuid,
+      thread_root_message_id uuid
     )
+  `);
+ // Orbs (plans/021). agent_webhooks is a FOUR-place schema table, not three:
+ // this bootstrap is a real fourth source of truth for it, despite AGENTS.md
+ // saying the Netlify backend has no independent DDL. Miss this file and a
+ // Netlify-first bootstrap of a fresh DB produces an agent_webhooks with none of
+ // the orb columns, which the Fly trigger route then reads as blank.
+ //
+ // session_id / thread_root_message_id are plain uuid here, WITHOUT the FKs the
+ // other three schema places carry. This function runs on live request paths
+ // (agent creation, CursorBuddy pairing) and this backend never creates
+ // chat_sessions or messages, so referencing them would make a hot path depend on
+ // a table this file has no hand in provisioning. Netlify never writes these two
+ // columns; the Fly server and neon-schema.sql hold the real constraints.
+ await query(`
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'generic';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS prompt text NOT NULL DEFAULT '';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS routing text NOT NULL DEFAULT 'new';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS rate_limit_per_hour integer NOT NULL DEFAULT 60;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS has_signing_secret boolean NOT NULL DEFAULT false;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS session_id uuid;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS thread_root_message_id uuid;
   `);
  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id)');
  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
@@ -1562,11 +1592,50 @@ async function handleCreateAgentWebhook(req, userId) {
  // table/trigger route, so both writers must hash or the trigger's dual-path
  // lookup would never match a netlify-created row.
  const token = crypto.randomBytes(32).toString('base64url');
+ // Orb config (plans/021), mirroring server/index.cjs's create route so an orb
+ // created through this backend is not silently generic/unsigned with no prompt.
+ //
+ // An unknown provider or routing value is REJECTED, never normalized: coercing
+ // "gitlab" to "generic" would mean UNSIGNED, and the operator would never be
+ // told. The provider list is duplicated as a literal rather than imported from
+ // server/orbs.cjs because this function must not pull in the Fly server's module
+ // graph; tests/netlify-parity.test.cjs asserts the two lists agree.
+ const ORB_PROVIDERS = ['generic', 'github', 'stripe'];
+ const ORB_ROUTING_MODES = ['new', 'thread'];
+ const provider = body?.provider === undefined ? 'generic' : String(body.provider || '').trim().toLowerCase();
+ if (!ORB_PROVIDERS.includes(provider)) {
+  return jsonError(400, new Error(`Unknown orb provider "${provider}". Supported: ${ORB_PROVIDERS.join(', ')}`));
+ }
+ const routing = body?.routing === undefined ? 'new' : String(body.routing || '').trim().toLowerCase();
+ if (!ORB_ROUTING_MODES.includes(routing)) {
+  return jsonError(400, new Error(`Unknown orb routing "${routing}". Supported: ${ORB_ROUTING_MODES.join(', ')}`));
+ }
+ // A non-generic provider needs a signing secret, and only the Fly config route
+ // can write one (it owns the workspace vault). Refuse here rather than create an
+ // orb whose every delivery would 503.
+ if (provider !== 'generic') {
+  return jsonError(400, new Error(
+   `Provider "${provider}" needs a signing secret, which is set from the orb's own panel. `
+   + 'Create the webhook as generic, then configure the provider and secret.',
+  ));
+ }
+ const prompt = typeof body?.prompt === 'string' ? body.prompt.slice(0, 4000) : '';
+ const payloadFields = (Array.isArray(body?.payload_fields) ? body.payload_fields : [])
+  .map((value) => String(value == null ? '' : value).trim())
+  .filter((value) => /^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,199}$/.test(value))
+  .slice(0, 40);
+ const rateLimit = Number(body?.rate_limit_per_hour);
+ const rateLimitPerHour = Number.isFinite(rateLimit) && rateLimit > 0 ? Math.min(10_000, Math.round(rateLimit)) : 60;
  const rows = await query(
-  `insert into agent_webhooks (workspace_id, agent_id, name, token)
-     values ($1, $2, $3, $4)
+  `insert into agent_webhooks
+     (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
      returning *`,
-  [workspaceId, agentId || null, name, hashAgentToken(token)],
+  // payload_fields is STRINGIFIED here and bound as an object on the Fly server.
+  // The drivers are opposite: @netlify/database sends a text param for the cast
+  // to parse, while porsager serializes the JS value itself (a pre-stringified
+  // value would land as a jsonb string scalar). Do not "sync" the two.
+  [workspaceId, agentId || null, name, hashAgentToken(token), provider, prompt, JSON.stringify(payloadFields), routing, rateLimitPerHour],
  );
  return json({ data: { ...rows[0], token }, error: null });
 }

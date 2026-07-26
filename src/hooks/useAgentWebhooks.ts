@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
-import type { AgentWebhook } from '../types';
+import type { AgentWebhook, OrbConfigInput } from '../types';
 
 export function useAgentWebhooks(workspaceId: string | null) {
   const [webhooks, setWebhooks] = useState<AgentWebhook[]>([]);
@@ -53,5 +53,25 @@ export function useAgentWebhooks(workspaceId: string | null) {
     return data as AgentWebhook | null;
   }, []);
 
-  return { webhooks, loading, createWebhook, updateWebhook, refetch: fetchWebhooks };
+  // Orb config (plans/021) goes through the dedicated route, not the generic /db
+  // update path: the route validates the provider/routing enums (an unknown value
+  // is rejected rather than coerced to "generic", which would mean unsigned), and
+  // it is the only writer allowed to touch the signing secret — which is stored in
+  // the workspace vault and never returned here.
+  const configureWebhook = useCallback(async (id: string, config: OrbConfigInput) => {
+    const response = await fetch(apiUrl(`/backend/agent-webhooks/${id}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+      body: JSON.stringify(config),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.error) {
+      return { webhook: null, error: String(payload.error || 'Could not save this orb') };
+    }
+    const webhook = payload.data as AgentWebhook;
+    setWebhooks(prev => prev.map(existing => existing.id === id ? webhook : existing));
+    return { webhook, error: null };
+  }, []);
+
+  return { webhooks, loading, createWebhook, updateWebhook, configureWebhook, refetch: fetchWebhooks };
 }

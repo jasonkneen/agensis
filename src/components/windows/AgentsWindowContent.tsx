@@ -35,7 +35,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { AI_MODELS, type AgentConnection, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
+import { AI_MODELS, type AgentConnection, type AgentWebhook, type ChatSession, type OrbConfigInput, type OrbProvider, type OrbRouting, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -135,6 +135,8 @@ interface AgentsWindowContentProps {
   onDisconnectAgent: (id: string) => Promise<unknown>;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  /** Orb config (plans/021) — goes through the dedicated validating route. */
+  onConfigureWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
   onOpenConnections: () => void;
 }
 
@@ -240,6 +242,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onDisconnectAgent,
   onCreateWebhook,
   onUpdateWebhook,
+  onConfigureWebhook,
   onOpenConnections,
 }: AgentsWindowContentProps) {
   // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
@@ -463,6 +466,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
         onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+        onConfigureWebhook={onConfigureWebhook}
       />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
@@ -1719,6 +1723,7 @@ function AgentConnectDialog({
   webhooks,
   onCreateWebhook,
   onToggleWebhook,
+  onConfigureWebhook,
 }: {
   agent: WorkspaceAgent | null;
   open: boolean;
@@ -1726,6 +1731,7 @@ function AgentConnectDialog({
   webhooks: AgentWebhook[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+  onConfigureWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
 }) {
   const [tab, setTab] = useState<ConnectTab>('cli');
 
@@ -1995,8 +2001,8 @@ function AgentConnectDialog({
             {/* Webhook */}
             <TabsContent value="webhook" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={`Trigger @${handle} over HTTP from anything — CI, cron, Zapier, a curl one-liner.`}
-                note="One-way fire-and-forget, not a live connection. Treat the URL as a secret — anyone with it can post to this agent."
+                benefit={`Wake @${handle} from an external event — CI failing, an issue opening, a monitor firing.`}
+                note="Set a provider and signing secret and the delivery is verified and de-duplicated. Leave it generic and the URL alone is the only authenticator, so treat it as a secret."
               />
               <McpDialogSection icon={Link2} title="Webhook URLs">
                 {webhooks.length > 0 ? (
@@ -2004,28 +2010,39 @@ function AgentConnectDialog({
                     {webhooks.map(webhook => {
                       const url = webhookUrl(webhook.token);
                       return (
-                        <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
-                          <Link2 className="size-3 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => void navigator.clipboard?.writeText(url)}
-                            aria-label={`Copy webhook for ${agent.name}`}
-                          >
-                            <Copy />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant={webhook.enabled ? 'secondary' : 'ghost'}
-                            size="icon-xs"
-                            onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
-                            aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
-                            title={webhook.enabled ? 'Enabled' : 'Disabled'}
-                          >
-                            <Power />
-                          </Button>
+                        <div key={webhook.id} className="space-y-1.5 rounded-md border bg-background px-2 py-1.5">
+                          <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                            <Link2 className="size-3 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
+                            {!webhook.has_signing_secret && (
+                              <span
+                                className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400"
+                                title="No signing secret: deliveries cannot be verified, and this agent will not run at elevated permissions from an unsigned event."
+                              >
+                                Unsigned
+                              </span>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => void navigator.clipboard?.writeText(url)}
+                              aria-label={`Copy webhook for ${agent.name}`}
+                            >
+                              <Copy />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={webhook.enabled ? 'secondary' : 'ghost'}
+                              size="icon-xs"
+                              onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
+                              aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
+                              title={webhook.enabled ? 'Enabled' : 'Disabled'}
+                            >
+                              <Power />
+                            </Button>
+                          </div>
+                          <OrbConfigForm webhook={webhook} onConfigure={onConfigureWebhook} />
                         </div>
                       );
                     })}
@@ -2050,6 +2067,198 @@ function AgentConnectDialog({
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const ORB_PROVIDER_LABELS: Array<{ value: OrbProvider; label: string }> = [
+  { value: 'generic', label: 'Generic (agensis signature, or unsigned)' },
+  { value: 'github', label: 'GitHub (X-Hub-Signature-256)' },
+  { value: 'stripe', label: 'Stripe (Stripe-Signature)' },
+];
+
+const ORB_ROUTING_LABELS: Array<{ value: OrbRouting; label: string }> = [
+  { value: 'new', label: 'New session per event' },
+  { value: 'thread', label: 'One thread, appended to' },
+];
+
+// Orb configuration for one webhook (plans/021). Collapsed by default — most
+// webhooks are fire-and-forget, and these fields only start to matter when a real
+// provider is pointed at one.
+//
+// The draft is seeded from the row ONCE per webhook id, not on every change to it:
+// an orb firing mid-edit bumps last_triggered_at, and re-seeding on that would
+// wipe whatever the operator was typing.
+function OrbConfigForm({
+  webhook,
+  onConfigure,
+}: {
+  webhook: AgentWebhook;
+  onConfigure: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [provider, setProvider] = useState<OrbProvider>(webhook.provider || 'generic');
+  const [routing, setRouting] = useState<OrbRouting>(webhook.routing || 'new');
+  const [prompt, setPrompt] = useState(webhook.prompt || '');
+  const [payloadFields, setPayloadFields] = useState((webhook.payload_fields || []).join('\n'));
+  const [rateLimit, setRateLimit] = useState(String(webhook.rate_limit_per_hour ?? 60));
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  const seed = useCallback((row: AgentWebhook) => {
+    setProvider(row.provider || 'generic');
+    setRouting(row.routing || 'new');
+    setPrompt(row.prompt || '');
+    setPayloadFields((row.payload_fields || []).join('\n'));
+    setRateLimit(String(row.rate_limit_per_hour ?? 60));
+    setSecret('');
+  }, []);
+
+  useEffect(() => { seed(webhook); }, [webhook.id, seed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = useCallback(async (config: OrbConfigInput) => {
+    setBusy(true);
+    setError('');
+    setSaved(false);
+    const result = await onConfigure(webhook.id, config);
+    setBusy(false);
+    if (result.error || !result.webhook) {
+      setError(result.error || 'Could not save this orb');
+      return;
+    }
+    // Re-seed from what the server actually stored, so a clamped rate limit or a
+    // trimmed prompt is visible rather than only local.
+    seed(result.webhook);
+    setSaved(true);
+  }, [onConfigure, seed, webhook.id]);
+
+  if (!open) {
+    return (
+      <Button type="button" variant="ghost" size="xs" className="h-6 px-1.5 text-[11px]" onClick={() => setOpen(true)}>
+        <Wrench data-icon="inline-start" />
+        Configure orb
+      </Button>
+    );
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-2">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Provider
+          <NativeSelect
+            value={provider}
+            onChange={event => setProvider(event.target.value as OrbProvider)}
+            className="h-7 text-xs"
+          >
+            {ORB_PROVIDER_LABELS.map(option => (
+              <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Thread
+          <NativeSelect
+            value={routing}
+            onChange={event => setRouting(event.target.value as OrbRouting)}
+            className="h-7 text-xs"
+          >
+            {ORB_ROUTING_LABELS.map(option => (
+              <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+      </div>
+
+      <label className="block space-y-1 text-[11px] text-muted-foreground">
+        Instructions for the agent
+        <Textarea
+          value={prompt}
+          onChange={event => setPrompt(event.target.value)}
+          rows={2}
+          className="text-xs"
+          placeholder="What should the agent do when this event arrives?"
+        />
+        <span className="block text-[10px] text-muted-foreground/80">
+          This is the only instruction the agent is given. The event payload is passed
+          separately and marked untrusted.
+        </span>
+      </label>
+
+      <label className="block space-y-1 text-[11px] text-muted-foreground">
+        Payload fields (one per line, optional)
+        <Textarea
+          value={payloadFields}
+          onChange={event => setPayloadFields(event.target.value)}
+          rows={2}
+          className="font-mono text-[11px]"
+          placeholder={'repository.full_name\nworkflow_run.conclusion'}
+        />
+        <span className="block text-[10px] text-muted-foreground/80">
+          Narrows the payload to these paths. Leave empty to pass the whole body, truncated.
+        </span>
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Signing secret {webhook.has_signing_secret ? '(set)' : '(none)'}
+          <Input
+            type="password"
+            value={secret}
+            onChange={event => setSecret(event.target.value)}
+            className="h-7 text-xs"
+            placeholder={webhook.has_signing_secret ? 'Replace secret' : 'Paste the provider secret'}
+            autoComplete="off"
+          />
+        </label>
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Max events per hour
+          <Input
+            type="number"
+            min={1}
+            value={rateLimit}
+            onChange={event => setRateLimit(event.target.value)}
+            className="h-7 text-xs"
+          />
+        </label>
+      </div>
+
+      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {saved && !error && <p className="text-[11px] text-muted-foreground">Saved.</p>}
+
+      <div className="flex items-center gap-1.5">
+        <Button
+          type="button"
+          size="xs"
+          disabled={busy}
+          onClick={() => void submit({
+            provider,
+            routing,
+            prompt,
+            payload_fields: payloadFields.split('\n').map(value => value.trim()).filter(Boolean),
+            rate_limit_per_hour: Number(rateLimit) || 60,
+            ...(secret ? { signing_secret: secret } : {}),
+          })}
+        >
+          <Save data-icon="inline-start" />
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+        {webhook.has_signing_secret && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void submit({ provider, signing_secret: '' })}
+            title="Remove the signing secret. A non-generic provider will refuse this, since it could never verify a delivery without one."
+          >
+            Remove secret
+          </Button>
+        )}
+        <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>Close</Button>
+      </div>
+    </div>
   );
 }
 
