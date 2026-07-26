@@ -256,12 +256,23 @@ test('the tool delegates the destination decision — it never builds a URL or f
     'the workspace and agent must come from the TOKEN, never from args');
 });
 
-test('the proxy is passed into the MCP handler, so the tool is reachable', () => {
-  const start = SERVER.indexOf('const mcpHandler = createMcpHandler({');
-  const end = SERVER.indexOf('});', start);
+test('the proxy is passed into BOTH tool doors, so the tool is reachable', () => {
+  // The tool-facing deps live in one factory (mcpToolDeps) precisely so the MCP
+  // endpoint and the built-in tool loop cannot be handed different capabilities —
+  // a call_provider that works over MCP and silently does not exist for a builtin
+  // agent is the exact drift this file was written to catch.
+  const start = SERVER.indexOf('function mcpToolDeps() {');
+  const end = SERVER.indexOf('\n}', start);
+  assert.ok(start > 0 && end > start, 'could not locate mcpToolDeps');
   const deps = SERVER.slice(start, end);
   assert.match(deps, /\bcallProviderOperation,/);
   assert.match(deps, /\bproviderCallRateLimiter,/);
+
+  // …and both doors are actually built from it.
+  const handlerStart = SERVER.indexOf('const mcpHandler = createMcpHandler({');
+  const handlerEnd = SERVER.indexOf('});', handlerStart);
+  assert.match(SERVER.slice(handlerStart, handlerEnd), /\.\.\.mcpToolDeps\(\),/);
+  assert.match(SERVER, /createBuiltinToolset\(mcpToolDeps\(\)\)/);
 });
 
 test('exactly one place puts a credential into a request', () => {

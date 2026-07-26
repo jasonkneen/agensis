@@ -10,6 +10,21 @@
       "Opening a thread jumps to the reply and marks that thread read, not the whole channel",
       "Voice-call transcripts are excluded; the call already has its own row in the channel",
       "Read state is shared with the inbox, so the two can never disagree about what you have seen"
+]
+  },
+  {
+    "version": "builtin-agent-tools",
+    "date": "2026-07-26",
+    "title": "Built-in agents can now actually use the workspace",
+    "summary": "An agent running inside agensis could only ever write text. That is why one would tell you it was about to create a to-do or look something up, and then nothing happened — there was no way for it to do anything but talk. It now has the real workspace tools: it can read channels, search messages and documents, write a doc, create and update tasks, put plan and to-do items on a thread's widget rail, save something to team memory, bring a teammate in, and use a provider key you have stored. And you can watch it work. Each tool it uses appears as a chip in the thread as it happens, a call that fails is marked as failed rather than quietly skipped, and what it says between steps arrives as separate messages instead of one paragraph that keeps growing. Agents run by a daemon on your own machine, and clients connected over MCP, are unchanged — this brings the ones agensis runs itself up to the same level.",
+    "highlights": [
+      "Built-in agents can read and post in channels, search, write docs, manage tasks and remember things",
+      "They can raise a plan, to-dos or a blocker on the thread's widget rail while they work",
+      "Tool use shows up live as chips in the thread, so you can see what an agent is doing, not just wait",
+      "A tool call that fails is shown as failed and the agent tells you what it could not do",
+      "An agent talks in separate messages as it goes, instead of one bubble that grows for a minute",
+      "Each turn is capped, so an agent cannot spin on tools indefinitely and always comes back with an answer",
+      "An agent's tools only ever reach its own workspace, with exactly the permissions it already had"
     ]
   },
   {

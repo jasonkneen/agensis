@@ -1346,6 +1346,133 @@ function buildTools() {
  return tools;
 }
 
+// =============================================================================
+// ONE tool surface, TWO doors.
+//
+// Door 1 — an external MCP client over JSON-RPC (createMcpHandler below).
+// Door 2 — a BUILT-IN agent turn, which runs the Anthropic tool-use loop
+//          in-process (runToolUseLoop in server/index.cjs) and needs the same
+//          tools with the same authorization.
+//
+// Both read `buildTools()`. There is exactly one list of tools and exactly one
+// copy of every schema: the builtin door does not describe the tools, it
+// PROJECTS them (`{ name, description, input_schema }` is Anthropic's spelling
+// of the very object `tools/list` serves). A second, hand-written copy is how an
+// agent ends up confidently calling a tool that was renamed a month ago.
+//
+// Authorization is shared the same way: `runToolForIdentity` below is the ONLY
+// place a tool is executed, so every gate — the `kinds` allowlist, the Flows
+// scope check, the per-connection channel pin — applies identically whichever
+// door the call came through.
+// =============================================================================
+
+/** Every gate that decides whether an identity may SEE a tool. */
+function toolAllowedForIdentity(tool, identity) {
+ const kinds = tool.kinds || ['agent', 'invite'];
+ return kinds.includes(identity.kind) && connectionCanUseTool(identity, tool.name);
+}
+
+/**
+ * Execute ONE tool under ONE identity, applying every authorization gate.
+ *
+ * Returns `{ ok: true, value }` or `{ ok: false, error }` and NEVER throws for a
+ * caller-facing failure — the MCP door renders the error as `isError` content,
+ * and the builtin loop feeds it back to the model as a readable `tool_result` it
+ * can recover from. A tool that throws must not kill either door.
+ *
+ * `identity.workspaceId` is the whole tenancy story: every tool scopes its own
+ * queries to it, and neither door lets a caller supply it — the MCP door reads it
+ * off the verified token, the builtin door off the agent ROW being run.
+ */
+async function runToolForIdentity({ name, args, identity, db, deps, toolMap }) {
+ const tool = toolMap.get(name);
+ if (!tool) return { ok: false, error: `Unknown tool: ${name}` };
+ const kinds = tool.kinds || ['agent', 'invite'];
+ if (!kinds.includes(identity.kind)) {
+  return { ok: false, error: `Tool "${tool.name}" is not available for a ${identity.kind} token.` };
+ }
+ if (!connectionCanUseTool(identity, tool.name)) {
+  return { ok: false, error: `Tool "${tool.name}" is outside this connection's granted scopes.` };
+ }
+ if (identity.kind === 'integration' && identity.channelId) {
+  const requestedChannelId = args.channel_id || args.session_id || null;
+  if (requestedChannelId) {
+   try {
+    assertConnectionChannel(identity, requestedChannelId);
+   } catch (err) {
+    return { ok: false, error: err.message };
+   }
+  }
+ }
+ try {
+  const value = await tool.run(args, { db, identity, deps });
+  return { ok: true, value };
+ } catch (err) {
+  if (err instanceof ToolError) return { ok: false, error: err.message };
+  console.error('[mcp] tool execution error', tool.name, err);
+  return { ok: false, error: `Internal error executing ${tool.name}: ${err.message || err}` };
+ }
+}
+
+/**
+ * Tools a BUILT-IN turn is not given, on top of the `kinds` filter it already
+ * shares with the MCP door. Each one is excluded for a reason, not for tidiness:
+ *
+ *   claim_job / submit_job_result / fail_job
+ *     The pull-queue plumbing by which an EXTERNAL client becomes an agent. A
+ *     builtin turn already IS a claimed job, running in-process; letting it claim
+ *     and resolve jobs would let one turn answer (or fail) another agent's turn
+ *     and re-enter continueConversation from inside itself.
+ *
+ *   get_connect_command
+ *     Mints a fresh `aga_` daemon token AND flips the agent to daemon run-mode.
+ *     A builtin agent writes its output straight into a channel humans read, so a
+ *     minted token is one paraphrase away from being published — and the run-mode
+ *     flip would silently move the agent off the lane it is executing on.
+ *
+ * Everything else an agent-kind token can reach over MCP, a builtin turn can
+ * reach too: the two doors are meant to be the same workspace, not two tiers.
+ */
+const BUILTIN_TOOL_EXCLUSIONS = Object.freeze([
+ 'claim_job',
+ 'submit_job_result',
+ 'fail_job',
+ 'get_connect_command',
+]);
+
+/**
+ * The builtin door. `specs(identity)` is the Anthropic `tools` array for a turn;
+ * `call(...)` runs one of them through the shared authorization path above.
+ *
+ * Built from the same `buildTools()` as the MCP handler and given the same
+ * `deps`, so a tool behaves identically whichever door invoked it.
+ */
+function createBuiltinToolset(deps) {
+ const TOOLS = buildTools();
+ const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
+ const excluded = new Set(BUILTIN_TOOL_EXCLUSIONS);
+ return {
+  specs(identity) {
+   return TOOLS
+    .filter((tool) => toolAllowedForIdentity(tool, identity) && !excluded.has(tool.name))
+    .map((tool) => ({
+     name: tool.name,
+     description: tool.description,
+     // The SAME schema object tools/list serves. Not a copy of it.
+     input_schema: tool.inputSchema,
+    }));
+  },
+  async call({ name, args, identity, db }) {
+   // Belt and braces: the model is only ever shown `specs()`, but a refusal here
+   // means an excluded tool cannot be reached even if a spec list goes stale.
+   if (excluded.has(name)) {
+    return { ok: false, error: `Tool "${name}" is not available to a built-in agent turn.` };
+   }
+   return runToolForIdentity({ name, args, identity, db, deps, toolMap: TOOL_MAP });
+  },
+ };
+}
+
 // --- shared tool internals --------------------------------------------------
 
 async function assertChannelInWorkspace(db, channelId, workspaceId) {
@@ -1396,10 +1523,7 @@ function createMcpHandler(deps) {
  const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
 
  function toolsForIdentity(identity) {
-  return TOOLS.filter((tool) => {
-   const kinds = tool.kinds || ['agent', 'invite'];
-   return kinds.includes(identity.kind) && connectionCanUseTool(identity, tool.name);
-  });
+  return TOOLS.filter((tool) => toolAllowedForIdentity(tool, identity));
  }
 
  async function handleOne(rpc, identity) {
@@ -1441,34 +1565,14 @@ function createMcpHandler(deps) {
     return jsonrpcResult(id, { prompts: [] });
    case 'tools/call': {
     const params = rpc.params || {};
-    const tool = TOOL_MAP.get(params.name);
-    if (!tool) return jsonrpcResult(id, toolError(`Unknown tool: ${params.name}`));
-    const kinds = tool.kinds || ['agent', 'invite'];
-    if (!kinds.includes(identity.kind)) {
-     return jsonrpcResult(id, toolError(`Tool "${tool.name}" is not available for a ${identity.kind} token.`));
-    }
     const args = params.arguments && typeof params.arguments === 'object' ? params.arguments : {};
-    if (!connectionCanUseTool(identity, tool.name)) {
-     return jsonrpcResult(id, toolError(`Tool "${tool.name}" is outside this connection's granted scopes.`));
-    }
-    if (identity.kind === 'integration' && identity.channelId) {
-     const requestedChannelId = args.channel_id || args.session_id || null;
-     if (requestedChannelId) {
-      try {
-       assertConnectionChannel(identity, requestedChannelId);
-      } catch (err) {
-       return jsonrpcResult(id, toolError(err.message));
-      }
-     }
-    }
-    try {
-     const value = await tool.run(args, { db: getDb(), identity, deps });
-     return jsonrpcResult(id, toolContent(value));
-    } catch (err) {
-     if (err instanceof ToolError) return jsonrpcResult(id, toolError(err.message));
-     console.error('[mcp] tool execution error', tool.name, err);
-     return jsonrpcResult(id, toolError(`Internal error executing ${tool.name}: ${err.message || err}`));
-    }
+    // Shared with the builtin door (see runToolForIdentity): every gate and the
+    // error wording live in one place, so the two lanes cannot authorize
+    // differently.
+    const outcome = await runToolForIdentity({
+     name: params.name, args, identity, db: getDb(), deps, toolMap: TOOL_MAP,
+    });
+    return jsonrpcResult(id, outcome.ok ? toolContent(outcome.value) : toolError(outcome.error));
    }
    default:
     return isNotification ? null : jsonrpcError(id, -32601, `Method not found: ${method}`);
@@ -1524,8 +1628,10 @@ function listToolSummaries() {
 
 module.exports = {
  createMcpHandler,
+ createBuiltinToolset,
+ BUILTIN_TOOL_EXCLUSIONS,
  listToolSummaries,
  SERVER_INSTRUCTIONS,
  SERVER_NAME,
- __test: { buildTools, ToolError },
+ __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity },
 };
