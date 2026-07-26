@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { apiAuthHeaders, apiUrl } from '@/lib/backendClient';
 import { BUILD_ID } from '@/lib/appVersion';
+import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
   buildDiagnosticsSnapshot,
   consoleCaptureTruncated,
@@ -153,9 +154,10 @@ export function FeedbackButton({ workspaceId, userId, contextLabel }: FeedbackBu
             bottom: WORKSPACE_DOCK_BOTTOM_OFFSET + Math.round((WORKSPACE_DOCK_HEIGHT - BUTTON_SIZE) / 2),
             width: BUTTON_SIZE,
             height: BUTTON_SIZE,
-            // Above the dock (11000), below dialogs/sheets (11990+) so an open
-            // dialog is never fighting a floating button for clicks.
-            zIndex: 11500,
+            // Above the window dock, below dialogs/sheets, so an open dialog is
+            // never fighting a floating button for clicks. See the ladder in
+            // src/lib/chromeDepth.ts.
+            zIndex: CHROME_DEPTH.appDock,
           }}
         >
           <MessageSquareWarning className="size-4" />

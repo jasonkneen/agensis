@@ -154,7 +154,7 @@ export function ElementPicker({ onPick, onDone, onCancel, picked, max }: Element
       {rect && (
         <div
           aria-hidden
-          className="pointer-events-none fixed z-[12080] rounded-[3px] border-2 border-primary bg-primary/15"
+          className="pointer-events-none fixed z-[var(--z-picker)] rounded-[3px] border-2 border-primary bg-primary/15"
           style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
         >
           <span
@@ -171,7 +171,7 @@ export function ElementPicker({ onPick, onDone, onCancel, picked, max }: Element
 
       <div
         data-feedback-ui
-        className="fixed top-4 left-1/2 z-[12090] flex -translate-x-1/2 items-center gap-2 rounded-xl border bg-popover/95 px-3 py-2 text-sm text-popover-foreground shadow-lg backdrop-blur"
+        className="fixed top-4 left-1/2 z-[var(--z-picker-hud)] flex -translate-x-1/2 items-center gap-2 rounded-xl border bg-popover/95 px-3 py-2 text-sm text-popover-foreground shadow-lg backdrop-blur"
       >
         <MousePointerSquareDashed className="size-4 shrink-0 text-primary" />
         <span className="text-xs">
