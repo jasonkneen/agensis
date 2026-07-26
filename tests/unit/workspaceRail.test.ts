@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWorkspaceRail,
+  clampWorkspaceRailWidth,
+  isWorkspaceRailExpanded,
+  nudgeWorkspaceRailWidth,
   pickInitialWorkspaceId,
+  readWorkspaceRailWidth,
   resolveActiveWorkspaceId,
+  toggleWorkspaceRailWidth,
   workspaceGlyph,
   workspaceInitials,
   workspaceRailFocusOrder,
   workspaceRailKeyTarget,
   workspaceTileColor,
+  WORKSPACE_RAIL_COLLAPSED_WIDTH,
+  WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH,
+  WORKSPACE_RAIL_MAX_WIDTH,
+  WORKSPACE_RAIL_MIN_EXPANDED_WIDTH,
+  WORKSPACE_RAIL_SNAP_WIDTH,
   type WorkspaceRailSource,
 } from '../../src/lib/workspaceRail';
 
@@ -256,5 +266,129 @@ describe('the System workspace is never an automatic landing place', () => {
 
   it('uses System only when it is genuinely the only workspace', () => {
     expect(pickInitialWorkspaceId(null, [sys])).toBe('sys');
+  });
+});
+
+// The rail drags between an icon strip and a column wide enough for names and
+// canvases. The band between the two is the interesting part: a rail left at
+// 90px is wide enough to look deliberate and too narrow to read, so no drag may
+// end there. Everything downstream (the canvas viewport's left inset, the
+// traffic-light clearance) is arithmetic off this number.
+describe('clampWorkspaceRailWidth', () => {
+  it('snaps shut below the snap threshold', () => {
+    expect(clampWorkspaceRailWidth(WORKSPACE_RAIL_SNAP_WIDTH - 1)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(clampWorkspaceRailWidth(60)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(clampWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+
+  it('opens to the minimum readable width AT the threshold', () => {
+    expect(clampWorkspaceRailWidth(WORKSPACE_RAIL_SNAP_WIDTH)).toBe(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH);
+  });
+
+  it('leaves nothing representable between the two shapes', () => {
+    // Every width in the dead band resolves to one end or the other.
+    for (let width = 0; width <= WORKSPACE_RAIL_MIN_EXPANDED_WIDTH; width += 1) {
+      const clamped = clampWorkspaceRailWidth(width);
+      expect(
+        clamped === WORKSPACE_RAIL_COLLAPSED_WIDTH || clamped === WORKSPACE_RAIL_MIN_EXPANDED_WIDTH,
+      ).toBe(true);
+    }
+  });
+
+  it('keeps a width above the threshold, rounded', () => {
+    expect(clampWorkspaceRailWidth(240)).toBe(240);
+    expect(clampWorkspaceRailWidth(240.4)).toBe(240);
+  });
+
+  it('caps at the maximum', () => {
+    expect(clampWorkspaceRailWidth(WORKSPACE_RAIL_MAX_WIDTH + 1)).toBe(WORKSPACE_RAIL_MAX_WIDTH);
+    expect(clampWorkspaceRailWidth(5000)).toBe(WORKSPACE_RAIL_MAX_WIDTH);
+  });
+
+  it('treats nonsense as collapsed rather than propagating NaN into a layout inset', () => {
+    expect(clampWorkspaceRailWidth(Number.NaN)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(clampWorkspaceRailWidth(Number.POSITIVE_INFINITY)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(clampWorkspaceRailWidth(-500)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+});
+
+describe('isWorkspaceRailExpanded', () => {
+  it('is false at and below the snap threshold', () => {
+    expect(isWorkspaceRailExpanded(WORKSPACE_RAIL_COLLAPSED_WIDTH)).toBe(false);
+    expect(isWorkspaceRailExpanded(WORKSPACE_RAIL_SNAP_WIDTH - 1)).toBe(false);
+  });
+
+  it('is true from the snap threshold up', () => {
+    expect(isWorkspaceRailExpanded(WORKSPACE_RAIL_SNAP_WIDTH)).toBe(true);
+    expect(isWorkspaceRailExpanded(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH)).toBe(true);
+    expect(isWorkspaceRailExpanded(WORKSPACE_RAIL_MAX_WIDTH)).toBe(true);
+  });
+});
+
+describe('readWorkspaceRailWidth', () => {
+  it('opens collapsed for a browser that has never dragged the rail', () => {
+    // The shape the app has always had — an upgrade must change nothing until
+    // the user asks for it.
+    expect(readWorkspaceRailWidth(null)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(readWorkspaceRailWidth(undefined)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(readWorkspaceRailWidth('')).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(readWorkspaceRailWidth('wide please')).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+
+  it('restores a saved width, clamped', () => {
+    expect(readWorkspaceRailWidth('224')).toBe(224);
+    expect(readWorkspaceRailWidth('9999')).toBe(WORKSPACE_RAIL_MAX_WIDTH);
+  });
+});
+
+// Regression: the first version nudged by a flat ±24 and clamped. From 52 that
+// lands on 76, which clamps straight back to 52 — the handle was focusable and
+// completely inert, caught by driving it with the keyboard rather than by
+// reading it. A pointer crosses the dead band in one gesture; a keyboard has to
+// be given the step.
+describe('nudgeWorkspaceRailWidth', () => {
+  it('steps a collapsed rail over the dead band, not into it', () => {
+    expect(nudgeWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH, 24)).toBe(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH);
+    expect(nudgeWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH, 1)).toBe(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH);
+  });
+
+  it('steps the narrowest expanded rail shut rather than stalling on the floor', () => {
+    expect(nudgeWorkspaceRailWidth(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH, -24)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+
+  it('moves by the step in the open band', () => {
+    expect(nudgeWorkspaceRailWidth(240, 24)).toBe(264);
+    expect(nudgeWorkspaceRailWidth(240, -24)).toBe(216);
+  });
+
+  it('does not run off either end', () => {
+    expect(nudgeWorkspaceRailWidth(WORKSPACE_RAIL_MAX_WIDTH, 24)).toBe(WORKSPACE_RAIL_MAX_WIDTH);
+    expect(nudgeWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH, -24)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+
+  it('is reachable in both directions from every legal width', () => {
+    // Anything the handle can be at must be able to grow and to shrink.
+    for (const width of [WORKSPACE_RAIL_COLLAPSED_WIDTH, WORKSPACE_RAIL_MIN_EXPANDED_WIDTH, 220, WORKSPACE_RAIL_MAX_WIDTH]) {
+      const wider = nudgeWorkspaceRailWidth(width, 24);
+      const narrower = nudgeWorkspaceRailWidth(width, -24);
+      if (width !== WORKSPACE_RAIL_MAX_WIDTH) expect(wider).toBeGreaterThan(width);
+      if (width !== WORKSPACE_RAIL_COLLAPSED_WIDTH) expect(narrower).toBeLessThan(width);
+    }
+  });
+});
+
+describe('toggleWorkspaceRailWidth', () => {
+  it('opens a collapsed rail to the default width', () => {
+    expect(toggleWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH)).toBe(WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH);
+  });
+
+  it('shuts an expanded rail whatever width it was left at', () => {
+    expect(toggleWorkspaceRailWidth(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(toggleWorkspaceRailWidth(WORKSPACE_RAIL_MAX_WIDTH)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  });
+
+  it('round-trips', () => {
+    const opened = toggleWorkspaceRailWidth(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+    expect(toggleWorkspaceRailWidth(opened)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
   });
 });

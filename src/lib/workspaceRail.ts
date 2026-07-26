@@ -1,10 +1,12 @@
 import { agentAccentPaletteColor, hashString } from './agentAccent';
+import { WORKSPACE_RAIL_WIDTH } from './workspaceLayout';
 /**
  * The workspace switcher rail's decisions, with no React and no DOM.
  *
  * Everything here is about what a tile *says* and where it *sits* — the glyph,
- * the fallback initials, which tile reads as active, and which workspaces get
- * pushed below the divider. The component is then a thin painter over this.
+ * the fallback initials, which tile reads as active, which workspaces get
+ * pushed below the divider, and how wide the rail is allowed to be. The
+ * component is then a thin painter over this.
  *
  * The subtle one is the glyph. `workspaces.icon` is a free-text column the user
  * types into (the create dialog's Icon field is a plain `<input maxLength=4>`),
@@ -236,3 +238,110 @@ export function workspaceRailKeyTarget(
       return null;
   }
 }
+
+/* --------------------------------------------------------------------------
+ * Width
+ *
+ * The rail drags between two useful shapes: an icon strip, and a column wide
+ * enough to carry a workspace name plus its canvases. The band in between is
+ * the problem — 90px is wide enough to look deliberate and too narrow to read,
+ * so a drag that lands there is snapped to one end rather than left as a
+ * sliver. Everything downstream (the canvas viewport's left inset, the
+ * traffic-light clearance) is arithmetic off this number, so it is clamped in
+ * one place instead of at each call site.
+ * ----------------------------------------------------------------------- */
+
+/** Icon-only. Same 52px the rail has always been; see WORKSPACE_RAIL_WIDTH. */
+export const WORKSPACE_RAIL_COLLAPSED_WIDTH = WORKSPACE_RAIL_WIDTH;
+
+/**
+ * Narrowest the rail may be while showing names. Below this a name is all
+ * ellipsis, so there is no width between the collapsed strip and this that is
+ * worth offering.
+ */
+export const WORKSPACE_RAIL_MIN_EXPANDED_WIDTH = 168;
+
+/** Widest. Past this the rail is competing with the sidebar for the same job. */
+export const WORKSPACE_RAIL_MAX_WIDTH = 320;
+
+/** Where an unconfigured rail opens to when expanded by double-click. */
+export const WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH = 208;
+
+/**
+ * Drag below this and the rail snaps shut. It sits between the collapsed width
+ * and the minimum expanded width so both directions are reachable without the
+ * pointer having to travel the whole gap.
+ */
+export const WORKSPACE_RAIL_SNAP_WIDTH = 110;
+
+/**
+ * A raw drag width made legal: either exactly collapsed, or somewhere in the
+ * expanded band. Nothing in between is representable, which is what stops a
+ * half-dragged rail existing at all.
+ */
+export function clampWorkspaceRailWidth(width: number): number {
+  if (!Number.isFinite(width) || width < WORKSPACE_RAIL_SNAP_WIDTH) {
+    return WORKSPACE_RAIL_COLLAPSED_WIDTH;
+  }
+  return Math.round(
+    Math.min(WORKSPACE_RAIL_MAX_WIDTH, Math.max(WORKSPACE_RAIL_MIN_EXPANDED_WIDTH, width)),
+  );
+}
+
+/** True when the rail is wide enough to carry workspace names beside the tiles. */
+export function isWorkspaceRailExpanded(width: number): boolean {
+  return clampWorkspaceRailWidth(width) > WORKSPACE_RAIL_COLLAPSED_WIDTH;
+}
+
+/**
+ * The persisted width, read back. A missing or junk value is the collapsed
+ * rail — the shape the app has always had, so an upgrade changes nothing until
+ * the user drags.
+ */
+export function readWorkspaceRailWidth(stored: string | null | undefined): number {
+  return clampWorkspaceRailWidth(Number.parseFloat(String(stored ?? '')));
+}
+
+/** Double-clicking the resize handle toggles between the two shapes. */
+export function toggleWorkspaceRailWidth(width: number): number {
+  return isWorkspaceRailExpanded(width)
+    ? WORKSPACE_RAIL_COLLAPSED_WIDTH
+    : WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH;
+}
+
+/**
+ * One arrow-key step on the resize handle.
+ *
+ * A pointer crosses the dead band in one gesture; a keyboard cannot, because
+ * every step starts from the last CLAMPED width. Nudging right from a collapsed
+ * rail by 24px lands on 76, which clamps straight back to 52 — the rail would be
+ * keyboard-unresizable, which is how this was first written and how it was
+ * caught. So a step that would land inside the band steps over it instead.
+ */
+export function nudgeWorkspaceRailWidth(width: number, delta: number): number {
+  const current = clampWorkspaceRailWidth(width);
+  if (delta > 0 && current === WORKSPACE_RAIL_COLLAPSED_WIDTH) return WORKSPACE_RAIL_MIN_EXPANDED_WIDTH;
+  if (delta < 0 && current <= WORKSPACE_RAIL_MIN_EXPANDED_WIDTH) return WORKSPACE_RAIL_COLLAPSED_WIDTH;
+  return clampWorkspaceRailWidth(current + delta);
+}
+
+/* --------------------------------------------------------------------------
+ * Desktops are NOT in this file, on purpose.
+ *
+ * An earlier version of the rail disclosed each workspace's desktops beneath
+ * its tile. It was removed once the model was settled: a workspace is a
+ * PROJECT (its own agents, channels, documents); a desktop is a saved view *of*
+ * the workspace you are already in — window positions, wallpaper, applets — and
+ * every piece of content is identical whichever desktop you are on.
+ *
+ * Nesting desktops under workspaces in one tree asserts that they are the same
+ * kind of thing one level apart, and users would reason from that and be wrong
+ * ("are my channels per-desktop?"). The rail is a flat list of projects.
+ *
+ * A desktop switcher belongs in the workspace's own chrome, beside the desktop
+ * name the sidebar header already renders. Whoever builds it will want the one
+ * idea worth keeping from the removed code: desktops load per-workspace
+ * (`useCanvasLayers(activeWorkspaceId)`), so a list must travel STAMPED with
+ * the workspace id it was loaded for, and be refused by any other workspace —
+ * otherwise one workspace's desktops end up labelled with another's name.
+ * ----------------------------------------------------------------------- */
