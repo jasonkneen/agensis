@@ -254,7 +254,12 @@ export function ThreadWidgetRail({
                 <button
                   key={kind}
                   type="button"
-                  className="control-outer-ring flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+                  // 10px muted-on-card was the least legible thing in the rail:
+                  // a control the user has to FIND to undo a close should not be
+                  // quieter than the text it sits beside. Up a step in size, and
+                  // full-strength foreground with the border carrying the
+                  // "secondary" reading instead of low-contrast text.
+                  className="control-outer-ring flex items-center gap-1 rounded-full border border-border bg-card px-2 py-1 text-[11px] font-medium text-foreground shadow-sm transition-colors hover:border-primary/50 hover:bg-muted/60"
                   title={`Add ${KIND_META[kind].label} widget`}
                   onClick={() => addWidget(kind)}
                 >
@@ -360,7 +365,9 @@ function WidgetCard({
         <Icon className="size-3.5 shrink-0" style={accent ? { color: accent } : undefined} />
         <span className="truncate text-xs font-semibold tracking-tight">{meta.label}</span>
         {items.length > 0 && (
-          <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium leading-4 text-muted-foreground">
+          // A count is DATA. Muted grey on grey made the one number in the
+          // header the hardest thing in it to read.
+          <span className="rounded-full bg-muted px-1.5 text-[10px] font-semibold leading-4 text-foreground">
             {openCount || items.length}
           </span>
         )}
@@ -390,7 +397,10 @@ function WidgetCard({
         {loading && items.length === 0 ? (
           <p className="px-1 py-2 text-[11px] text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (
-          <p className="px-1 py-2 text-[11px] text-muted-foreground/70">{meta.empty}</p>
+          // Was muted-foreground/70 — a double discount (already-muted token,
+          // then 70% of it) that put the empty state under any reasonable
+          // contrast floor. Muted alone is the intended "quiet".
+          <p className="px-1 py-2 text-[11px] text-muted-foreground">{meta.empty}</p>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {items.map(item => (
@@ -452,7 +462,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
             type="button"
             className={cn(
               'mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded border',
-              isDone ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-muted-foreground/40',
+              isDone ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-muted-foreground',
             )}
             title={isDone ? 'Mark open' : 'Mark done'}
             aria-label={isDone ? 'Mark open' : 'Mark done'}
@@ -473,7 +483,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
         >
           {item.content}
         </button>
-        {jump && <CornerDownRight className="mt-0.5 size-3 shrink-0 text-muted-foreground/50" />}
+        {jump && <CornerDownRight className="mt-0.5 size-3 shrink-0 text-muted-foreground" />}
         <button
           type="button"
           className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-muted group-hover/row:opacity-100"
@@ -488,7 +498,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
       {/* blocker resolution */}
       {isBlocker && (
         isAnswered ? (
-          <p className="ml-5 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          <p className="ml-5 rounded bg-muted px-1.5 py-0.5 text-[11px] text-foreground">
             {item.response}
           </p>
         ) : answering ? (
