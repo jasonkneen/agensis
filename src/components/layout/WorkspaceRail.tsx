@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { InlineRename } from '@/components/common/InlineRename';
 import { Plus } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -61,6 +62,8 @@ interface WorkspaceRailProps {
   workspaces: readonly WorkspaceRailSource[];
   activeWorkspaceId: string;
   onSelectWorkspace: (workspaceId: string) => void;
+  /** Omit to make the rail read-only. Resolves false when the write is rejected. */
+  onRenameWorkspace?: (workspaceId: string, name: string) => Promise<boolean> | boolean;
   onCreateWorkspace: () => void;
   /**
    * Desktop shell traffic-light band. The rail is now the leftmost chrome, so it
@@ -83,6 +86,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   workspaces,
   activeWorkspaceId,
   onSelectWorkspace,
+  onRenameWorkspace,
   onCreateWorkspace,
   titlebarInset = 0,
   width = WORKSPACE_RAIL_COLLAPSED_WIDTH,
@@ -207,6 +211,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       tabbable={tile.id === tabbableId}
       onSelect={onSelectWorkspace}
       registerRef={registerTile}
+      onRename={onRenameWorkspace}
     />
   );
 
@@ -319,13 +324,16 @@ function WorkspaceRow({
   tabbable,
   onSelect,
   registerRef,
+  onRename,
 }: {
   tile: WorkspaceRailTile;
   expanded: boolean;
   tabbable: boolean;
   onSelect: (workspaceId: string) => void;
   registerRef: (id: string, node: HTMLButtonElement | null) => void;
+  onRename?: (workspaceId: string, name: string) => Promise<boolean> | boolean;
 }) {
+  const [renaming, setRenaming] = useState(false);
   const button = (
     <button
       ref={node => registerRef(tile.id, node)}
@@ -377,8 +385,13 @@ function WorkspaceRow({
       >
         {tile.glyph}
       </span>
-      {expanded && (
+      {expanded && !renaming && (
         <span
+          // Double-click, not single: a single click on a rail tile SWITCHES
+          // workspace, and a rename affordance that fights the primary action
+          // of the control it lives on is a trap.
+          onDoubleClick={onRename ? (event => { event.preventDefault(); event.stopPropagation(); setRenaming(true); }) : undefined}
+          title={onRename ? 'Double-click to rename' : undefined}
           className={cn(
             'min-w-0 flex-1 truncate text-[13px] tracking-tight',
             tile.active ? 'font-medium text-foreground' : 'text-muted-foreground group-hover:text-foreground',
@@ -389,6 +402,26 @@ function WorkspaceRow({
       )}
     </button>
   );
+
+  if (expanded && renaming && onRename) {
+    return (
+      <div className="flex w-full shrink-0 items-center gap-2 px-2">
+        <span
+          aria-hidden="true"
+          className="flex size-9 shrink-0 items-center justify-center rounded-[7px] text-[13px] font-semibold tracking-tight text-white"
+          style={{ backgroundColor: tile.color }}
+        >
+          {tile.glyph}
+        </span>
+        <InlineRename
+          value={tile.name}
+          ariaLabel={`Rename ${tile.name}`}
+          onCommit={name => onRename(tile.id, name)}
+          onCancel={() => setRenaming(false)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={cn('flex w-full shrink-0 items-center px-2', !expanded && 'justify-center')}>
