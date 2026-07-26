@@ -54,11 +54,11 @@ test('the Netlify-provisioned vars still work when nothing is configured', () =>
   // Local dev and preview deploys legitimately have no DATABASE_URL.
   assert.deepEqual(
     resolveDbUrl({ NETLIFY_DATABASE_URL: 'postgres://auto/only' }),
-    { connectionString: 'postgres://auto/only', source: 'NETLIFY_DATABASE_URL' },
+    { connectionString: 'postgres://auto/only', source: 'NETLIFY_DATABASE_URL', rejected: [] },
   );
   assert.deepEqual(
     resolveDbUrl({ NETLIFY_DB_URL: 'postgres://auto/only' }),
-    { connectionString: 'postgres://auto/only', source: 'NETLIFY_DB_URL' },
+    { connectionString: 'postgres://auto/only', source: 'NETLIFY_DB_URL', rejected: [] },
   );
 });
 
@@ -73,5 +73,28 @@ test('blank and whitespace-only values do not count as configured', () => {
 });
 
 test('no database configuration at all resolves to nothing, not a crash', () => {
-  assert.deepEqual(resolveDbUrl({}), { connectionString: '', source: null });
+  assert.deepEqual(resolveDbUrl({}), { connectionString: '', source: null, rejected: [] });
+});
+
+// Production really did have DATABASE_URL set to `=postgresql://…` — one stray
+// leading `=`. Promoting it to first place without checking it handed neon() a
+// string it rejects and took the whole function down, with a working fallback
+// sitting right behind it. A typo must never outrank something that connects.
+test('a malformed connection string is skipped, not promoted', () => {
+  const resolved = resolveDbUrl({
+    DATABASE_URL: '=postgresql://user:pw@host/db',
+    NETLIFY_DATABASE_URL: 'postgresql://user:pw@host/db',
+  });
+  assert.equal(resolved.connectionString, 'postgresql://user:pw@host/db');
+  assert.equal(resolved.source, 'NETLIFY_DATABASE_URL');
+  assert.deepEqual(resolved.rejected, ['DATABASE_URL']);
+});
+
+test('only postgres URLs qualify', () => {
+  for (const bad of ['not-a-url', 'http://example.com/db', 'mysql://u:p@h/db', '://x']) {
+    assert.equal(resolveDbUrl({ DATABASE_URL: bad }).source, null, `should reject ${bad}`);
+  }
+  for (const good of ['postgres://u:p@h/db', 'postgresql://u:p@h/db?sslmode=require']) {
+    assert.equal(resolveDbUrl({ DATABASE_URL: good }).source, 'DATABASE_URL', `should accept ${good}`);
+  }
 });

@@ -128,17 +128,45 @@ let database;
 export const DB_URL_VARS = ['DATABASE_URL', 'NETLIFY_DB_URL', 'NETLIFY_DATABASE_URL'];
 
 /** Exported so the precedence can be tested without a live database. */
+/**
+ * A connection string only counts if it could actually connect.
+ *
+ * Precedence without validation is a loaded gun: production had DATABASE_URL set
+ * to `=postgresql://…` — one stray leading `=` — and promoting it to first place
+ * handed neon() a string it rejects, taking the whole function down while a
+ * perfectly good fallback sat right behind it. A value that cannot be parsed is
+ * not configuration, it is a typo, and it must not outrank something that works.
+ */
+function isUsableDbUrl(value) {
+ if (!value) return false;
+ try {
+  const { protocol } = new URL(value);
+  return protocol === 'postgres:' || protocol === 'postgresql:';
+ } catch {
+  return false;
+ }
+}
+
 export function resolveDbUrl(env = process.env) {
+ const rejected = [];
  for (const name of DB_URL_VARS) {
   const value = String(env[name] || '').trim();
-  if (value) return { connectionString: value, source: name };
+  if (!value) continue;
+  if (!isUsableDbUrl(value)) {
+   rejected.push(name);
+   continue;
+  }
+  return { connectionString: value, source: name, rejected };
  }
- return { connectionString: '', source: null };
+ return { connectionString: '', source: null, rejected };
 }
 
 function dbPool() {
  if (!database) {
-  const { connectionString, source } = resolveDbUrl();
+  const { connectionString, source, rejected } = resolveDbUrl();
+  if (rejected.length > 0) {
+   console.error(`[db] ignoring malformed connection string in ${rejected.join(', ')}`);
+  }
   // Loud, once, at cold start: a backend quietly talking to the wrong database
   // is the most expensive failure this file can have, and it is invisible from
   // the outside — every response looks healthy.
