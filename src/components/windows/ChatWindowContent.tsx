@@ -157,6 +157,7 @@ import { useMyThreads } from '../../hooks/useMyThreads';
 import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
+import { huddleAgentOptions } from '../../lib/huddleAgents';
 import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
 import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
 import { useSharedNow } from '../../hooks/useSharedNow';
@@ -1002,6 +1003,13 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => buildAgentAccentLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
   );
+  // Who a huddle utterance can be addressed to, in roster order. Empty in a DM:
+  // the single agent there already answers a plain message, so there is nothing
+  // to switch between and nothing to @mention.
+  const huddleAgents = useMemo(
+    () => (isDirectMessage ? [] : huddleAgentOptions(agents, persistedParticipants)),
+    [agents, isDirectMessage, persistedParticipants],
+  );
   // Who replied and when, per parent message — derived from the messages already
   // in memory (threadReplyCounts stays the source of truth for the number itself).
   const threadReplySummaries = useMemo(
@@ -1463,6 +1471,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             workspaceId={workspaceId}
             sessionId={inferredSessionId}
             onTranscript={sendTranscript}
+            agents={huddleAgents}
           />
         )}
         <MessageScrollerProvider autoScroll={autoScroll}>
