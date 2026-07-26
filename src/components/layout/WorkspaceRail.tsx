@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { InlineRename } from '@/components/common/InlineRename';
-import { Plus } from 'lucide-react';
+import { Building2, Plus } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
@@ -65,6 +65,8 @@ interface WorkspaceRailProps {
   /** Omit to make the rail read-only. Resolves false when the write is rejected. */
   onRenameWorkspace?: (workspaceId: string, name: string) => Promise<boolean> | boolean;
   onCreateWorkspace: () => void;
+  /** Omitted for everyone but the system owner — the server decides, not us. */
+  onOpenTenants?: () => void;
   /**
    * Desktop shell traffic-light band. The rail is now the leftmost chrome, so it
    * is what sits under the macOS window buttons and it takes the clearance.
@@ -88,6 +90,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   onSelectWorkspace,
   onRenameWorkspace,
   onCreateWorkspace,
+  onOpenTenants,
   titlebarInset = 0,
   width = WORKSPACE_RAIL_COLLAPSED_WIDTH,
   onWidthChange,
@@ -270,6 +273,35 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           </>
         )}
       </div>
+
+      {/* Tenants — the owner-only admin surface, above "+". Rendering is gated
+          on the SERVER's answer (useTenantAccess), never on a client-side email
+          comparison. Hiding it is cosmetic anyway: every /backend/tenants route
+          re-checks, so a hidden button is a tidiness measure and the route is
+          the actual control. */}
+      {onOpenTenants && (
+        <div className="w-full shrink-0 px-2 pb-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-workspace-rail-tenants
+                onClick={onOpenTenants}
+                aria-label="Tenants"
+                className={cn(
+                  'flex h-9 items-center rounded-[11px] border border-transparent text-muted-foreground transition-colors',
+                  'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
+                )}
+              >
+                <Building2 className="size-4 shrink-0" />
+                {expanded && <span className="truncate text-[13px]">Tenants</span>}
+              </button>
+            </TooltipTrigger>
+            {!expanded && <TooltipContent side="right">Tenants</TooltipContent>}
+          </Tooltip>
+        </div>
+      )}
 
       <div className="w-full shrink-0 px-2">
         <Tooltip>

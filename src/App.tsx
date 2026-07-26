@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, X } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -89,6 +89,8 @@ import {
   type OverlayWorkspaceTile,
 } from './lib/desktopOverlay';
 import { InlineRename } from './components/common/InlineRename';
+import { TenantsWindowContent } from './components/tenants/TenantsWindowContent';
+import { useTenantAccess } from './hooks/useTenants';
 import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -734,6 +736,12 @@ function AppContent() {
 
   // Rename. Both return false on a rejected write so the inline editor stays
   // open and says so, rather than closing over a change that never landed.
+  // The server answers whether this account may see Tenants. Never inferred
+  // from the signed-in email client-side — the browser can be told anything,
+  // and the routes re-check regardless.
+  const isSystemOwner = useTenantAccess(Boolean(user?.id));
+  const [tenantsOpen, setTenantsOpen] = useState(false);
+
   const handleRenameWorkspace = useCallback(async (id: string, name: string) => {
     const { workspace } = await updateWorkspace(id, { name });
     return Boolean(workspace);
@@ -1866,6 +1874,7 @@ function AppContent() {
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={setActiveWorkspaceId}
             onRenameWorkspace={handleRenameWorkspace}
+            onOpenTenants={isSystemOwner ? () => setTenantsOpen(true) : undefined}
             onCreateWorkspace={handleCreateWorkspace}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // Phone: the rail rides inside the off-canvas drawer beside a
@@ -2135,6 +2144,23 @@ function AppContent() {
                 focusObjectId={focusCanvasObjectId}
                 onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
               />
+
+              {tenantsOpen && (
+                <div
+                  className="absolute inset-0 flex flex-col bg-background"
+                  style={{ zIndex: 'var(--z-modal)' }}
+                  role="dialog"
+                  aria-label="Tenants"
+                >
+                  <header className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+                    <h2 className="text-sm font-semibold">Tenants</h2>
+                    <Button type="button" variant="ghost" size="icon-sm" onClick={() => setTenantsOpen(false)} aria-label="Close tenants">
+                      <X className="size-4" />
+                    </Button>
+                  </header>
+                  <div className="min-h-0 flex-1"><TenantsWindowContent /></div>
+                </div>
+              )}
 
               {showCanvasGrid && (
                 <WorkspaceDesktopOverlay
