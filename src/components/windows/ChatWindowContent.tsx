@@ -1,3 +1,4 @@
+import { participantAgentKey } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -1152,10 +1153,27 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setFlowConnectOpen(true);
   };
 
+
+/**
+ * One id for one participant, whatever shape wrote it. Session rosters hold
+ * both `agent:<uuid>` and bare `<uuid>` ids for agents (two historical
+ * writers), while the dialog's options are keyed `agent:<uuid>` — compared
+ * raw, an auto-added agent never matched its own dialog row, showed "Add"
+ * while standing in the channel, and clicking Add duplicated it. The
+ * duplicate then answered every turn twice, which a huddle read aloud twice.
+ */
+function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent_id?: unknown; handle?: unknown }): string {
+  if (participant?.kind === 'agent') {
+    const bare = participantAgentKey(participant);
+    if (bare) return `agent:${bare}`;
+  }
+  return String(participant?.id ?? '');
+}
+
   const handleOpenParticipantsDialog = () => {
     const selected = new Set<string>();
     const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
-    saved.forEach(participant => selected.add(participant.id));
+    saved.forEach(participant => selected.add(dialogParticipantKey(participant)));
     setSelectedParticipantIds(selected);
     setAddParticipantsOpen(true);
   };
@@ -1171,7 +1189,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
   const handleSaveParticipants = async () => {
     const selected = participantCandidates
-      .filter(participant => selectedParticipantIds.has(participant.id))
+      .filter(participant => selectedParticipantIds.has(dialogParticipantKey(participant)))
       .map(toPersistedParticipant);
     const saved = await persistChannelUpdates({ participants: selected });
     if (saved) setAddParticipantsOpen(false);
@@ -2130,14 +2148,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                   </div>
                   <div className="space-y-1">
                     {candidates.map(participant => {
-                      const selected = selectedParticipantIds.has(participant.id);
+                      const selected = selectedParticipantIds.has(dialogParticipantKey(participant));
                       return (
                         <button
                           key={participant.id}
                           type="button"
                           className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
                             }`}
-                          onClick={() => handleToggleParticipant(participant.id)}
+                          onClick={() => handleToggleParticipant(dialogParticipantKey(participant))}
                         >
                           <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
                             {participant.kind === 'agent' ? <Bot className="size-4" /> : participant.name.slice(0, 2).toUpperCase()}
