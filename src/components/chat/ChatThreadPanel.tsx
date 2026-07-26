@@ -71,7 +71,9 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
-import { COMPOSER_ADDON_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
+import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 
 interface ChatThreadPanelProps {
   parentMessage: ChatMessage;
@@ -121,6 +123,8 @@ export function ChatThreadPanel({
   useEffect(() => {
     if (models) setModel(current => availableChatModelId(current, models));
   }, [models]);
+
+  useComposerAutosize(inputRef, m.input);
 
   const handleSend = () => {
     if (streaming) return;
@@ -199,7 +203,7 @@ export function ChatThreadPanel({
         </MessageScroller>
       </MessageScrollerProvider>
 
-      <div className="channel-composer shrink-0 border-t border-border p-3">
+      <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
         <div className="relative">
           <ComposerMentionPicker m={m} />
           <ComposerMentionChips m={m} />
@@ -218,7 +222,7 @@ export function ChatThreadPanel({
                   handleSend();
                 }
               }}
-              placeholder="Reply in thread... @agent, / commands"
+              placeholder={THREAD_COMPOSER_PLACEHOLDER}
               disabled={streaming}
               rows={1}
               className={COMPOSER_TEXTAREA_CLASS}

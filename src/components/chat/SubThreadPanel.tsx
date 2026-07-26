@@ -48,7 +48,9 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
-import { COMPOSER_ADDON_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { SUB_THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
+import { useComposerAutosize } from '../../hooks/useComposerAutosize';
 
 interface SubThreadPanelProps {
   session: ChatSession;
@@ -104,6 +106,7 @@ export function SubThreadPanel({
   // collapse into one chip row here too: same rules as the channel transcript, just
   // the compact spacing of a side panel.
   const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
+  useComposerAutosize(inputRef, mentions.input);
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of messages) {
@@ -299,7 +302,7 @@ export function SubThreadPanel({
         </div>
       )}
 
-      <div className="channel-composer shrink-0 border-t border-border p-2">
+      <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
         {hasAttachments && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {linkedFiles.map(file => (
@@ -346,7 +349,7 @@ export function SubThreadPanel({
                   handleSend();
                 }
               }}
-              placeholder="Message in sub-thread..."
+              placeholder={SUB_THREAD_COMPOSER_PLACEHOLDER}
               disabled={streaming}
               rows={1}
               className={COMPOSER_TEXTAREA_CLASS}
