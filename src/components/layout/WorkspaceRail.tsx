@@ -158,13 +158,15 @@ function WorkspaceTile({
           className={cn(
             'relative flex size-9 shrink-0 items-center justify-center border transition-all duration-150',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            // Slack's tell: the active tile squares off and fills, the rest stay
-            // rounded and quiet. Shape and weight carry it — no decorative hue.
-            tile.active
-              ? 'rounded-lg border-foreground/25 bg-background text-foreground shadow-sm'
-              : 'rounded-xl border-transparent bg-muted/50 text-muted-foreground hover:rounded-lg hover:bg-muted hover:text-foreground',
-            tile.fromIcon ? 'text-base leading-none' : 'text-[11px] font-semibold tracking-tight',
+            // Slack's tell: the active tile squares off, the rest stay rounded.
+            // Shape carries the state; the fill is the workspace's identity and
+            // stays constant so a tile is recognisable at a glance in a rail of
+            // a dozen. Inactive tiles are dimmed rather than recoloured, so
+            // "which one am I in" never competes with "which one is which".
+            tile.active ? 'rounded-lg shadow-sm' : 'rounded-xl opacity-60 hover:rounded-lg hover:opacity-100',
+            'border-transparent text-[13px] font-semibold tracking-tight text-white',
           )}
+          style={{ backgroundColor: tile.color }}
         >
           {/* Bright left-edge marker, the way Slack signals the current
               workspace. It lives in the 8px channel between the rail's left
