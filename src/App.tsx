@@ -10,13 +10,15 @@ import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
 import { computeGroupBounds, computeGroupRole } from './lib/windowGroups';
+import { tipSurfaceFor } from './lib/pageTips';
+import { DIRECT_MESSAGES_FOLDER } from './lib/onboardingChecklist';
 import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
 import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
-import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
+import { GetStartedPanel } from './components/onboarding/GetStartedPanel';
 import CommandPalette from './components/search/CommandPalette';
 import { AuthPage } from './components/auth/AuthPage';
 import { ShareDialog } from './components/sharing/ShareDialog';
@@ -999,6 +1001,19 @@ function AppContent() {
     const dockEntries = groupDockWindows(dockWindows);
     return { dockWindows, focusedDockWindow, dockEntries };
   }, [windows, activeLayerId]);
+  // Which surface the sidebar-footer panel gives advice about. This is a
+  // windowed desktop, so there is no route to read: the answer is the focused
+  // window, which is `focusedDockWindow` above — the top non-minimized window
+  // ON THE ACTIVE PROJECT, focus being encoded as zIndex. A window parked on
+  // another project is not on screen and must not claim the panel; nothing open
+  // means the canvas itself. Tenants is an overlay rather than a window, so it
+  // is passed separately and outranks whatever is behind it.
+  const tipSurface = useMemo(() => tipSurfaceFor({
+    overlay: tenantsOpen ? 'tenants' : null,
+    focusedWindowType: focusedDockWindow?.type ?? null,
+    isDirectMessage: focusedDockWindow?.type === 'chat'
+      && sessions.find(item => item.id === focusedDockWindow.sessionId)?.folder === DIRECT_MESSAGES_FOLDER,
+  }), [tenantsOpen, focusedDockWindow, sessions]);
   // macOS-style dock bounce: a chat window's icon bounces once when its agent
   // starts working (idle → busy). Derived purely from the realtime connection
   // status already in scope — no extra subscriptions.
@@ -1951,10 +1966,12 @@ function AppContent() {
             onSignOut={signOut}
             onOpenSettings={handleOpenSettingsFromSidebar}
             getStartedSlot={(
-              <GetStartedChecklist
+              <GetStartedPanel
+                workspaceId={activeWorkspaceId || null}
                 agents={agents}
                 sessions={sessions}
                 memberCount={members.length}
+                surface={tipSurface}
                 onCreateAgent={handleOpenAgents}
                 onStartRoom={handleNewChat}
                 onMessageAgent={handleOpenAgents}

@@ -1,75 +1,46 @@
-import { useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, X } from 'lucide-react';
-import type { ChatSession, WorkspaceAgent } from '../../types';
+import type { ChecklistStep, ChecklistStepId } from '@/lib/onboardingChecklist';
 import { cn } from '@/lib/utils';
 
-// Handles seeded into every workspace by default — an agent OUTSIDE this set
-// means the user actually created their own, so "Create your first agent" is real.
-const DEFAULT_AGENT_HANDLES = new Set(['scout', 'research', 'coder', 'q', 'mills', 'general']);
-
-const DISMISS_KEY = 'agensis_getstarted_dismissed';
-const COLLAPSE_KEY = 'agensis_getstarted_collapsed';
-
 interface GetStartedChecklistProps {
-  agents: WorkspaceAgent[];
-  sessions: ChatSession[];
-  memberCount: number;
+  /** From computeChecklistSteps — the panel owns the computation now. */
+  steps: ChecklistStep[];
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onDismiss: () => void;
   onCreateAgent: () => void;
   onStartRoom: () => void;
   onMessageAgent: () => void;
   onInvite: () => void;
 }
 
-interface StepDef {
-  id: string;
-  label: string;
-  done: boolean;
-  action: () => void;
-}
-
+/**
+ * The first-run checklist in the sidebar footer.
+ *
+ * Presentational: whether it is shown at all is decided by GetStartedPanel,
+ * which shares this space with per-surface tips and so needs one place that
+ * knows which of the two wins. Its dismissed/collapsed state lives there too,
+ * under the same localStorage keys as before.
+ */
 export function GetStartedChecklist({
-  agents,
-  sessions,
-  memberCount,
+  steps,
+  collapsed,
+  onToggleCollapse,
+  onDismiss,
   onCreateAgent,
   onStartRoom,
   onMessageAgent,
   onInvite,
 }: GetStartedChecklistProps) {
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISS_KEY) === '1');
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1');
-
-  const steps = useMemo<StepDef[]>(() => {
-    const createdAgent = agents.some(a => !DEFAULT_AGENT_HANDLES.has(String(a.handle || '').toLowerCase()));
-    const startedRoom = sessions.some(s => s.folder !== 'Direct messages');
-    const messagedAgent = sessions.some(s => s.folder === 'Direct messages');
-    const invited = memberCount > 1;
-    return [
-      { id: 'agent', label: 'Create your first agent', done: createdAgent, action: onCreateAgent },
-      { id: 'room', label: 'Start your first channel', done: startedRoom, action: onStartRoom },
-      { id: 'message', label: 'Message an agent', done: messagedAgent, action: onMessageAgent },
-      { id: 'invite', label: 'Invite teammates', done: invited, action: onInvite },
-    ];
-  }, [agents, sessions, memberCount, onCreateAgent, onStartRoom, onMessageAgent, onInvite]);
+  const actions: Record<ChecklistStepId, () => void> = {
+    agent: onCreateAgent,
+    room: onStartRoom,
+    message: onMessageAgent,
+    invite: onInvite,
+  };
 
   const doneCount = steps.filter(s => s.done).length;
   const total = steps.length;
-  const allDone = doneCount === total;
-
-  const dismiss = () => {
-    localStorage.setItem(DISMISS_KEY, '1');
-    setDismissed(true);
-  };
-  const toggleCollapse = () => {
-    setCollapsed(prev => {
-      const next = !prev;
-      localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
-      return next;
-    });
-  };
-
-  // Self-hide once fully complete (and remember), or when the user dismisses it.
-  if (dismissed || allDone) return null;
 
   return (
     <div className="pointer-events-auto w-full select-none rounded-xl border border-border bg-card p-3 shadow-lg">
@@ -79,12 +50,12 @@ export function GetStartedChecklist({
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
           <div
             className="h-full rounded-full bg-primary transition-[width] duration-500"
-            style={{ width: `${(doneCount / total) * 100}%` }}
+            style={{ width: `${total ? (doneCount / total) * 100 : 0}%` }}
           />
         </div>
         <button
           type="button"
-          onClick={toggleCollapse}
+          onClick={onToggleCollapse}
           className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
           aria-label={collapsed ? 'Expand checklist' : 'Collapse checklist'}
         >
@@ -92,7 +63,7 @@ export function GetStartedChecklist({
         </button>
         <button
           type="button"
-          onClick={dismiss}
+          onClick={onDismiss}
           className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
           aria-label="Dismiss checklist"
         >
@@ -106,7 +77,7 @@ export function GetStartedChecklist({
             <button
               key={step.id}
               type="button"
-              onClick={step.done ? undefined : step.action}
+              onClick={step.done ? undefined : actions[step.id]}
               disabled={step.done}
               className={cn(
                 'flex items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left text-sm transition',
