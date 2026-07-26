@@ -4458,7 +4458,14 @@ select {
 :root[data-ui-theme="neo"] [data-slot="popover-content"],
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="card"],
-:root[data-ui-theme="neo"] [data-sidebar-panel] {
+:root[data-ui-theme="neo"] [data-sidebar-panel],
+/* The workspace rail belongs in this list too. It carries `bg-card/85` for the
+   glass families, and left out of here it stayed 85% translucent while the
+   sidebar directly beside it went fully opaque — two adjacent chrome columns
+   disagreeing about whether the wallpaper shows through, which is exactly the
+   seam you see first. Brutal is flat ink on flat colour; a translucent rail is
+   a different design language sharing an edge with this one. */
+:root[data-ui-theme="neo"] [data-workspace-rail] {
  background: var(--card) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
