@@ -1,5 +1,20 @@
 [
   {
+    "version": "workspace-vault",
+    "date": "2026-07-26",
+    "title": "One vault for every key your workspace uses",
+    "summary": "Settings has a Vault tab, and it now shows every credential the workspace holds instead of only the loose ones you typed in yourself. Provider keys and orb signing secrets used to be stored in the same vault but hidden from the list, which meant a key like Box's could not be entered anywhere — there was nothing on screen to type it into. Each entry now appears grouped under the thing it belongs to: Box's API key under Box, an orb's signing secret under that orb's name. Everything is write-only. You can set a value, replace it, or delete it, and after that agensis will only ever tell you that it is set and when — no masked preview, no reveal button, because the server no longer reads a stored value back for any screen. Agents take their provider keys from the vault, so setting Box's key here is what makes the Sandbox Agent able to provision; if a key is missing, the agent now names the vault entry to add rather than an environment variable on a machine you may not have.",
+    "highlights": [
+      "Settings -> Vault lists every credential the workspace has, grouped by the provider or orb that owns it",
+      "Provider credentials can be entered for the first time — including the Box key the Sandbox Agent needs",
+      "Write-only throughout: set, replace or delete, and nothing is ever shown back, not even masked",
+      "Every value is encrypted at rest, and any older entry stored before that is re-encrypted automatically",
+      "Owner and admin only, per workspace — a member of one workspace can never reach another's keys",
+      "An orb's signing secret is visible in the list but still rotated from that orb's own panel",
+      "When a key is missing, an agent tells you which vault entry to add and stops instead of failing at the provider"
+    ]
+  },
+  {
     "version": "provider-credential-proxy",
     "date": "2026-07-26",
     "title": "Agents can use your provider keys without ever holding one",

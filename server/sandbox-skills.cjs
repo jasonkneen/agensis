@@ -88,18 +88,23 @@
 // ---------------------------------------------------------------------------
 //
 // A provider API key is never in this file, never in the frontend bundle, and
-// never in a `VITE_` var. Two sources, and the prompt says which is live:
+// never in a `VITE_` var. THE WORKSPACE VAULT IS ITS HOME; a host env var is a
+// fallback, and the prompt says which one is live:
 //
-//   - HOST ENV on the machine running the daemon (`credential.env`, e.g.
-//     `BOX_API_KEY`). agensis never sees it. This is the path that can actually
-//     provision today.
-//   - WORKSPACE VAULT under `sandbox:<provider>:<credential.key>`. Written
-//     through a manage-role route, AES-256-GCM at rest, and never returned —
-//     the read side reports `configured: true|false` and nothing else, not even
-//     a masked preview. The `:` in the key is also structural: the generic
-//     vault PUT/DELETE routes accept only `[A-Za-z0-9_.-]`, so a sandbox
-//     credential cannot be reached through them, and `SANDBOX_VAULT_PREFIX` is
-//     excluded from the vault LIST route exactly as `orb:` is.
+//   - WORKSPACE VAULT under `sandbox:<provider>:<credential.key>` — the primary,
+//     and the only source that works on the deployed server. Written through a
+//     manage-role route, AES-256-GCM at rest, and never returned: the read side
+//     reports `configured: true|false` and nothing else, not even a masked
+//     preview. Managed in Settings -> Vault, where the namespaced entry is shown
+//     grouped under its provider. The `:` in the key is structural too — the
+//     generic vault PUT/DELETE routes accept only `[A-Za-z0-9_.-]`, so a sandbox
+//     credential can only be written through the route built for it.
+//   - HOST ENV (`credential.env`, e.g. `BOX_API_KEY`), used ONLY when the vault
+//     has no value — for a server run on a developer's own machine whose `.env`
+//     already has the key. Nothing sets these on Fly, so an env var there is not
+//     a configuration, it is a no-op. The env NAME is read from the BUNDLED
+//     definition, never from an agent-authored one (see
+//     BUNDLED_CREDENTIAL_ENV_BY_KEY for the exfiltration this closes).
 //
 // ---------------------------------------------------------------------------
 // UNTRUSTED PROVIDER OUTPUT
@@ -635,6 +640,93 @@ function sandboxCredentialKeysForSkills(skills) {
   return out;
 }
 
+// vault key -> the env var name declared by the BUNDLED definition for that key.
+//
+// The allowlist for the host-env FALLBACK, and the reason it is an allowlist.
+// An agent-authored definition overrides a bundled one by id (resolveSandboxSkills),
+// and `credential.env` passes normalizeCredential as long as it looks like an env
+// var name — so an authored skill could name `AUTH_SECRET` or `DATABASE_URL` and,
+// with an unrestricted env fallback, have the server attach that value as a Bearer
+// token to the definition's own base URL. Reading the env var name from the
+// SHIPPED definition instead means an authored skill can still correct a base URL
+// or an endpoint (the documented override path) but can never point the fallback
+// at a variable Box was not entitled to.
+const BUNDLED_CREDENTIAL_ENV_BY_KEY = (() => {
+  const map = new Map();
+  for (const raw of BUNDLED_SANDBOX_SKILLS) {
+    const skill = normalizeSandboxSkill(raw);
+    if (!skill || skill.kind !== 'provider' || !skill.credential?.key || !skill.credential.env) continue;
+    const key = sandboxCredentialKey(skill.provider, skill.credential.key);
+    if (key) map.set(key, skill.credential.env);
+  }
+  return map;
+})();
+
+/**
+ * The env var a vault key may fall back to, or '' for none.
+ *
+ * The fallback exists for a server run on a developer's own machine, where the
+ * provider key is already in `.env`; on Fly nothing sets these, so the vault is
+ * the only source there. The VAULT ALWAYS WINS — see callProviderOperation.
+ */
+function bundledCredentialEnvVar(vaultKey) {
+  return BUNDLED_CREDENTIAL_ENV_BY_KEY.get(String(vaultKey || '')) || '';
+}
+
+/**
+ * Which of a skill list's credentials are satisfied by the host environment.
+ *
+ * Used to render the prompt's CONFIGURED line accurately for a locally-run
+ * server: without this the agent is told the credential is missing while the
+ * proxy would in fact find it, and it refuses work it could do.
+ */
+function envConfiguredCredentialKeys(skills, env = process.env) {
+  const out = [];
+  for (const key of sandboxCredentialKeysForSkills(skills)) {
+    const name = bundledCredentialEnvVar(key);
+    if (name && String(env?.[name] || '').trim() && !out.includes(key)) out.push(key);
+  }
+  return out;
+}
+
+/**
+ * Every provider credential SLOT the workspace could fill, whether or not a value
+ * is stored — the list the vault surface needs to offer "add a Box key" before any
+ * `sandbox:box:api_key` row exists. Bundled definitions always appear; authored
+ * ones appear when an agent in the workspace carries them.
+ */
+function providerCredentialSlots(authoredSkills = []) {
+  const byId = new Map();
+  for (const raw of BUNDLED_SANDBOX_SKILLS) {
+    const skill = normalizeSandboxSkill(raw);
+    if (skill) byId.set(skill.id, skill);
+  }
+  for (const raw of Array.isArray(authoredSkills) ? authoredSkills : []) {
+    const skill = normalizeSandboxSkill(raw);
+    if (skill) byId.set(skill.id, skill);
+  }
+  const slots = [];
+  const seen = new Set();
+  for (const skill of byId.values()) {
+    if (skill.kind !== 'provider' || !skill.credential?.key) continue;
+    const key = sandboxCredentialKey(skill.provider, skill.credential.key);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    slots.push({
+      key,
+      skillId: skill.id,
+      provider: skill.provider,
+      providerName: skill.name || skill.provider,
+      credential: skill.credential.key,
+      // A NAME, never a value. Shown so an operator can see which local env var
+      // the same credential would come from on a machine that has one.
+      env: bundledCredentialEnvVar(key),
+      docsUrl: skill.credential.docsUrl || '',
+    });
+  }
+  return slots;
+}
+
 // ---------------------------------------------------------------------------
 // Planning a credentialed provider call
 //
@@ -1038,9 +1130,13 @@ function renderCredentialLine(skill, configuredKeys) {
   if (!credential) return 'Credential: none required.';
   const vaultKey = sandboxCredentialKey(skill.provider, credential.key);
   const configured = Array.isArray(configuredKeys) && configuredKeys.includes(vaultKey);
-  const sources = [];
-  if (credential.env) sources.push(`the \`${credential.env}\` environment variable on the machine you run on`);
-  sources.push(`the workspace vault entry \`${vaultKey}\``);
+  // THE VAULT IS THE HOME OF A PROVIDER CREDENTIAL, so it is named first and it is
+  // what the agent quotes when the credential is missing. The host env var is a
+  // fallback for a server run on someone's own machine and is mentioned second —
+  // telling an operator to "set BOX_API_KEY" is useless advice on Fly, where no
+  // env var reaches the proxy and the vault is the only source.
+  const sources = [`the workspace vault entry \`${vaultKey}\` (Settings -> Vault)`];
+  if (credential.env) sources.push(`the \`${credential.env}\` environment variable, if the server runs on a machine that has one`);
   return [
     `Credential: ${configured ? 'CONFIGURED' : 'NOT CONFIGURED'} in the workspace vault (\`${vaultKey}\`).`,
     `  Sources, in order: ${sources.join('; then ')}.`,
@@ -1049,7 +1145,7 @@ function renderCredentialLine(skill, configuredKeys) {
       // plainly stops it from inventing a placeholder, or telling a requester it
       // is withholding a key it was never given.
       ? '  You do not have its value. agensis attaches it on your behalf when you use `call_provider`.'
-      : '  You CANNOT provision with this provider until an operator sets it — say so and name the vault key above.',
+      : `  You CANNOT provision with this provider until an operator adds \`${vaultKey}\` to the workspace vault (Settings -> Vault). Say exactly that, name the key, and stop.`,
   ].join('\n');
 }
 
@@ -1183,6 +1279,9 @@ module.exports = {
   PROVIDER_CALL_USER_AGENT,
   BUNDLED_SANDBOX_SKILLS,
   applyProviderCredential,
+  bundledCredentialEnvVar,
+  envConfiguredCredentialKeys,
+  providerCredentialSlots,
   describeProviderCall,
   fenceProviderOutput,
   formatSandboxDetails,
