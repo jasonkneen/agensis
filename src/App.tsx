@@ -572,7 +572,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth, authNotice, dismissAuthNotice } = useAuth();
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
@@ -1699,7 +1699,13 @@ function AppContent() {
     // the stale SPA shell forever with no update path to escape it.
     return (
       <>
-        <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />
+        <AuthPage
+          onSignIn={signIn}
+          onSignUp={signUp}
+          onOAuthSignIn={signInWithOAuth}
+          notice={authNotice}
+          onDismissNotice={dismissAuthNotice}
+        />
         <AppUpdateManager />
       </>
     );
