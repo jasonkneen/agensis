@@ -1179,7 +1179,7 @@ function DirectAgentRow({
  const profileEnabled = Boolean(agent.agentId || handle);
 
  return (
-  <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
+  <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 flex-nowrap rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
    <button
     type="button"
     className="sidebar-agent-primary min-w-0 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
