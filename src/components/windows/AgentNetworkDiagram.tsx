@@ -35,6 +35,11 @@ interface AgentNetworkDiagramProps {
   workspaceId?: string | null;
   currentUserId?: string | null;
   onSelectAgent?: (id: string) => void;
+  /**
+   * The window's ONE agent selection, mirrored here so the map highlights the
+   * same agent whose card is lit in the grid and whose detail pane is open.
+   */
+  selectedAgentId?: string | null;
 }
 
 const REDUCED =
@@ -92,6 +97,7 @@ export function AgentNetworkDiagram({
   workspaceId = null,
   currentUserId = null,
   onSelectAgent,
+  selectedAgentId = null,
 }: AgentNetworkDiagramProps) {
   const [path, setPath] = useState<MeshPath>([]);
   const [hover, setHover] = useState<string | null>(null);
@@ -154,8 +160,12 @@ export function AgentNetworkDiagram({
       goTo(drillOut(path));
       return;
     }
+    // Clicking an agent here IS selecting it: the same click that centres the
+    // mesh on an agent opens (or retargets) the window's detail pane, so the
+    // map and the card grid share one selection.
+    if (node.kind === 'agent' && node.refId) onSelectAgent?.(node.refId);
     goTo(drillInto(path, node));
-  }, [goTo, path, view.center.id]);
+  }, [goTo, path, view.center.id, onSelectAgent]);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Escape' || path.length === 0) return;
@@ -470,6 +480,7 @@ export function AgentNetworkDiagram({
                 node={node}
                 isCenter={node.id === view.center.id}
                 focused={hover === node.id}
+                selected={!!selectedAgentId && node.kind === 'agent' && node.refId === selectedAgentId}
                 layout={layout}
                 canPop={path.length > 0}
                 fan={hover === node.id ? fan : null}
@@ -543,10 +554,12 @@ function centerLabel(label: string, r: number): string {
   return truncateLabel(label, Math.max(4, Math.floor((r * 1.78) / (CENTER_MIN_PX * 0.56))));
 }
 
-function MeshNodeShape({ node, isCenter, focused, layout, canPop, fan, onActivate, onHover }: {
+function MeshNodeShape({ node, isCenter, focused, selected, layout, canPop, fan, onActivate, onHover }: {
   node: MeshNode;
   isCenter: boolean;
   focused: boolean;
+  /** The window's selected agent — gets the focus halo without needing the cursor. */
+  selected: boolean;
   layout: { nodeR: number; centerR: number };
   canPop: boolean;
   fan: { shown: Array<{ id: string; label: string; color: string; x: number; y: number }>; overflow: number; side: 1 | -1 } | null;
@@ -608,7 +621,7 @@ function MeshNodeShape({ node, isCenter, focused, layout, canPop, fan, onActivat
 
   return (
     <g {...handlers}>
-      {focused && <circle r={r + 20} fill={`url(#focus-${node.status})`} />}
+      {(focused || selected) && <circle r={r + 20} fill={`url(#focus-${node.status})`} />}
       {node.live && !REDUCED && (
         <circle r={r} fill="none" stroke={node.color} strokeWidth={1}>
           <animate attributeName="r" values={`${r};${r + 14};${r}`} dur="2.2s" repeatCount="indefinite" />
@@ -616,7 +629,7 @@ function MeshNodeShape({ node, isCenter, focused, layout, canPop, fan, onActivat
         </circle>
       )}
       <circle r={r} fill="var(--card)" stroke={node.color} strokeOpacity={0.9}
-        strokeWidth={focused ? 2.5 : 1.75} style={{ transition: 'stroke-width .15s' }} />
+        strokeWidth={focused || selected ? 2.5 : 1.75} style={{ transition: 'stroke-width .15s' }} />
       <circle r={r - 5} fill="none" stroke={node.accent} strokeOpacity={0.7} strokeWidth={1.25} />
 
       {isCenter ? (

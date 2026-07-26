@@ -1,5 +1,18 @@
 [
   {
+    "version": "agents-split-view",
+    "date": "2026-07-26",
+    "title": "The Agents window opens details beside the grid, and can show the map underneath",
+    "summary": "Clicking an agent no longer replaces the whole window with its details — the roster stays on the left and the details open in a pane beside it, so you can move between agents without losing your place. The view toggle also gains a third option that shows the card grid with the network map right underneath, and the two stay in sync: selecting an agent in either one highlights it in the other.",
+    "highlights": [
+      "Agent details open beside the grid or map instead of replacing them; click the card again or the close button to put them away",
+      "A new Both view stacks the card grid above the live network map",
+      "One selection everywhere: pick an agent on a card or on a map node, and it is highlighted in both and opened on the right",
+      "In a narrow window the details still take the full width, with a back arrow to return to the roster",
+      "Your chosen view — grid, map, or both — is remembered per workspace"
+    ]
+  },
+  {
     "version": "orbs",
     "date": "2026-07-26",
     "title": "Webhooks that actually wake your agent, and can prove who sent them",
