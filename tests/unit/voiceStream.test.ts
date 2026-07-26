@@ -254,14 +254,50 @@ describe('chooseEngines', () => {
   });
 
   it('says so plainly when there is no engine at all', () => {
-    const choice = chooseEngines(null, { sttAvailable: false, ttsAvailable: false });
+    // A LOADED empty answer with no browser support — genuinely no engine.
+    const choice = chooseEngines({ stt: null, tts: null }, { sttAvailable: false, ttsAvailable: false });
     expect(choice.stt).toBe('none');
     expect(choice.tts).toBe('none');
     expect(choice.notice).toContain('cannot transcribe speech');
     expect(choice.notice).toContain('cannot read replies aloud');
   });
 
-  it('treats a null capabilities response (fetch failed) as no hosted engines', () => {
-    expect(chooseEngines(null, browser)).toMatchObject({ stt: 'browser', tts: 'browser' });
+  it('a FAILED capabilities fetch produces the loaded-empty shape, never null', () => {
+    // useVoiceCapabilities' catch sets {stt:null, tts:null}. Null is reserved
+    // for "the fetch has not answered yet", where nothing may speak — the old
+    // version of this test pinned null -> browser, which was the two-voices bug.
+    expect(chooseEngines({ stt: null, tts: null }, browser)).toMatchObject({ stt: 'browser', tts: 'browser' });
+  });
+});
+
+// The two-voices bug, pinned. NULL capabilities means the fetch has not
+// ANSWERED — it is not "Cartesia is unavailable". Treating loading as absence
+// enabled the browser engine for the first beat of every call: a reply landing
+// in that window played in the device default voice, then Cartesia mounted
+// (anchored at joinedAtMs) and read the SAME reply again. One agent, two
+// voices, the first one wrong. Reported twice before it was found.
+describe('chooseEngines while capabilities are still loading', () => {
+  const fullBrowser = { sttAvailable: true, ttsAvailable: true };
+
+  it('enables NOTHING until the server has answered', () => {
+    const choice = chooseEngines(null, fullBrowser);
+    expect(choice.tts).toBe('none');
+    expect(choice.stt).toBe('none');
+  });
+
+  it('a LOADED answer with no hosted providers still falls back to the browser', () => {
+    // The fallback is for "the server said no", and only for that.
+    const choice = chooseEngines({ stt: null, tts: null }, fullBrowser);
+    expect(choice.tts).toBe('browser');
+    expect(choice.stt).toBe('browser');
+  });
+
+  it('a loaded answer with hosted providers uses them', () => {
+    const choice = chooseEngines(
+      { stt: { provider: 'deepgram' }, tts: { provider: 'cartesia' } } as never,
+      fullBrowser,
+    );
+    expect(choice.tts).toBe('cartesia');
+    expect(choice.stt).toBe('deepgram');
   });
 });

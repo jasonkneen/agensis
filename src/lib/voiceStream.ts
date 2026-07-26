@@ -300,6 +300,18 @@ export function chooseEngines(
   capabilities: VoiceCapabilities | null,
   browser: { sttAvailable: boolean; ttsAvailable: boolean },
 ): EngineChoice {
+  // NULL means the capabilities fetch has not ANSWERED yet — it is not the same
+  // as "the server said no". Treating loading as absence enabled the browser
+  // engine for the first second of every call: a reply landing in that window
+  // was spoken by the device's default voice, and when Cartesia mounted a
+  // moment later — anchored at joinedAtMs — it spoke the SAME reply again.
+  // One agent, two voices, and the first one wrong. Reported twice before this
+  // was found. While loading, both engines stay 'none': a beat of silence at
+  // the start of a call is nothing; a double reading in the wrong voice is a
+  // bug the user hears.
+  if (capabilities === null) {
+    return { stt: 'none', tts: 'none', notice: '' };
+  }
   const hostedStt = capabilities?.stt?.provider === 'deepgram';
   const hostedTts = capabilities?.tts?.provider === 'cartesia';
 
