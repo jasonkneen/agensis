@@ -1907,9 +1907,17 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               )}
 
               <div className={cn('relative', CHAT_COLUMN_CLASS)} onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+                {/* Both pickers open UPWARD from the composer, so their height is
+                    free space they are not using: nothing sits above them to
+                    displace. Capped at 520px / 72vh — tall enough to show
+                    several two-line rows at once instead of one row and a
+                    scrollbar, and still short of covering the conversation.
+                    The vh half of the min() matters because this composer lives
+                    in a resizable WINDOW: a short window gets a proportional
+                    picker rather than one taller than the window itself. */}
                 {showSlashPicker && (
-                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                    <CommandList className="max-h-[min(260px,44vh)]">
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(520px,72vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(440px,64vh)]">
                       <CommandEmpty>No commands or skills match.</CommandEmpty>
                       {slashGroups.map(group => {
                         if (group.type === 'builtin') {
@@ -1954,8 +1962,8 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 )}
 
                 {showDocPicker && (
-                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                    <CommandList className="max-h-[min(240px,40vh)]">
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(500px,70vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(420px,62vh)]">
                       <CommandEmpty>No agents or documents found.</CommandEmpty>
                       {filteredAgents.length > 0 && (
                         <CommandGroup heading="Agents">
@@ -1963,7 +1971,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                             <CommandItem
                               key={agent.id}
                               value={`${agent.name} ${agentHandle(agent)}`}
-                              className="rounded-lg px-2 py-1.5"
+                              // py-2.5, not py-1.5: this row is a name AND a
+                              // description on two lines, and one-line padding
+                              // made the pair read as one cramped block.
+                              className="rounded-lg px-2 py-2.5"
                               onSelect={() => handleAgentSelect(agent)}
                             >
                               <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
@@ -4391,7 +4402,9 @@ function SlashRow({
   return (
     <CommandItem
       value={item.id}
-      className={`rounded-lg px-2 py-1.5${indented ? ' ml-3' : ''}`}
+      // py-2.5 for the same reason as the mention rows: title plus
+      // description is two lines and needs more than one line's padding.
+      className={`rounded-lg px-2 py-2.5${indented ? ' ml-3' : ''}`}
       onSelect={onSelect}
     >
       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
