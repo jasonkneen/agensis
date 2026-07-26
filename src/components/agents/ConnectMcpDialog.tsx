@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import { WORKSPACE_UNAVAILABLE, describeWriteFailure } from '../../lib/writeFeedback';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 
 // "Connect an MCP client" — mints the ONE workspace token, shows the paste-able config,
@@ -18,21 +19,31 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
   const [flowsOpen, setFlowsOpen] = useState(false);
 
   const generate = async () => {
-    if (!workspaceId) return;
+    // No workspace id means the workspace list never loaded. The button used to
+    // be silently `disabled` in that state, so clicking it did nothing at all
+    // and nothing said why. Say why instead.
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     setBusy(true); setErr(null);
     try {
       const next = await generateMcpToken(workspaceId);
       setInfo(next);
       setAuto(next.autoApprove);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to generate token');
+      setErr(describeWriteFailure('generate a connection token', e).description);
     } finally { setBusy(false); }
   };
 
   const toggleAuto = async (next: boolean) => {
-    if (!workspaceId) return;
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     setAuto(next);
-    try { await setMcpAutoApprove(workspaceId, next); } catch { setAuto(!next); }
+    setErr(null);
+    try {
+      await setMcpAutoApprove(workspaceId, next);
+    } catch (e) {
+      // The switch snapping back on its own is not an explanation.
+      setAuto(!next);
+      setErr(describeWriteFailure('change auto-approve', e).description);
+    }
   };
 
   const copy = async (key: string, value: string) => {
@@ -52,7 +63,7 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
           </DialogHeader>
 
           {!info ? (
-            <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
+            <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
           ) : (
             <div className="space-y-3 overflow-hidden">
               <Row label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />

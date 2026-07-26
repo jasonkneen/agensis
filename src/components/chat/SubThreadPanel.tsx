@@ -51,13 +51,15 @@ import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { SUB_THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '../../hooks/useComposerAutosize';
+import type { SendOutcome } from '../../lib/writeFeedback';
 
 interface SubThreadPanelProps {
   session: ChatSession;
   messages: ChatMessage[];
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
-  onSendMessage: (content: string) => void;
+  // May resolve `{ delivered: false }` — the message was rejected and rolled back.
+  onSendMessage: (content: string) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -159,7 +161,7 @@ export function SubThreadPanel({
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (streaming) return;
     let content = mentions.buildContent();
     if (!content) return;
@@ -168,12 +170,26 @@ export function SubThreadPanel({
       const groupContext = linkedGroups.map(g => `[Canvas Group "${g.name}"]`).join('\n');
       content = `${groupContext}\n\n${content}`;
     }
-    onSendMessage(content);
+    // Clear now, restore if the write is rejected — the sub-thread composer had
+    // the same "typed text disappears into nothing" hole as the others.
+    const draft = mentions.snapshot();
+    const previousFiles = linkedFiles;
+    const previousDocs = linkedDocs;
+    const previousGroups = linkedGroups;
     mentions.clear();
     setLinkedFiles([]);
     setLinkedDocs([]);
     setLinkedGroups([]);
     inputRef.current?.focus();
+
+    const outcome = await onSendMessage(content);
+    if (outcome && outcome.delivered === false) {
+      mentions.restore(draft);
+      setLinkedFiles(previousFiles);
+      setLinkedDocs(previousDocs);
+      setLinkedGroups(previousGroups);
+      inputRef.current?.focus();
+    }
   };
 
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {

@@ -21,15 +21,27 @@ function isTransportFailure(error: BackendError): boolean {
   return TRANSPORT_ERROR_PATTERN.test(error.message || '');
 }
 
+// What a mutation actually did. `offlineInsert` collapses this to data-or-null,
+// which is why a rejected write used to reach the UI as an indistinguishable
+// `null` and got rendered as "nothing happened" — the caller had no error to
+// report even when the server had explained itself. Callers that tell the user
+// anything should use the *Result variants.
+export interface OfflineWriteResult<T> {
+  data: T | null;
+  error: { message: string; code?: string | null } | null;
+  /** True when the write is sitting in the replay queue, not in the DB yet. */
+  queued: boolean;
+}
+
 // The three mutation helpers accept an optional `cacheKey` (the same key the
 // hook passes to cachedFetch). When a mutation is queued offline, the cached
 // collection under that key is updated too, so a reload while still offline
 // reflects the change instead of the stale snapshot (M8).
-export async function offlineInsert(
+export async function offlineInsertResult(
   table: string,
   payload: Record<string, unknown>,
   cacheKey?: string,
-): Promise<Record<string, unknown> | null> {
+): Promise<OfflineWriteResult<Record<string, unknown>>> {
   const now = new Date().toISOString();
   const record = {
     ...payload,
@@ -41,18 +53,26 @@ export async function offlineInsert(
   if (navigator.onLine) {
     const { data, error } = await backendClient.from(table).insert(record).select().single();
     if (!error && data) {
-      return data;
+      return { data, error: null, queued: false };
     }
     if (error && !isTransportFailure(error)) {
       console.warn(`[offlineInsert] Backend rejected insert into ${table}`, error);
-      return null;
+      return { data: null, error, queued: false };
     }
     console.warn(`[offlineInsert] Falling back to offline queue for ${table}`, error);
   }
 
   await enqueue({ table, operation: 'insert', payload: record });
   if (cacheKey) await cacheApplyInsert(cacheKey, record);
-  return record;
+  return { data: record, error: null, queued: true };
+}
+
+export async function offlineInsert(
+  table: string,
+  payload: Record<string, unknown>,
+  cacheKey?: string,
+): Promise<Record<string, unknown> | null> {
+  return (await offlineInsertResult(table, payload, cacheKey)).data;
 }
 
 export async function offlineUpdate(

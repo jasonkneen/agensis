@@ -16,7 +16,12 @@ interface HomeCanvasProps {
   agents?: WorkspaceAgent[];
   workspaceId?: string;
   memoryFacts: MemoryFact[];
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  /**
+   * Resolves false when the channel could not be created, so the draft can be
+   * put back. This composer has no transcript to fall back on: if the send
+   * fails there is nowhere at all for the typed text to reappear.
+   */
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void | Promise<boolean | void>;
   onOpenNewDocument: () => void;
   workspaceName: string;
   backgroundOpacity?: number;
@@ -52,6 +57,7 @@ export function HomeCanvas({
   };
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [mentionedAgents, setMentionedAgents] = useState<WorkspaceAgent[]>([]);
+  const [sending, setSending] = useState(false);
   // '@' opens the mention picker (agents + documents); '/' opens the command
   // picker (built-in actions + daemon-enumerated commands/skills).
   const [picker, setPicker] = useState<'mention' | 'slash' | null>(null);
@@ -131,18 +137,35 @@ export function HomeCanvas({
     setInput(before + after);
   };
 
-  const handleSend = () => {
-    if (!canSend) return;
+  const handleSend = async () => {
+    if (!canSend || sending) return;
     // Rebuild @handle tokens from the agent chips so the backend (which routes
     // agents by parsing @mentions in the text) still notifies + runs them.
     const mentionPrefix = mentionedAgents.map(a => `@${agentHandle(a)}`).join(' ');
     const body = input.trim();
     const content = [mentionPrefix, body].filter(Boolean).join(' ').trim();
     if (!content) return;
-    onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+
+    // Clear optimistically — this is the fast path and it is what makes the
+    // composer feel instant — but hold on to everything so a failed send can put
+    // it all back. Clearing and then losing it is the failure that costs the
+    // user actual work.
+    const draft = { input, linkedDocs, mentionedAgents };
     setInput('');
     setLinkedDocs([]);
     setMentionedAgents([]);
+    setSending(true);
+    try {
+      const sent = await onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+      if (sent === false) {
+        setInput(draft.input);
+        setLinkedDocs(draft.linkedDocs);
+        setMentionedAgents(draft.mentionedAgents);
+        inputRef.current?.focus();
+      }
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -360,7 +383,7 @@ export function HomeCanvas({
               </div>
               <InputGroupButton
                 onClick={handleSend}
-                disabled={!canSend}
+                disabled={!canSend || sending}
                 title="Send"
                 size="icon-sm"
                 variant="default"

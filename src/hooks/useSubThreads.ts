@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { backendClient, apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
+import { classifyWriteFailure, type SendOutcome } from '../lib/writeFeedback';
 import type { ChatSession, Message } from '../types';
 
 export function useSubThreads(workspaceId: string | null) {
@@ -205,8 +206,8 @@ export function useSubThreads(workspaceId: string | null) {
     setSubThreadMessages([]);
   }, []);
 
-  const sendSubThreadMessage = useCallback(async (content: string) => {
-    if (!activeSubThread || !workspaceId) return;
+  const sendSubThreadMessage = useCallback(async (content: string): Promise<SendOutcome> => {
+    if (!activeSubThread || !workspaceId) return { delivered: false };
 
     const userMsgId = crypto.randomUUID();
     const userMsg: Message = {
@@ -218,12 +219,29 @@ export function useSubThreads(workspaceId: string | null) {
     };
     setSubThreadMessages(prev => [...prev, userMsg]);
 
-    await backendClient.from('messages').insert({
+    const { error: insertError } = await backendClient.from('messages').insert({
       id: userMsgId,
       session_id: activeSubThread.id,
       role: 'user',
       content,
     });
+
+    // The insert result used to be discarded, which left a phantom message on
+    // screen after a rejection and then dispatched a messageId the server had
+    // never stored. Roll the optimistic row back and say so, exactly as
+    // useChat's insertUserMessage does.
+    if (insertError && navigator.onLine) {
+      setSubThreadMessages(prev => prev.filter(m => m.id !== userMsgId));
+      const failure = classifyWriteFailure(insertError, { online: navigator.onLine });
+      setSubThreadMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        session_id: activeSubThread.id,
+        role: 'assistant',
+        content: `Couldn't send your message — ${failure.reason}`,
+        created_at: new Date().toISOString(),
+      }]);
+      return { delivered: false };
+    }
 
     // Dispatch to agent via the existing dispatch endpoint
     const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
@@ -254,7 +272,7 @@ export function useSubThreads(workspaceId: string | null) {
         setSubThreadMessages(prev =>
           prev.some(m => m.id === next.id) ? prev : [...prev, next]);
       }
-      return;
+      return { delivered: true };
     }
 
     // Fallback: stream direct AI if dispatch failed entirely
@@ -292,7 +310,8 @@ export function useSubThreads(workspaceId: string | null) {
         if (!response.ok || !response.body) {
           setSubThreadMessages(prev => prev.map(m =>
             m.id === assistantMsgId ? { ...m, content: 'Failed to get response.' } : m));
-          return;
+          // The user's message is saved; only the reply failed.
+          return { delivered: true };
         }
 
         const reader = response.body.getReader();
@@ -347,11 +366,14 @@ export function useSubThreads(workspaceId: string | null) {
         });
       } catch (error) {
         if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // Unmount aborted the stream. The user's message is saved either way.
+        if (error instanceof DOMException && error.name === 'AbortError') return { delivered: true };
       } finally {
         setSubThreadStreaming(false);
       }
     }
+    // The user's message is stored; only the reply may be missing.
+    return { delivered: true };
   }, [activeSubThread, workspaceId, subThreadMessages]);
 
   return {

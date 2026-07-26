@@ -20,6 +20,7 @@ import { useCallback, type ComponentProps } from 'react';
 import { ChatWindowContent } from './ChatWindowContent';
 import { DocWindowContent } from './DocWindowContent';
 import { TasksWindowContent } from './TasksWindowContent';
+import type { SendMessageResult } from '../../hooks/useChat';
 import type { ChatSession, Document, FloatingWindow, MemoryFact } from '../../types';
 
 export type ChatWindowBodyProps = Omit<
@@ -37,7 +38,9 @@ export type ChatWindowBodyProps = Omit<
     targetSession?: ChatSession | null,
     // Thread composer's "Send to channel": also show this reply in the channel.
     broadcastToChannel?: boolean,
-  ) => void;
+    // `delivered: false` means the message was rolled back and is nowhere —
+    // the composer has to put the draft back.
+  ) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
   onAppSplitThread: (source: ChatSession) => void;
 };
@@ -55,7 +58,7 @@ export function ChatWindowBody({
   const handleSendMessage = useCallback(
     (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      onAppSendMessage(content, model, mf, docs, null, winSession || null);
+      return onAppSendMessage(content, model, mf, docs, null, winSession || null);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage],
   );
@@ -63,7 +66,7 @@ export function ChatWindowBody({
   const handleSendThreadReply = useCallback(
     (content: string, model: string, broadcastToChannel?: boolean) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
+      return onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage, memoryFacts, activeThreadId],
   );

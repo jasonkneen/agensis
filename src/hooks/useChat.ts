@@ -4,6 +4,7 @@ import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiS
 import { computeThreadDivergence } from '../lib/threadMerge';
 import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
+import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { channelMessages } from '../components/chat/channelView';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -15,6 +16,17 @@ import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 // is fetched independently at dispatch time, so this display cap never truncates
 // what an agent sees.
 const MESSAGE_PAGE_SIZE = 200;
+
+export interface CreateSessionResult {
+  session: ChatSession | null;
+  failure: WriteFailure | null;
+}
+
+export interface SendMessageResult {
+  /** The user's message reached the database. False means it is not saved. */
+  delivered: boolean;
+  failure: WriteFailure | null;
+}
 
 export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
@@ -190,15 +202,22 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     },
   );
 
-  const createSession = useCallback(async (model = 'auto', initial: Partial<ChatSession> = {}) => {
-    if (!workspaceId) return null;
-    if (!navigator.onLine) return null;
+  // Returns the failure as well as the row. Every caller of this opens a window
+  // or sends a message next; when the insert is rejected there is nothing to
+  // open, and each of them used to just `return` — which is exactly what the
+  // "+ makes no channel and says nothing" report was.
+  const createSession = useCallback(async (
+    model = 'auto',
+    initial: Partial<ChatSession> = {},
+  ): Promise<CreateSessionResult> => {
+    if (!workspaceId) return { session: null, failure: WORKSPACE_UNAVAILABLE };
+    if (!navigator.onLine) return { session: null, failure: classifyWriteFailure(null, { online: false }) };
     const initialFields: Record<string, unknown> = { ...initial };
     delete initialFields.id;
     delete initialFields.workspace_id;
     delete initialFields.created_at;
     delete initialFields.updated_at;
-    const { data } = await backendClient
+    const { data, error } = await backendClient
       .from('chat_sessions')
       .insert({
         workspace_id: workspaceId,
@@ -212,8 +231,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       setSessions(prev => [data, ...prev]);
       setActiveSession(data);
       setMessages([]);
+      return { session: data, failure: null };
     }
-    return data;
+    return { session: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, [workspaceId]);
 
   // Split a thread: clone the session as a new top-level thread and copy its
@@ -639,9 +659,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
     broadcastToChannel?: boolean,
-  ) => {
+  ): Promise<SendMessageResult> => {
     const session = targetSession ?? activeSession;
-    if (!session) return;
+    // No session to send into: the composer must keep the draft rather than
+    // clearing it into nothing.
+    if (!session) return { delivered: false, failure: WORKSPACE_UNAVAILABLE };
 
     if (!navigator.onLine) {
       await insertUserMessage(session, content, threadParentId, broadcastToChannel);
@@ -654,7 +676,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, offlineReply]);
-      return;
+      // Deliberately reported as delivered: the offline branch keeps the row on
+      // screen and posts its own notice, so the user's words are still visible
+      // and the composer is free to clear.
+      return { delivered: true, failure: null };
     }
 
     const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel);
@@ -672,7 +697,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
           created_at: new Date().toISOString(),
         }]);
       }
-      return;
+      // Not delivered: the composer restores the draft so the words the user
+      // typed are not destroyed along with the send.
+      return { delivered: false, failure: classifyWriteFailure(sendError, { online: navigator.onLine }) };
     }
     await autoTitleSession(session, content, threadParentId);
 
@@ -729,7 +756,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         workspaceContext,
         threadParentId,
       );
-      if (dispatched) return;
+      if (dispatched) return { delivered: true, failure: null };
       // Dispatch failed. If there's a direct-AI fallback (agent/direct
       // participant) fall through to it; otherwise surface the failure instead
       // of returning silently and leaving the user's message looking sent (M6).
@@ -747,10 +774,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
             created_at: new Date().toISOString(),
           }]);
         }
-        return;
+        // The message itself IS saved — only the reply is missing — so the
+        // composer keeps its clear. The notice above owns the explanation.
+        return { delivered: true, failure: null };
       }
     } else if (!agent && !sharedModelRoute) {
-      return;
+      return { delivered: true, failure: null };
     }
 
     await streamDirectAI(
@@ -765,6 +794,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       directParticipant,
       threadParentId,
     );
+    return { delivered: true, failure: null };
   }, [activeSession, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
   // Merge a split fork back into its parent. "What changed" = the messages
