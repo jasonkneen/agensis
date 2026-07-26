@@ -3553,11 +3553,21 @@ function AgentProfileSection({ title, children }: { title: string; children: Rea
 }
 
 function AgentProfileTextSection({ title, value, tall = false }: { title: string; value: string; tall?: boolean }) {
+  // Soul, system prompt, instructions and description are markdown documents,
+  // and this rendered them pre-wrapped, so headings and lists arrived as
+  // literal # and -. Same fix as the agent DETAIL pane in
+  // AgentsWindowContent — both surfaces show the same four fields, and letting
+  // one render markdown while the other shows source is how they drift.
+  // MarkdownContent builds its own elements and never injects HTML, which
+  // matters because an agent writes its own soul.
   return (
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
       <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
-      <div className={`overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${tall ? 'max-h-48' : 'max-h-32'}`}>
-        {value}
+      {/* min-w-0: .chat-markdown is a grid, and grid children default to
+          min-width:auto, so a fenced code block would widen this card rather
+          than scroll inside it. */}
+      <div className={`min-w-0 overflow-auto text-sm leading-relaxed ${tall ? 'max-h-48' : 'max-h-32'}`}>
+        <MarkdownContent content={value} compact />
       </div>
     </section>
   );
