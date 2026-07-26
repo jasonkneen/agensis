@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nextSpeechChunk, normalizeTranscript, speechItemFor, type SpeechItem, type VoiceMessage, pickSpeechVoice } from '../lib/huddleVoice';
+import { claimSpeaker, releaseSpeaker, subscribeSpeakerReleases } from '@/lib/speakerClaim';
 import {
   chooseEngines,
   flushRemainder,
@@ -880,8 +881,36 @@ export function useSpeechOutput(
   options: { engine?: TtsEngine; workspaceId?: string | null; voiceId?: string } = {},
 ): SpeechOutputState {
   const { engine = 'browser', workspaceId = null, voiceId = '' } = options;
-  const browser = useBrowserSpeechOutput(sessionId, enabled && engine === 'browser', joinedAtMs);
-  const hosted = useCartesiaSpeechOutput(workspaceId, sessionId, enabled && engine === 'cartesia', joinedAtMs, voiceId);
+
+  // ONE speaker per session, app-wide. agensis is a single page of in-page
+  // windows, so the same DM can be mounted twice at once; each mount polls the
+  // same transcript and speaks every new reply, so two mounts read every reply
+  // twice a beat apart — heard as two voices talking over each other, and
+  // invisible to any per-component fix because each speaker is correct alone.
+  // The claim decides which mount is audible; the others render normally and
+  // stay silent until it releases.
+  const tokenRef = useRef<symbol | null>(null);
+  if (tokenRef.current === null) tokenRef.current = Symbol('huddle-speaker');
+  const token = tokenRef.current;
+  const [audible, setAudible] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !sessionId) { setAudible(false); return; }
+    const attempt = () => setAudible(claimSpeaker(sessionId, token));
+    attempt();
+    // A silent mount retries when the holder goes away — closing the window
+    // that held the claim must hand the voice to the one still open, not
+    // leave the huddle mute.
+    const unsubscribe = subscribeSpeakerReleases(attempt);
+    return () => {
+      unsubscribe();
+      releaseSpeaker(sessionId, token);
+      setAudible(false);
+    };
+  }, [enabled, sessionId, token]);
+
+  const browser = useBrowserSpeechOutput(sessionId, audible && enabled && engine === 'browser', joinedAtMs);
+  const hosted = useCartesiaSpeechOutput(workspaceId, sessionId, audible && enabled && engine === 'cartesia', joinedAtMs, voiceId);
   if (engine === 'cartesia') return hosted;
   if (engine === 'browser') return browser;
   return NO_OUTPUT;
