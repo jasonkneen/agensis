@@ -139,6 +139,36 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
     BUNDLED skill definition (`bundledCredentialEnvVar`), never from an
     agent-authored one — otherwise an agent that can write its own metadata could
     name `AUTH_SECRET` and have the server attach it as a Bearer token.
+- **Skill content (agents can USE a skill, not just be listed as having one)** —
+  `agent_connections.capabilities.skills` is a list of NAMES, so a skill was
+  unusable unless an agent happened to run on the machine that had it. Bodies now
+  live in the workspace: **push-and-store**, not fetch-on-demand.
+  - **Transport**: a daemon pushes `{ action: 'agent_skill_sync', hash, skills:
+    [{ skill, path, summary, content }] }`, mirrored into `agent_skill_documents`
+    (UPSERT by `UNIQUE(agent_id, skill)`, then prune) — the same shape
+    `agent_memory_sync` → `agent_memory_files` already uses. **Hash-gated**: the
+    heartbeat carries `skillsHash`, `capabilitiesDriftNudges` compares it against
+    the stored reference and nudges `agent_skills_refresh` on drift only.
+    `handleAgentSkillSync` advances the stored hash itself, so drift resolves in
+    one round-trip. A daemon that sends no `skillsHash` is **never nudged and
+    never blocked** — its skills simply have no body yet.
+  - **Reachable from a turn**: `list_skills` + `read_skill` in `server/mcp.cjs`,
+    so one agent can read another agent's skill **while that agent is offline** —
+    the reason this is stored rather than RPC'd to a live daemon. Both doors share
+    `listWorkspaceSkills` / `loadSkillContent` in `server/skill-content.cjs` with
+    the browser route, so a human and an agent can never see different text.
+  - **A body is UNTRUSTED DATA.** It is a file from someone's laptop entering
+    another agent's context, so `read_skill` returns it inside
+    `fenceSkillContent` — a nonce fence built exactly like `fenceProviderOutput`.
+    Truncation is always marked, never silent (64 KiB stored, 8000 chars per prompt).
+  - **Never invent a body.** A closed set of reasons (`not-synced`,
+    `host-fs-disabled`, `not-found`, `unreadable`) is reported to both the pane and
+    the agent. Skills that agensis itself holds — sandbox/provider definitions —
+    render `renderSkillBlock` verbatim, so a reader sees the agent's own text.
+  - **Host libraries** (`detectSkillLibraries`) scan the **backend host**, not a
+    daemon; reading their files is gated on `AGENSIS_ALLOW_PROJECT_FS` and confined
+    to `skills`/`agents`/`commands` types — `config` is excluded because
+    `~/.gemini/settings.json` holds API keys.
 - **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
   stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
   returned to the client — only `has_key`). Managed in Settings → AI. Selecting a

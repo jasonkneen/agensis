@@ -2907,6 +2907,7 @@ function CanvasLayerScene({
                 agents={agents}
                 agentConnections={agentConnections}
                 systemCapabilities={systemCapabilities}
+                workspaceId={workspaceId}
               />
             </FloatingWindowShell>
           );

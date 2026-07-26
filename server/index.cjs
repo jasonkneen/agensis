@@ -40,6 +40,17 @@ const {
  sandboxSkillsForAgent,
  unknownProviderCallArgs,
 } = require('./sandbox-skills.cjs');
+const {
+ SKILL_CONTENT_MAX_BYTES,
+ fenceSkillContent,
+ findReadableLibrary,
+ listLibraryEntries,
+ listWorkspaceSkills,
+ loadSkillContent,
+ normalizeSkillDocuments,
+ readLibraryEntry,
+ unavailable: skillContentUnavailable,
+} = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
 const { channelIntentNote } = require('../shared/channelIntent.cjs');
 const {
@@ -1113,6 +1124,29 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_memory_files_workspace_id ON agent_memory_files(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_memory_files_agent_id ON agent_memory_files(agent_id);
+
+    -- The BODY behind a skill NAME a daemon advertises. capabilities.skills is
+    -- names only, so the Skills browser had nothing to show for them; a daemon
+    -- mirrors the real SKILL.md here via agent_skill_sync, the same way it
+    -- mirrors its memory palace above. Daemon-write / browser-read only.
+    CREATE TABLE IF NOT EXISTS agent_skill_documents (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      skill text NOT NULL,
+      path text DEFAULT '',
+      summary text DEFAULT '',
+      content text DEFAULT '',
+      byte_size bigint DEFAULT 0,
+      truncated boolean NOT NULL DEFAULT false,
+      last_synced timestamptz DEFAULT now(),
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (agent_id, skill)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
 
     CREATE TABLE IF NOT EXISTS memory_file_comments (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -4638,6 +4672,55 @@ async function loadSandboxSkillNote(workspaceId, agent) {
  return renderSandboxSkillPrompt({ ...resolved, configuredKeys });
 }
 
+// ---------------------------------------------------------------------------
+// What the Skills browser can show for one skill (GET /backend/system/skill-content)
+// ---------------------------------------------------------------------------
+
+// The resolution itself lives in server/skill-content.cjs so the browser route and the
+// AGENT tool loop (mcp.cjs `read_skill`) share ONE implementation — a pane and an agent
+// that disagree about what a skill says is the failure this feature exists to avoid.
+// The vault read stays here, injected, because this is the only module that knows it.
+function loadSkillContentForWorkspace(workspaceId, skill) {
+ return loadSkillContent({
+  db: getDb(),
+  workspaceId,
+  skill,
+  listConfiguredCredentialKeys: listConfiguredSandboxCredentialKeys,
+ });
+}
+
+async function skillContentPayload(workspaceId, skill) {
+ return { kind: 'skill', ...(await loadSkillContentForWorkspace(workspaceId, skill)) };
+}
+
+// A detected skill library's entries, or one entry's markdown.
+//
+// The library is looked up by ID in the list detectSkillLibraries produced — the caller
+// never names a path, because a proxy that takes a path from its caller is a file-read
+// primitive, and this process has a home directory. Reading is additionally gated on
+// AGENSIS_ALLOW_PROJECT_FS, the same flag inspectProjectPath uses: these libraries live on
+// the BACKEND HOST, which is the operator's machine when self-hosted and a shared machine
+// otherwise, and only the operator can say which of those it is.
+async function skillLibraryPayload(libraryId, entryName) {
+ if (!projectFsAllowed()) {
+  return { kind: 'library', library: libraryId, entries: [], ...skillContentUnavailable('host-fs-disabled') };
+ }
+ const library = findReadableLibrary(detectSkillLibraries(''), libraryId);
+ if (!library) {
+  return { kind: 'library', library: libraryId, entries: [], ...skillContentUnavailable('not-found') };
+ }
+ if (!entryName) {
+  return { kind: 'library', library: libraryId, path: library.path, entries: listLibraryEntries(library.path) };
+ }
+ return {
+  kind: 'library-entry',
+  library: libraryId,
+  entry: entryName,
+  maxBytes: SKILL_CONTENT_MAX_BYTES,
+  ...readLibraryEntry(library.path, entryName),
+ };
+}
+
 // ===========================================================================
 // The credential-injecting provider proxy
 // ---------------------------------------------------------------------------
@@ -5501,6 +5584,17 @@ function mcpToolDeps() {
   // so mcp.cjs stays unit-testable with a mocked fetch and no live provider.
   callProviderOperation,
   providerCallRateLimiter,
+  // The skill layer, injected the same way and for the same reason. `list_skills`
+  // and `read_skill` share these with the browser route, so an agent and a human
+  // can never be shown different text for the same skill.
+  listWorkspaceSkills,
+  loadSkillContent: (db, workspaceId, skill) => loadSkillContent({
+   db,
+   workspaceId,
+   skill,
+   listConfiguredCredentialKeys: listConfiguredSandboxCredentialKeys,
+  }),
+  fenceSkillContent,
  };
 }
 
@@ -7001,15 +7095,22 @@ function capabilitiesShapeValid(caps) {
 //  - Only act on a hash the daemon actually sent (older daemons omit them → no nudge).
 //  - Capabilities drift when the stored row is malformed OR its stored hash differs.
 //  - Memory drift when the stored memoryHash differs.
+//  - Skill-document drift when the stored skillsHash differs. capabilities.skills is a
+//    list of NAMES; the BODIES ride agent_skill_sync into agent_skill_documents, so they
+//    need their own hash — a daemon can edit a SKILL.md without the name list changing,
+//    and the capabilities hash would not move.
 // The stored reference only advances when a real snapshot lands, so a genuine mismatch
 // resolves in ~1 round-trip rather than looping every beat.
-function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash } = {}) {
+function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash, skillsHash } = {}) {
  const nudges = [];
  if (capabilitiesHash && (!capabilitiesShapeValid(stored) || capabilitiesHash !== stored.hash)) {
   nudges.push('agent_capabilities_refresh');
  }
  if (memoryHash && memoryHash !== (stored && stored.memoryHash)) {
   nudges.push('agent_memory_refresh');
+ }
+ if (skillsHash && skillsHash !== (stored && stored.skillsHash)) {
+  nudges.push('agent_skills_refresh');
  }
  return nudges;
 }
@@ -7093,6 +7194,72 @@ async function handleAgentMemorySync(ws, message) {
 
  if (upserted.length > 0) notifyDbSubscribers('agent_memory_files', 'INSERT', upserted);
  if (pruned.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', pruned);
+}
+
+// Ingest the BODIES behind the skill names a daemon advertises.
+//
+// `capabilities.skills` is a list of names, which is why the Skills browser could say
+// who has a skill but never what it says. This is the same read-only mirror shape as
+// handleAgentMemorySync above — UPSERT by UNIQUE(agent_id, skill), then prune skills the
+// daemon no longer reports — deliberately, so there is one pattern for "a daemon pushed
+// files up", not two.
+//
+// Nothing is broadcast. A skill body is large and almost never looked at, so it does not
+// belong in the realtime fanout (sanitizeRealtimeRow strips bodies for exactly this
+// reason); the browser fetches one on demand from /backend/system/skill-content.
+async function handleAgentSkillSync(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth) throw forbidden('Agent token is required');
+ const workspaceId = ws.workspaceId || auth.workspaceId;
+ const agentId = ws.agentId || auth.agentId;
+ if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
+
+ const documents = normalizeSkillDocuments(message.skills);
+ const db = getDb();
+ const keptSkills = [];
+ for (const doc of documents) {
+  keptSkills.push(doc.skill);
+  await db.unsafe(
+   `insert into agent_skill_documents (workspace_id, agent_id, skill, path, summary, content, byte_size, truncated, last_synced, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+       on conflict (agent_id, skill) do update set
+         path = excluded.path,
+         summary = excluded.summary,
+         content = excluded.content,
+         byte_size = excluded.byte_size,
+         truncated = excluded.truncated,
+         last_synced = now(),
+         updated_at = now(),
+         version = agent_skill_documents.version + 1`,
+   [workspaceId, agentId, doc.skill, doc.path, doc.summary, doc.content, doc.byteSize, doc.truncated],
+  );
+ }
+
+ if (keptSkills.length > 0) {
+  await db.unsafe(
+   `delete from agent_skill_documents where agent_id = $1 and skill <> all($2::text[])`,
+   [agentId, keptSkills],
+  );
+ } else {
+  await db.unsafe('delete from agent_skill_documents where agent_id = $1', [agentId]);
+ }
+
+ // Advance the drift reference HERE rather than waiting for the next capabilities
+ // snapshot. Without this the heartbeat would keep nudging agent_skills_refresh every
+ // beat until an unrelated capabilities sync happened to carry the new hash — the daemon
+ // would answer each nudge with a full re-push it had already sent.
+ if (typeof message.hash === 'string' && message.hash && ws.agentConnectionId) {
+  const rows = await db.unsafe(
+   `update agent_connections
+      set capabilities = coalesce(capabilities, '{}'::jsonb) || $2::jsonb, updated_at = now()
+      where id = $1 returning *`,
+   // Bound as an OBJECT: porsager turns a stringified bind into a jsonb STRING SCALAR,
+   // which `||` would then concatenate into an array of fragments (see parseJsonObject).
+   [ws.agentConnectionId, { skillsHash: message.hash }],
+  );
+  const live = connectedAgents.get(ws.agentConnectionId);
+  if (live && rows[0]) live.capabilities = parseJsonObject(rows[0].capabilities);
+ }
 }
 
 // Sanitizes a daemon-reported reach advert before it's stored. Caps addrs to 4 and
@@ -7356,6 +7523,7 @@ async function handleAgentCapabilitiesSync(ws, message) {
   // canonicalization contract). Advances only when a real snapshot lands here.
   hash: typeof message.hash === 'string' ? message.hash : null,
   memoryHash: typeof message.memoryHash === 'string' ? message.memoryHash : null,
+  skillsHash: typeof message.skillsHash === 'string' ? message.skillsHash : null,
  };
 
  const rows = await getDb().unsafe(
@@ -9862,6 +10030,7 @@ function attachRealtime(server) {
      await updateAgentHeartbeat(ws, message.metadata || {}, {
       capabilitiesHash: message.capabilitiesHash,
       memoryHash: message.memoryHash,
+      skillsHash: message.skillsHash,
      });
      return;
     }
@@ -9887,6 +10056,10 @@ function attachRealtime(server) {
     }
     if (message.action === 'agent_memory_sync') {
      await handleAgentMemorySync(ws, message);
+     return;
+    }
+    if (message.action === 'agent_skill_sync') {
+     await handleAgentSkillSync(ws, message);
      return;
     }
     if (message.action === 'agent_capabilities_sync') {
@@ -10506,6 +10679,36 @@ function createApp() {
    );
    const items = mergeSlashCommands(rows.map(row => parseJsonObject(row.capabilities)));
    res.json({ data: items, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // The BODY behind a row in the Skills window. Three shapes, one route:
+ //   ?skill=<name>            -> the document for a skill some agent carries
+ //   ?library=<id>            -> the entries inside a detected skill library
+ //   ?library=<id>&entry=<n>  -> one entry's markdown
+ //
+ // Fly only (like /backend/system/slash-commands): the hosted frontend targets the
+ // Fly backend for every /backend call, and the sandbox-skill resolution needs the
+ // CommonJS skill modules. Not on Netlify.
+ //
+ // Workspace-scoped throughout — the skills, the authored definitions and the
+ // daemon-pushed documents are all read WHERE workspace_id = the id the caller
+ // proved `read` on, so a member of one workspace cannot reach another's.
+ app.get('/backend/system/skill-content', requireAuth, async (req, res) => {
+  try {
+   if (rateLimitBlocked(res, skillRateLimiter, `skill-content:${req.userId || clientIpFromReq(req)}`)) return;
+   const workspaceId = String(req.query.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+
+   const libraryId = String(req.query.library || '').trim();
+   if (libraryId) return res.json({ data: await skillLibraryPayload(libraryId, String(req.query.entry || '')), error: null });
+
+   const skill = String(req.query.skill || '').trim().slice(0, 200);
+   if (!skill) return jsonError(res, 400, new Error('skill or library is required'));
+   res.json({ data: await skillContentPayload(workspaceId, skill), error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

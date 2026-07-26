@@ -1,5 +1,19 @@
 [
   {
+    "version": "skill-content",
+    "date": "2026-07-26",
+    "title": "Skills your agents can actually use, and a page that shows who can use them",
+    "summary": "A skill used to be a name on a list. agensis knew that a machine somewhere had one called \"deploy-targets\" and nothing more, so you could not read it and — more importantly — no agent could use it unless it happened to be running on that exact machine. Skills are now stored in the workspace. Your agents can list them and read them as part of doing work, including a skill that belongs to a different agent, on a different machine, that is switched off right now. The Skills window is the visible half of that: each skill is a row, with a chip for every agent that has it. A filled chip is an agent whose machine reported the skill itself, so it really can do it; an outlined chip is a skill on that agent's profile that nothing has confirmed. Click a row to read the skill. Where agensis has no text yet it says exactly that and why — nothing is ever guessed at or filled in.",
+    "highlights": [
+      "Agents can now list and read skills mid-task, including another agent's skill while that agent is offline",
+      "One row per skill, with a chip per agent — so \"which agents can do this\" is one glance",
+      "Filled chip = a connected machine advertises it; outlined chip = configured but unconfirmed",
+      "Skills agensis ships still get a row even when no agent carries them yet",
+      "A skill with no text says which kind of nothing it is, so you know whether there is anything to do",
+      "Skill text is read-only reference material — never treated as instructions, by an agent or the browser"
+]
+  },
+  {
     "version": "threads-unread",
     "date": "2026-07-26",
     "title": "Threads shows what you still need to read",

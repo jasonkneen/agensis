@@ -1296,6 +1296,10 @@ module.exports = {
   redactSandboxSecrets,
   renderSandboxDetailsTemplate,
   renderSandboxSkillPrompt,
+  // Exported for server/skill-content.cjs: the Skills browser shows a sandbox
+  // skill by rendering THIS block, so a reader sees the exact text the agent is
+  // given rather than a second description that can drift from it.
+  renderSkillBlock,
   resolveSandboxSkills,
   sanitizeSandboxMeta,
   sandboxCredentialKey,
