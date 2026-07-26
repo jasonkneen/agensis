@@ -1017,6 +1017,76 @@ function buildTools() {
   },
  });
 
+ // -- Provider skills: a credentialed call the agent never holds the key for --
+ //
+ // The one tool a Sandbox Agent needs in order to actually provision anything.
+ // Read the "THE PROVIDER CALL" section of server/sandbox-skills.cjs before
+ // touching this — the design is load-bearing, not stylistic.
+ //
+ // The shape below is the security boundary, so it is worth stating plainly:
+ //
+ //   kinds: ['agent'] ONLY. Every other identity kind acts through `as: "<handle>"`,
+ //   which is fine for posting a message and wrong for spending a credential: an
+ //   `invite` bearer is a transient 14-day join secret, and letting one drive a
+ //   workspace's provider keys would be a strict escalation over anything an invite
+ //   can do today. A `workspace`/`user` token has no agent and therefore no skill
+ //   layer to authorize against. 'integration' is excluded twice over — by `kinds`
+ //   and by connectionCanUseTool, which fails closed for a tool with no entry in
+ //   flow-integration's TOOL_SCOPES.
+ //
+ //   THE SCHEMA IS NOT THE GUARD. `additionalProperties: false` is documentation
+ //   here: the dispatcher passes `params.arguments` straight through and never
+ //   validates it against inputSchema. The authoritative rejection of a `url` or
+ //   `headers` argument is unknownProviderCallArgs, inside callProviderOperation.
+ //
+ //   NO CHANNEL, NO POSTING. This tool returns the provider's response to the
+ //   caller and does nothing else. It deliberately does not post into a channel:
+ //   the response is untrusted provider text, and the agent — which has read the
+ //   fence — decides what of it is worth saying.
+ add({
+  name: 'call_provider',
+  kinds: ['agent'],
+  description: 'Call one operation on one of YOUR provider skills. You name the skill id and an operation name from that skill; agensis resolves the URL from the skill definition, attaches the stored credential itself, makes the call, and returns the response as untrusted data. You never see the credential, and there is deliberately no url/host/header argument — a credentialed call can only go where the skill definition already points. Use list_agents/your prompt to see which provider skills and operations you carry.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    skill_id: { type: 'string', description: 'A provider skill id you carry, e.g. "sandbox-provider-box".' },
+    operation: { type: 'string', description: 'An operation name from that skill, e.g. "create" or "stop". Not a URL and not an HTTP method.' },
+    path_params: { type: 'object', description: 'Values for the operation\'s path placeholders, e.g. { id: "box_123" }. Letters, digits, dot, underscore and hyphen only.' },
+    body: { type: 'object', description: 'JSON request body, for operations that take one (POST/PUT/PATCH).' },
+   },
+   required: ['skill_id', 'operation'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   if (typeof deps.callProviderOperation !== 'function') {
+    throw new ToolError('Provider calls are not available on this backend.');
+   }
+   // Per-agent, tighter than the general MCP limiter (which has already run for
+   // this request): a credentialed call spends someone else's rate limit and can
+   // provision billable infrastructure. `check` rather than the HTTP-shaped
+   // rateLimitBlocked — a refusal here has to reach the agent as a tool error it
+   // can read, not a 429 body it never sees.
+   const limiter = deps.providerCallRateLimiter;
+   if (limiter && typeof limiter.check === 'function') {
+    const verdict = limiter.check(`provider-call:${identity.workspaceId}:${identity.agentId}`);
+    if (!verdict.allowed) {
+     throw new ToolError(`Too many provider calls — retry in about ${Math.max(1, Math.ceil(verdict.retryAfterMs / 1000))}s. Do not loop on this.`);
+    }
+   }
+   const result = await deps.callProviderOperation({
+    workspaceId: identity.workspaceId,
+    agentId: identity.agentId,
+    args,
+   });
+   // A caller error is returned as isError (the MCP convention this file already
+   // uses) rather than a successful payload with ok:false, so a client that only
+   // reads isError does not treat a refusal as a provisioned sandbox.
+   if (result && result.ok === false && result.error) throw new ToolError(result.error);
+   return result;
+  },
+ });
+
  // --- register as an agent, then work AS it over MCP -----------------------
  // A connected client first calls register_agent (popup approval, or auto-approve via an
  // invite link). Once approved, it polls claim_job, generates the reply, and returns it

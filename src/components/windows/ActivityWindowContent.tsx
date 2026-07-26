@@ -4,6 +4,7 @@ import {
   Brain,
   CheckCircle2,
   FileText,
+  KeyRound,
   MessageCircle,
   MessageSquare,
   Palette,
@@ -65,6 +66,8 @@ function iconFor(type: ActivityEventType): React.ReactNode {
       return <UserPlus />;
     case 'canvas_updated':
       return <Palette />;
+    case 'provider_call':
+      return <KeyRound />;
     default:
       return <Activity />;
   }
@@ -118,6 +121,10 @@ const ACTIVITY_FAMILY: Record<ActivityEventType, Exclude<ActivityFilter, 'all'>>
   canvas_updated: 'canvas',
   agent_connected: 'agents',
   agent_disconnected: 'agents',
+  // A credentialed provider call an agent made through the server. Filed under
+  // Agents because that is what the reader is auditing — which agent spent a
+  // provider credential, on what, and what came back.
+  provider_call: 'agents',
 };
 
 // Remembered per workspace. The tab list is also filtered down to families that
