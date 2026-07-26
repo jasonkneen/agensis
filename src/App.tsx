@@ -589,6 +589,8 @@ export default function App() {
   );
 }
 
+const LAST_WORKSPACE_KEY = 'agensis.workspace.last';
+
 function AppContent() {
   const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth, authNotice, dismissAuthNotice } = useAuth();
   // The update surface (deploy toast + "what's new" dialog + version check +
@@ -622,13 +624,34 @@ function AppContent() {
   const setupCallbackInFlightRef = useRef(false);
 
   const { workspaces, loading: wsLoading, createWorkspace, readiness: workspaceReadiness, retryWorkspaceSetup } = useWorkspaces(user?.id);
-  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
+  // NOT simply workspaces[0]. The list is ordered by updated_at, so the newest
+  // workspace sorts first — and the System workspace (the feedback inbox) sorts
+  // first the moment it is created. Neither an empty starter pair nor the
+  // feedback inbox is somewhere you should LAND; they are places you go on
+  // purpose. Prefer a workspace that actually has something in it.
+  const defaultWorkspace = useMemo(
+    () => workspaces.find(w => !w.is_system) || workspaces[0] || null,
+    [workspaces],
+  );
+  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || defaultWorkspace;
+
+  // Remember where you were. Without this the app re-picks a default on every
+  // load, so any change to the ordering — a new workspace, a touched
+  // updated_at — silently moves you to a different workspace, which reads as
+  // your data having disappeared.
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    try { localStorage.setItem(LAST_WORKSPACE_KEY, activeWorkspaceId); } catch { /* best effort */ }
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
-    if (!wsLoading && workspaces.length > 0 && !workspaces.find(w => w.id === activeWorkspaceId)) {
-      setActiveWorkspaceId(workspaces[0].id);
-    }
-  }, [wsLoading, workspaces, activeWorkspaceId]);
+    if (wsLoading || workspaces.length === 0) return;
+    if (workspaces.find(w => w.id === activeWorkspaceId)) return;
+    let remembered = '';
+    try { remembered = localStorage.getItem(LAST_WORKSPACE_KEY) || ''; } catch { /* ignore */ }
+    const restored = remembered && workspaces.find(w => w.id === remembered);
+    setActiveWorkspaceId((restored || defaultWorkspace)?.id || '');
+  }, [wsLoading, workspaces, activeWorkspaceId, defaultWorkspace]);
 
   const { data: workspaceBootstrap } = useWorkspaceBootstrap(activeWorkspaceId || null);
 
