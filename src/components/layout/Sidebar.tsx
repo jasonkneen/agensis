@@ -614,7 +614,10 @@ export const Sidebar = React.memo(function Sidebar({
     </div>
 
     <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
-     <div className="flex flex-col gap-1 pb-2">
+     {/* gap-0.5, not gap-1: with ~14 entries the inter-row gap is counted
+         thirteen times, so it moves the sidebar's overall height as much as
+         any single row's height does. */}
+     <div className="flex flex-col gap-0.5 pb-2">
       {/* Above the channels: whatever needs a human is the first thing in the
           sidebar, not something you scroll past. */}
       {onOpenInbox && (
