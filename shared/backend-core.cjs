@@ -70,6 +70,12 @@ const ALLOWED_TABLES = new Set([
  // dedicated, rate-limited POST /backend/feedback route (any signed-in user),
  // never by a browser reaching /backend/db/insert.
  'feedback_reports',
+ // Orb delivery ledger (plans/021). READ through the generic /db path so the
+ // delivery list is live over realtime db_changes; every write comes from the
+ // trigger route itself, and DB_TABLE_ACCESS gates generic writes to 'manage'
+ // so a client cannot forge or erase a delivery record. Same shape as
+ // agent_schedule_runs, for the same reason.
+ 'orb_deliveries',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -100,6 +106,7 @@ const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
  workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config', 'identity']),
+ agent_webhooks: new Set(['payload_fields']),
  agent_connections: new Set(['metadata', 'capabilities']),
  agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
@@ -145,7 +152,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
- 'huddles', 'huddle_events', 'feedback_reports',
+ 'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -194,6 +201,11 @@ const DB_TABLE_ACCESS = {
  // run_agents path can't bypass that validation; runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Orb deliveries are written ONLY by the trigger route (which is where the
+ // dedupe gate lives): a client-forged row would let an attacker pre-claim a
+ // delivery id and make the next real delivery look like a duplicate, and a
+ // client DELETE would erase the audit trail. Reads stay at 'read'.
+ orb_deliveries: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
