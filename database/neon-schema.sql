@@ -979,6 +979,33 @@ CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, 
 CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
 
+-- Liveness, and the ONE mutable table in the huddle surface.
+--
+-- A browser that crashes, loses power or is force-quit never posts its /leave,
+-- so presence has to EXPIRE rather than be deleted: a connected client refreshes
+-- last_seen_at/heartbeat_at every 30s and the server reaps anything that has
+-- gone quiet for 150s (2.5x the worst-case one-wake-per-minute clamp browsers
+-- apply to hidden tabs, so a backgrounded participant is never kicked out of a
+-- call they are still in).
+--
+-- Not part of huddle_events on purpose. That log is history and is never
+-- updated; "is this person still there" is a current value, and appending a row
+-- per participant per heartbeat would grow without bound for no gain.
+--
+-- heartbeat_at is NULL until the client's first beat, and the reaper keys on it
+-- ALONE: a client that confirms but never beats (an older frontend — Netlify and
+-- Fly deploy independently) is never expired, so the reaper cannot empty live
+-- huddles in the gap between the two deploys.
+CREATE TABLE IF NOT EXISTS huddle_presence (
+  huddle_id uuid NOT NULL REFERENCES huddles(id) ON DELETE CASCADE,
+  identity text NOT NULL,
+  connection_epoch text NOT NULL DEFAULT '',
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  heartbeat_at timestamptz,
+  reaped_at timestamptz,
+  PRIMARY KEY (huddle_id, identity)
+);
+
 -- The channel marker: ONE message per finished huddle, in the channel it was
 -- called from, saying it happened and pointing back at the transcript.
 -- Deliberately no foreign key — messages is created hundreds of lines above

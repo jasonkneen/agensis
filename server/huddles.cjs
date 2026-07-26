@@ -30,6 +30,15 @@
 //     huddle; it can only ask for a token for ITSELF, and only if it is a
 //     member of the workspace that owns the session.
 //
+//   * PRESENCE EXPIRES. The webhook was the only thing that could notice a
+//     browser that CRASHED, and the project's webhook has since been deleted —
+//     it never delivered a single participant event anyway (it needs a LiveKit
+//     dashboard step nobody performed). So a connected browser now HEARTBEATS,
+//     and presence that stops being refreshed is reaped: see the liveness
+//     section below. Self-reports say "I am here", heartbeats keep saying it,
+//     and silence is what removes you. The webhook path is untouched and still
+//     honoured if it is ever switched back on.
+//
 //   * NO `Math.max(1, participants.size)`. An ended huddle reports
 //     participantCount 0, not a phantom 1. The truthful "how many were here"
 //     numbers are peakParticipants / everJoinedCount, both derived from the log.
@@ -78,6 +87,38 @@ const MAX_TOKEN_TTL_SECONDS = 3600;
 const WEBHOOK_CLOCK_SKEW_SECONDS = 60;
 
 const EVENT_KINDS = new Set(['started', 'participant_joined', 'participant_left', 'ended']);
+
+// --- liveness windows -------------------------------------------------------
+//
+// How often a connected browser says "still here", and how long silence is
+// tolerated before that presence is expired. Both numbers are chosen against
+// ONE hard constraint: browsers throttle timers in hidden tabs, and Chrome's
+// intensive throttling clamps a background page to ONE wake per minute. A
+// participant who alt-tabs away is still in the call, so the threshold must
+// survive that clamp with room to spare.
+//
+//   interval 30s  — a foreground tab gets FIVE attempts inside the window, so a
+//                   handful of failed posts on a flaky connection never expires
+//                   anyone. Two writes per participant per minute is the whole
+//                   cost of the feature.
+//   stale   150s  — 2.5x the worst-case 60s background clamp. A hidden tab has
+//                   to miss TWO consecutive clamped wakes AND the headroom
+//                   before it is touched, which does not happen to a tab that
+//                   is merely backgrounded. Shorter (60-90s) reaps live people;
+//                   much longer and the ghost outlives the conversation.
+//
+// A flaky connection therefore behaves like this: drops under 150s are
+// invisible (the next heartbeat refreshes the row and the roster never
+// flickers); a drop longer than 150s expires the participant, and when the
+// browser comes back its next heartbeat sees `reaped_at` set and re-announces
+// it, so a long tunnel costs a roster row for a moment, not for the call.
+const HUDDLE_HEARTBEAT_INTERVAL_MS = 30_000;
+const HUDDLE_PRESENCE_STALE_MS = 150_000;
+// How long a huddle with nobody in it may sit "live" before it closes itself.
+// Measured from the last thing that happened (start, any event, any presence
+// write) so a room briefly between participants is not swept out from under a
+// rejoin.
+const HUDDLE_EMPTY_GRACE_MS = 150_000;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (no I/O — unit-testable without a DB, a network, or the SDK)
@@ -304,6 +345,103 @@ function huddleLeftATrace(state, transcriptMessageCount = 0) {
  return Number(state.everJoinedCount || 0) > 0 || Number(transcriptMessageCount || 0) > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Liveness (pure — the whole reap decision, with no I/O in it)
+// ---------------------------------------------------------------------------
+//
+// Everything that decides "is this person still here" and "should this huddle
+// close" lives in these three functions, taking timestamps and returning
+// answers. Deliberately NOT expressed as a WHERE clause: a rule buried in SQL
+// cannot be tested against a backgrounded-tab-length gap, and this rule's whole
+// job is to be right about gaps.
+
+function presenceByIdentity(rows = []) {
+ const map = new Map();
+ for (const row of Array.isArray(rows) ? rows : []) {
+  const identity = String((row && row.identity) || '');
+  if (identity) map.set(identity, row);
+ }
+ return map;
+}
+
+/**
+ * Which folded participants have stopped reporting, and may be removed.
+ *
+ * Two deliberate abstentions, both of which mean "this presence is not mine to
+ * expire":
+ *
+ *   - NO PRESENCE ROW. Nobody self-reported this identity to this server — it
+ *     came from LiveKit's webhook. The webhook is also the thing that would
+ *     send its participant_left, so expiring it here would fight the authority
+ *     it came from.
+ *   - A ROW WITH NO HEARTBEAT. The client confirmed a join but has never beaten
+ *     once, which is exactly what an older frontend does. The frontend deploys
+ *     to Netlify and this server to Fly, INDEPENDENTLY — a reaper that expired
+ *     anyone who does not beat would empty every live huddle in the gap between
+ *     the two deploys. Liveness is opt-in, per connection, by beating.
+ */
+function staleHuddleIdentities({
+ participants = [],
+ presence = [],
+ nowMs = Date.now(),
+ staleAfterMs = HUDDLE_PRESENCE_STALE_MS,
+} = {}) {
+ const rows = presenceByIdentity(presence);
+ const stale = [];
+ for (const participant of Array.isArray(participants) ? participants : []) {
+  const identity = String((participant && participant.identity) || '');
+  if (!identity) continue;
+  const row = rows.get(identity);
+  if (!row) continue;
+  const beat = timeOf(row.heartbeat_at);
+  if (!beat) continue;
+  if (nowMs - beat > staleAfterMs) stale.push(identity);
+ }
+ return stale;
+}
+
+/**
+ * The most recent moment this huddle showed ANY sign of life.
+ *
+ * Must be computed from the state BEFORE a reap runs: the reap's own
+ * participant_left rows are written at now(), so folding them in first would
+ * make every reap reset the clock it is about to be measured against, and an
+ * empty huddle could never reach its grace.
+ */
+function huddleLastActivityAt(huddle, events = [], presence = []) {
+ let latest = timeOf(huddle && huddle.started_at);
+ for (const event of Array.isArray(events) ? events : []) {
+  latest = Math.max(latest, timeOf(event && event.created_at));
+ }
+ for (const row of Array.isArray(presence) ? presence : []) {
+  latest = Math.max(latest, timeOf(row && row.last_seen_at), timeOf(row && row.heartbeat_at));
+ }
+ return latest;
+}
+
+/**
+ * Should a huddle with nobody left in it close itself?
+ *
+ * `agentBusy` is the one thing that outranks an empty roster: an agent
+ * mid-turn is still writing into the huddle's transcript, and ending the room
+ * out from under it would file the marker before the answer arrived.
+ *
+ * An undatable huddle is never ended — a call we cannot put a clock on is not
+ * one to guess about.
+ */
+function shouldEndEmptyHuddle({
+ participantCount = 0,
+ agentBusy = false,
+ lastActivityAtMs = 0,
+ nowMs = Date.now(),
+ graceMs = HUDDLE_EMPTY_GRACE_MS,
+} = {}) {
+ if (Number(participantCount) > 0) return false;
+ if (agentBusy) return false;
+ if (!lastActivityAtMs) return false;
+ return nowMs - lastActivityAtMs > graceMs;
+}
+
 // The video grant a join token carries. Room-scoped, publish+subscribe audio,
 // nothing else — no room admin, no room list, no recording.
 function buildJoinGrant(roomName) {
@@ -462,6 +600,34 @@ const HUDDLES_SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
 
+    -- Liveness, and the ONE mutable table in this module.
+    --
+    -- huddle_events is history and is never updated; "is this person still
+    -- there" is not history, it is a current value, and modelling it as an
+    -- append-only log would mean a row per participant per heartbeat forever.
+    -- So: one row per (huddle, identity), updated in place, deleted when they
+    -- leave, and cascaded away with the huddle.
+    CREATE TABLE IF NOT EXISTS huddle_presence (
+      huddle_id uuid NOT NULL REFERENCES huddles(id) ON DELETE CASCADE,
+      identity text NOT NULL,
+      -- Which browser connection this row is about, so a reap and a rejoin from
+      -- the same person cannot collide on an event id.
+      connection_epoch text NOT NULL DEFAULT '',
+      -- Seeded by /confirm and refreshed by every heartbeat. This is the "the
+      -- room is not abandoned" clock the empty-huddle grace measures from.
+      last_seen_at timestamptz NOT NULL DEFAULT now(),
+      -- NULL until this connection's FIRST heartbeat, and the ONLY thing the
+      -- reaper keys on. A client that confirms but never beats (an older
+      -- frontend — Netlify and Fly deploy independently) is never expired.
+      heartbeat_at timestamptz,
+      -- Stamped when the reaper expired this row. The next heartbeat sees it,
+      -- re-announces the participant and clears it, so a browser that was away
+      -- longer than the window comes back to the roster instead of being live
+      -- in the room and invisible on the card.
+      reaped_at timestamptz,
+      PRIMARY KEY (huddle_id, identity)
+    );
+
     -- The channel marker. ONE row per finished huddle, in the channel the
     -- huddle was called from, carrying the huddle it refers to so the
     -- transcript can be reopened months later.
@@ -542,6 +708,7 @@ async function deleteLivekitRoom(roomName) {
 
 const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at, transcript_session_id';
 const EVENT_COLUMNS = 'id, huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, seq, created_at';
+const PRESENCE_COLUMNS = 'huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at';
 
 /**
  * Mount the huddle surface onto an express app.
@@ -771,6 +938,184 @@ function mountHuddleRoutes(app, deps = {}) {
   }
  }
 
+ // --- liveness -------------------------------------------------------------
+
+ async function loadPresence(huddleId) {
+  return getDb().unsafe(
+   `select ${PRESENCE_COLUMNS} from huddle_presence where huddle_id = $1`,
+   [huddleId],
+  );
+ }
+
+ /**
+  * Record that this identity is here.
+  *
+  * `beat` is what separates the two callers, and it is the whole opt-in:
+  * /confirm seeds the row (so the empty-huddle grace has a clock) but leaves
+  * heartbeat_at NULL, while /heartbeat sets it and thereby accepts being
+  * reaped. Returns the row's PREVIOUS reaped_at — RETURNING hands back the new
+  * row and this statement never clears that column, so what comes back is the
+  * value the reaper last wrote.
+  */
+ async function touchPresence(huddleId, identity, connectionEpoch, beat) {
+  const rows = await getDb().unsafe(
+   // $4 is cast EXPLICITLY: a bare parameter inside a CASE has no column to
+   // infer its type from, and Postgres answers "could not determine data type
+   // of parameter" — which this module's best-effort catch would swallow,
+   // shipping a heartbeat that silently records nothing.
+   `insert into huddle_presence (huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at)
+         values ($1, $2, $3, now(), case when $4::boolean then now() else null end)
+         on conflict (huddle_id, identity) do update
+            set connection_epoch = excluded.connection_epoch,
+                last_seen_at = now(),
+                heartbeat_at = case when $4::boolean then now() else huddle_presence.heartbeat_at end
+         returning ${PRESENCE_COLUMNS}`,
+   [huddleId, identity, String(connectionEpoch || ''), Boolean(beat)],
+  );
+  return rows[0] || null;
+ }
+
+ async function clearPresence(huddleId, identity) {
+  await getDb().unsafe('delete from huddle_presence where huddle_id = $1 and identity = $2', [huddleId, identity]);
+ }
+
+ // An ended huddle has no live presence by definition, so the rows are dropped
+ // with it — the table means "who is in a call right now", not "who ever was"
+ // (that is the event log's job, and it is the one that must be permanent).
+ // Best-effort: a huddle must still end if this fails.
+ async function clearAllPresence(huddleId) {
+  try {
+   await getDb().unsafe('delete from huddle_presence where huddle_id = $1', [huddleId]);
+  } catch (error) {
+   console.warn('[huddles] could not clear presence:', (error && error.message) || error);
+  }
+ }
+
+ async function markPresenceReaped(huddleId, identities) {
+  for (const identity of identities) {
+   await getDb().unsafe(
+    'update huddle_presence set reaped_at = now() where huddle_id = $1 and identity = $2',
+    [huddleId, identity],
+   );
+  }
+ }
+
+ // Is an agent mid-turn in this huddle? Checked ONLY when the roster is already
+ // empty, so it costs nothing on the normal path. Both sessions count: the
+ // huddle's own transcript session is where an agent answers, and the host
+ // channel is where huddles that predate transcript sessions answered.
+ // Deliberately `= $1 or = $2` rather than `= any(array)` — a JS array bound
+ // through .unsafe is not array-serialised by postgres.js.
+ async function agentBusyInHuddle(huddle) {
+  try {
+   const rows = await getDb().unsafe(
+    `select 1 from agent_jobs
+        where status in ('queued', 'running') and (session_id = $1 or session_id = $2) limit 1`,
+    [huddle.session_id, huddle.transcript_session_id || null],
+   );
+   return rows.length > 0;
+  } catch {
+   // Unknown => assume busy. Getting this wrong in the other direction ends a
+   // live conversation.
+   return true;
+  }
+ }
+
+ /**
+  * Expire presence that has stopped reporting, and close the huddle if that
+  * leaves nobody in it. Returns the huddle row, updated if it was ended.
+  *
+  * REAP ON READ, not on a tick. Three reasons, in order of weight:
+  *
+  *   1. A tick is a loop whose existence proves nothing — the recorded lesson
+  *      from the agent-job reaper in server/index.cjs is that liveness must key
+  *      on real activity timestamps, not on something running. This server
+  *      sleeps, redeploys and runs on more than one Fly machine; a reaper that
+  *      only works while a particular interval is alive is a reaper you cannot
+  *      reason about.
+  *   2. A ghost only exists when somebody LOOKS. Every path that can show a
+  *      roster — the two GETs, start-or-join, join-by-id, confirm — runs this
+  *      first, so what a client can see has been reaped by construction. There
+  *      is no window in which the API returns a participant it knows is gone.
+  *   3. It cannot double-run. Two Fly machines reaping concurrently write the
+  *      same deterministic event ids (deduped by idx_huddle_events_event_id)
+  *      and race on one `ended_at is null` UPDATE, which elects one winner —
+  *      the same guard that already makes "exactly one channel marker" true.
+  *
+  * The cost of choosing reads is that a huddle in a channel nobody ever opens
+  * again stays `live` in the table until someone does. That is a row, not a
+  * ghost: nothing is displaying it, and the moment anything does, it is
+  * already correct.
+  *
+  * Best-effort throughout. A failing reap must never fail the read it is
+  * attached to — a huddle you cannot see is worse than a huddle with a ghost.
+  */
+ async function reapHuddle(huddle, { endIfEmpty = true } = {}) {
+  if (!huddle || huddle.ended_at) return huddle;
+  try {
+   const events = await loadEvents(huddle.id);
+   const presence = await loadPresence(huddle.id);
+   const state = foldHuddleState(huddle, events);
+   const nowMs = Date.now();
+   // Computed BEFORE anything is appended: the reap's own leave rows are
+   // written at now(), and folding them in would reset the very clock the
+   // grace below is measured against.
+   const lastActivityAtMs = huddleLastActivityAt(huddle, events, presence);
+   const stale = staleHuddleIdentities({ participants: state.participants, presence, nowMs });
+
+   const rowsByIdentity = presenceByIdentity(presence);
+   const namesByIdentity = new Map(state.participants.map((p) => [p.identity, p.name]));
+   for (const identity of stale) {
+    const row = rowsByIdentity.get(identity);
+    await appendEvent({
+     huddle,
+     kind: 'participant_left',
+     identity,
+     // From the fold, so the leave carries the same name the join did.
+     displayName: String(namesByIdentity.get(identity) || ''),
+     // Deterministic and namespaced: a retry (or a second machine) collapses on
+     // the unique index, and it can never collide with the browser's own
+     // `self:leave:` id for the same connection.
+     eventId: `reap:leave:${identity}:${String((row && row.connection_epoch) || '')}`,
+    });
+   }
+   if (stale.length > 0) await markPresenceReaped(huddle.id, stale);
+
+   const remaining = state.participants.length - stale.length;
+   if (!endIfEmpty) return huddle;
+   if (!shouldEndEmptyHuddle({ participantCount: remaining, lastActivityAtMs, nowMs })) return huddle;
+   if (await agentBusyInHuddle(huddle)) return huddle;
+   return (await endEmptyHuddle(huddle)) || huddle;
+  } catch (error) {
+   console.warn('[huddles] presence reap skipped:', (error && error.message) || error);
+   return huddle;
+  }
+ }
+
+ /**
+  * Close a huddle nobody is in. Same shape as the End button and the
+  * room_finished webhook — including the `returning` guard that makes exactly
+  * one of the three write the channel marker.
+  */
+ async function endEmptyHuddle(huddle) {
+  const rows = await getDb().unsafe(
+   `update huddles set ended_at = now() where id = $1 and ended_at is null returning ${HUDDLE_COLUMNS}`,
+   [huddle.id],
+  );
+  if (!rows[0]) return null;
+  const ended = rows[0];
+  fanout('huddles', 'UPDATE', [ended]);
+  await appendEvent({ huddle: ended, kind: 'ended', identity: '', eventId: `reap:ended:${ended.id}` });
+  await writeHuddleMarker(ended);
+  await clearAllPresence(ended.id);
+  try {
+   await endRoom(ended.room_name);
+  } catch (error) {
+   console.warn('[huddles] could not delete LiveKit room after a reap:', (error && error.message) || error);
+  }
+  return ended;
+ }
+
  // --- read ----------------------------------------------------------------
 
  // Current huddle for a channel: the live one, else the most recent so the card
@@ -785,7 +1130,10 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!(await sessionInWorkspace(sessionId, workspaceId))) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
-   const huddle = (await liveHuddleForSession(sessionId)) || (await latestHuddleForSession(sessionId));
+   // Reap BEFORE folding: a roster is the one thing this route exists to
+   // render, so it must never hand back a participant whose browser has
+   // stopped reporting.
+   const huddle = await reapHuddle((await liveHuddleForSession(sessionId)) || (await latestHuddleForSession(sessionId)));
    // Deliberately no "create the missing transcript session" repair here: this
    // is a read, and an old huddle without one is not broken — its conversation
    // genuinely lived in the channel.
@@ -809,7 +1157,7 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    await ensureSchemaOnce();
-   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   const huddle = await reapHuddle(await huddleInWorkspace(huddleId, workspaceId));
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    res.json({
     data: { ...(await huddlePayload(huddle)), configured: livekitConfigured() },
@@ -837,7 +1185,11 @@ function mountHuddleRoutes(app, deps = {}) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
 
-   let huddle = await liveHuddleForSession(sessionId);
+   // Reap first. Pressing "Huddle" on a channel whose last call is a room full
+   // of crashed browsers must open a NEW one, not enrol you in the wake — and
+   // the reap is what frees idx_huddles_one_live_per_session to allow it.
+   let huddle = await reapHuddle(await liveHuddleForSession(sessionId));
+   if (huddle && huddle.ended_at) huddle = null;
    let created = false;
    if (!huddle) {
     const id = crypto.randomUUID();
@@ -885,6 +1237,10 @@ function mountHuddleRoutes(app, deps = {}) {
      url: livekitConfig().url,
      identity: participantIdentity(req.userId),
      roomName: huddle.room_name,
+     // The client beats at the interval the SERVER names, so the window and the
+     // threshold it is measured against can only ever be changed together —
+     // and changing them does not need a frontend deploy.
+     heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS,
      created,
     },
     error: null,
@@ -903,8 +1259,10 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
-   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   const huddle = await reapHuddle(await huddleInWorkspace(huddleId, workspaceId));
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   // Also the reap's answer: joining a room whose occupants all crashed ten
+   // minutes ago is refused, truthfully, instead of putting you alone in it.
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
 
    const name = await displayNameFor(req.userId);
@@ -921,6 +1279,7 @@ function mountHuddleRoutes(app, deps = {}) {
      url: livekitConfig().url,
      identity: participantIdentity(req.userId),
      roomName: huddle.room_name,
+     heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS,
     },
     error: null,
    });
@@ -953,7 +1312,12 @@ function mountHuddleRoutes(app, deps = {}) {
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
+   // Clear out anyone who has stopped reporting, so the roster the arriving
+   // participant is handed is already correct — but never END the huddle from
+   // here: somebody is walking in the door as this runs.
+   await reapHuddle(huddle, { endIfEmpty: false });
    const identity = participantIdentity(req.userId);
+   const epoch = String(req.body?.connectionEpoch || '0');
    await appendEvent({
     huddle,
     kind: 'participant_joined',
@@ -961,9 +1325,24 @@ function mountHuddleRoutes(app, deps = {}) {
     displayName: await displayNameFor(req.userId),
     // Per-connection, not per-user: rejoin after a drop is a NEW event, while
     // the same connection re-confirming (a retry) stays one row.
-    eventId: `self:join:${identity}:${String(req.body?.connectionEpoch || '0')}`,
+    eventId: `self:join:${identity}:${epoch}`,
    });
-   res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
+   // Seed the liveness row WITHOUT a heartbeat: this join is now on a clock the
+   // empty-huddle grace can read, but nothing is reapable until the browser
+   // actually starts beating.
+   //
+   // Best-effort. Joining a call must not fail because its bookkeeping row
+   // could not be written — the join EVENT is what puts you in the room, and
+   // the heartbeat route will create this row on its own a moment later.
+   await touchPresence(huddle.id, identity, epoch, false)
+    .catch((error) => console.warn('[huddles] could not seed presence:', (error && error.message) || error));
+   res.json({
+    data: {
+     ...(await huddlePayload(await huddleInWorkspace(huddleId, workspaceId))),
+     heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS,
+    },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -986,7 +1365,68 @@ function mountHuddleRoutes(app, deps = {}) {
     displayName: await displayNameFor(req.userId),
     eventId: `self:leave:${identity}:${String(req.body?.connectionEpoch || '0')}`,
    });
+   // They said so themselves — there is nothing left to expire. Dropping the
+   // row is also what keeps the table one-per-live-participant rather than
+   // one-per-person-who-was-ever-here. Best-effort for the same reason as the
+   // seed above: the leave EVENT is what takes you out of the room.
+   await clearPresence(huddle.id, identity)
+    .catch((error) => console.warn('[huddles] could not clear presence:', (error && error.message) || error));
    res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ /**
+  * "Still here." The smallest write in the module, and the only one that runs
+  * on a timer in the browser.
+  *
+  * Identity comes from the verified session, exactly like /confirm — a client
+  * may only ever speak about itself, so the worst a hostile one can do is keep
+  * ITSELF in a huddle it is a member of.
+  *
+  * A 409 is load-bearing: it is how a browser whose websocket died finds out
+  * the huddle is over and stops beating into it.
+  */
+ app.post('/backend/workspaces/:id/huddles/:huddleId/heartbeat', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const huddleId = String(req.params.huddleId || '').trim();
+   if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+   await ensureSchemaOnce();
+   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
+
+   const identity = participantIdentity(req.userId);
+   const epoch = String(req.body?.connectionEpoch || '0');
+   const row = await touchPresence(huddle.id, identity, epoch, true);
+
+   // We were expired while away — longer than the window, so the roster has
+   // already been told we left. Say we are back rather than staying live in
+   // the room and invisible on the card. The event id is keyed on the reap
+   // that caused it, so the retry of a failed beat collapses onto one row.
+   let rejoined = false;
+   if (row && row.reaped_at) {
+    await appendEvent({
+     huddle,
+     kind: 'participant_joined',
+     identity,
+     displayName: await displayNameFor(req.userId),
+     eventId: `reap:rejoin:${identity}:${isoOf(row.reaped_at) || ''}`,
+    });
+    await getDb().unsafe(
+     'update huddle_presence set reaped_at = null where huddle_id = $1 and identity = $2',
+     [huddle.id, identity],
+    );
+    rejoined = true;
+   }
+
+   // Deliberately NOT the folded payload. This runs every 30 seconds per
+   // participant; loading the whole event log to answer it would turn the
+   // cheapest write in the module into the most expensive read.
+   res.json({ data: { ok: true, rejoined, heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -1018,6 +1458,7 @@ function mountHuddleRoutes(app, deps = {}) {
     // After the 'ended' event, so the fold the marker is built from already
     // knows the huddle is over and reports a real duration.
     await writeHuddleMarker(huddle);
+    await clearAllPresence(huddle.id);
     try {
      await endRoom(huddle.room_name);
     } catch (error) {
@@ -1096,6 +1537,7 @@ function mountHuddleRoutes(app, deps = {}) {
     if (updated[0]) {
      fanout('huddles', 'UPDATE', [updated[0]]);
      await writeHuddleMarker(updated[0]);
+     await clearAllPresence(updated[0].id);
     }
    }
 
@@ -1115,6 +1557,9 @@ module.exports = {
  DEFAULT_TOKEN_TTL_SECONDS,
  MIN_TOKEN_TTL_SECONDS,
  MAX_TOKEN_TTL_SECONDS,
+ HUDDLE_HEARTBEAT_INTERVAL_MS,
+ HUDDLE_PRESENCE_STALE_MS,
+ HUDDLE_EMPTY_GRACE_MS,
  HUDDLES_SCHEMA_SQL,
  ensureHuddlesSchema,
  mountHuddleRoutes,
@@ -1127,6 +1572,9 @@ module.exports = {
  huddleMarkerContent,
  everJoinedNames,
  huddleLeftATrace,
+ staleHuddleIdentities,
+ huddleLastActivityAt,
+ shouldEndEmptyHuddle,
  buildJoinGrant,
  verifyLivekitWebhook,
  huddleEventKindFor,
