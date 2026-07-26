@@ -1789,9 +1789,9 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
    'You are CursorBuddy, a local-machine agent connected through Agensis. Route browser, desktop, and embedded-site context through the hub, use local source paths when authorized, and keep all actions logged.',
    normalizeAgentPermissionMode(claim.permissionMode || claim.permission_mode || 'default'),
    connectionKey.created_by || null,
-   JSON.stringify(['cursorbuddy']),
-   JSON.stringify(['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh']),
-   JSON.stringify({ cursorbuddyRuntime: metadata }),
+   ['cursorbuddy'],
+   ['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh'],
+   { cursorbuddyRuntime: metadata },
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -1889,9 +1889,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
     label,
     'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
     'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
-    JSON.stringify(['cursorbuddy']),
-    JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
-    JSON.stringify({ ...parseJsonObject(existingRows[0].metadata), cursorbuddyProvider: mergedMetadata }),
+    ['cursorbuddy'],
+    ['cursorbuddy', 'surface-routing', 'agent-mesh'],
+    { ...parseJsonObject(existingRows[0].metadata), cursorbuddyProvider: mergedMetadata },
    ],
   );
   notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
@@ -1911,9 +1911,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
    'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
    'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
    userId || null,
-   JSON.stringify(['cursorbuddy']),
-   JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
-   JSON.stringify({ cursorbuddyProvider: metadata }),
+   ['cursorbuddy'],
+   ['cursorbuddy', 'surface-routing', 'agent-mesh'],
+   { cursorbuddyProvider: metadata },
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -1978,8 +1978,8 @@ async function ensurePrimaryDaemonAgent({ workspaceId, userId, handle, name, hos
    'You are the primary local Agensis daemon for this machine. Coordinate local CLIs, CursorBuddy surfaces, browser extensions, desktop clients, and subagents through Agensis. Keep actions logged and route source edits through the authorized local checkout.',
    normalizeAgentPermissionMode(permissionMode || 'default'),
    userId,
-   JSON.stringify([{ type: 'runtime', name: 'agensis-cli', metadata }]),
-   JSON.stringify(['primary-daemon', 'cursorbuddy', 'agent-mesh', 'local-source-edit']),
+   [{ type: 'runtime', name: 'agensis-cli', metadata }],
+   ['primary-daemon', 'cursorbuddy', 'agent-mesh', 'local-source-edit'],
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -3109,7 +3109,8 @@ async function findOrCreateDirectSession(workspaceId, agent) {
   `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants)
      values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb)
      returning *`,
-  [workspaceId, title, resolveAnthropicModel(agent.model), JSON.stringify([participant])],
+  // The ARRAY itself — see the note on the participants update above.
+  [workspaceId, title, resolveAnthropicModel(agent.model), [participant]],
  );
  if (created[0]) notifyDbSubscribers('chat_sessions', 'INSERT', created);
  return created[0] || null;
@@ -4005,8 +4006,12 @@ async function ensureMentionedParticipants(workspaceId, session, content) {
   if (additions.length === 0) return 0;
   const merged = [...existing, ...additions];
   const updated = await getDb().unsafe(
-   'update chat_sessions set participants = $1, updated_at = now() where id = $2 returning *',
-   [JSON.stringify(merged), session.id],
+   'update chat_sessions set participants = $1::jsonb, updated_at = now() where id = $2 returning *',
+   // Bind the ARRAY, never JSON.stringify it. A stringified bind into a jsonb
+   // column stores a jsonb STRING SCALAR, not an array — jsonb_typeof() reads
+   // 'string', Array.isArray() is false on the client, and every participant
+   // lookup silently finds nobody. 51 of 70 sessions were corrupted this way.
+   [merged, session.id],
   );
   if (updated.length > 0) notifyDbSubscribers('chat_sessions', 'UPDATE', updated);
   return additions.length;

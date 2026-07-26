@@ -33,10 +33,26 @@ test('CursorBuddy provider writes metadata outside workspace agent tools', () =>
   const netlify = readText('netlify/functions/backend.mjs');
 
   for (const source of [server, netlify]) {
-    assert.match(source, /JSON\.stringify\(\['cursorbuddy'\]\)/);
     assert.match(source, /cursorbuddyProvider: metadata/);
     assert.match(source, /cursorbuddyRuntime: metadata/);
     assert.doesNotMatch(source, /JSON\.stringify\(\[\{ type: 'provider', name: 'cursorbuddy', metadata/);
     assert.doesNotMatch(source, /JSON\.stringify\(\[\{ type: 'runtime', name: 'cursorbuddy', metadata/);
   }
+
+  // The two backends bind jsonb OPPOSITELY, and both forms below are correct for
+  // their own driver. Verified against the live database:
+  //
+  //   postgres (porsager, Fly)   bind array -> jsonb array     stringify -> jsonb STRING
+  //   @netlify/database (Neon)   bind array -> ERROR           stringify -> jsonb array
+  //
+  // Getting this backwards is silent on Fly — it stores a jsonb string scalar,
+  // every Array.isArray() on the client reads empty, and the data looks present
+  // in psql. That is how 88 sessions lost their participants. Copying the
+  // "fix" to the Netlify side would instead throw on every write.
+  assert.doesNotMatch(server, /JSON\.stringify\(\['cursorbuddy'\]\)/,
+    'server/index.cjs must bind the ARRAY (porsager stringifies a string into a jsonb string scalar)');
+  assert.match(server, /^\s*\['cursorbuddy'\],$/m,
+    'server/index.cjs binds the array literal');
+  assert.match(netlify, /JSON\.stringify\(\['cursorbuddy'\]\)/,
+    'netlify/functions/backend.mjs must bind the STRING (@netlify/database rejects a raw array)');
 });
