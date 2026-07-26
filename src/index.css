@@ -4512,11 +4512,21 @@ select {
  padding: 0 !important;
  /* Desktop only: push the pill past the macOS traffic lights (0px on web). */
  padding-left: var(--sidebar-titlebar-inset, 0px) !important;
- /* `padding: 0` above wiped the base header's 8px top pad (pt-2). Native
-     traffic lights are fixed by the titlebar style and can't be repositioned
-     per-theme, so restore the 8px here: it drops the brutal header content down
-     8px, which reads as the traffic lights sitting ~8px higher against it. */
- padding-top: 8px !important;
+ /* `padding: 0` above wiped the base header's 8px top pad (pt-2), and this is
+     also what puts the header on the SAME line as the first window's title bar
+     to its right — the two are meant to read as one chrome band across the top
+     of the shell. That bar is h-10 (2.5rem, with its own 2.5px divider inside
+     it) and its box starts 11px down: WORKSPACE_CHROME_GAP (8px, the canvas
+     column's padding) + [data-floating-window]'s 2px frame + the window
+     surface's 1px border. The sidebar is flush to the shell's top edge, so
+     2.5px of that 11px is already spent on [data-sidebar-panel]'s own top
+     border above — which is why this is 8.5px and not 8px, and why a plain 8px
+     left the two bars stepped by 1.75px where they meet. Height is pinned for
+     the same reason: the header's own content must be 2.5rem tall (divider
+     included) so both bars end on one line. */
+ box-sizing: border-box !important;
+ padding-top: 8.5px !important;
+ height: calc(2.5rem + 8.5px) !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
@@ -4525,6 +4535,10 @@ select {
  box-shadow: none !important;
  border-radius: 0 !important;
  padding: 0.25rem 0.5rem !important;
+ /* Fill the band the header just pinned, so the workspace name is centred on
+     the same axis as the window title beside it rather than a pixel above it —
+     the pill's own 2.1rem min-height is shorter than the band. */
+ min-height: 100% !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-switch {
@@ -4570,7 +4584,17 @@ select {
    disagreeing about whether the wallpaper shows through, which is exactly the
    seam you see first. Brutal is flat ink on flat colour; a translucent rail is
    a different design language sharing an edge with this one. */
-:root[data-ui-theme="neo"] [data-workspace-rail] {
+:root[data-ui-theme="neo"] [data-workspace-rail],
+/* `.agensis-glass-panel` is the SHARED floating-panel surface (the command
+   palette, the mention pickers, the composer, and the presence popover — the
+   "Shared users and agents" panel). Every one of those is chrome, but the class
+   only ever had the 76%-alpha + blur treatment, and a hand-rolled portal like
+   the presence popover carries no [data-slot="popover-content"] to be caught by
+   the entry three lines up — so it stayed glass while every panel around it went
+   opaque, and the wallpaper and the sidebar behind it read straight through the
+   panel body. Listing the class itself, rather than one more per-panel hook, is
+   what stops the next shared-glass panel arriving translucent again. */
+:root[data-ui-theme="neo"] .agensis-glass-panel {
  background: var(--card) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
