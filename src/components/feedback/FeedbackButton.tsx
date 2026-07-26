@@ -142,13 +142,18 @@ export function FeedbackButton({ workspaceId, userId, contextLabel }: FeedbackBu
       {!picking && (
         <Button
           type="button"
-          variant="secondary"
           size="icon"
           data-feedback-ui
           onClick={handleOpen}
           title="Send feedback"
           aria-label="Send feedback"
-          className="agensis-glass-panel fixed rounded-full border shadow-md"
+          // INVERTED against the page, deliberately. As a glass panel this sat
+          // on top of whatever was behind it and read as another piece of
+          // chrome — the one control a confused user needs to find was the
+          // hardest to see. Solid near-black on light, solid near-white on
+          // dark: the strongest contrast available without introducing a
+          // colour, and it inverts with the theme rather than picking a side.
+          className="fixed rounded-full border-0 bg-neutral-900 text-white shadow-lg shadow-black/20 transition-colors hover:bg-neutral-800 dark:bg-neutral-50 dark:text-neutral-900 dark:hover:bg-white"
           style={{
             right: WORKSPACE_CHROME_GAP + 8,
             bottom: WORKSPACE_DOCK_BOTTOM_OFFSET + Math.round((WORKSPACE_DOCK_HEIGHT - BUTTON_SIZE) / 2),
