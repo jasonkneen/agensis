@@ -11,7 +11,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { assertSystemOwner, isSystemOwnerUser } = require('../shared/tenant-admin.cjs');
+const { assertSystemOwner, isSystemOwnerUser, isSystemOwnerEmail, isReservedSignupEmail } = require('../shared/tenant-admin.cjs');
 
 const OWNER = 'jason@bouncingfish.com';
 const OWNER_ID = 'owner-1';
@@ -71,4 +71,33 @@ test('the refusal does not reveal who the owner is', async () => {
     assert.ok(!String(error.message).includes('@'), 'no address in the message');
     assert.ok(!String(error.message).toLowerCase().includes('jason'), 'no owner name');
   }
+});
+
+test('case folding is ASCII-only: U+212A (Kelvin sign) does not become the owner', () => {
+  // toLowerCase() folds the Kelvin sign to `k`, which would make a
+  // visually-distinct address equal an ASCII owner address. The comparison
+  // must only ever make ONE address equal to the owner's.
+  const kelvinSign = '\u212A'; // KELVIN SIGN
+  assert.equal(isSystemOwnerEmail(`${kelvinSign}ate@example.com`, 'kate@example.com'), false);
+  assert.equal(isSystemOwnerEmail('KATE@example.com', 'kate@example.com'), true);
+  // A configured owner address containing non-ASCII letters matches nothing:
+  // signup stores addresses ASCII-lowercased, so this fails closed.
+  assert.equal(isSystemOwnerEmail('kate@example.com', `${kelvinSign}ate@example.com`), false);
+});
+
+test('isReservedSignupEmail reserves exactly the configured owner address', () => {
+  // The squat: signup never verifies mailbox ownership, so the owner address
+  // must be refused from account creation. Same normalization as the gate.
+  assert.equal(isReservedSignupEmail(OWNER, env), true);
+  assert.equal(isReservedSignupEmail('  Jason@Bouncingfish.COM ', env), true);
+  // Near misses are NOT reserved — the reservation must not over-block.
+  assert.equal(isReservedSignupEmail('jason+admin@bouncingfish.com', env), false);
+  assert.equal(isReservedSignupEmail('jason@bouncingfish.com.evil.test', env), false);
+  assert.equal(isReservedSignupEmail('someone@else.test', env), false);
+});
+
+test('with NO owner configured, isReservedSignupEmail reserves nothing (fail-safe)', () => {
+  assert.equal(isReservedSignupEmail(OWNER, {}), false);
+  assert.equal(isReservedSignupEmail(OWNER, { AGENSIS_SYSTEM_OWNER_EMAIL: '' }), false);
+  assert.equal(isReservedSignupEmail(OWNER, { AGENSIS_SYSTEM_OWNER_EMAIL: '   ' }), false);
 });
