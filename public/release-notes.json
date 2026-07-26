@@ -12,6 +12,19 @@
     ]
   },
   {
+    "version": "in-app-feedback",
+    "date": "2026-07-26",
+    "title": "Send feedback without leaving the app",
+    "summary": "There's a feedback button in the bottom-right corner. Describe what went wrong, point at the element that's broken, and it goes straight to the maintainers.",
+    "highlights": [
+      "Your workspace, account and current page are filled in for you",
+      "\"Select element\" lets you click the thing that's wrong, like browser devtools",
+      "Recent console output and errors can be attached — review them first, or switch them off",
+      "Tokens, keys and passwords are stripped out before anything is sent",
+      "Nothing you send is visible to your workspace"
+    ]
+  },
+  {
     "version": "invite-link-dismiss",
     "date": "2026-07-26",
     "title": "Tidy up your invite links",

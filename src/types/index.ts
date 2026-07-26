@@ -11,6 +11,14 @@ export interface Workspace {
  git_remote?: string;
  background_opacity?: number | null;
  background_image?: string | null;
+ /**
+  * The System workspace: where in-app feedback reports land as ordinary tasks.
+  * A flag, not a type — it has members, roles and invites like any other
+  * workspace, and only one row may carry it (partial unique index
+  * `uq_workspaces_system`). Absent from the `/backend/workspaces` projection,
+  * which lists its columns explicitly; present on generic `select('*')` reads.
+  */
+ is_system?: boolean;
  version?: number;
  created_at: string;
  updated_at: string;
@@ -198,7 +206,8 @@ export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'ta
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
-export type TaskSourceType = 'manual' | 'chat' | 'document' | 'canvas' | 'ai';
+/** Mirrors the `tasks_source_type_check` constraint — keep the two in step. */
+export type TaskSourceType = 'manual' | 'chat' | 'document' | 'canvas' | 'ai' | 'feedback';
 
 export interface Task {
  id: string;

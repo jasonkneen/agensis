@@ -26,6 +26,7 @@ import { CanvasSelectionLayer } from './components/canvas/CanvasSelectionLayer';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog, type SettingsTabId } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
+import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
@@ -2219,6 +2220,11 @@ function AppContent() {
         </AlertDialog>
       </div>
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
+      <FeedbackButton
+        workspaceId={activeWorkspaceId || null}
+        userId={user.id}
+        contextLabel={viewedLayer.name || activeWorkspace?.name || ''}
+      />
       <AppUpdateManager />
       <Toaster />
     </TooltipProvider>

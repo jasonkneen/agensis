@@ -55,6 +55,15 @@ const ALLOWED_TABLES = new Set([
  // 'manage' so the token-minting and webhook-authority paths cannot be bypassed.
  'huddles',
  'huddle_events',
+ // In-app feedback reports. READ through the generic /db path on purpose: that
+ // routes read authorization through enforceDbOperationAccess -> 'read' on the
+ // report's workspace, which is the System workspace — so "only members of the
+ // System workspace can read feedback" is enforced by the SAME membership gate
+ // as every other table, with no bespoke authorization path to get wrong.
+ // Every WRITE is gated to 'manage' below: reports are created only by the
+ // dedicated, rate-limited POST /backend/feedback route (any signed-in user),
+ // never by a browser reaching /backend/db/insert.
+ 'feedback_reports',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -89,6 +98,7 @@ const JSON_COLUMNS_BY_TABLE = {
  agent_jobs: new Set(['metadata']),
  activity_events: new Set(['metadata']),
  messages: new Set(['reactions']),
+ feedback_reports: new Set(['page', 'selections', 'diagnostics']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -128,7 +138,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
- 'huddles', 'huddle_events',
+ 'huddles', 'huddle_events', 'feedback_reports',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -189,6 +199,15 @@ const DB_TABLE_ACCESS = {
  // 'manage' (not 'write') so an editor cannot reach these through /backend/db.
  huddles: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  huddle_events: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // SELECT is the whole point: a member of the System workspace reads the
+ // reports filed against the product. 'read' means the generic gate resolves
+ // the row's workspace and demands membership of it, so one user can never see
+ // another user's report — the reporter is not a member and gets 403.
+ // INSERT is 'manage', NOT 'write': submitting must stay on the dedicated
+ // rate-limited route, which is the only place that resolves the System
+ // workspace server-side and runs the server's own redaction pass. A generic
+ // insert would let a client choose the workspace and skip both.
+ feedback_reports: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
@@ -973,6 +992,320 @@ async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSec
  );
 }
 
+// ----------------------------------------------------------------------------
+// IN-APP FEEDBACK (System workspace).
+//
+// Shape of the feature, so the security properties are readable in one place:
+//
+//   SUBMIT  any authenticated user, rate limited, via POST /backend/feedback.
+//           The client never chooses the destination workspace — the server
+//           resolves the single System workspace itself. A report becomes an
+//           ordinary `tasks` row (source_type='feedback') plus a
+//           `feedback_reports` row holding the bulky diagnostics, so the
+//           existing task list, assignment and agent dispatch work on it for
+//           free and no parallel todo system exists.
+//
+//   READ    members of the System workspace only, through the generic /db
+//           gate (DB_TABLE_ACCESS.feedback_reports.select = 'read', and
+//           feedback_reports is workspace-scoped) — the same membership check
+//           every other table uses. The reporter is NOT a member, so they
+//           cannot read their own report back, and definitely not anyone
+//           else's.
+//
+// The System workspace is an ORDINARY workspace with `is_system = true`. It has
+// an owner, members, roles and invites like any other, so "add someone to it"
+// is the normal Users flow rather than something new.
+// ----------------------------------------------------------------------------
+
+const SYSTEM_WORKSPACE_NAME = 'System';
+const SYSTEM_WORKSPACE_ICON = '🛟';
+const SYSTEM_WORKSPACE_DESCRIPTION = 'Product feedback filed from inside the app.';
+
+const FEEDBACK_DESCRIPTION_MAX_CHARS = 4000;
+const FEEDBACK_MAX_SELECTIONS = 5;
+const FEEDBACK_MAX_CONSOLE_ENTRIES = 300;
+const FEEDBACK_CONSOLE_ENTRY_MAX_CHARS = 800;
+const FEEDBACK_MAX_ERROR_ENTRIES = 30;
+/** Hard ceiling on the stored diagnostics blob, enforced by dropping the OLDEST console lines. */
+const FEEDBACK_DIAGNOSTICS_MAX_BYTES = 256_000;
+
+// CJS twin of src/lib/feedbackRedaction.ts's REDACTION_PATTERNS.
+//
+// The client redacts before sending; this redacts again on arrival. Both are
+// needed for different reasons: the client one keeps secrets out of the network
+// request at all, this one is the version that still holds when the request did
+// NOT come from our client. A feedback endpoint that trusts the browser to have
+// scrubbed its own console is not a security control.
+//
+// tests/feedback-redaction-parity.test.cjs asserts the two lists carry the same
+// pattern NAMES, so adding a shape on one side and forgetting the other fails
+// the suite instead of silently halving the protection.
+const REDACTED_PLACEHOLDER = '[redacted]';
+
+const FEEDBACK_REDACTION_PATTERNS = [
+ { name: 'agensis-session-token', pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.\d+\.\d+\.[A-Za-z0-9_-]{16,}/gi, replacement: REDACTED_PLACEHOLDER },
+ { name: 'agensis-agent-token', pattern: /\baga_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'bearer-header', pattern: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED_PLACEHOLDER}` },
+ { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'anthropic-key', pattern: /\bsk-ant-[A-Za-z0-9_-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'openai-style-key', pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'github-token', pattern: /\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'npm-token', pattern: /\bnpm_[A-Za-z0-9]{20,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'slack-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'aws-access-key-id', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'google-api-key', pattern: /\bAIza[0-9A-Za-z_-]{30,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'connection-string-credentials', pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, replacement: `$1${REDACTED_PLACEHOLDER}@` },
+ { name: 'secret-assignment', pattern: /(["']?\b(?:api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|auth[-_]?token|id[-_]?token|session[-_]?token|connect[-_]?token|client[-_]?secret|private[-_]?key|secret|password|passwd|pwd|authorization|cookie|set-cookie)\b["']?\s*[:=]\s*)(["']?)([^\s"',;)}\]&]{3,})\2/gi, replacement: `$1$2${REDACTED_PLACEHOLDER}$2` },
+];
+
+// Matched against the key with separators stripped, so `accessToken`,
+// `access_token` and `access-token` all hit the same rule. Deliberately omits
+// bare `auth` (matches `author`) and bare `session` (matches `sessionId`, not a
+// credential and genuinely useful in a bug report) — both are covered by their
+// compound forms. Mirrors SENSITIVE_KEY_WORDS in src/lib/feedbackRedaction.ts.
+const FEEDBACK_SENSITIVE_KEY_WORDS = /token|secret|password|passwd|pwd|authorization|cookie|credential|apikey|privatekey/;
+
+function isFeedbackSensitiveKey(key) {
+ return FEEDBACK_SENSITIVE_KEY_WORDS.test(String(key).replace(/[-_.\s]/g, '').toLowerCase());
+}
+
+function redactSecretsText(value) {
+ let text = typeof value === 'string' ? value : String(value == null ? '' : value);
+ for (const { pattern, replacement } of FEEDBACK_REDACTION_PATTERNS) {
+  pattern.lastIndex = 0;
+  text = text.replace(pattern, replacement);
+ }
+ return text;
+}
+
+function redactSecretsDeep(value, depth = 6) {
+ if (depth <= 0) return REDACTED_PLACEHOLDER;
+ if (typeof value === 'string') return redactSecretsText(value);
+ if (value === null || typeof value !== 'object') return value;
+ if (Array.isArray(value)) return value.map((item) => redactSecretsDeep(item, depth - 1));
+ const out = {};
+ for (const [key, entry] of Object.entries(value)) {
+  out[key] = isFeedbackSensitiveKey(key) ? REDACTED_PLACEHOLDER : redactSecretsDeep(entry, depth - 1);
+ }
+ return out;
+}
+
+function clampString(value, max) {
+ return redactSecretsText(String(value == null ? '' : value)).slice(0, max);
+}
+
+/**
+ * Validate + clamp + redact a submitted report. Throws 400 when there is no
+ * usable description. Everything else degrades to a safe default rather than
+ * rejecting — a bug report is worth having even if its diagnostics were
+ * malformed.
+ */
+function normalizeFeedbackSubmission(body) {
+ const raw = body && typeof body === 'object' ? body : {};
+ const description = clampString(raw.description, FEEDBACK_DESCRIPTION_MAX_CHARS).trim();
+ if (description.length < 3) throw badRequest('Please describe the problem before submitting');
+
+ const page = raw.page && typeof raw.page === 'object' ? raw.page : {};
+ const normalizedPage = {
+  path: clampString(page.path, 400),
+  hash: clampString(page.hash, 200),
+  label: clampString(page.label, 200),
+ };
+
+ const selections = (Array.isArray(raw.selections) ? raw.selections : [])
+  .slice(0, FEEDBACK_MAX_SELECTIONS)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => {
+   const rect = entry.rect && typeof entry.rect === 'object' ? entry.rect : {};
+   const num = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0);
+   return {
+    selector: clampString(entry.selector, 500),
+    tag: clampString(entry.tag, 40),
+    role: clampString(entry.role, 40),
+    text: clampString(entry.text, 200),
+    rect: { x: num(rect.x), y: num(rect.y), width: num(rect.width), height: num(rect.height) },
+   };
+  });
+
+ const diagnostics = normalizeFeedbackDiagnostics(raw.diagnostics);
+
+ return { description, page: normalizedPage, selections, diagnostics };
+}
+
+function normalizeFeedbackDiagnostics(input) {
+ if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+ const viewport = input.viewport && typeof input.viewport === 'object' ? input.viewport : {};
+ const dimension = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.round(n), 100_000) : 0;
+ };
+
+ const consoleEntries = (Array.isArray(input.console) ? input.console : [])
+  .slice(-FEEDBACK_MAX_CONSOLE_ENTRIES)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => ({
+   level: clampString(entry.level, 10) || 'log',
+   message: clampString(entry.message, FEEDBACK_CONSOLE_ENTRY_MAX_CHARS),
+   at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : 0,
+  }));
+
+ const errors = (Array.isArray(input.errors) ? input.errors : [])
+  .slice(-FEEDBACK_MAX_ERROR_ENTRIES)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => ({
+   kind: clampString(entry.kind, 30) || 'error',
+   message: clampString(entry.message, FEEDBACK_CONSOLE_ENTRY_MAX_CHARS),
+   source: clampString(entry.source, 300),
+   at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : 0,
+  }));
+
+ const diagnostics = {
+  buildId: clampString(input.buildId, 120),
+  userAgent: clampString(input.userAgent, 400),
+  url: clampString(input.url, 600),
+  language: clampString(input.language, 40),
+  capturedAt: clampString(input.capturedAt, 40),
+  viewport: { width: dimension(viewport.width), height: dimension(viewport.height) },
+  console: consoleEntries,
+  errors,
+  truncated: Boolean(input.truncated),
+ };
+
+ // Size ceiling. Drop from the OLDEST console line inward — the lines nearest
+ // the moment the user hit "report" are the ones that explain the bug.
+ while (
+  diagnostics.console.length > 0
+  && JSON.stringify(diagnostics).length > FEEDBACK_DIAGNOSTICS_MAX_BYTES
+ ) {
+  diagnostics.console.shift();
+  diagnostics.truncated = true;
+ }
+
+ return diagnostics;
+}
+
+/** First line of the description, as the task title. Falls back to a generic label. */
+function feedbackTaskTitle(description) {
+ const firstLine = String(description || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
+ if (!firstLine) return 'Feedback report';
+ return firstLine.length <= 90 ? firstLine : `${firstLine.slice(0, 89)}…`;
+}
+
+/**
+ * Resolve (creating on first use) the single System workspace.
+ *
+ * Auto-creating means the feature has no manual setup step, and the partial
+ * unique index `uq_workspaces_system` makes it race-safe: two concurrent first
+ * submissions cannot produce two System workspaces, the loser just re-reads.
+ *
+ * Owner selection: AGENSIS_SYSTEM_OWNER_EMAIL when set, else the oldest account
+ * (on a single-owner deployment that is the person who installed it). Ownership
+ * is a normal `workspaces.user_id`, so it can be transferred with the existing
+ * flow if that guess is wrong.
+ */
+async function ensureSystemWorkspace(db) {
+ const existing = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
+ if (existing[0]) return existing[0].id;
+
+ const configuredEmail = String(process.env.AGENSIS_SYSTEM_OWNER_EMAIL || '').trim().toLowerCase();
+ let ownerId = null;
+ if (configuredEmail) {
+  const rows = await db('select id from app_users where lower(email) = $1 limit 1', [configuredEmail]);
+  ownerId = rows[0]?.id || null;
+ }
+ if (!ownerId) {
+  const rows = await db('select id from app_users order by created_at asc limit 1', []);
+  ownerId = rows[0]?.id || null;
+ }
+
+ await db(
+  `insert into workspaces (name, description, icon, user_id, is_system)
+     values ($1, $2, $3, $4, true)
+     on conflict do nothing`,
+  [SYSTEM_WORKSPACE_NAME, SYSTEM_WORKSPACE_DESCRIPTION, SYSTEM_WORKSPACE_ICON, ownerId],
+ );
+
+ const created = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
+ if (!created[0]) throw httpError(500, 'Could not resolve the System workspace');
+ return created[0].id;
+}
+
+/**
+ * Persist one report: a `tasks` row (the reviewable, assignable artifact) and a
+ * `feedback_reports` row (the payload). Returns { taskId, reportId }.
+ *
+ * `jsonParam` is the ONLY thing the two backends must supply differently, and
+ * it is the trap this repo has been bitten by before. Verified against the live
+ * Neon database, 2026-07-26:
+ *
+ *   postgres.js (Fly)          bind object -> jsonb object     JSON.stringify -> jsonb STRING (wrong)
+ *   @netlify/database (Neon)   bind object -> jsonb object     JSON.stringify -> jsonb object
+ *                              bind ARRAY  -> ERROR            JSON.stringify -> jsonb array (right)
+ *
+ * So Fly passes identity and Netlify passes JSON.stringify; that combination is
+ * the only one correct for BOTH objects and arrays on BOTH drivers. Get it
+ * backwards and Fly silently stores `"{\"console\":[...]}"` as a jsonb string
+ * scalar — every `diagnostics->>'buildId'` then returns NULL and nothing errors.
+ */
+async function insertFeedbackReport({ db, jsonParam, userId, sourceWorkspaceId, submission }) {
+ if (typeof db !== 'function') throw new Error('insertFeedbackReport requires a db function');
+ if (typeof jsonParam !== 'function') throw new Error('insertFeedbackReport requires a jsonParam binder');
+
+ const systemWorkspaceId = await ensureSystemWorkspace(db);
+ const title = feedbackTaskTitle(submission.description);
+
+ const pageRef = [submission.page.path, submission.page.hash].filter(Boolean).join('');
+ const descriptionLines = [
+  submission.description,
+  '',
+  `Page: ${pageRef || '(unknown)'}${submission.page.label ? ` — ${submission.page.label}` : ''}`,
+ ];
+ if (submission.selections.length > 0) {
+  descriptionLines.push('', 'Elements:');
+  for (const selection of submission.selections) {
+   descriptionLines.push(`- \`${selection.selector}\`${selection.text ? ` — "${selection.text}"` : ''}`);
+  }
+ }
+
+ const taskRows = await db(
+  `insert into tasks (workspace_id, created_by, title, description, status, priority, source_type, source_id)
+     values ($1, $2, $3, $4, 'todo', 'normal', 'feedback', null)
+     returning id`,
+  [systemWorkspaceId, userId || null, title, descriptionLines.join('\n')],
+ );
+ const taskId = taskRows[0]?.id;
+ if (!taskId) throw httpError(500, 'Could not record the feedback task');
+
+ const reportRows = await db(
+  `insert into feedback_reports
+       (workspace_id, task_id, reporter_id, source_workspace_id, description, page, selections, diagnostics, build_id, user_agent)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)
+     returning id`,
+  [
+   systemWorkspaceId,
+   taskId,
+   userId || null,
+   sourceWorkspaceId || null,
+   submission.description,
+   jsonParam(submission.page),
+   jsonParam(submission.selections),
+   submission.diagnostics ? jsonParam(submission.diagnostics) : null,
+   submission.diagnostics?.buildId || '',
+   submission.diagnostics?.userAgent || '',
+  ],
+ );
+ const reportId = reportRows[0]?.id;
+
+ // source_id points back at the report so the task row alone is enough to find
+ // the diagnostics. Written as a follow-up UPDATE because the report id is only
+ // known after its insert, and the task must exist first for the FK.
+ if (reportId) {
+  await db('update tasks set source_id = $1, updated_at = now() where id = $2', [String(reportId), taskId]);
+ }
+
+ return { taskId, reportId: reportId || null, systemWorkspaceId };
+}
+
 module.exports = {
  verifyAuthToken,
  issueAuthToken,
@@ -1018,4 +1351,20 @@ module.exports = {
  badRequest,
  PASSWORD_MIN_LENGTH,
  PASSWORD_MIN_CLASSES,
+ // In-app feedback / System workspace
+ SYSTEM_WORKSPACE_NAME,
+ SYSTEM_WORKSPACE_ICON,
+ SYSTEM_WORKSPACE_DESCRIPTION,
+ FEEDBACK_REDACTION_PATTERNS,
+ FEEDBACK_DESCRIPTION_MAX_CHARS,
+ FEEDBACK_MAX_SELECTIONS,
+ FEEDBACK_MAX_CONSOLE_ENTRIES,
+ FEEDBACK_DIAGNOSTICS_MAX_BYTES,
+ redactSecretsText,
+ redactSecretsDeep,
+ normalizeFeedbackSubmission,
+ normalizeFeedbackDiagnostics,
+ feedbackTaskTitle,
+ ensureSystemWorkspace,
+ insertFeedbackReport,
 };

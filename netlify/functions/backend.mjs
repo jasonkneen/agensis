@@ -24,6 +24,8 @@ import {
  safeSelectColumns,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
+ normalizeFeedbackSubmission,
+ insertFeedbackReport,
 } from '../../shared/backend-core.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 
@@ -58,6 +60,10 @@ const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below (mirrors server/index.cjs).
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// Feedback: any signed-in user may submit, so this is the only thing standing
+// between one account and an unbounded write into the System workspace's task
+// list. Tight on purpose — nobody files five genuine bug reports a minute.
+const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -85,6 +91,7 @@ function rateLimitBlock(limiter, key) {
 // here at module load is safe. DB errors fail open (see createDbRateLimiter).
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'dispatch' });
+const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
 // Callers MUST await it.
@@ -2139,6 +2146,36 @@ async function route(req) {
   const blocked = await dbRateLimitBlock(dispatchRateLimiter, dispatchDbRateLimiter, userId || clientIpFromRequest(req));
   if (blocked) return blocked;
   return handleAgentDispatch(req, userId);
+ }
+ // In-app feedback. Mirrors server/index.cjs exactly — a route on only one
+ // backend is a live 404 for half the deployment.
+ //
+ // SUBMIT only. Reading a report is not a route: reports are ordinary rows of
+ // the System workspace, read through /backend/db, where
+ // enforceDbOperationAccess already requires 'read' on that workspace. The
+ // client never names the destination workspace; ensureSystemWorkspace resolves
+ // it server-side, so `workspaceId` in the body is context, never authority.
+ if (req.method === 'POST' && pathname === '/backend/feedback') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(feedbackRateLimiter, feedbackDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const body = await readBody(req);
+  // Re-validate, re-clamp and RE-REDACT server-side: the browser scrubbed the
+  // payload before sending, but a request that did not come from our client
+  // would not have.
+  const submission = normalizeFeedbackSubmission(body);
+  const result = await insertFeedbackReport({
+   db: query,
+   // node-postgres/Neon: bind the STRINGIFIED value. Binding a raw JS array
+   // here throws "invalid input syntax for type json" — the opposite of the
+   // Fly side, which must bind the object. Verified against the live database;
+   // see insertFeedbackReport in shared/backend-core.cjs.
+   jsonParam: (value) => JSON.stringify(value),
+   userId,
+   sourceWorkspaceId: String(body?.workspaceId || body?.workspace_id || '').trim() || null,
+   submission,
+  });
+  return json({ data: { ok: true, taskId: result.taskId }, error: null });
  }
  if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
   return handleCreateAgentWebhook(req, await requireUserId(req));
