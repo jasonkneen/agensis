@@ -1,5 +1,6 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, RotateCw } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -14,8 +15,33 @@ import { cn } from '@/lib/utils';
 import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';
 import { InboxRow } from './InboxRow';
-import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, ROW_PADDING } from './inboxPresentation';
+import { InboxSelectionBar } from './InboxSelectionBar';
+import {
+  FOCUS_RING,
+  LIST_COLUMN_CLASS,
+  PANE_HEADER,
+  ROW_PADDING,
+  SCROLL_VIEWPORT_BLOCK,
+} from './inboxPresentation';
 import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
+import {
+  NO_SELECTION,
+  availableBulkActions,
+  beginSelection,
+  bulkResultMessage,
+  clearSelection,
+  dismissableBlockerIds,
+  isAllSelected,
+  isSelecting,
+  pruneSelection,
+  runBulk,
+  selectAll,
+  selectRange,
+  summarizeSelection,
+  toggleSelection,
+  unreadGroupKeys,
+  type InboxBulkActionId,
+} from './inboxSelection';
 
 // ---------------------------------------------------------------------------
 // The triage surface. Work that needs a HUMAN collects here instead of being
@@ -45,6 +71,35 @@ const DEFAULT_LIST_WIDTH = 340;
 const MIN_LIST_WIDTH = 240;
 const MAX_LIST_WIDTH = 520;
 const LIST_WIDTH_KEY = 'agensis.inbox.list-width';
+
+/**
+ * The floor the detail pane is entitled to whenever both panes are on screen.
+ *
+ * The list's cap used to be a bare `62%`, a number that happened to work at the
+ * widths it was tried at and says nothing about whether what is left is
+ * readable. Expressed the other way round — `max-width: calc(100% - 18rem)` —
+ * the guarantee is the one that matters and it holds at every container width:
+ * the detail pane never gets less than 18rem, however far the divider is
+ * dragged and however small the window gets. Below 42rem there is no width left
+ * to divide and SINGLE_COLUMN_HIDE takes over entirely.
+ *
+ * In REM because it is a readability floor, and readability is a character
+ * count. It has to grow when the user turns the base font size up, exactly as
+ * SINGLE_COLUMN_HIDE's own 42rem threshold already does — 270px at the 15px
+ * default, 306px at 17px.
+ */
+const MIN_DETAIL_REM = 18;
+
+/**
+ * The rem→px conversion the drag clamp needs. Reads the root font size rather
+ * than assuming 16: this app sets `html { font-size: var(--agensis-ui-font-size) }`,
+ * so 1rem is 15px by default and anywhere from 12 to 18 by user setting.
+ */
+function minDetailPx(): number {
+  if (typeof document === 'undefined') return MIN_DETAIL_REM * 16;
+  const root = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return MIN_DETAIL_REM * (Number.isFinite(root) && root > 0 ? root : 16);
+}
 
 /**
  * Under 42rem (672px) the two panes cannot both hold a readable column, so the
@@ -110,12 +165,99 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     markRead(key);
   }, [markRead]);
 
+  // --- Bulk selection -----------------------------------------------------
+  //
+  // Keyed off the same contextKeys the list is, so a realtime arrival cannot
+  // shuffle what is selected any more than it can shuffle what is open.
+  const [selection, setSelection] = useState(NO_SELECTION);
+  const [busy, setBusy] = useState<InboxBulkActionId | null>(null);
+
+  const visibleKeys = useMemo(() => visibleRows.map(row => row.group.key), [visibleRows]);
+
+  // A row that has left the list (filter flipped, blocker resolved, refetch)
+  // must leave the selection with it — a bulk action must never reach something
+  // the user cannot see. pruneSelection returns the same object when nothing
+  // changed, so this settles in one pass instead of looping.
+  useEffect(() => {
+    setSelection(current => pruneSelection(current, visibleKeys));
+  }, [visibleKeys]);
+
+  const selecting = isSelecting(selection);
+  const summary = useMemo(() => summarizeSelection(groups, selection), [groups, selection]);
+  const bulkActions = useMemo(() => availableBulkActions(groups, selection), [groups, selection]);
+  const allSelected = useMemo(() => isAllSelected(selection, visibleKeys), [selection, visibleKeys]);
+
+  const handleToggleSelect = useCallback((key: string, extend: boolean) => {
+    setSelection(current => {
+      if (!isSelecting(current)) return beginSelection(key);
+      return extend ? selectRange(current, key, visibleKeys) : toggleSelection(current, key);
+    });
+    // Bulk work wants the full-width list, and the header the selection puts up
+    // does not fit the 340px column the detail pane leaves behind.
+    setSelectedKey(null);
+  }, [visibleKeys]);
+
+  const handleToggleAll = useCallback(() => {
+    setSelection(current => (isAllSelected(current, visibleKeys)
+      ? clearSelection()
+      : selectAll(current, visibleKeys)));
+  }, [visibleKeys]);
+
+  const exitSelection = useCallback(() => setSelection(clearSelection()), []);
+
+  /**
+   * Both bulk actions are N per-item calls — the inbox has no batch endpoint —
+   * so they run a few at a time and REPORT what actually happened. Reporting
+   * "done" over a half-applied batch is the failure mode worth engineering
+   * against here: a dismissed-but-not-really blocker leaves an agent waiting
+   * forever on an answer the human believes they gave.
+   */
+  const runAction = useCallback(async (id: InboxBulkActionId) => {
+    if (busy) return;
+    setBusy(id);
+    try {
+      if (id === 'mark-read') {
+        const keys = unreadGroupKeys(groups, selection);
+        // markRead flips the row locally FIRST and treats a dropped POST as a
+        // non-event — the marker is monotonic server-side and self-heals on the
+        // next open — so it reports no failure and there is none to report. The
+        // count is still worth showing: it is the only confirmation that a
+        // select-all touched everything the user thought it did.
+        const result = await runBulk(keys, async key => {
+          await markRead(key);
+          return true;
+        });
+        toast.success(bulkResultMessage('Marked read', result));
+      } else {
+        const ids = dismissableBlockerIds(groups, selection);
+        const result = await runBulk(ids, id2 => resolveBlocker(id2, 'dismissed'));
+        if (result.failed > 0) toast.error(bulkResultMessage('Dismissed', result));
+        else toast.success(bulkResultMessage('Dismissed', result));
+      }
+      setSelection(clearSelection());
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, groups, selection, markRead, resolveBlocker]);
+
   // Drag-to-resize, via pointer capture so it needs no window listeners and
   // cannot leak a handler if the window unmounts mid-drag.
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ x: number; width: number } | null>(null);
 
-  const clampWidth = (value: number) =>
-    Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(value)));
+  /**
+   * Clamped against the CONTAINER, not against two absolute constants. 240..520
+   * is the range the list is allowed to want; what it is allowed to have also
+   * depends on leaving MIN_DETAIL_WIDTH behind. Read straight off the ref — no
+   * ResizeObserver, no state, so a window drag still costs zero re-renders.
+   */
+  const clampWidth = useCallback((value: number) => {
+    const container = rootRef.current?.clientWidth ?? 0;
+    const ceiling = container > 0
+      ? Math.max(MIN_LIST_WIDTH, Math.min(MAX_LIST_WIDTH, container - minDetailPx()))
+      : MAX_LIST_WIDTH;
+    return Math.min(ceiling, Math.max(MIN_LIST_WIDTH, Math.round(value)));
+  }, []);
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -127,7 +269,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     const drag = dragRef.current;
     if (!drag) return;
     setListWidth(clampWidth(drag.width + (event.clientX - drag.x)));
-  }, []);
+  }, [clampWidth]);
 
   const handleResizeEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (!dragRef.current) return;
@@ -143,21 +285,43 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
   const resetWidth = useCallback(() => setListWidth(DEFAULT_LIST_WIDTH), []);
 
   return (
-    <div className="@container/inboxwin flex h-full min-h-0 bg-card text-card-foreground">
+    <div
+      ref={rootRef}
+      className="@container/inboxwin flex h-full min-h-0 bg-card text-card-foreground"
+    >
       <section
         className={cn(
           'relative flex min-h-0 min-w-0 flex-col',
           selected ? cn('shrink-0 border-r border-border/60', SINGLE_COLUMN_HIDE) : 'flex-1',
         )}
-        style={selected ? { width: listWidth, maxWidth: '62%' } : undefined}
+        style={selected ? { width: listWidth, maxWidth: `calc(100% - ${MIN_DETAIL_REM}rem)` } : undefined}
+        onKeyDown={event => {
+          // Esc is the fastest way out of a mode you entered by accident.
+          if (event.key === 'Escape' && selecting && !busy) {
+            event.preventDefault();
+            exitSelection();
+          }
+        }}
       >
+        {selecting ? (
+          <InboxSelectionBar
+            count={summary.groups}
+            itemCount={summary.items}
+            allSelected={allSelected}
+            actions={bulkActions}
+            busy={busy}
+            onToggleAll={handleToggleAll}
+            onRun={id => void runAction(id)}
+            onExit={exitSelection}
+          />
+        ) : (
         <div className={PANE_HEADER}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 className={cn(
-                  'relative -ml-1 flex h-6 items-center gap-1 rounded-md px-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted/70',
+                  'relative -ml-1 flex h-6 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/70',
                   FOCUS_RING,
                 )}
               >
@@ -180,7 +344,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
                 <DropdownMenuRadioItem value="unread">
                   Unread
                   {unreadCount > 0 && (
-                    <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+                    <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[0.65rem] font-semibold leading-none text-primary-foreground">
                       {unreadCount > 99 ? '99+' : unreadCount}
                     </span>
                   )}
@@ -202,13 +366,17 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
             <RotateCw className={loading ? 'animate-spin' : undefined} />
           </Button>
         </div>
+        )}
 
         <InboxList
           rows={visibleRows}
           unreadOnly={unreadOnly}
           loading={loading}
           selectedKey={selectedKey}
+          selectionMode={selecting}
+          selectedKeys={selection.keys}
           onSelect={handleSelect}
+          onToggleSelect={handleToggleSelect}
           onMarkRead={markRead}
           onOpenSession={onOpenSession}
         />
@@ -261,10 +429,17 @@ interface InboxListProps {
   unreadOnly: boolean;
   loading: boolean;
   selectedKey: string | null;
+  /** Bulk-selection mode is open: rows toggle instead of opening. */
+  selectionMode?: boolean;
+  selectedKeys?: ReadonlySet<string>;
   onSelect: (key: string) => void;
+  onToggleSelect?: (key: string, extend: boolean) => void;
   onMarkRead: (key: string) => void;
   onOpenSession?: (sessionId: string) => void;
 }
+
+const NO_KEYS: ReadonlySet<string> = new Set<string>();
+const noop = () => {};
 
 /** Pure list pane — takes pre-formatted rows so it never reads the clock. */
 export function InboxList({
@@ -272,7 +447,10 @@ export function InboxList({
   unreadOnly,
   loading,
   selectedKey,
+  selectionMode = false,
+  selectedKeys = NO_KEYS,
   onSelect,
+  onToggleSelect = noop,
   onMarkRead,
   onOpenSession,
 }: InboxListProps) {
@@ -322,15 +500,15 @@ export function InboxList({
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
         <div className="max-w-[16rem]">
-          <p className="text-[13px] font-medium text-foreground">{empty.title}</p>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{empty.description}</p>
+          <p className="text-sm font-medium text-foreground">{empty.title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{empty.description}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
+    <ScrollArea className={cn('min-h-0 flex-1', SCROLL_VIEWPORT_BLOCK)}>
       {/* One flat stream, newest first, blockers pinned above it. Nothing is
           drawn between rows — see InboxRow. Capped and centred (LIST_COLUMN_CLASS)
           so a wide window doesn't stretch rows into a thin edge-to-edge ribbon. */}
@@ -340,7 +518,10 @@ export function InboxList({
             key={row.group.key}
             row={row}
             selected={row.group.key === selectedKey}
+            selectionMode={selectionMode}
+            checked={selectedKeys.has(row.group.key)}
             onSelect={onSelect}
+            onToggleSelect={onToggleSelect}
             onMarkRead={onMarkRead}
             onOpenSession={onOpenSession}
           />
