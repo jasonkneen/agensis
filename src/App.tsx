@@ -2762,6 +2762,10 @@ function CanvasLayerScene({
                   agents={agents}
                   webhooks={agentWebhooks}
                   connections={agentConnections}
+                  sessions={sessions}
+                  tasks={tasks}
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
                   currentUserId={userId}
                   focusedAgentKey={focusedAgentKey}
                   onCreateAgent={onCreateAgent}

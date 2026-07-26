@@ -34,7 +34,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent } from '../../types';
+import { AI_MODELS, type AgentConnection, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -75,6 +75,11 @@ interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
   webhooks: AgentWebhook[];
   connections?: AgentConnection[];
+  /** Network view only: the sessions/tasks it drills through. Read-only. */
+  sessions?: ChatSession[];
+  tasks?: Task[];
+  workspaceId?: string | null;
+  workspaceName?: string;
   currentUserId?: string | null;
   focusedAgentKey?: string | null;
   onCreateAgent: (input: {
@@ -151,6 +156,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   agents,
   webhooks,
   connections = [],
+  sessions = [],
+  tasks = [],
+  workspaceId = null,
+  workspaceName = 'agensis',
   currentUserId,
   focusedAgentKey,
   onCreateAgent,
@@ -644,7 +653,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </Empty>
             ) : layoutView === 'network' ? (
               <div className="min-h-0 flex-1 overflow-hidden">
-                <AgentNetworkDiagram agents={visibleAgents} connections={connections} onSelectAgent={setSelectedAgentId} />
+                <AgentNetworkDiagram
+                  agents={visibleAgents}
+                  connections={connections}
+                  sessions={sessions}
+                  tasks={tasks}
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
+                  currentUserId={currentUserId}
+                  onSelectAgent={setSelectedAgentId}
+                />
               </div>
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
