@@ -27,6 +27,10 @@ export function useWorkspaces(userId: string | undefined) {
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [seedFailure, setSeedFailure] = useState<WriteFailure | null>(null);
+  // Set only when a fetch SUCCEEDS and returns zero rows. cachedFetch answers
+  // null for a failed request with no cache, which is indistinguishable from an
+  // empty account unless we track the difference here.
+  const [fetchConfirmedEmpty, setFetchConfirmedEmpty] = useState(false);
   // At most ONE automatic seed per user, EVER — persisted, not a ref.
   //
   // A ref only survives the mount. On the next page load it is null again, so
@@ -69,7 +73,14 @@ export function useWorkspaces(userId: string | undefined) {
       if (!response.ok) throw new Error(payload?.error?.message || `Workspaces HTTP ${response.status}`);
       return payload?.data ?? [];
     });
-    if (data) setWorkspaces(data);
+    if (data) {
+      setWorkspaces(data);
+      setFetchConfirmedEmpty(data.length === 0);
+    } else {
+      // null means the fetch failed and no cache answered. Do NOT treat that as
+      // an empty account — that guess is what minted duplicate workspaces.
+      setFetchConfirmedEmpty(false);
+    }
     setLoading(false);
   }, [userId]);
 
@@ -110,8 +121,9 @@ export function useWorkspaces(userId: string | undefined) {
       workspaceCount: workspaces.length,
       repairing: seeding,
       repairFailure: seedFailure,
+      fetchConfirmedEmpty,
     }),
-    [loading, workspaces.length, seeding, seedFailure],
+    [loading, workspaces.length, seeding, seedFailure, fetchConfirmedEmpty],
   );
 
   useEffect(() => {
