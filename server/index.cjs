@@ -49,6 +49,16 @@ const {
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
+const {
+ applyIdentityDeclaration,
+ markHumanIdentityWrite,
+ identityLockSql,
+ normalizeIdentityDeclaration,
+ normalizeVoicePreference,
+ resolveAgentVoice,
+ isCartesiaVoiceId,
+ CARTESIA_MODEL_ID,
+} = require('../shared/agentIdentity.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -525,6 +535,14 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
+    -- How the agent presents itself, and who decided each part of it:
+    --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
+    -- Deliberately NOT a key in metadata: metadata is manage-only
+    -- (MANAGE_ONLY_DB_COLUMNS_BY_TABLE — it carries host_folders, which widens an
+    -- agent's filesystem access), and choosing an accent is not an escalation, so
+    -- putting the voice there would have locked editors out of it. See
+    -- shared/agentIdentity.cjs for the precedence rule human_set enforces.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
@@ -1023,6 +1041,11 @@ async function ensureRuntimeSchema() {
       updated_at timestamptz DEFAULT now(),
       decided_at timestamptz
     );
+    -- The identity the client declared in register_agent. Approval is
+    -- asynchronous (pending -> a popup -> approved), so the declaration has to
+    -- survive the round trip or a brand new agent loses the avatar and voice it
+    -- asked for at the exact moment its row is created.
+    ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
   `);
  // C3 — make message-activity logging idempotent. A retried daemon finalization
@@ -1634,6 +1657,10 @@ const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// The voice preview spends real money per press, so it is capped harder than
+// anything else here. Twenty presses a minute is far more than auditioning
+// voices needs and far less than a stuck retry loop would cost.
+const ttsPreviewRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
@@ -2327,7 +2354,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -2338,7 +2365,7 @@ async function verifyAgentConnectToken(token, req = null) {
   const { workspaceId, agentId } = agentIdsFromWsRequest(req);
   if (workspaceId && agentId) {
    const fallbackRows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -2636,6 +2663,11 @@ function agentRuntimePayload(agent) {
   tools: parseJsonArray(agent.tools),
   skills: parseJsonArray(agent.skills),
   metadata: parseJsonObject(agent.metadata),
+  // { voice, human_set } — see shared/agentIdentity.cjs. Every explicit
+  // workspace_agents select above lists `identity` too; a column left out of
+  // one of them reads blank in exactly one screen, which is how host_folders
+  // and canvas_id each got shipped broken.
+  identity: parseJsonObject(agent.identity),
   model: resolveAnthropicModel(agent.model),
   run_mode: agent.run_mode === 'daemon' ? 'daemon'
    : agent.run_mode === 'sandbox' ? 'sandbox'
@@ -2688,7 +2720,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -5091,6 +5123,208 @@ async function pruneOfflineConnections() {
  }
 }
 
+// --- Cartesia ---------------------------------------------------------------
+// Text-to-speech for agent voices. The key lives ONLY here: a Cartesia voice id
+// is safe to hand the browser (it is a public identifier), the key is not.
+//
+// This file owns the catalogue and a one-shot render for the preview button.
+// Streaming playback of agent replies into a huddle is a separate pipeline and
+// is not built here.
+
+const CARTESIA_API_BASE = 'https://api.cartesia.ai';
+// Cartesia pins breaking changes behind a date header. Bumping it is a
+// deliberate act, so it is a constant with an env escape hatch rather than
+// "whatever is current".
+const CARTESIA_VERSION = String(process.env.CARTESIA_VERSION || '2026-03-01');
+const CARTESIA_VOICES_TTL_MS = 10 * 60 * 1000;
+// `GET /voices` caps `limit` at 100 and pages by cursor. ~836 voices is nine
+// round trips, which is why the result is cached rather than fetched per panel
+// open. The bound stops a pagination bug turning into an infinite loop.
+const CARTESIA_VOICES_PAGE = 100;
+const CARTESIA_VOICES_MAX_PAGES = 30;
+
+function cartesiaApiKey() {
+ return String(process.env.CARTESIA_API_KEY || '').trim();
+}
+
+function cartesiaHeaders() {
+ return {
+  'X-API-Key': cartesiaApiKey(),
+  'Cartesia-Version': CARTESIA_VERSION,
+  'Content-Type': 'application/json',
+ };
+}
+
+/** The fields the picker and the resolver need — not the whole voice object. */
+function publicCartesiaVoice(voice) {
+ return {
+  id: String(voice.id || ''),
+  name: String(voice.name || '').slice(0, 200),
+  description: String(voice.description || '').slice(0, 400),
+  gender: voice.gender || null,
+  language: voice.language || null,
+  country: voice.country || null,
+  is_pro: voice.is_pro === true,
+ };
+}
+
+let cartesiaVoicesCache = { at: 0, voices: [], inflight: null };
+
+async function fetchCartesiaVoices() {
+ const out = [];
+ let cursor = '';
+ for (let page = 0; page < CARTESIA_VOICES_MAX_PAGES; page += 1) {
+  const url = new URL('/voices', CARTESIA_API_BASE);
+  url.searchParams.set('limit', String(CARTESIA_VOICES_PAGE));
+  if (cursor) url.searchParams.set('starting_after', cursor);
+  const response = await fetch(url, { headers: cartesiaHeaders() });
+  if (!response.ok) {
+   const detail = await response.text().catch(() => '');
+   const error = new Error(`Cartesia /voices failed (${response.status}) ${detail.slice(0, 200)}`);
+   error.status = response.status === 401 || response.status === 403 ? 502 : 502;
+   throw error;
+  }
+  const payload = await response.json();
+  const batch = Array.isArray(payload?.data) ? payload.data : [];
+  for (const voice of batch) if (voice && voice.id) out.push(publicCartesiaVoice(voice));
+  if (!payload?.has_more || batch.length === 0) break;
+  cursor = String(payload.next_page || batch[batch.length - 1].id || '');
+  if (!cursor) break;
+ }
+ return out;
+}
+
+/**
+ * The catalogue, cached. Concurrent callers share ONE in-flight fetch — the
+ * Agents window and the resolver can both ask on the same tick, and nine
+ * paginated round trips is not something to do twice.
+ */
+async function cartesiaVoices() {
+ const now = Date.now();
+ if (cartesiaVoicesCache.voices.length > 0 && now - cartesiaVoicesCache.at < CARTESIA_VOICES_TTL_MS) {
+  return cartesiaVoicesCache.voices;
+ }
+ if (cartesiaVoicesCache.inflight) return cartesiaVoicesCache.inflight;
+ const inflight = fetchCartesiaVoices()
+  .then((voices) => {
+   cartesiaVoicesCache = { at: Date.now(), voices, inflight: null };
+   return voices;
+  })
+  .catch((error) => {
+   cartesiaVoicesCache = { ...cartesiaVoicesCache, inflight: null };
+   // Serve a stale catalogue rather than nothing: a voice list that is ten
+   // minutes out of date is strictly better than an empty picker, and an empty
+   // list would also make every agent's derived default resolve to ''.
+   if (cartesiaVoicesCache.voices.length > 0) return cartesiaVoicesCache.voices;
+   throw error;
+  });
+ cartesiaVoicesCache.inflight = inflight;
+ return inflight;
+}
+
+/** English voice ids in a STABLE order — what a derived default indexes into. */
+async function cartesiaEnglishVoiceIds() {
+ const voices = await cartesiaVoices();
+ return voices
+  .filter((voice) => String(voice.language || '').toLowerCase().startsWith('en'))
+  .map((voice) => voice.id)
+  .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * WHAT THE TTS PIPELINE CALLS. Which voice speaks for this agent, and how.
+ *
+ * Returns `{ voiceId, speed, emotion, isDefault, modelId }`. `voiceId` is ''
+ * only when the catalogue could not be loaded at all; the caller should skip
+ * speaking rather than substitute an arbitrary voice.
+ */
+async function agentVoiceSettings(agent) {
+ if (!agent) return null;
+ let voiceIds = [];
+ try {
+  voiceIds = await cartesiaEnglishVoiceIds();
+ } catch (error) {
+  console.error('[cartesia] voice catalogue unavailable:', error.message || error);
+ }
+ return resolveAgentVoice(agent, voiceIds);
+}
+
+// The preview line is a server-side constant, never client input — see the
+// route for why.
+const CARTESIA_PREVIEW_TEXT = 'Hello. This is how I sound when I answer in a huddle.';
+
+/** One-shot render to mp3 bytes. Not streaming; the preview is one short line. */
+async function cartesiaSpeak({ voiceId, speed = 1, emotion = 'neutral', transcript = CARTESIA_PREVIEW_TEXT }) {
+ if (!isCartesiaVoiceId(voiceId)) {
+  const error = new Error('A Cartesia voice id is required');
+  error.status = 400;
+  throw error;
+ }
+ const response = await fetch(new URL('/tts/bytes', CARTESIA_API_BASE), {
+  method: 'POST',
+  headers: cartesiaHeaders(),
+  body: JSON.stringify({
+   model_id: CARTESIA_MODEL_ID,
+   transcript,
+   voice: { mode: 'id', id: voiceId },
+   // generation_config is the supported control surface on sonic-3 and newer.
+   // The old top-level `speed: "slow"|"normal"|"fast"` is deprecated.
+   generation_config: { speed, emotion },
+   output_format: { container: 'mp3', encoding: 'mp3', sample_rate: 24000 },
+  }),
+ });
+ if (!response.ok) {
+  const detail = await response.text().catch(() => '');
+  const error = new Error(`Cartesia /tts/bytes failed (${response.status}) ${detail.slice(0, 200)}`);
+  error.status = 502;
+  throw error;
+ }
+ return Buffer.from(await response.arrayBuffer());
+}
+
+// Columns applyIdentityDeclaration compares a declaration against. Keep in step
+// with IDENTITY_COLUMNS in shared/agentIdentity.cjs — a field missing here reads
+// as empty, so the declaration always looks like a change and rewrites the row
+// on every reconnect.
+const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+
+/**
+ * Apply an agent's self-declared identity to its row — THE one server-side path
+ * for it. Both the daemon (agent_register) and MCP (register_agent) land here,
+ * so the precedence rule in shared/agentIdentity.cjs is enforced once rather
+ * than in two places that will drift.
+ *
+ * Writes nothing when the declaration matches what is stored or is entirely
+ * locked by a human's choices — an agent that reconnects on a loop must not
+ * produce an UPDATE and a realtime fanout on every loop.
+ */
+async function applyAgentIdentity({ workspaceId, agentId, row, declared, isNew = false }) {
+ const result = applyIdentityDeclaration({ current: row, declared, isNew });
+ if (!result.changed) return null;
+
+ const params = [];
+ const setParts = [];
+ for (const [column, value] of Object.entries(result.columns)) {
+  setParts.push(`${quoteIdent(column)} = ${bindDbParam(params, 'workspace_agents', column, value)}`);
+ }
+ if (result.identity) {
+  setParts.push(`"identity" = ${bindDbParam(params, 'workspace_agents', 'identity', result.identity)}`);
+ }
+ // workspace_agents is a VERSIONED_TABLE; the generic write path bumps version
+ // on every update and the offline-write reconciler relies on it moving.
+ setParts.push('"version" = COALESCE("version", 0) + 1', 'updated_at = now()');
+ params.push(agentId, workspaceId);
+
+ const rows = await getDb().unsafe(
+  `update workspace_agents set ${setParts.join(', ')}
+     where id = $${params.length - 1} and workspace_id = $${params.length}
+     returning *`,
+  params,
+ );
+ if (rows.length > 0) notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+ return rows[0] || null;
+}
+
 async function registerAgentConnection(ws, message) {
  const auth = ws.agentAuth;
  if (!auth) throw forbidden('Agent token is required');
@@ -5099,8 +5333,16 @@ async function registerAgentConnection(ws, message) {
  if (workspaceId !== auth.workspaceId || agentId !== auth.agentId) {
   throw forbidden('Agent token does not match this workspace');
  }
- const enabledRows = await getDb().unsafe('select enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
- if (!isAgentEnabled(enabledRows[0])) throw forbidden('Agent is deactivated');
+ const agentRows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
+ if (!isAgentEnabled(agentRows[0])) throw forbidden('Agent is deactivated');
+ // The agent declares who it is on every connect; a human's explicit change
+ // survives it. Best effort on purpose — a rejected avatar must never be the
+ // reason a daemon cannot come online.
+ try {
+  await applyAgentIdentity({ workspaceId, agentId, row: agentRows[0], declared: message.identity });
+ } catch (error) {
+  console.error('[agensis] agent identity declaration failed:', error.message || error);
+ }
  const handle = slugHandle(message.handle || auth.handle || auth.name);
  const name = String(message.name || auth.name || handle).trim() || handle;
  const host = String(message.host || '').slice(0, 180);
@@ -5909,6 +6151,26 @@ async function finalizeRegistrationApproval(reg) {
   handle = slugHandle(created[0].handle || created[0].name);
   notifyDbSubscribers('workspace_agents', 'INSERT', created);
  }
+ // The identity the client asked for in register_agent, applied now that a row
+ // exists. Approval is asynchronous, so this is the first moment it can land —
+ // and `isNew` is only true for the branch that just created the row, which is
+ // the one case where an agent is allowed to choose its own name.
+ try {
+  const declared = parseJsonObject(reg.requested_identity);
+  if (Object.keys(declared).length > 0) {
+   const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, reg.workspace_id]);
+   const applied = await applyAgentIdentity({
+    workspaceId: reg.workspace_id,
+    agentId,
+    row: rows[0],
+    declared,
+    isNew: !reg.agent_id,
+   });
+   if (applied) name = applied.name;
+  }
+ } catch (error) {
+  console.error('[agensis] register_agent identity declaration failed:', error.message || error);
+ }
  const updReg = await getDb().unsafe(
   `update agent_registrations set status = 'approved', agent_id = $2, decided_at = now(), updated_at = now() where id = $1 returning *`,
   [reg.id, agentId],
@@ -5917,21 +6179,38 @@ async function finalizeRegistrationApproval(reg) {
  return { agentId, handle, name };
 }
 
-async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false }) {
+async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false, identity = null }) {
+ const declaredIdentity = normalizeIdentityDeclaration(identity);
  let agent = null;
  if (asHandle) {
   agent = await resolveWorkspaceAgentByHandle(workspaceId, asHandle);
   if (!agent) throw badRequest(`No agent "@${slugHandle(asHandle)}" in this workspace`);
   if (agent.mcp_approved) {
+   // The already-approved reconnect — the common case, and the one that happens
+   // several times a day. No registration row is written, so the declaration has
+   // to be applied here or an MCP agent could never update its own identity.
+   try {
+    const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agent.id, workspaceId]);
+    await applyAgentIdentity({ workspaceId, agentId: agent.id, row: rows[0], declared: declaredIdentity });
+   } catch (error) {
+    console.error('[agensis] register_agent identity declaration failed:', error.message || error);
+   }
    return { status: 'approved', agentId: agent.id, handle: slugHandle(agent.handle || agent.name) };
   }
  }
  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
  const reqName = agent ? agent.name : (name || reqHandle);
  const rows = await getDb().unsafe(
-  `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status)
-     values ($1, $2, $3, $4, $5, $6) returning *`,
-  [workspaceId, agent ? agent.id : null, reqHandle, reqName, String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending'],
+  `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status, requested_identity)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb) returning *`,
+  [
+   workspaceId, agent ? agent.id : null, reqHandle, reqName,
+   String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending',
+   // JSON.stringify + an explicit ::jsonb cast, matching every other jsonb bind
+   // in this file (agent_connections.metadata, agent_jobs.metadata). `.unsafe`
+   // sends params untyped, so the cast is what parses the text into jsonb.
+   JSON.stringify(declaredIdentity),
+  ],
  );
  const reg = rows[0];
  notifyDbSubscribers('agent_registrations', 'INSERT', rows);
@@ -8929,7 +9208,7 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
          from workspace_agents
          where workspace_id = $1
          order by created_at asc, name asc`,
@@ -10818,10 +11097,29 @@ function createApp() {
     return jsonError(res, 400, new Error('No updatable fields provided'));
    }
 
+   // A human editing an agent is the OTHER half of the identity precedence rule
+   // (shared/agentIdentity.cjs): whatever they touch here is recorded in
+   // identity.human_set so the agent's next self-declaration leaves it alone.
+   // This route is the one chokepoint every human agent edit goes through, which
+   // is why the marking lives here and not in whichever dialog made the edit.
+   const { lockPatch } = markHumanIdentityWrite(table, safeValues);
+
    const params = [];
    const setParts = keys.map((column) => {
-    return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
+    const bound = bindDbParam(params, table, column, safeValues[column]);
+    if (column === 'identity' && lockPatch) {
+     // Merge the locks INTO the stored ones rather than taking the caller's
+     // copy: a client cannot forge a lock for a field it did not write, and a
+     // stale echo of identity cannot un-protect a previously chosen field.
+     return `"identity" = ${identityLockSql(bound, bindDbParam(params, table, 'identity', lockPatch))}`;
+    }
+    return `${quoteIdent(column)} = ${bound}`;
    });
+   if (lockPatch && !Object.prototype.hasOwnProperty.call(safeValues, 'identity')) {
+    // Renaming an agent must record the lock without clobbering its voice, so
+    // the base is the stored column, merged in SQL.
+    setParts.push(`"identity" = ${identityLockSql('"identity"', bindDbParam(params, table, 'identity', lockPatch))}`);
+   }
    if (VERSIONED_TABLES.has(table) && values.version == null) {
     setParts.push('"version" = COALESCE("version", 0) + 1');
    }
@@ -11001,6 +11299,52 @@ function createApp() {
    res.json({ data: { key }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Cartesia voices -------------------------------------------------------
+ // Two routes, both thin. The browser must never see CARTESIA_API_KEY, so the
+ // catalogue is proxied and the preview is rendered here.
+ //
+ // NOT the huddle playback pipeline — that is a separate piece of work. This is
+ // only "which voices exist" and "let me hear this one".
+
+ app.get('/backend/tts/voices', requireAuth, async (req, res) => {
+  try {
+   if (!cartesiaApiKey()) {
+    // A missing key is a configuration state, not a failure: the panel shows
+    // "voices unavailable" and every agent keeps its stored id.
+    return res.json({ data: [], error: null, configured: false });
+   }
+   const voices = await cartesiaVoices();
+   res.json({ data: voices, error: null, configured: true });
+  } catch (error) {
+   jsonError(res, error.status || 502, error);
+  }
+ });
+
+ app.post('/backend/tts/preview', requireAuth, async (req, res) => {
+  try {
+   if (rateLimitBlocked(res, ttsPreviewRateLimiter, req.userId || clientIpFromReq(req))) return;
+   if (!cartesiaApiKey()) return jsonError(res, 503, new Error('Cartesia is not configured'));
+
+   // Only the voice settings come from the client. The TRANSCRIPT does not:
+   // this route bills per character, and accepting arbitrary text would turn an
+   // authenticated preview button into a metered text-to-speech endpoint for
+   // anyone with an account.
+   const settings = normalizeVoicePreference(req.body || {});
+   if (!settings.cartesia_voice_id) return jsonError(res, 400, new Error('A Cartesia voice id is required'));
+
+   const audio = await cartesiaSpeak({
+    voiceId: settings.cartesia_voice_id,
+    speed: settings.speed ?? 1,
+    emotion: settings.emotion || 'neutral',
+   });
+   res.setHeader('Content-Type', 'audio/mpeg');
+   res.setHeader('Cache-Control', 'no-store');
+   res.send(audio);
+  } catch (error) {
+   jsonError(res, error.status || 502, error);
   }
  });
 
@@ -11307,6 +11651,10 @@ module.exports = {
   buildWhereClause,
   buildDaemonPrompt,
   VOICE_HUDDLE_NOTE,
+  agentVoiceSettings,
+  cartesiaEnglishVoiceIds,
+  cartesiaSpeak,
+  publicCartesiaVoice,
   capabilityForDbOperation,
   canManageWorkspace,
   canMutateWorkspace,

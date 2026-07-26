@@ -28,6 +28,7 @@ import {
  insertFeedbackReport,
 } from '../../shared/backend-core.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
+import { markHumanIdentityWrite, identityLockSql } from '../../shared/agentIdentity.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -761,6 +762,7 @@ function publicWorkspaceAgent(row) {
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
   metadata: parseJsonObject(row.metadata),
+  identity: parseJsonObject(row.identity),
   model: row.model || 'auto',
   run_mode: row.run_mode === 'daemon' ? 'daemon' : 'builtin',
   permission_mode: normalizeAgentPermissionMode(row.permission_mode),
@@ -931,7 +933,7 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
  await ensureAgentRuntimeTables();
  const rows = await query(
-  `select id, workspace_id, name, avatar, description, system_prompt, tools, skills, model, handle, run_mode, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, description, system_prompt, tools, skills, identity, metadata, model, handle, run_mode, permission_mode, version, enabled
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -1896,10 +1898,22 @@ async function handleDb(pathname, req, userId) {
   const safeValues = stripPrivilegedDbValues(table, values);
   const keys = Object.keys(safeValues);
 
+  // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded
+  // in identity.human_set, so the agent's next self-declaration on connect
+  // treats it as already chosen. See shared/agentIdentity.cjs.
+  const { lockPatch } = markHumanIdentityWrite(table, safeValues);
+
   const params = [];
   const setParts = keys.map((column) => {
-   return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
+   const bound = bindDbParam(params, table, column, safeValues[column]);
+   if (column === 'identity' && lockPatch) {
+    return `"identity" = ${identityLockSql(bound, bindDbParam(params, table, 'identity', lockPatch))}`;
+   }
+   return `${quoteIdent(column)} = ${bound}`;
   });
+  if (lockPatch && !Object.prototype.hasOwnProperty.call(safeValues, 'identity')) {
+   setParts.push(`"identity" = ${identityLockSql('"identity"', bindDbParam(params, table, 'identity', lockPatch))}`);
+  }
   if (VERSIONED_TABLES.has(table) && values.version == null) {
    setParts.push('"version" = COALESCE("version", 0) + 1');
   }

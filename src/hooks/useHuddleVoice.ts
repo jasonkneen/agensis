@@ -310,10 +310,11 @@ export function useSpeechOutput(
     }
     const utterance = new SpeechSynthesisUtterance(next.text);
     utterance.rate = SPEECH_RATE;
-    // Ask for a neural voice by name. Without this the platform default is
-    // usually a legacy system voice, while Edge/Chrome ship Microsoft's free
-    // "Natural" voices through the same API — the single biggest quality lever
-    // here, and free. Null means nothing better than the default was available.
+    // INTERIM: one browser voice for every agent. Per-agent voices are Cartesia
+    // now (each agent's id is on `next.agentId`, its voice on
+    // identity.voice.cartesia_voice_id), and the playback pipeline that uses
+    // them is owned elsewhere. This stays until that lands — removing the only
+    // working audio path first would leave every huddle silent.
     const voice = pickSpeechVoice(synth.getVoices());
     if (voice) utterance.voice = voice;
 

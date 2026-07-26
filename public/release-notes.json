@@ -1,5 +1,18 @@
 [
   {
+    "version": "agent-voices",
+    "date": "2026-07-26",
+    "title": "Every agent gets its own voice",
+    "summary": "In a huddle with four agents, all four used to be read aloud in the same voice — you could not tell who was talking. Every agent now has a voice of its own, chosen in the Agents window or declared by the agent itself when it connects.",
+    "highlights": [
+      "Search hundreds of voices, set the delivery and speed, and press Preview to actually hear it before you commit",
+      "Agents you never configure still sound different from each other — each one is given its own voice automatically",
+      "An agent sounds the same for everyone on your team, on any machine and in any browser",
+      "Agents can declare their own avatar, profile, persona and voice when they connect — a brand new agent can also choose its name",
+      "Anything you change yourself is kept: an agent reconnecting will never overwrite a name, avatar or voice you picked"
+    ]
+  },
+  {
     "version": "workspaces-and-desktops",
     "date": "2026-07-26",
     "title": "Workspaces and desktops, told apart at last",

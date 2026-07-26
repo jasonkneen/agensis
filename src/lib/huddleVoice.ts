@@ -21,6 +21,7 @@ export interface VoiceMessage {
   id?: string;
   content?: unknown;
   sender_kind?: string | null;
+  sender_id?: string | null;
   sender_name?: string | null;
   message_kind?: string | null;
   deleted_at?: string | null;
@@ -32,6 +33,14 @@ export interface SpeechItem {
   id: string;
   text: string;
   speaker: string;
+  /**
+   * The agent whose voice this should be read in — `messages.sender_id`.
+   * Carried separately from `speaker` (a display name) because the voice
+   * preference is keyed on the agent's id, and two agents can share a name.
+   * '' when the row has no sender id, in which case the reader falls back to
+   * the device default.
+   */
+  agentId: string;
 }
 
 // A spoken sentence runs ~15 chars/second, so this is roughly 80 seconds of
@@ -176,7 +185,12 @@ export function speechItemFor(
   if (!Number.isFinite(created) || created < joinedAtMs) return null;
   const text = speechTextFromMarkdown(message.content);
   if (!text) return null;
-  return { id: String(message.id), text, speaker: String(message.sender_name || 'Agent').trim() || 'Agent' };
+  return {
+    id: String(message.id),
+    text,
+    speaker: String(message.sender_name || 'Agent').trim() || 'Agent',
+    agentId: String(message.sender_id || ''),
+  };
 }
 
 /**
@@ -254,6 +268,15 @@ export function echoGuardUntil(speaking: boolean, nowMs: number, tailMs = ECHO_T
  * then a local voice in the right language. Returns null when nothing matches, in
  * which case the caller should leave `utterance.voice` unset and let the platform
  * choose — that is still better than forcing a worse voice than the default.
+ *
+ * INTERIM. Huddle playback still goes through the browser here, but agent
+ * voices are moving to Cartesia (`sonic-3.5`), where a voice id means the same
+ * thing on every machine and this scoring is unnecessary. Verified in Chrome:
+ * 204 voices, zero Microsoft Natural — those exist only inside Edge, so this
+ * path was never going to give two people the same voice anyway. It stays until
+ * the Cartesia playback pipeline lands, because deleting it first would leave
+ * huddles silent. Which agent is speaking is on SpeechItem.agentId, and its
+ * chosen voice is on identity.voice.cartesia_voice_id (src/lib/agentVoice.ts).
  */
 export function pickSpeechVoice(
   voices: SpeechSynthesisVoice[],

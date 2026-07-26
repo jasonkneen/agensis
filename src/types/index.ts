@@ -1,3 +1,6 @@
+// Type-only, so it erases at build time and cannot create a runtime cycle.
+import type { AgentVoicePreference } from '../lib/agentVoice';
+
 export interface Workspace {
  id: string;
  name: string;
@@ -488,6 +491,19 @@ export interface WorkspaceAgent {
  tools?: string[];
  skills?: string[];
  metadata?: Record<string, unknown> | null;
+ /**
+  * How this agent presents itself, and who chose it.
+  *
+  * `voice` is a PORTABLE preference (accent + variant index + rate/pitch),
+  * never a device voice name — see src/lib/agentVoice.ts. `human_set` records
+  * which identity fields a person explicitly chose, so the agent's
+  * self-declaration on every reconnect can fill in the rest without
+  * overwriting them (shared/agentIdentity.cjs).
+  */
+ identity?: {
+  voice?: AgentVoicePreference | null;
+  human_set?: Record<string, boolean> | null;
+ } | null;
  handle?: string | null;
  model: string;
  /** How this agent's turns are served. 'external' = an MCP client registered
