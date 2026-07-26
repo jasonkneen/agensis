@@ -1,9 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Code2, Eye, LayoutTemplate, Star, Trash2 } from 'lucide-react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Code2, Columns2, Eye, LayoutTemplate, Star, Trash2 } from 'lucide-react';
 import type { Document } from '../../types';
 import { extractHtmlFromDocContent } from '../../lib/canvasApps';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+
+// Lazy: CodeMirror and its grammars stay out of the main bundle. The
+// service-worker precache size is a known sore point, and most sessions never
+// open an applet's code — the editor loads the first time someone does.
+const AppletCodeEditor = React.lazy(() => import('./AppletCodeEditor'));
 
 interface AppletDocWindowContentProps {
   document: Document;
@@ -38,7 +43,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
   const [title, setTitle] = useState(doc.title);
   const [content, setContent] = useState(doc.content || '');
   const [loadingContent, setLoadingContent] = useState(doc.content === undefined);
-  const [view, setView] = useState<'preview' | 'code'>('preview');
+  const [view, setView] = useState<'preview' | 'code' | 'split'>('preview');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Guards the async fetch below from clobbering an edit the user already made
   // while the body was still in flight (fetch is not instant, autosave is 800ms).
@@ -86,14 +91,22 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
     triggerAutoSave(next, undefined);
   };
 
-  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const next = e.target.value;
+  const handleContentChange = useCallback((next: string) => {
     editedRef.current = true;
     setContent(next);
     triggerAutoSave(undefined, next);
-  };
+  }, [triggerAutoSave]);
 
-  const previewHtml = extractHtmlFromDocContent(content);
+  // In split view the iframe would otherwise be torn down and rebuilt on every
+  // keystroke — srcDoc changes reload the document, so a running applet would
+  // restart mid-word. The preview follows the code at a short lag instead.
+  const [previewSource, setPreviewSource] = useState(content);
+  useEffect(() => {
+    if (view !== 'split') { setPreviewSource(content); return; }
+    const timer = setTimeout(() => setPreviewSource(content), 600);
+    return () => clearTimeout(timer);
+  }, [content, view]);
+  const previewHtml = extractHtmlFromDocContent(view === 'split' ? previewSource : content);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
@@ -115,6 +128,15 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
           size="icon-sm"
         >
           <Code2 />
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setView('split')}
+          title="Code and preview side by side"
+          variant={view === 'split' ? 'secondary' : 'ghost'}
+          size="icon-sm"
+        >
+          <Columns2 />
         </Button>
         <div className="flex-1" />
         {onAddToCanvas && (
@@ -164,27 +186,42 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
           <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
             Loading applet source…
           </div>
-        ) : view === 'preview' ? (
-          previewHtml ? (
-            <iframe
-              title={title}
-              srcDoc={previewHtml}
-              sandbox="allow-forms allow-modals allow-popups allow-scripts"
-              className="h-full w-full rounded-md border border-border bg-white"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
-              No ```html code block found in this applet's source yet — switch to Code to add one.
-            </div>
-          )
         ) : (
-          <textarea
-            value={content}
-            onChange={handleContentChange}
-            spellCheck={false}
-            placeholder="```html&#10;<!doctype html>...&#10;```"
-            className="h-full w-full resize-none rounded-md border border-border bg-muted/20 p-3 font-mono text-[12.5px] leading-relaxed text-foreground outline-none"
-          />
+          // Split is editor + preview in one grid; the solo views are the same
+          // two panes with one column hidden, so all three share the mounts and
+          // switching view never resets the editor's cursor or the iframe.
+          <div className={view === 'split' ? 'grid h-full min-h-0 grid-cols-2 gap-3' : 'h-full min-h-0'}>
+            {view !== 'preview' && (
+              <div className="h-full min-h-0 min-w-0">
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center rounded-md border border-border bg-muted/20 text-sm text-muted-foreground">
+                      Loading editor…
+                    </div>
+                  }
+                >
+                  <AppletCodeEditor value={content} onChange={handleContentChange} ariaLabel={`Source of ${title || 'applet'}`} />
+                </Suspense>
+              </div>
+            )}
+            {view !== 'code' && (
+              <div className="h-full min-h-0 min-w-0">
+                {previewHtml ? (
+                  <iframe
+                    title={title}
+                    srcDoc={previewHtml}
+                    sandbox="allow-forms allow-modals allow-popups allow-scripts"
+                    className="h-full w-full rounded-md border border-border bg-white"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+                    No ```html code block found in this applet's source yet
+                    {view === 'split' ? ' — it will appear here as you type one.' : ' — switch to Code to add one.'}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
