@@ -16,6 +16,12 @@
 // ============================================================================
 
 const crypto = require('node:crypto');
+const {
+ WORKSPACE_MAX_DEPTH,
+ wouldCreateCycle,
+ wouldExceedMaxDepth,
+ roleSetHasCapability,
+} = require('./workspace-tree.cjs');
 
 // ----------------------------------------------------------------------------
 // Allow-sets and role/capability tables — lifted VERBATIM from server/index.cjs.
@@ -537,7 +543,8 @@ async function resolveOperationWorkspace(table, { values, filters }, db) {
  return { unscoped: true };
 }
 
-// True if the user owns the workspace or is a member of it.
+// True if the user owns the workspace, is a member of it, or holds either in an
+// ANCESTOR (members inherit downward — see getInheritedWorkspaceRoles).
 async function userCanAccessWorkspace(userId, workspaceId, db) {
  if (!userId || !workspaceId) return false;
  const rows = await db(
@@ -547,15 +554,79 @@ async function userCanAccessWorkspace(userId, workspaceId, db) {
      limit 1`,
   [workspaceId, userId],
  );
- return rows.length > 0;
+ if (rows.length > 0) return true;
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ return inherited.length > 0;
 }
 
+// The role held DIRECTLY in this workspace, ignoring the hierarchy. This is the
+// role the UI shows on a workspace tile and the one `/backend/workspaces`
+// projects — deliberately not the effective role, so "you are a viewer here"
+// keeps meaning what it says. Authorization uses the effective set below.
 async function getWorkspaceRole(userId, workspaceId, db) {
  if (!userId || !workspaceId) return null;
  const ownerRows = await db('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
  if (ownerRows.length > 0) return 'owner';
  const memberRows = await db('select role from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
  return memberRows[0]?.role || null;
+}
+
+// ----------------------------------------------------------------------------
+// Nested workspaces: inherited membership.
+//
+// THE RULE — a child inherits AGENTS and MEMBERS from its ancestors; CONTENT is
+// isolated. Access therefore flows strictly DOWNWARD:
+//
+//   member of `Work`      -> reaches Work AND every client workspace under it
+//   member of `Client A`  -> reaches Client A only. NOT its sibling Client B
+//                            (siblings share an ancestor, not membership) and
+//                            NOT its parent Work (there is no upward path).
+//
+// `depth > 0` in the query below is the one-way valve: it excludes the
+// workspace itself, so this returns ONLY inherited roles. The direct role is
+// still resolved by getWorkspaceRole, which means the common case (a direct
+// member acting in their own workspace) issues exactly the queries it always
+// did and this walk never runs.
+//
+// The recursion is capped at WORKSPACE_MAX_DEPTH so a cycle that somehow exists
+// in the data terminates instead of spinning to statement_timeout on every
+// request. The cycle should be impossible — a CHECK, a trigger and
+// assertWorkspaceParentChange all refuse to create one — but this is the path
+// where being wrong is a denial of service, so it does not rely on that.
+// ----------------------------------------------------------------------------
+const ANCESTOR_ROLES_SQL = `with recursive chain as (
+   select id, parent_id, 0 as depth from workspaces where id = $1
+   union all
+   select w.id, w.parent_id, c.depth + 1
+     from workspaces w join chain c on w.id = c.parent_id
+    where c.depth < $3
+ )
+ select distinct r.role from (
+   select 'owner'::text as role
+     from chain c join workspaces w on w.id = c.id
+    where c.depth > 0 and w.user_id = $2
+   union all
+   select wm.role
+     from chain c join workspace_members wm on wm.workspace_id = c.id and wm.user_id = $2
+    where c.depth > 0
+ ) r`;
+
+async function getInheritedWorkspaceRoles(userId, workspaceId, db) {
+ if (!userId || !workspaceId) return [];
+ const rows = await db(ANCESTOR_ROLES_SQL, [workspaceId, userId, WORKSPACE_MAX_DEPTH]);
+ return rows.map((row) => row.role).filter(Boolean);
+}
+
+// Direct role first, then every role inherited from an ancestor. Capabilities
+// are the UNION of all of them — this repo checks capability membership rather
+// than ranking roles, so "owner of the parent, viewer of the child" needs no
+// tie-break.
+async function getEffectiveWorkspaceRoles(userId, workspaceId, db) {
+ const direct = await getWorkspaceRole(userId, workspaceId, db);
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ const roles = direct ? [direct] : [];
+ for (const role of inherited) if (!roles.includes(role)) roles.push(role);
+ return roles;
 }
 
 function roleHasWorkspaceCapability(role, capability) {
@@ -575,13 +646,120 @@ function capabilityForDbOperation(table, action) {
 async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, mode, db }) {
  const need = capability || mode || minRole;
  const role = await getWorkspaceRole(userId, workspaceId, db);
- if (!role) throw forbidden('You do not have access to this workspace');
- if (!roleHasWorkspaceCapability(role, need)) {
-  if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
-  if (need === 'write') throw forbidden('You do not have permission to change this workspace');
-  if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
-  if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
-  throw forbidden('You do not have permission to access this workspace');
+ // Fast path, and the only path until a workspace actually has a parent: a
+ // direct role that already carries the capability costs exactly the queries it
+ // always did. The ancestor walk runs ONLY when the direct role falls short.
+ if (role && roleHasWorkspaceCapability(role, need)) return;
+
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ if (roleSetHasCapability(inherited, need, WORKSPACE_ROLE_CAPABILITIES)) return;
+
+ if (!role && inherited.length === 0) throw forbidden('You do not have access to this workspace');
+ if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
+ if (need === 'write') throw forbidden('You do not have permission to change this workspace');
+ if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
+ if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
+ throw forbidden('You do not have permission to access this workspace');
+}
+
+// ----------------------------------------------------------------------------
+// Re-parenting: the write that creates the hierarchy, and the one that can
+// break it. Nothing in the product sets parent_id yet — the only reachable
+// writer is a generic POST /backend/db/update on `workspaces` — so this exists
+// so that the day a child is created it is already correct and already safe.
+// ----------------------------------------------------------------------------
+
+// Load the child -> parent edges along the ancestor chain above `startId`, as
+// the plain map shape shared/workspace-tree.cjs expects. A point-lookup loop
+// rather than a recursive CTE ON PURPOSE: it is bounded by `seen` even if the
+// stored data is already cyclic, so this diagnostic path can never be the thing
+// that hangs. Bounded at WORKSPACE_MAX_DEPTH + 2 lookups.
+async function loadAncestorEdges(startId, db) {
+ const edges = new Map();
+ const seen = new Set();
+ let current = startId == null ? null : String(startId);
+ let steps = 0;
+ while (current !== null && !seen.has(current) && steps <= WORKSPACE_MAX_DEPTH + 1) {
+  seen.add(current);
+  const rows = await db('select parent_id from workspaces where id = $1 limit 1', [current]);
+  if (rows.length === 0) break;
+  const parent = rows[0].parent_id == null ? null : String(rows[0].parent_id);
+  edges.set(current, parent);
+  current = parent;
+  steps += 1;
+ }
+ return edges;
+}
+
+// Every edge inside `rootId`'s subtree, so the depth rule can account for the
+// fact that a re-parented workspace drags its whole subtree down with it.
+async function loadSubtreeEdges(rootId, db) {
+ const edges = new Map();
+ if (rootId == null) return edges;
+ const rows = await db(
+  `with recursive sub as (
+      select id, parent_id, 0 as depth from workspaces where id = $1
+      union all
+      select w.id, w.parent_id, s.depth + 1
+        from workspaces w join sub s on w.parent_id = s.id
+       where s.depth < $2
+    )
+    select id, parent_id from sub`,
+  [rootId, WORKSPACE_MAX_DEPTH],
+ );
+ for (const row of rows) {
+  edges.set(String(row.id), row.parent_id == null ? null : String(row.parent_id));
+ }
+ return edges;
+}
+
+/**
+ * Authorize and validate a change to `workspaces.parent_id`.
+ *
+ * THE RULE:
+ *   - Attaching to a parent needs 'manage' on the PROPOSED PARENT. Without it,
+ *     anyone could graft their workspace under someone else's group and hand
+ *     that group's members a view of their content — and, once nesting is
+ *     visible, put an unwanted tile inside another org's rail.
+ *   - Moving or detaching an EXISTING workspace needs a DIRECT 'manage' on the
+ *     child, not an inherited one. An inherited manager (an agency admin acting
+ *     inside a client workspace) must not be able to detach that client from
+ *     the parent, which would strip every inherited member's access in one
+ *     write, themselves included.
+ *   - The result must be acyclic and within WORKSPACE_MAX_DEPTH.
+ *
+ * `isInsert` skips the child-side check: on INSERT the row does not exist yet
+ * and the creator is its owner.
+ */
+async function assertWorkspaceParentChange({ userId, workspaceId, parentId, db, isInsert = false }) {
+ const child = workspaceId == null ? null : String(workspaceId);
+ const parent = parentId == null || parentId === '' ? null : String(parentId);
+
+ if (!isInsert) {
+  const directRole = await getWorkspaceRole(userId, child, db);
+  if (!directRole || !roleHasWorkspaceCapability(directRole, 'manage')) {
+   throw forbidden('Only a direct manager of this workspace can change where it sits');
+  }
+ }
+
+ if (parent === null) return; // detaching to top level needs nothing further
+ if (child !== null && parent === child) throw badRequest('A workspace cannot be its own parent');
+
+ await assertWorkspaceRole({ userId, workspaceId: parent, capability: 'manage', db });
+
+ const exists = await db('select id from workspaces where id = $1 limit 1', [parent]);
+ if (exists.length === 0) throw badRequest('The parent workspace does not exist');
+
+ const edges = await loadAncestorEdges(parent, db);
+ if (child !== null && !isInsert) {
+  for (const [id, value] of await loadSubtreeEdges(child, db)) edges.set(id, value);
+ }
+
+ if (wouldCreateCycle(edges, child, parent)) {
+  throw badRequest('A workspace cannot be its own ancestor');
+ }
+ if (wouldExceedMaxDepth(edges, child, parent, WORKSPACE_MAX_DEPTH)) {
+  throw badRequest(`Workspaces cannot be nested more than ${WORKSPACE_MAX_DEPTH} levels deep`);
  }
 }
 
@@ -665,6 +843,12 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
     if (row && row.user_id && String(row.user_id) !== String(userId)) {
      throw forbidden('Cannot create a workspace for another user');
     }
+    // Creating a workspace already inside a group: needs 'manage' on the group.
+    if (row && row.parent_id != null && row.parent_id !== '') {
+     await assertWorkspaceParentChange({
+      userId, workspaceId: null, parentId: row.parent_id, db, isInsert: true,
+     });
+    }
    }
    return;
   }
@@ -672,6 +856,25 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    || await resolveWorkspaceRowById(findFilterValue(flt, 'workspace_id'), db);
   if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db });
+
+  if (op === 'delete') {
+   // parent_id is ON DELETE RESTRICT, so Postgres would refuse this anyway —
+   // but as an opaque foreign-key violation surfaced as a 500. Ask first, so
+   // the caller is told what to do about it. Deleting a group must never be a
+   // way to silently destroy (CASCADE) or silently orphan (SET NULL) the client
+   // workspaces inside it.
+   const children = await db('select id from workspaces where parent_id = $1 limit 1', [workspaceId]);
+   if (children.length > 0) {
+    throw httpError(409, 'This workspace still has workspaces inside it — move or delete those first');
+   }
+   return;
+  }
+
+  if (op === 'update'
+   && values && typeof values === 'object' && !Array.isArray(values)
+   && Object.prototype.hasOwnProperty.call(values, 'parent_id')) {
+   await assertWorkspaceParentChange({ userId, workspaceId, parentId: values.parent_id, db });
+  }
   return;
  }
 
@@ -1343,6 +1546,11 @@ module.exports = {
  resolveOperationWorkspace,
  userCanAccessWorkspace,
  getWorkspaceRole,
+ // Nested workspaces (shared/workspace-tree.cjs holds the pure rules).
+ getInheritedWorkspaceRoles,
+ getEffectiveWorkspaceRoles,
+ assertWorkspaceParentChange,
+ WORKSPACE_MAX_DEPTH,
  roleHasWorkspaceCapability,
  assertUpdateKeepsTenancy,
  httpError,

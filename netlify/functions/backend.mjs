@@ -733,6 +733,11 @@ function publicWorkspace(row) {
   // `is_system` apart, and it reads whichever backend answered.
   icon: row.icon || '',
   is_system: row.is_system === true,
+  // Groupable workspaces: null = top level, otherwise the group this workspace
+  // sits inside. Must match server/index.cjs — the client reads whichever
+  // backend answered, and a column present on one and missing on the other is
+  // exactly how `icon` and `is_system` went missing here before.
+  parent_id: row.parent_id || null,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -875,7 +880,8 @@ async function ensureCursorBuddyConnectionKeyTables() {
 
 async function handleWorkspaces(userId) {
  const rows = await query(
-  `select w.id, w.name, w.description, w.icon, w.is_system, w.local_path, w.project_kind, w.git_root, w.git_remote,
+  `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
+            w.local_path, w.project_kind, w.git_root, w.git_remote,
             w.created_at, w.updated_at,
             case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
      from workspaces w

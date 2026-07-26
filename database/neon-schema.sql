@@ -38,11 +38,58 @@ CREATE TABLE IF NOT EXISTS workspaces (
   background_opacity numeric DEFAULT 0.42,
   background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
+  -- Groupable workspaces. A workspace with children renders as a group, one
+  -- without renders as a leaf; there is no separate folder entity and no new
+  -- tier. Children inherit AGENTS and MEMBERS from their ancestors; CONTENT
+  -- (channels, documents, tasks, memory) stays isolated to one workspace.
+  --
+  -- ON DELETE RESTRICT: CASCADE would silently destroy a client's whole
+  -- workspace when the agency parent is deleted, and SET NULL would silently
+  -- promote it to top level AND strip every member whose access was inherited.
+  -- RESTRICT forces the operator to re-parent or delete the children first.
+  parent_id uuid REFERENCES workspaces(id) ON DELETE RESTRICT,
+  CONSTRAINT workspaces_parent_id_not_self CHECK (parent_id IS NULL OR parent_id <> id),
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_parent_id ON workspaces(parent_id);
+
+-- The CHECK above rejects the 1-cycle (parent_id = id). Every longer cycle
+-- (A -> B -> A and deeper) needs a walk, so it is a trigger. This is enforced
+-- at the DB and not only at the API gate because a cycle makes the recursive
+-- ancestor walk in the AUTHORIZATION path spin until statement_timeout on every
+-- request touching that workspace — one bad row is a denial of service.
+CREATE OR REPLACE FUNCTION workspaces_reject_parent_cycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  cursor_id uuid := NEW.parent_id;
+  steps int := 0;
+BEGIN
+  WHILE cursor_id IS NOT NULL LOOP
+    IF cursor_id = NEW.id THEN
+      RAISE EXCEPTION 'workspace % cannot be its own ancestor', NEW.id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    steps := steps + 1;
+    IF steps > 10 THEN
+      RAISE EXCEPTION 'workspace nesting exceeds the maximum depth of 10'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    SELECT parent_id INTO cursor_id FROM workspaces WHERE id = cursor_id;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_workspaces_reject_parent_cycle ON workspaces;
+CREATE TRIGGER trg_workspaces_reject_parent_cycle
+  BEFORE INSERT OR UPDATE OF parent_id ON workspaces
+  FOR EACH ROW
+  WHEN (NEW.parent_id IS NOT NULL)
+  EXECUTE FUNCTION workspaces_reject_parent_cycle();
 
 CREATE TABLE IF NOT EXISTS workspace_secrets (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

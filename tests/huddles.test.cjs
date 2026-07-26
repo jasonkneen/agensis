@@ -149,6 +149,10 @@ function makeDb({ roles = {}, owners = {}, sessions = { [SESSION]: WS }, huddleR
         row.ended_at = new Date().toISOString();
         return [row];
       }
+      // Nested workspaces: the inherited-role ancestor walk, reached whenever a
+      // direct role does not carry the capability — the non-member and
+      // viewer-cannot-join cases below.
+      if (n.includes('with recursive chain as')) return [];
       throw new Error(`Unexpected SQL in huddles test: ${sql}`);
     },
   };

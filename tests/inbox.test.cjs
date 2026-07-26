@@ -152,6 +152,9 @@ function makeDb({ roles = {}, owners = {}, items = inboxRows(), user = { display
         if (!existing || !guarded || existing < readAt) markers.set(key, readAt);
         return [];
       }
+      // Nested workspaces: the inherited-role ancestor walk, reached whenever a
+      // direct role does not carry the capability (i.e. every 403 below).
+      if (n.includes('with recursive chain as')) return [];
       throw new Error(`Unexpected SQL in inbox test: ${sql}`);
     },
   };

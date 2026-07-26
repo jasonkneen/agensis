@@ -170,6 +170,10 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
         return workspaceId ? [{ workspace_id: workspaceId }] : [];
       }
 
+      // Nested workspaces: the inherited-role ancestor walk, reached whenever a
+      // direct role does not carry the capability. Flat fixtures inherit nothing.
+      if (normalized.includes('with recursive chain as')) return [];
+
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };

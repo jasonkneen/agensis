@@ -75,6 +75,10 @@ function memberDb({ ownerOf = [], memberships = {}, reportWorkspace = 'sys-1' } 
   if (text.includes('from "feedback_reports" where id = $1')) {
    return [{ workspace_id: reportWorkspace }];
   }
+  // Nested workspaces: the inherited-role ancestor walk, reached whenever the
+  // direct role does not carry the capability. The System workspace is a root,
+  // so there is nothing above it to inherit membership from.
+  if (text.includes('with recursive chain as')) return [];
   throw new Error(`Unexpected SQL: ${text}`);
  };
 }
