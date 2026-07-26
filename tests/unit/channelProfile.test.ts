@@ -32,7 +32,10 @@ describe('parity with the server implementation', () => {
   });
 });
 
-const base: ChannelProfileDraft = { title: 'general', description: 'Chat', icon: 'hash', intent: 'Be brief.' };
+const base: ChannelProfileDraft = {
+  title: 'general', description: 'Chat', icon: 'hash', intent: 'Be brief.',
+  conversation_mode: 'auto',
+};
 
 describe('channelProfileDiff', () => {
   it('returns null when nothing changed', () => {
@@ -61,6 +64,24 @@ describe('channelProfileDiff', () => {
   it('normalizes before comparing, so cosmetic whitespace is not a change', () => {
     expect(channelProfileDiff({ ...base, intent: '  Be brief.  ' }, base)).toBeNull();
     expect(channelProfileDiff({ ...base, icon: 'HASH' }, base)).toBeNull();
+  });
+
+  it('sends the reply timing on its own when only that changed', () => {
+    // conversation_mode is what makes an un-addressed post wake somebody or not.
+    // It has to ride the same sparse diff as everything else, or changing the
+    // channel name would silently rewrite who is expected to answer in it.
+    expect(channelProfileDiff({ ...base, conversation_mode: 'mention' }, base))
+      .toEqual({ conversation_mode: 'mention' });
+    expect(channelProfileDiff({ ...base, conversation_mode: 'auto' }, base)).toBeNull();
+  });
+
+  it('reads an absent or unreadable stored mode as auto, so it is not a phantom change', () => {
+    // Rows written before the field existed have no value for it. Treating that
+    // as different from 'auto' would make every channel save look like a change
+    // to reply timing.
+    const legacy = { ...base, conversation_mode: undefined } as unknown as ChannelProfileDraft;
+    expect(channelProfileDiff({ ...base, conversation_mode: 'auto' }, legacy)).toBeNull();
+    expect(channelProfileDiff(legacy, { ...base, conversation_mode: 'auto' })).toBeNull();
   });
 });
 

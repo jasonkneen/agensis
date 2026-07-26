@@ -6,6 +6,7 @@ import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { channelMessages } from '../components/chat/channelView';
+import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
 import { isHuddleSession } from '../lib/huddleTranscript';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
@@ -17,6 +18,19 @@ import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 // is fetched independently at dispatch time, so this display cap never truncates
 // what an agent sees.
 const MESSAGE_PAGE_SIZE = 200;
+
+/**
+ * What /backend/agents/dispatch decided.
+ *
+ * 'declined' exists because a bare boolean conflated "the channel chose not to
+ * wake anyone" with "dispatch broke", and the two want opposite handling: the
+ * first is the feature working, the second gets a fallback reply or a visible
+ * notice. See the reason constant below.
+ */
+type DispatchOutcome = 'dispatched' | 'declined' | 'failed';
+
+/** The server's reason for a deliberate non-dispatch. Must match server/index.cjs. */
+const DISPATCH_DECLINED_ON_MENTION_ONLY = 'channel_replies_on_mention_only';
 
 export interface CreateSessionResult {
   session: ChatSession | null;
@@ -484,7 +498,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     docContext: string | null,
     workspaceContext?: WorkspaceContextSnapshot | null,
     threadParentId?: string | null,
-  ): Promise<boolean> => {
+  ): Promise<DispatchOutcome> => {
     const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
       method: 'POST',
       headers: {
@@ -513,14 +527,23 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         const next = normalizeMessage(dispatchPayload.data.message);
         return prev.some(message => message.id === next.id) ? prev : [...prev, next];
       });
-      return true;
+      return 'dispatched';
     }
 
     if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
-      return true;
+      return 'dispatched';
     }
 
-    return false;
+    // The channel is set to answer only when asked, and this post asked nobody.
+    // That is a decision, not a failure: no fallback reply, no "couldn't reach
+    // the agent" notice. Every OTHER dispatched:false reason keeps its previous
+    // meaning — 'serverless_dispatch_unavailable' in particular is how a
+    // Netlify-only deploy falls through to the direct-AI path.
+    if (dispatchResponse?.ok && dispatchPayload?.data?.reason === DISPATCH_DECLINED_ON_MENTION_ONLY) {
+      return 'declined';
+    }
+
+    return 'failed';
   }, [workspaceId]);
 
   const streamDirectAI = useCallback(async (
@@ -757,7 +780,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
     const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
 
-    const hasMention = Boolean(firstAgentMention(content));
+    const hasMention = Boolean(firstAgentMention(content)) || mentionsChannel(content);
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
@@ -767,10 +790,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // would hit neither directAgentChannel nor autoChannel (autoChannel excludes
     // DMs) and silently never dispatch, so the agent never replies.
     const folderDm = session.folder === 'Direct messages';
-    // AUTO is always on for channels now (no per-channel toggle): any non-DM
-    // channel lets participant agents chime in on new messages. DMs route via
-    // their direct participant or the folder fallback above.
-    const autoChannel = session.folder !== 'Direct messages';
+    // A non-DM channel lets participant agents chime in on an un-addressed
+    // message — but only when the channel's own reply timing allows it. Same
+    // decision the server makes (shared/channelMentions.cjs), asked here so a
+    // 'mention'-timed channel makes no request at all rather than one that comes
+    // back refused. DMs route via their direct participant or the folder
+    // fallback above and are never governed by the mode.
+    const autoChannel = session.folder !== 'Direct messages'
+      && allowsUnpromptedReply({ conversationMode: session.conversation_mode });
     const sharedModelRoute = isSharedModelRoute(model);
     const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || folderDm || autoChannel));
 
@@ -785,7 +812,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         workspaceContext,
         threadParentId,
       );
-      if (dispatched) return { delivered: true, failure: null };
+      if (dispatched === 'dispatched') return { delivered: true, failure: null };
+      // The channel answers only when asked and nobody was asked. The message is
+      // posted and that is the whole intent — no fallback reply, no notice.
+      if (dispatched === 'declined') return { delivered: true, failure: null };
       // Dispatch failed. If there's a direct-AI fallback (agent/direct
       // participant) fall through to it; otherwise surface the failure instead
       // of returning silently and leaving the user's message looking sent (M6).
@@ -883,19 +913,25 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     const { message: userMsg } = await insertUserMessage(parent, prompt);
     // A rejected insert leaves nothing for the agent to answer, so treat it
     // exactly like a failed dispatch below: keep the fork, surface the failure.
-    const dispatched = userMsg
+    const dispatched: DispatchOutcome = userMsg
       ? await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null)
-      : false;
+      : 'failed';
 
     // If the synthesis dispatch failed, keep the fork (do NOT soft-delete) so
     // the merge can be retried, and surface the failure instead of silently
-    // destroying the branch with no synthesis (M6).
-    if (!dispatched) {
+    // destroying the branch with no synthesis (M6). 'declined' counts as a
+    // failure HERE even though it is a success elsewhere: a merge exists to
+    // produce a synthesis, and a channel set to answer only when asked has not
+    // been asked — soft-deleting the fork would destroy the branch and leave
+    // nothing in its place.
+    if (dispatched !== 'dispatched') {
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         session_id: parent.id,
         role: 'assistant',
-        content: "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
+        content: dispatched === 'declined'
+          ? 'This channel is set so nobody has to answer unless asked, so no agent picked up the merge — the split branch has been kept. @mention the agent you want to synthesize it.'
+          : "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
         created_at: new Date().toISOString(),
       }]);
       return { status: 'error', parent };

@@ -943,3 +943,34 @@ test('create_task without depends_on writes an empty array, not a bare JS array'
   const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
   assert.equal(insert.params[10], '{}');
 });
+
+// --- create_channel reply timing --------------------------------------------
+// conversation_mode used to be a column nothing read, so this tool's default of
+// 'mention' was harmless. The dispatcher reads it again, which makes the default
+// load-bearing: get it wrong and an agent-created channel silently answers
+// nothing while a human-created one answers, with nothing on screen to say why.
+
+test('create_channel defaults to auto, matching a channel created in the UI', async () => {
+  const { db, res } = await callTask('create_channel', { title: 'ops' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into chat_sessions'));
+  assert.ok(insert, 'must reach the insert');
+  assert.equal(insert.params[3], 'auto');
+});
+
+test('create_channel honours an explicit mention mode', async () => {
+  const { db, res } = await callTask('create_channel', { title: 'quiet', conversation_mode: 'mention' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into chat_sessions'));
+  assert.equal(insert.params[3], 'mention');
+});
+
+test('create_channel normalizes an unrecognised mode to auto rather than storing it', async () => {
+  // A stored value outside the enum would read as 'auto' anyway
+  // (normalizeConversationMode), so writing it would leave the row disagreeing
+  // with the behaviour it produces.
+  const { db, res } = await callTask('create_channel', { title: 'odd', conversation_mode: 'whenever' });
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into chat_sessions'));
+  assert.equal(insert.params[3], 'auto');
+});

@@ -75,6 +75,13 @@ import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
 import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
 import { EditChannelDialog } from '../chat/EditChannelDialog';
 import { channelIconGlyph, normalizeChannelIcon, type ChannelProfileDraft } from '../../lib/channelProfile';
+import {
+  CHANNEL_MENTION_HANDLE,
+  CHANNEL_MENTION_MAX_AGENTS,
+  agentMentionHandles,
+  mentionsChannel,
+  normalizeConversationMode,
+} from '../../lib/channelMentions';
 import { HuddlePanel } from '../huddle/HuddlePanel';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
@@ -620,8 +627,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     void uploadAndLinkFiles(files);
   };
 
-  const handleAgentSelect = (agent: WorkspaceAgent) => {
-    const handle = agentHandle(agent);
+  const insertMentionHandle = (handle: string) => {
     const selectionEnd = inputRef.current?.selectionStart || input.length;
     const before = input.slice(0, Math.max(0, atStartPos));
     const after = input.slice(selectionEnd);
@@ -632,6 +638,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setAtStartPos(-1);
     inputRef.current?.focus();
   };
+
+  const handleAgentSelect = (agent: WorkspaceAgent) => insertMentionHandle(agentHandle(agent));
 
   const handleDocSelect = (doc: Document) => {
     if (!linkedDocs.find(d => d.id === doc.id)) {
@@ -680,11 +688,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         setShowDocPicker(false);
         return;
       }
-      // Tab or Enter completes the top item (agents render above docs) and closes the @ menu.
+      // Tab or Enter completes the top item and closes the @ menu. The order
+      // mirrors what is RENDERED: agents, then Everyone, then documents. @channel
+      // is deliberately behind the agents — someone typing "@sc" for Scout must
+      // never get "ask all six" from a reflex Tab — but once the typed text rules
+      // every agent out ("@chann"), it is the top item on screen and completing
+      // anything else would mean the keyboard and the eye disagree.
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         if (filteredAgents.length > 0) {
           e.preventDefault();
           handleAgentSelect(filteredAgents[0]);
+          return;
+        }
+        if (showChannelMentionOption && docPickerQuery.trim()) {
+          e.preventDefault();
+          insertMentionHandle(CHANNEL_MENTION_HANDLE);
           return;
         }
         if (filteredDocs.length > 0) {
@@ -1076,16 +1094,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
   // Agents @mentioned in the current draft that aren't channel participants yet.
   // On send, the server adds them to the roster (ensureMentionedParticipants), so
-  // we surface a small heads-up here. Mirrors the server mention regex + is a
-  // no-op in 1:1 DMs. Matches on persisted participants (the roster the server
-  // checks), not transient presence.
+  // we surface a small heads-up here. Uses the SAME parser the server dispatches
+  // with (src/lib/channelMentions.ts, pinned to shared/channelMentions.cjs), and
+  // is a no-op in 1:1 DMs. Matches on persisted participants (the roster the
+  // server checks), not transient presence.
   const mentionedNotInChannel = useMemo(() => {
     if (isDirectMessage) return [] as string[];
-    const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
     const names = new Map<string, string>();
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(input))) {
-      const handle = match[2];
+    // `@channel` is excluded by agentMentionHandles: it addresses the roster
+    // rather than adding to it, so there is never anyone to add for it.
+    for (const handle of agentMentionHandles(input)) {
       const agent = agents.find(item => agentMatchesLookupKey(item, handle));
       if (!agent) continue;
       if (persistedParticipants.some(p => participantMatchesLookupKey(p, handle))) continue;
@@ -1093,6 +1111,37 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }
     return Array.from(names.values());
   }, [input, agents, persistedParticipants, isDirectMessage]);
+
+  // Who `@channel` in the current draft will actually reach: the STORED agent
+  // roster, capped the same way the server caps it. Shown because "pings
+  // everyone" costs one model turn per agent, and the number is the only honest
+  // way to say how much. Empty (and hidden) when the draft has no @channel, in a
+  // DM, or when the channel has no agents in it.
+  const channelMentionTargets = useMemo(() => {
+    if (isDirectMessage || !mentionsChannel(input)) return [] as string[];
+    return persistedParticipants
+      .filter(participant => participant.kind === 'agent')
+      .map(participant => {
+        const agent = agents.find(item => agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+        if (agent && agent.enabled === false) return '';
+        return agent?.name || participant.name || '';
+      })
+      .filter(Boolean)
+      .slice(0, CHANNEL_MENTION_MAX_AGENTS);
+  }, [input, agents, persistedParticipants, isDirectMessage]);
+
+  // `@channel` is offered in the composer's @ menu alongside the agent handles,
+  // because a mention nobody can discover is a mention nobody uses. Not in a DM:
+  // there is no roster there to address, and the one agent already answers a
+  // plain message. Hidden once the typed query stops being a prefix of it.
+  const showChannelMentionOption = !isDirectMessage
+    && CHANNEL_MENTION_HANDLE.startsWith(docPickerQuery.trim().toLowerCase());
+  // Enabled agents on the STORED roster — what `@channel` costs, in turns.
+  const channelAgentCount = useMemo(() => persistedParticipants.filter(participant => {
+    if (participant.kind !== 'agent') return false;
+    const agent = agents.find(item => agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+    return !agent || agent.enabled !== false;
+  }).length, [agents, persistedParticipants]);
 
   const agentAvatarLookup = useMemo(
     () => buildAgentAvatarLookup(agents, persistedParticipants),
@@ -1224,7 +1273,11 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     description: channelMeta?.description || '',
     icon: normalizeChannelIcon(channelMeta?.icon),
     intent: channelMeta?.intent || '',
-  }), [channelMeta?.title, channelMeta?.description, channelMeta?.icon, channelMeta?.intent, channelTitle]);
+    conversation_mode: normalizeConversationMode(channelMeta?.conversation_mode),
+  }), [
+    channelMeta?.title, channelMeta?.description, channelMeta?.icon, channelMeta?.intent,
+    channelMeta?.conversation_mode, channelTitle,
+  ]);
 
   // The channel's chosen glyph, or the hash. Capitalised because it is rendered
   // as a component.
@@ -1992,6 +2045,34 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           ))}
                         </CommandGroup>
                       )}
+                      {/* BELOW the agents on purpose. Tab/Enter completes the top
+                          item, and asking every agent at once is a paid mistake to
+                          make by reflex — so @channel is one deliberate step away,
+                          never the accidental default. It still completes on
+                          Tab/Enter once the typed text rules the agents out (see
+                          handleKeyDown), so the keyboard and the list agree. */}
+                      {showChannelMentionOption && (
+                        <CommandGroup heading="Everyone">
+                          <CommandItem
+                            value={`${CHANNEL_MENTION_HANDLE} everyone all agents`}
+                            className="rounded-lg px-2 py-1.5"
+                            onSelect={() => insertMentionHandle(CHANNEL_MENTION_HANDLE)}
+                          >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                              <Users className="size-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">Everyone in this channel</span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {channelAgentCount === 0
+                                  ? 'No agents in this channel yet'
+                                  : `Asks all ${channelAgentCount} agent${channelAgentCount === 1 ? '' : 's'} here, one after another`}
+                              </span>
+                            </span>
+                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{CHANNEL_MENTION_HANDLE}</span>
+                          </CommandItem>
+                        </CommandGroup>
+                      )}
                       <CommandGroup heading="Documents">
                         {filteredDocs.map(doc => (
                           <CommandItem
@@ -2053,6 +2134,18 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     {mentionedNotInChannel.length === 1
                       ? `${mentionedNotInChannel[0]} isn't in this channel yet — they'll be added when you send.`
                       : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
+                  </div>
+                )}
+                {/* Who @channel will reach, by name. One agent is one paid turn, so
+                    the count is the cost — worth showing before Send, not after. */}
+                {channelMentionTargets.length > 0 && (
+                  <div className="px-1 pb-1 text-xs text-muted-foreground">
+                    {`@channel asks ${channelMentionTargets.join(', ')} — ${channelMentionTargets.length} repl${channelMentionTargets.length === 1 ? 'y' : 'ies'}, one after another.`}
+                  </div>
+                )}
+                {!isDirectMessage && channelMentionTargets.length === 0 && mentionsChannel(input) && (
+                  <div className="px-1 pb-1 text-xs text-muted-foreground">
+                    No agents are in this channel yet, so @channel reaches nobody. Add some from the members list.
                   </div>
                 )}
                 <InputGroup className="h-auto flex-col items-stretch">
@@ -3960,6 +4053,7 @@ function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMe
     description: meta.description ?? '',
     icon: normalizeChannelIcon(meta.icon),
     intent: meta.intent ?? '',
+    conversation_mode: normalizeConversationMode(meta.conversation_mode),
     is_favorite: Boolean(meta.is_favorite),
     archived_at: meta.archived_at ?? null,
     participants: normalizeChannelParticipants(meta.participants),

@@ -2,6 +2,7 @@ import {
   BarChart3, BookOpen, Bug, Calendar, Coffee, FlaskConical, Globe, Hash, Heart,
   Megaphone, Music, Palette, Rocket, Shield, Sparkles, Wrench, type LucideIcon,
 } from 'lucide-react';
+import { normalizeConversationMode, type ConversationMode } from './channelMentions';
 
 // ---------------------------------------------------------------------------
 // A channel's presentable profile: its icon, its description, its INTENT.
@@ -89,6 +90,13 @@ export interface ChannelProfileDraft {
   description: string;
   icon: string;
   intent: string;
+  /**
+   * chat_sessions.conversation_mode — whether a post nobody addressed still
+   * expects an answer now. Normalized by src/lib/channelMentions.ts, which the
+   * server shares, so a channel set to 'mention' here really does stop
+   * dispatching there.
+   */
+  conversation_mode: ConversationMode;
 }
 
 /**
@@ -116,6 +124,9 @@ export function channelProfileDiff(
 
   const intent = normalizeChannelIntent(draft.intent);
   if (intent !== normalizeChannelIntent(baseline.intent)) next.intent = intent;
+
+  const mode = normalizeConversationMode(draft.conversation_mode);
+  if (mode !== normalizeConversationMode(baseline.conversation_mode)) next.conversation_mode = mode;
 
   return Object.keys(next).length > 0 ? next : null;
 }

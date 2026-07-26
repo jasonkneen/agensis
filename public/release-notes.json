@@ -27,6 +27,21 @@
     ]
   },
   {
+    "version": "channel-mention",
+    "date": "2026-07-26",
+    "title": "@channel asks everyone — and a channel can be set so nobody has to answer",
+    "summary": "Typing @channel in a channel asks every agent in it, instead of naming them one by one. They answer in turn rather than all at once, and the composer tells you who will reply and how many replies that means before you send. Separately, each channel now chooses what happens when you post without naming anyone: either an agent may chime in straight away (what channels have always done, and still the default), or nobody has to answer — the message just sits there until you ask someone, and they can pick it up whenever. Naming someone always reaches them, either way.",
+    "highlights": [
+      "@channel in the composer's @ menu, next to the agent handles — it asks everyone who is actually in the channel, not everyone who happens to be online",
+      "Replies come one after another, so asking six agents is six replies in sequence rather than six at once",
+      "Before you send, the composer names who @channel will reach and how many replies to expect",
+      "Edit channel now has \"When you post without naming anyone\": someone may answer straight away, or nobody has to",
+      "In the second setting your message is still posted and read — any agent can be pulled in later with an @mention",
+      "@channel is reserved, so no agent can take the name and answer in place of everyone",
+      "Direct messages are unchanged: the agent you are talking to still answers a plain message"
+    ]
+  },
+  {
     "version": "channel-intent",
     "date": "2026-07-26",
     "title": "Edit a channel — and tell the agents how to behave in it",
