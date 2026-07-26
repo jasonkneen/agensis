@@ -1,3 +1,4 @@
+import { useFidgetDrag } from '@/hooks/useFidgetDrag';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -291,6 +292,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   );
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
+  // Cards are draggable and spring back — a fidget, not a layout. One hook for
+  // the whole grid: a pointer drags one card at a time. See useFidgetDrag.
+  const fidget = useFidgetDrag();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
@@ -773,6 +777,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         // The card is its own toggle: clicking the open agent
                         // again closes the detail pane (lib/agentsView.ts).
                         onClick={() => { setSelectedAgentId(prev => toggleAgentSelection(prev, agent.id)); setEditingId(null); }}
+                        // Drag handlers ride alongside the click: the fidget
+                        // hook swallows a click that turned into a drag, so a
+                        // pull never opens the detail pane by accident.
+                        {...fidget.handlers}
                         style={agentAccentStyle(agent)}
                         data-agent-selected={selected ? 'true' : undefined}
                         aria-pressed={selected}
@@ -826,11 +834,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // Stacked: the card grid with the live map under it, in ONE
                 // scroll container — a short window scrolls the pair rather
                 // than crushing both into slivers.
+                // The grid takes the height its cards need; the map takes
+                // EVERYTHING left. A fixed map height left dead space below it
+                // in a tall window, which is the one thing a two-panel view
+                // must not do. min-h keeps the map readable in a short window,
+                // where the outer container scrolls instead.
                 return (
-                  <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
-                    {grid}
-                    <div className="mt-3 h-[26rem] overflow-hidden rounded-xl border border-border bg-card/40">
-                      {diagram}
+                  <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pt-1.5 pb-2">
+                    <div className="shrink-0">{grid}</div>
+                    <div className="mt-3 flex min-h-[18rem] flex-1 overflow-hidden rounded-xl border border-border bg-card/40">
+                      <div className="min-h-0 min-w-0 flex-1">{diagram}</div>
                     </div>
                   </div>
                 );
