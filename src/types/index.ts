@@ -1,5 +1,6 @@
 // Type-only, so it erases at build time and cannot create a runtime cycle.
 import type { AgentVoicePreference } from '../lib/agentVoice';
+import type { ConversationMode } from '../lib/channelMentions';
 
 export interface Workspace {
  id: string;
@@ -75,7 +76,12 @@ export interface ChatSession {
  intent?: string | null;
  is_favorite?: boolean;
  participants?: ChannelParticipant[] | null;
- conversation_mode?: 'mention' | 'auto' | null;
+ /**
+  * How eagerly this channel answers a post that named nobody: 'auto' at once
+  * (the default), 'social' unhurried (see src/lib/replyCadence.ts), 'mention'
+  * not at all. Normalized by src/lib/channelMentions.ts.
+  */
+ conversation_mode?: ConversationMode | null;
  max_agent_turns?: number | null;
  auto_rounds?: number | null;
  archived_at?: string | null;

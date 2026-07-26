@@ -12,13 +12,24 @@ import {
   normalizeChannelIcon, type ChannelProfileDraft,
 } from '@/lib/channelProfile';
 import { normalizeConversationMode, type ConversationMode } from '@/lib/channelMentions';
+import { socialCadenceHint, socialCadenceSummary } from '@/lib/replyCadence';
 
-/** The two reply timings, in the words a person would use for them. */
+/**
+ * The three reply timings, in the words a person would use for them, most eager
+ * first. The 'social' detail is GENERATED from the cadence constants
+ * (socialCadenceSummary) rather than written out, so the dialog cannot promise a
+ * timing the dispatcher does not keep.
+ */
 const REPLY_TIMING_CHOICES: Array<{ mode: ConversationMode; title: string; detail: string }> = [
   {
     mode: 'auto',
     title: 'Someone may answer straight away',
     detail: 'The agent it seems meant for chimes in. Often nobody does.',
+  },
+  {
+    mode: 'social',
+    title: 'Someone may answer, in their own time',
+    detail: socialCadenceSummary(),
   },
   {
     mode: 'mention',
@@ -66,6 +77,15 @@ export function EditChannelDialog({ open, onOpenChange, baseline, onSave, status
   const icons = useMemo(() => channelIconChoices(), []);
   const patch = useMemo(() => channelProfileDiff(draft, baseline), [draft, baseline]);
   const titleEmpty = draft.title.trim().length === 0;
+
+  // The intent is prose, so it is read as a SUGGESTION and nothing else: if it
+  // sounds like a social room and the timing is still the eager default, offer to
+  // switch. Nothing happens unless the operator clicks. Deriving dispatch
+  // behaviour from free text would mean a channel whose replies changed pace
+  // because somebody edited a sentence, with no control that said so.
+  const cadenceHint = useMemo(() => socialCadenceHint(draft.intent), [draft.intent]);
+  const suggestSocial = cadenceHint.social
+    && normalizeConversationMode(draft.conversation_mode) === 'auto';
 
   const handleSave = async () => {
     if (!patch || titleEmpty) return;
@@ -169,8 +189,25 @@ export function EditChannelDialog({ open, onOpenChange, baseline, onSave, status
                 );
               })}
             </div>
+            {suggestSocial && (
+              <div className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2">
+                <p className="text-xs text-muted-foreground">
+                  The intent below mentions{' '}
+                  <span className="font-medium text-foreground">{cadenceHint.phrase}</span>, which
+                  reads like a social channel. Replies here will all arrive at once unless you pace
+                  them.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setDraft(prev => ({ ...prev, conversation_mode: 'social' }))}
+                  className="mt-1.5 text-xs font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  Pace them
+                </button>
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
-              Naming someone always reaches them, either way. Use @channel to ask everyone in the
+              Naming someone always reaches them, at any timing. Use @channel to ask everyone in the
               channel at once.
             </p>
           </div>

@@ -242,6 +242,41 @@ test("an un-addressed post in an 'auto' channel dispatches, as it always has", a
   });
 });
 
+test("an un-addressed post in a 'social' channel still dispatches — paced is not silent", async () => {
+  // The failure this catches is invisible: 'social' is a value on the same axis
+  // as 'mention', and if the route's gate (allowsUnpromptedReply) treated
+  // anything-but-'auto' as silence, the composer would be told dispatched:false
+  // and no agent would ever speak in a social channel. Cadence delays a reply
+  // INSIDE continueConversation; the route's answer is unchanged.
+  __test.setTestDb(makeDb({ session: channelSession({ conversation_mode: 'social' }) }));
+  const token = await __test.issueToken(USER, '1');
+
+  await withServer(async (baseUrl) => {
+    const res = await post(baseUrl, token, '/backend/agents/dispatch', {
+      workspaceId: WORKSPACE, sessionId: SESSION, content: 'saw a heron on the way in',
+    });
+    assert.equal(res.status, 200);
+    const { data } = await res.json();
+    assert.equal(data.dispatched, true);
+    assert.equal(data.mode, 'auto', 'the dispatch MODE descriptor is about addressing, not timing');
+  });
+});
+
+test("an @mention in a 'social' channel dispatches exactly as anywhere else", async () => {
+  __test.setTestDb(makeDb({ session: channelSession({ conversation_mode: 'social' }) }));
+  const token = await __test.issueToken(USER, '1');
+
+  await withServer(async (baseUrl) => {
+    const res = await post(baseUrl, token, '/backend/agents/dispatch', {
+      workspaceId: WORKSPACE, sessionId: SESSION, content: '@coder did you see this',
+    });
+    const { data } = await res.json();
+    assert.equal(data.dispatched, true);
+    assert.equal(data.mode, 'mention');
+    assert.deepEqual(data.mentions, ['coder']);
+  });
+});
+
 test("an un-addressed post in a 'mention' channel dispatches NOBODY, with a reason", async () => {
   __test.setTestDb(makeDb({ session: channelSession({ conversation_mode: 'mention' }) }));
   const token = await __test.issueToken(USER, '1');

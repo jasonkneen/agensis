@@ -166,16 +166,27 @@ function expandChannelMention({ participantAgentIds, agents, isEnabled, limit = 
  *   'auto'    — an un-addressed post may draw ONE agent in unprompted (a cheap
  *               relevance call elects it; it fails closed). The default, and
  *               what every existing channel already does.
+ *   'social'  — the same, unhurried. Replies are paced seconds apart and a
+ *               message that named nobody draws a couple of answers rather than
+ *               one per agent. See shared/replyCadence.cjs; the ONLY thing that
+ *               reads this value is the cadence plan.
  *   'mention' — an un-addressed post dispatches NOBODY. It is still posted,
  *               still read, and any agent can be pulled in later with an
  *               @mention or `@channel`. "They do not have to answer now, but
  *               they can whenever."
  *
+ * ONE AXIS, three values, deliberately: how eagerly does this room answer a post
+ * nobody addressed — never ('mention'), unhurried ('social'), at once ('auto').
+ * Cadence became a third value here rather than a second column because a
+ * separate control would have multiplied into states with no meaning ('mention'
+ * plus paced is paced silence) and asked the operator the same question twice.
+ * `@channel` made the same call.
+ *
  * Explicit addressing is unaffected by the mode: an @mention, a DM, and a reply
- * inside an agent's thread all dispatch in both modes. The mode only governs
+ * inside an agent's thread all dispatch in every mode. The mode only governs
  * the un-addressed case, which is the only case where nobody asked.
  */
-const CONVERSATION_MODES = Object.freeze(['auto', 'mention']);
+const CONVERSATION_MODES = Object.freeze(['auto', 'social', 'mention']);
 const DEFAULT_CONVERSATION_MODE = 'auto';
 
 function normalizeConversationMode(value) {
@@ -188,10 +199,17 @@ function normalizeConversationMode(value) {
  *
  * A DM always may: its single agent answers plain messages by definition, and
  * that is what makes it a DM rather than a channel of one.
+ *
+ * Phrased as "not 'mention'" rather than "is 'auto'" ON PURPOSE. 'mention' is
+ * the one value that means silence; every other value — today 'auto' and
+ * 'social', tomorrow whatever else lands on this axis — means somebody may
+ * answer. Written the other way round, adding a value would have made those
+ * channels go silent, which is the one failure this file exists to prevent and
+ * the one a test cannot see (nothing errors; an agent simply never speaks).
  */
 function allowsUnpromptedReply({ conversationMode, isDirectMessage = false } = {}) {
  if (isDirectMessage) return true;
- return normalizeConversationMode(conversationMode) === 'auto';
+ return normalizeConversationMode(conversationMode) !== 'mention';
 }
 
 // --- parity fixture ---------------------------------------------------------
