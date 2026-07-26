@@ -5770,6 +5770,22 @@ async function handleAgentJobDelta(ws, message) {
   );
   if (updatedRows.length > 0) {
    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
+  } else if (metadata.pendingPlaceholder) {
+   // A segment handed us an id but deliberately did not create the row, so the
+   // thread is not littered with empty "Thinking …" bubbles while the agent runs
+   // tools. This is the first content for that block: materialise it now.
+   const createdRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
+       on conflict (id) do nothing
+       returning *`,
+    [
+     responseMessageId, job.session_id, content,
+     metadata.pendingPlaceholderParentId || null,
+     String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent',
+    ],
+   );
+   if (createdRows.length > 0) notifyDbSubscribers('messages', 'INSERT', createdRows);
   }
  }
  await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
@@ -5963,14 +5979,17 @@ async function handleAgentJobSegment(ws, message) {
   );
   notifyDbSubscribers('messages', 'INSERT', blockRows);
  }
- const placeholderRows = await getDb().unsafe(
-  `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-     values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
-  // Same "Thinking …" shape the turn started with — isAgentPlaceholder and
-  // finalizeStuckJob both key off it.
-  [nextPlaceholderId, job.session_id, agentLiveMessageContent({ elapsedMs: message.elapsedMs }), threadParentId, String(job.agent_id || ''), senderName],
+ // The next placeholder is created LAZILY, by the first delta that actually has
+ // text for it (see handleAgentJobDelta). Creating it here left a visible
+ // "Thinking 29s" bubble sitting in the thread for as long as the agent spent on
+ // tool calls between two text blocks — a real turn produced three of them. The
+ // id and parent are recorded on the job so the delta can materialise the row in
+ // the right place when there is finally something to show.
+ nextMetadata.pendingPlaceholderParentId = threadParentId;
+ await getDb().unsafe(
+  'update agent_jobs set metadata = $2::jsonb where id = $1 and status in (\'queued\', \'running\')',
+  [jobId, { ...nextMetadata, pendingPlaceholder: true, pendingPlaceholderParentId: threadParentId }],
  );
- notifyDbSubscribers('messages', 'INSERT', placeholderRows);
 }
 
 async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {

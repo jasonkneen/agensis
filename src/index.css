@@ -1425,7 +1425,12 @@
  grid-template-columns: 1.75rem minmax(0, 1fr);
  align-items: center;
  gap: 0.55rem;
- width: 100%;
+ /* Share the row rather than claiming it. `width: 100%` made this button take the
+    full width of its flex parent, pushing the elapsed badge and the "..." menu
+    onto a second line. flex-basis 0 + min-width 0 lets the name truncate instead,
+    so the badge sits further left and the menu stays on the same row. */
+ flex: 1 1 0%;
+ min-width: 0;
  overflow: hidden;
 }
 
