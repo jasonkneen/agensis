@@ -107,9 +107,16 @@ export interface Message {
  // render as compact chips instead of full message rows (components/chat/toolSteps.ts).
  // `content` keeps its human-readable fallback ("Bash · cd ~/repo && git log") so
  // rows written before these columns existed still read sensibly.
+ // ...and 'huddle' for the single marker row a finished huddle leaves in the
+ // channel it was called from ("You were in a huddle · 12:04 · Ada, Sam"). Its
+ // `content` is a complete sentence, so a client that does not know the kind
+ // still renders something true; huddle_id below is what makes it a link back
+ // to the transcript.
  message_kind?: string | null;
  tool_name?: string | null;
  tool_detail?: string | null;
+ /** Set only on a huddle marker row. Null/absent everywhere else. */
+ huddle_id?: string | null;
  // "Send to channel": a thread reply that is ALSO shown in the channel/DM view.
  // An agent works inside a thread and flags only its final answer; a human can
  // flag a reply from the thread composer. The row KEEPS its thread_parent_id, so a
@@ -561,7 +568,15 @@ export interface AgentWebhook {
 export interface Huddle {
  id: string;
  workspace_id: string;
+ /** The channel/DM the huddle was CALLED FROM. Not where its conversation lives. */
  session_id: string;
+ /**
+  * The huddle's OWN conversation — a chat_sessions row of its own, where the
+  * transcript and the agents' replies land instead of in the host channel.
+  * Null for huddles that predate it; readers fall back to session_id, which is
+  * what those huddles actually did.
+  */
+ transcript_session_id?: string | null;
  /** Namespaced 'agensis-<huddleId>': the LiveKit project is shared with other apps. */
  room_name: string;
  started_by: string | null;
@@ -599,7 +614,10 @@ export interface HuddleParticipant {
 export interface HuddleState {
  id: string;
  workspaceId: string;
+ /** The channel/DM the huddle was called from. */
  sessionId: string;
+ /** The huddle's own conversation session, or null for a pre-transcript huddle. */
+ transcriptSessionId: string | null;
  roomName: string;
  startedBy: string | null;
  startedAt: string | null;

@@ -34,9 +34,30 @@
 //     participantCount 0, not a phantom 1. The truthful "how many were here"
 //     numbers are peakParticipants / everJoinedCount, both derived from the log.
 //
-//   * The huddle is bound to the session it happened in (`session_id`), so the
-//     card lives in the real conversation. There is deliberately no "view
-//     thread" affordance pointing at a separate, empty place.
+//   * TWO SESSION LINKS, and they mean different things. `session_id` is the
+//     channel/DM the huddle was CALLED FROM — it is what the toolbar button,
+//     the live card and the "one live huddle per channel" index key off.
+//     `transcript_session_id` is the huddle's OWN conversation: a chat_sessions
+//     row of its own, created when the huddle starts, where speech-to-text and
+//     the agents' replies land.
+//
+//     Why a session and not a messages column: sessions already carry realtime,
+//     RBAC, history, agent dispatch, mention resolution and the composer. A
+//     huddle transcript is just another session, so it inherits all of that
+//     rather than re-implementing it. It copies the host's `participants` and
+//     `canvas_id` verbatim (in ONE statement, via a select-into-insert, so the
+//     jsonb never round-trips through a bind), which is what makes @mention
+//     dispatch and the DM's `direct: true` shortcut behave identically inside
+//     the huddle.
+//
+//     A huddle is ad-hoc; the channel is the record. So the conversation does
+//     NOT go into the channel — when the huddle ends the channel gets ONE
+//     marker row (message_kind='huddle') saying it happened, carrying the
+//     huddle id so the transcript can be opened again later.
+//
+//     transcript_session_id is NULLABLE and older huddles have none. Every
+//     reader must treat "no transcript session" as "fall back to the host
+//     session", which is exactly the pre-existing behaviour.
 //
 // Agents in huddles is PHASE 2 and intentionally not built here.
 
@@ -175,6 +196,9 @@ function foldHuddleState(huddle, events = []) {
   id: huddle.id,
   workspaceId: huddle.workspace_id,
   sessionId: huddle.session_id,
+  // Null for every huddle started before transcript sessions existed. Readers
+  // fall back to sessionId, which is exactly what those huddles actually did.
+  transcriptSessionId: huddle.transcript_session_id || null,
   roomName: huddle.room_name,
   startedBy: huddle.started_by || null,
   startedAt: isoOf(huddle.started_at),
@@ -185,6 +209,99 @@ function foldHuddleState(huddle, events = []) {
   peakParticipants,
   everJoinedCount: everJoined.size,
  };
+}
+
+// ---------------------------------------------------------------------------
+// The channel marker
+// ---------------------------------------------------------------------------
+
+// `messages.message_kind` for the one row a finished huddle leaves in the
+// channel it was called from. The client renders it as a single compact line
+// with a link to the transcript, not as a chat bubble.
+const HUDDLE_MARKER_KIND = 'huddle';
+
+/** "1:23" / "1:02:03". Same shape as huddleDuration in src/lib/huddleState.ts. */
+function formatDuration(ms) {
+ const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
+ const hours = Math.floor(seconds / 3600);
+ const minutes = Math.floor((seconds % 3600) / 60);
+ const secs = seconds % 60;
+ const pad = (n) => String(n).padStart(2, '0');
+ return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
+}
+
+/**
+ * The marker sentence, composed here and stored verbatim in `content`.
+ *
+ * Deliberately server-side and deliberately plain text. The row is a permanent
+ * part of the channel's history: it is read by search, by exports, and by every
+ * agent whose context includes the channel, none of which can run the client's
+ * renderer. A client that does not understand message_kind='huddle' still shows
+ * a sentence that reads correctly, which is the same fallback contract
+ * tool_step rows already rely on.
+ *
+ * Counts come from the folded event log, so they are facts: "how many were
+ * here" is everJoinedCount, never a floored 1, and never the live roster (which
+ * is empty by the time a huddle ends).
+ *
+ * `names` is optional because participant display names live in the event log
+ * only when LiveKit's webhook delivered them; with none we still say the true
+ * thing about how many people joined.
+ */
+function huddleMarkerContent(state, names = []) {
+ if (!state) return '';
+ const started = timeOf(state.startedAt);
+ const ended = state.endedAt ? timeOf(state.endedAt) : 0;
+ const parts = ['You were in a huddle'];
+ if (started && ended && ended >= started) parts.push(formatDuration(ended - started));
+ const roster = (Array.isArray(names) ? names : [])
+  .map((name) => String(name || '').trim())
+  .filter(Boolean);
+ const joined = Number(state.everJoinedCount || 0);
+ if (roster.length > 0) {
+  parts.push(roster.length <= 3
+   ? roster.join(', ')
+   : `${roster.slice(0, 2).join(', ')} and ${roster.length - 2} others`);
+ } else if (joined > 0) {
+  parts.push(`${joined} ${joined === 1 ? 'person' : 'people'} joined`);
+ }
+ return parts.join(' · ');
+}
+
+/**
+ * Everyone who was ever in the room, in join order, deduped by identity.
+ *
+ * Derived from the append-only log rather than from `state.participants`, which
+ * is EMPTY for an ended huddle by design — reading it here is how the marker
+ * would end up claiming nobody was in a call that four people attended.
+ */
+function everJoinedNames(events = []) {
+ const rows = Array.isArray(events) ? [...events].sort(compareEvents) : [];
+ const names = new Map();
+ for (const event of rows) {
+  if (String((event && event.kind) || '') !== 'participant_joined') continue;
+  const identity = String((event && event.identity) || '');
+  if (!identity || names.has(identity)) continue;
+  names.set(identity, String((event && event.display_name) || '').trim() || identity);
+ }
+ return [...names.values()];
+}
+
+/**
+ * Is this huddle worth a marker at all?
+ *
+ * A huddle that was opened and closed with nobody joining and nothing said is a
+ * misclick. Leaving "You were in a huddle · 0:03" in the channel for it is
+ * exactly the noise this whole change exists to remove.
+ *
+ * Both halves matter. `everJoinedCount` is 0 whenever LiveKit's webhook is not
+ * configured (or has not arrived yet), so on its own it would suppress the
+ * marker for a real conversation; the transcript's message count is the
+ * independent witness that something happened.
+ */
+function huddleLeftATrace(state, transcriptMessageCount = 0) {
+ if (!state) return false;
+ return Number(state.everJoinedCount || 0) > 0 || Number(transcriptMessageCount || 0) > 0;
 }
 
 // The video grant a join token carries. Room-scoped, publish+subscribe audio,
@@ -318,8 +435,13 @@ const HUDDLES_SCHEMA_SQL = `
       room_name text NOT NULL UNIQUE,
       started_by uuid,
       started_at timestamptz NOT NULL DEFAULT now(),
-      ended_at timestamptz
+      ended_at timestamptz,
+      transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL
     );
+    -- The ALTER is for databases created before transcript sessions existed;
+    -- the column above is for fresh ones. Nullable on purpose: an old huddle
+    -- has no transcript and every reader falls back to session_id.
+    ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
@@ -339,6 +461,20 @@ const HUDDLES_SCHEMA_SQL = `
     CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, created_at, seq);
     CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
+
+    -- The channel marker. ONE row per finished huddle, in the channel the
+    -- huddle was called from, carrying the huddle it refers to so the
+    -- transcript can be reopened months later.
+    --
+    -- Deliberately NO foreign key. messages is created long before huddles in
+    -- database/neon-schema.sql, so an FK here would need the deferred-ALTER
+    -- dance chat_sessions.parent_message_id already uses — and it would buy
+    -- nothing: a marker whose huddle is gone degrades to a plain sentence with
+    -- a dead link, which is the SAME graceful path an old huddle with no
+    -- transcript session already takes. messages.sender_id stores an agent id
+    -- with no FK for the same reason.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+    CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE huddle_id IS NOT NULL;
 `;
 
 async function ensureHuddlesSchema(db) {
@@ -404,7 +540,7 @@ async function deleteLivekitRoom(roomName) {
 // Routes
 // ---------------------------------------------------------------------------
 
-const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at';
+const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at, transcript_session_id';
 const EVENT_COLUMNS = 'id, huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, seq, created_at';
 
 /**
@@ -466,10 +602,10 @@ function mountHuddleRoutes(app, deps = {}) {
  // against workspace B's session id.
  async function sessionInWorkspace(sessionId, workspaceId) {
   const rows = await getDb().unsafe(
-   'select id from chat_sessions where id = $1 and workspace_id = $2 limit 1',
+   'select id, title from chat_sessions where id = $1 and workspace_id = $2 limit 1',
    [sessionId, workspaceId],
   );
-  return rows.length > 0;
+  return rows[0] || null;
  }
 
  async function loadEvents(huddleId) {
@@ -544,6 +680,89 @@ function mountHuddleRoutes(app, deps = {}) {
   return String(row.display_name || '').trim() || String(row.email || '').trim();
  }
 
+ /**
+  * Create the huddle's own conversation session and link the huddle to it.
+  *
+  * ONE statement copies `participants` and `canvas_id` straight off the host
+  * session. That is not an optimisation — it is how the huddle inherits agent
+  * dispatch. The dispatch route resolves @mentions and the DM `direct: true`
+  * shortcut from the SESSION's participants, so a transcript session with an
+  * empty roster would be a room where talking to an agent silently does
+  * nothing. Copying in SQL also keeps the jsonb out of a bind entirely, which
+  * is the one place the two backends' jsonb binding rules disagree.
+  *
+  * folder='huddle' is the discriminator that keeps these out of the sidebar:
+  * a huddle is reached from its channel's marker or its live card, never from
+  * the channel list.
+  *
+  * Best-effort by design. If this fails the huddle still works — every reader
+  * falls back to the host session, which is exactly what huddles did before.
+  */
+ async function createTranscriptSession(huddle, hostTitle) {
+  const sessionId = crypto.randomUUID();
+  const title = hostTitle ? `Huddle in ${hostTitle}` : 'Huddle';
+  const rows = await getDb().unsafe(
+   `insert into chat_sessions (id, workspace_id, title, model, conversation_mode, folder, canvas_id, participants)
+        select $1, $2, $3, host.model, host.conversation_mode, 'huddle', host.canvas_id, host.participants
+          from chat_sessions host
+         where host.id = $4
+        returning id`,
+   [sessionId, huddle.workspace_id, title.slice(0, 200), huddle.session_id],
+  );
+  if (!rows[0]) return null;
+  const updated = await getDb().unsafe(
+   `update huddles set transcript_session_id = $1 where id = $2 returning ${HUDDLE_COLUMNS}`,
+   [rows[0].id, huddle.id],
+  );
+  return updated[0] || null;
+ }
+
+ async function transcriptMessageCount(sessionId) {
+  if (!sessionId) return 0;
+  const rows = await getDb().unsafe(
+   'select count(*)::int as count from messages where session_id = $1',
+   [sessionId],
+  );
+  return Number((rows[0] && rows[0].count) || 0);
+ }
+
+ /**
+  * Leave ONE marker in the host channel saying the huddle happened.
+  *
+  * Called from BOTH ways a huddle ends (the End button and LiveKit's
+  * room_finished webhook), in each case only on the request that actually
+  * flipped `ended_at` — the `returning` guard on those UPDATEs is what makes
+  * "exactly one marker" true without a second uniqueness mechanism.
+  *
+  * role='assistant' because messages.role is CHECKed to ('user','assistant');
+  * sender_kind='system' is what distinguishes it from something an agent said,
+  * and keeps it out of the agent-status broadcast in notifyDbSubscribers.
+  *
+  * Best-effort: a huddle that ended must not fail to end because its epitaph
+  * could not be written.
+  */
+ async function writeHuddleMarker(huddle) {
+  try {
+   const events = await loadEvents(huddle.id);
+   const state = foldHuddleState(huddle, events);
+   const count = await transcriptMessageCount(huddle.transcript_session_id);
+   if (!huddleLeftATrace(state, count)) return null;
+   const content = huddleMarkerContent(state, everJoinedNames(events));
+   if (!content) return null;
+   const rows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, message_kind, huddle_id, sender_kind, sender_name)
+          values ($1, 'assistant', $2, $3, $4, 'system', 'Huddle')
+          returning *`,
+    [huddle.session_id, content, HUDDLE_MARKER_KIND, huddle.id],
+   );
+   if (rows[0]) fanout('messages', 'INSERT', [rows[0]]);
+   return rows[0] || null;
+  } catch (error) {
+   console.warn('[huddles] could not write the channel marker:', (error && error.message) || error);
+   return null;
+  }
+ }
+
  // --- read ----------------------------------------------------------------
 
  // Current huddle for a channel: the live one, else the most recent so the card
@@ -559,6 +778,31 @@ function mountHuddleRoutes(app, deps = {}) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
    const huddle = (await liveHuddleForSession(sessionId)) || (await latestHuddleForSession(sessionId));
+   // Deliberately no "create the missing transcript session" repair here: this
+   // is a read, and an old huddle without one is not broken — its conversation
+   // genuinely lived in the channel.
+   res.json({
+    data: { ...(await huddlePayload(huddle)), configured: livekitConfigured() },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // One huddle by id, live or long finished. This is what the channel marker
+ // links to: "You were in a huddle" has to still open the transcript months
+ // later, when the channel has moved on and the per-session route above would
+ // answer with a completely different (newer) huddle.
+ app.get('/backend/workspaces/:id/huddles/:huddleId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const huddleId = String(req.params.huddleId || '').trim();
+   if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   await ensureSchemaOnce();
+   const huddle = await huddleInWorkspace(huddleId, workspaceId);
+   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    res.json({
     data: { ...(await huddlePayload(huddle)), configured: livekitConfigured() },
     error: null,
@@ -580,7 +824,8 @@ function mountHuddleRoutes(app, deps = {}) {
    // Speaking in a channel is a write, so starting a call in it is too.
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
-   if (!(await sessionInWorkspace(sessionId, workspaceId))) {
+   const host = await sessionInWorkspace(sessionId, workspaceId);
+   if (!host) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
 
@@ -606,6 +851,11 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddle) return jsonError(res, 409, new Error('Could not open a huddle for this session'));
 
    if (created) {
+    // Order matters: the huddle row is inserted FIRST so the unique index has
+    // already elected one winner, and only the winner creates a transcript
+    // session. Creating it before the insert would leave the loser of a race
+    // holding an orphaned session that nothing points at.
+    huddle = (await createTranscriptSession(huddle, host.title)) || huddle;
     fanout('huddles', 'INSERT', [huddle]);
     // A 'started' marker, not a synthetic participant_joined: nobody has
     // connected to the room yet and the card must not claim they have.
@@ -694,6 +944,9 @@ function mountHuddleRoutes(app, deps = {}) {
    if (rows[0]) {
     fanout('huddles', 'UPDATE', [huddle]);
     await appendEvent({ huddle, kind: 'ended', identity: participantIdentity(req.userId) });
+    // After the 'ended' event, so the fold the marker is built from already
+    // knows the huddle is over and reports a real duration.
+    await writeHuddleMarker(huddle);
     try {
      await endRoom(huddle.room_name);
     } catch (error) {
@@ -765,7 +1018,14 @@ function mountHuddleRoutes(app, deps = {}) {
      `update huddles set ended_at = now() where id = $1 and ended_at is null returning ${HUDDLE_COLUMNS}`,
      [huddle.id],
     );
-    if (updated[0]) fanout('huddles', 'UPDATE', [updated[0]]);
+    // `returning` is the guard: a room_finished redelivery updates zero rows,
+    // so the channel cannot collect a second marker for the same huddle. This
+    // is the OTHER way a huddle ends (everyone walked away rather than someone
+    // pressing End) and it must leave the same record behind.
+    if (updated[0]) {
+     fanout('huddles', 'UPDATE', [updated[0]]);
+     await writeHuddleMarker(updated[0]);
+    }
    }
 
    return res.status(200).json({ data: { accepted: Boolean(event), kind }, error: null });
@@ -780,6 +1040,7 @@ function mountHuddleRoutes(app, deps = {}) {
 
 module.exports = {
  ROOM_PREFIX,
+ HUDDLE_MARKER_KIND,
  DEFAULT_TOKEN_TTL_SECONDS,
  MIN_TOKEN_TTL_SECONDS,
  MAX_TOKEN_TTL_SECONDS,
@@ -792,6 +1053,9 @@ module.exports = {
  participantIdentity,
  userIdFromIdentity,
  foldHuddleState,
+ huddleMarkerContent,
+ everJoinedNames,
+ huddleLeftATrace,
  buildJoinGrant,
  verifyLivekitWebhook,
  huddleEventKindFor,
