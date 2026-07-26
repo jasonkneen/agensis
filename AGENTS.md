@@ -61,6 +61,24 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   repeatable `--host-folder` CLI flag persists in the connect profile. **The
   bootstrap + `/agents` selects and `sanitizeRealtimeRow` now include
   `metadata`** — needed so host_folders survive a realtime update.
+- **Sandbox Agent + provider skills** — sandboxes are no longer a server feature.
+  The `sandbox` agent template (`src/lib/agentTemplates.ts`, `runMode: 'daemon'`)
+  is a provisioner, and a provider is a **skill**: `workspace_agents.skills` holds
+  skill **ids** (it stays `string[]` — the Agents window round-trips it through a
+  comma-separated input, so an object in there is destroyed by the next edit), and
+  `server/sandbox-skills.cjs` resolves them against bundled definitions plus
+  per-agent ones in `workspace_agents.metadata.sandbox_skills` (the same no-DDL
+  route `metadata.host_folders` took). **Adding a provider is one jsonb write — no
+  migration, no `fly deploy`, no daemon release.** The resolved layer is rendered
+  into the prompt in all THREE lanes (builtin system prompt + both
+  `buildDaemonPrompt` call sites) and deliberately NOT into `agentRuntimePayload`,
+  which the browser edit form saves back. Provider API keys live in the workspace
+  vault under `sandbox:<provider>:<key>`, write-only via
+  `/backend/workspaces/:id/sandbox-credentials` (manage role, Fly-only): no route
+  returns one, not even masked, and the per-turn path only reads whether the
+  cipher column is non-empty. A requester asks through the normal doors —
+  `@sandbox spin up a node sandbox` in a channel, or the existing `dispatch_agent`
+  MCP tool; there is no sandbox-specific tool.
 - **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
   stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
   returned to the client — only `has_key`). Managed in Settings → AI. Selecting a
