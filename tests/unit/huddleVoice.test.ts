@@ -135,7 +135,14 @@ describe('isSpeakableAgentMessage', () => {
 
 describe('speechItemFor', () => {
   it('speaks a message written after we joined', () => {
-    expect(speechItemFor(agentMessage(), JOINED)).toEqual({ id: 'm1', text: 'All done.', speaker: 'Coder' });
+    expect(speechItemFor(agentMessage(), JOINED))
+      .toEqual({ id: 'm1', text: 'All done.', speaker: 'Coder', agentId: '' });
+  });
+
+  it('carries the sender id, so the reply is read in THAT agent\'s voice', () => {
+    // `speaker` is a display name and two agents can share one; the voice
+    // preference is keyed on the agent id.
+    expect(speechItemFor(agentMessage({ sender_id: 'agent-7' }), JOINED)?.agentId).toBe('agent-7');
   });
 
   it('never reads the backlog aloud on join', () => {

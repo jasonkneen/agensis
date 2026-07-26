@@ -39,6 +39,10 @@ const MUST_BE_LINTED = [
   // Silently rewrites user-authored task titles on every create — a correctness
   // problem, not a style one.
   'shared/taskTitle.cjs',
+  // Decides whether an agent's self-declaration on reconnect may overwrite a
+  // name, avatar or voice a person chose. Getting it wrong is silent data loss
+  // that looks like the app forgetting, and it runs on every daemon restart.
+  'shared/agentIdentity.cjs',
   'server/index.cjs',
   'server/mcp.cjs',
   'server/skills.cjs',

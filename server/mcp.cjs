@@ -1027,6 +1027,28 @@ function buildTools() {
     name: { type: 'string', description: 'Display name for a NEW agent (e.g. "Cursor").' },
     handle: { type: 'string', description: 'Handle for a NEW agent (defaults from name).' },
     label: { type: 'string', description: 'Optional label for this client shown in the approval popup (e.g. "Cursor on laptop").' },
+    identity: {
+     type: 'object',
+     description: 'How you present yourself: avatar, profile, persona and how you sound when a huddle reads your replies aloud. Send it on every connect — it is treated as a DEFAULT, so anything a human has explicitly changed in the app is kept and yours is ignored for that field. `name` applies only to a brand new agent.',
+     properties: {
+      name: { type: 'string', description: 'Display name. Honoured only when this call creates a NEW agent.' },
+      avatar: { type: 'string', description: 'Avatar: an image URL, or 1-3 characters shown as initials on your accent colour. Never an emoji.' },
+      accent_color: { type: 'string', description: 'Hex colour for your avatar and name, e.g. "#00a95c".' },
+      description: { type: 'string', description: 'Short profile line — what you are for.' },
+      soul: { type: 'string', description: 'Persona / attitude in prose. Injected into your prompt, so it shapes how you write.' },
+      voice: {
+       type: 'object',
+       description: 'How you SOUND when a huddle reads your replies aloud. Speech is Cartesia (sonic-3.5). Omit this entirely and you are given a distinct voice derived from your agent id — you do not need to choose one to sound different from your teammates.',
+       properties: {
+        cartesia_voice_id: { type: 'string', description: 'A Cartesia voice id, e.g. "f9fc912e-e650-4766-a20c-5a93a43aa6e3". List them from the app; there are 836, 418 of them English.' },
+        speed: { type: 'number', description: 'Cartesia generation_config.speed, 0.6-1.5. 1.0 is normal.' },
+        emotion: { type: 'string', description: 'Cartesia generation_config.emotion — delivery, not persona. neutral | calm | angry | content | sad | scared, plus ~50 more (excited, sarcastic, confident, contemplative, ...). An unrecognised value is ignored. For persona, use `soul` instead: that changes the words.' },
+       },
+       additionalProperties: false,
+      },
+     },
+     additionalProperties: false,
+    },
    },
    additionalProperties: false,
   },
@@ -1041,6 +1063,7 @@ function buildTools() {
      asHandle, name, handle,
      clientLabel: (typeof args?.label === 'string' ? args.label : identity.name) || '',
      autoApprove: Boolean(identity.autoApprove),
+     identity: (args?.identity && typeof args.identity === 'object') ? args.identity : null,
     });
    } catch (err) {
     if (err instanceof ToolError) throw err;

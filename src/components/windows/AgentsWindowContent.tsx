@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
@@ -30,6 +30,7 @@ import {
   TriangleAlert,
   Unplug,
   Upload,
+  Volume2,
   Wrench,
   X,
   type LucideIcon,
@@ -63,9 +64,27 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import {
+  MAX_SPEED,
+  MIN_SPEED,
+  VOICE_EMOTIONS,
+  assignAgentVoices,
+  describeVoice,
+  englishVoiceIds,
+  filterVoices,
+  readAgentVoice,
+  resolveAgentVoice,
+  type AgentVoicePreference,
+} from '../../lib/agentVoice';
+import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
+
+// 418 English voices in one <select> is a scroll nobody finishes; the search
+// box above it is the real control.
+const VOICE_OPTION_LIMIT = 60;
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
@@ -568,6 +587,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 capabilities={capabilities}
                 webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                 connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
+                roster={agents}
                 onUpdateAgent={onUpdateAgent}
                 onConnect={() => setConnectAgentId(selectedAgent.id)}
                 onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
@@ -1160,6 +1180,7 @@ function AgentDetailPane({
   capabilities,
   webhooks,
   connections,
+  roster,
   onUpdateAgent,
   onConnect,
   onDisconnect,
@@ -1176,6 +1197,13 @@ function AgentDetailPane({
   capabilities: SystemCapabilities | null;
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
+  /**
+   * Every agent in the workspace, so the voice preview plays exactly what a
+   * huddle would play. Voice assignment is COORDINATED across the roster (two
+   * agents never share a voice while the device has a spare), so resolving this
+   * agent on its own would preview a voice it may not actually get.
+   */
+  roster: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onConnect: () => void;
   onDisconnect: () => Promise<unknown>;
@@ -1408,6 +1436,8 @@ function AgentDetailPane({
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
+
+          <VoiceSection agent={agent} roster={roster} onUpdateAgent={onUpdateAgent} />
 
           {agent.run_mode === 'daemon' && (
             <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
@@ -1994,6 +2024,240 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
   );
 }
 
+
+// Exported only so tests/unit/agentVoicePanel.test.ts can mount it on its own —
+// the surrounding detail pane needs a dozen props this section does not care
+// about, and "does the voice section actually render" is the question worth
+// asking.
+export function VoiceSection({
+  agent,
+  roster,
+  onUpdateAgent,
+}: {
+  agent: WorkspaceAgent;
+  roster: WorkspaceAgent[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+}) {
+  const { voices, loading, configured } = useCartesiaVoices();
+  const [query, setQuery] = useState('');
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stored = readAgentVoice(agent);
+
+  // Resolved ACROSS THE WHOLE ROSTER, exactly as the pipeline will. Resolving
+  // this agent alone would be simpler and would sometimes lie: a derived
+  // default steps aside when another agent already holds that voice, so a
+  // preview that ignored its teammates could play a voice it never gets.
+  const resolved = useMemo(
+    () => assignAgentVoices(roster.length > 0 ? roster : [agent], englishVoiceIds(voices)).get(agent.id)
+      ?? resolveAgentVoice(agent, englishVoiceIds(voices)),
+    [agent, roster, voices],
+  );
+
+  const chosen = voices.find(voice => voice.id === resolved.voiceId) || null;
+  const matches = useMemo(() => filterVoices(voices, query), [voices, query]);
+
+  const persist = (voice: AgentVoicePreference) => {
+    // `identity` carries only `voice` from here. The server reads a write to
+    // that key as "a human chose this" (shared/agentIdentity.cjs), so any other
+    // section writing it would silently lock the voice against the agent's own
+    // declaration.
+    onUpdateAgent(agent.id, { identity: { ...(agent.identity || {}), voice } });
+  };
+
+  // Pins the derived default as an explicit choice, which is the only way to
+  // stop it moving if Cartesia's catalogue changes under it.
+  const pinDefault = () => {
+    if (resolved.voiceId) persist({ ...stored, cartesia_voice_id: resolved.voiceId });
+  };
+
+  const stopPreview = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    // Revoking is what actually frees the decoded blob; pausing alone leaks one
+    // per press.
+    if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+    audioRef.current = null;
+  }, []);
+
+  const speakPreview = async () => {
+    if (!resolved.voiceId) return;
+    stopPreview();
+    setPreviewError('');
+    setPreviewing(true);
+    try {
+      const response = await fetch(apiUrl('/backend/tts/preview'), {
+        method: 'POST',
+        headers: { ...apiAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cartesia_voice_id: resolved.voiceId,
+          speed: resolved.speed,
+          emotion: resolved.emotion,
+        }),
+      });
+      if (!response.ok) throw new Error(`Preview failed (${response.status})`);
+      const audio = new Audio(URL.createObjectURL(await response.blob()));
+      audioRef.current = audio;
+      audio.onended = () => { stopPreview(); setPreviewing(false); };
+      audio.onerror = () => { stopPreview(); setPreviewing(false); setPreviewError('Could not play the preview.'); };
+      await audio.play();
+    } catch (error) {
+      setPreviewing(false);
+      setPreviewError(error instanceof Error ? error.message : 'Preview failed.');
+    }
+  };
+
+  // Closing the panel mid-sentence must not leave audio playing.
+  useEffect(() => stopPreview, [stopPreview]);
+
+  return (
+    <AgentDetailSection title="Voice">
+      <p className="mb-2 text-xs text-muted-foreground">
+        How this agent sounds when a huddle reads its replies aloud. Leave it unset and
+        it gets a distinct voice of its own, derived from its id — two agents never share
+        one by accident.
+      </p>
+
+      {!configured ? (
+        <div className="text-sm text-muted-foreground">
+          Speech is not configured on this workspace's backend, so voices cannot be listed
+          or previewed.
+        </div>
+      ) : (
+        <>
+          <FieldGroup className="gap-2">
+            <Field>
+              <FieldLabel htmlFor={`voice-search-${agent.id}`}>Find a voice</FieldLabel>
+              <Input
+                id={`voice-search-${agent.id}`}
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder={loading ? 'Loading voices…' : 'Name, accent or description'}
+                className="h-8 text-xs"
+              />
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor={`voice-id-${agent.id}`}>Voice</FieldLabel>
+              <NativeSelect
+                id={`voice-id-${agent.id}`}
+                value={stored.cartesia_voice_id || ''}
+                onChange={event => persist({ ...stored, cartesia_voice_id: event.target.value })}
+                className="h-8 text-xs"
+                disabled={loading}
+              >
+                <NativeSelectOption value="">
+                  {resolved.voiceId && chosen
+                    ? `Automatic — ${describeVoice(chosen)}`
+                    : 'Automatic'}
+                </NativeSelectOption>
+                {/* Capped: 418 English voices in one select is a scroll nobody
+                    finishes, so the search box above is the real control and
+                    this shows the top of whatever it matched. */}
+                {matches.slice(0, VOICE_OPTION_LIMIT).map(voice => (
+                  <NativeSelectOption key={voice.id} value={voice.id}>{describeVoice(voice)}</NativeSelectOption>
+                ))}
+              </NativeSelect>
+              {matches.length > VOICE_OPTION_LIMIT && (
+                <p className="mt-1 text-xs text-muted-foreground/70">
+                  Showing {VOICE_OPTION_LIMIT} of {matches.length} — narrow the search to see more.
+                </p>
+              )}
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor={`voice-emotion-${agent.id}`}>Delivery</FieldLabel>
+              <NativeSelect
+                id={`voice-emotion-${agent.id}`}
+                value={resolved.emotion}
+                onChange={event => persist({ ...stored, emotion: event.target.value })}
+                className="h-8 text-xs"
+              >
+                {VOICE_EMOTIONS.map(emotion => (
+                  <NativeSelectOption key={emotion} value={emotion}>
+                    {emotion.charAt(0).toUpperCase() + emotion.slice(1)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <p className="mt-1 text-xs text-muted-foreground/70">
+                Changes how a line is delivered, not what the agent says. For persona, edit Soul.
+              </p>
+            </Field>
+
+            <VoiceSpeedField
+              id={`voice-speed-${agent.id}`}
+              value={resolved.speed}
+              onChange={value => persist({ ...stored, speed: value })}
+            />
+          </FieldGroup>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={speakPreview}
+              disabled={previewing || loading || !resolved.voiceId}
+            >
+              <Volume2 data-icon="inline-start" />
+              {previewing ? 'Speaking' : 'Preview'}
+            </Button>
+            {resolved.isDefault && resolved.voiceId && (
+              <Button type="button" variant="ghost" size="sm" onClick={pinDefault}>
+                Keep this one
+              </Button>
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={resolved.voiceId}>
+              {previewError
+                ? previewError
+                : loading
+                  ? 'Loading voices…'
+                  : chosen
+                    ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
+                    : 'No voice available.'}
+            </span>
+          </div>
+        </>
+      )}
+    </AgentDetailSection>
+  );
+}
+
+function VoiceSpeedField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  // The thumb has to track the pointer, but the WRITE happens on release —
+  // binding onValueChange straight to onUpdateAgent would fire one round trip
+  // per pixel of drag. Hence a local draft, re-synced whenever the saved value
+  // changes underneath (a realtime update, or the agent re-declaring).
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>
+        Speed <span className="ml-1 tabular-nums font-normal text-muted-foreground">{draft.toFixed(2)}</span>
+      </FieldLabel>
+      <Slider
+        id={id}
+        value={[draft]}
+        min={MIN_SPEED}
+        max={MAX_SPEED}
+        step={0.05}
+        onValueChange={next => setDraft(Number(next[0]))}
+        onValueCommit={next => onChange(Number(next[0]))}
+      />
+    </Field>
+  );
+}
 
 function HostFoldersSection({
   agent,

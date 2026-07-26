@@ -330,6 +330,14 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   instructions text DEFAULT '',
   tools jsonb DEFAULT '[]'::jsonb,
   skills jsonb DEFAULT '[]'::jsonb,
+  -- How the agent presents itself, and who chose each part:
+  --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
+  -- `voice` stores a PREFERENCE (accent + a variant index + rate/pitch), never a
+  -- device voice name — getVoices() returns a different list on every machine.
+  -- `human_set` records which fields a person chose, so an agent's identity
+  -- declaration on reconnect can default the rest without overwriting them.
+  -- Separate from `metadata` because metadata is manage-only (host_folders).
+  identity jsonb NOT NULL DEFAULT '{}'::jsonb,
   handle text DEFAULT '',
   connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
@@ -607,6 +615,10 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
   agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
   requested_handle text DEFAULT '',
   requested_name text DEFAULT '',
+  -- Identity declared in register_agent. Approval is asynchronous, so this has
+  -- to outlive the pending state or a new agent loses the avatar/voice it asked
+  -- for at the moment its workspace_agents row is created.
+  requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb,
   client_label text DEFAULT '',
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
   created_at timestamptz DEFAULT now(),
