@@ -7,6 +7,7 @@ import {
   workspaceInitials,
   workspaceRailFocusOrder,
   workspaceRailKeyTarget,
+  workspaceTileColor,
   type WorkspaceRailSource,
 } from '../../src/lib/workspaceRail';
 
@@ -65,19 +66,34 @@ describe('workspaceInitials', () => {
 });
 
 describe('workspaceGlyph', () => {
-  it('prefers the icon column', () => {
-    expect(workspaceGlyph({ name: 'Personal', icon: '🌱' })).toEqual({ glyph: '🌱', fromIcon: true });
+  // No emoji in the rail, ever. Emoji renders as a different typeface at a
+  // different weight on every platform, so a column of tiles stops reading as
+  // one control — and it is illegible at tile size. Initials plus a solid
+  // colour (Slack's approach) instead.
+  it('ignores the icon column entirely and always uses initials', () => {
+    expect(workspaceGlyph({ name: 'Personal', icon: '🌱' })).toEqual({ glyph: 'PE', fromIcon: false });
+    expect(workspaceGlyph({ name: 'Work', icon: '💼' })).toEqual({ glyph: 'WO', fromIcon: false });
   });
 
-  it('falls back to initials when the icon is missing or blank', () => {
+  it('uses initials when the icon is missing or blank', () => {
     expect(workspaceGlyph({ name: 'Personal', icon: '' })).toEqual({ glyph: 'PE', fromIcon: false });
     expect(workspaceGlyph({ name: 'Personal', icon: '   ' })).toEqual({ glyph: 'PE', fromIcon: false });
     expect(workspaceGlyph({ name: 'Personal', icon: null })).toEqual({ glyph: 'PE', fromIcon: false });
     expect(workspaceGlyph({ name: 'Personal' })).toEqual({ glyph: 'PE', fromIcon: false });
   });
 
-  it('caps a long icon so a pasted string cannot blow the tile out', () => {
-    expect(workspaceGlyph({ name: 'Personal', icon: 'ABCDEFG' }).glyph).toBe('AB');
+  it('a pasted string in the icon column cannot blow the tile out', () => {
+    // It is not read at all now, but the initials path caps at two either way.
+    expect(workspaceGlyph({ name: 'Personal', icon: 'ABCDEFG' }).glyph).toBe('PE');
+  });
+
+  it('gives each workspace a stable, distinct tile colour', () => {
+    const a = workspaceTileColor({ id: 'a', name: 'Work' });
+    expect(a).toMatch(/^#[0-9a-f]{6}$/i);
+    // Stable across calls — a tile that changes colour on reload is unusable
+    // as a spatial cue.
+    expect(workspaceTileColor({ id: 'a', name: 'Work' })).toBe(a);
+    expect(workspaceTileColor({ id: 'b', name: 'Personal' })).not.toBe(a);
   });
 });
 

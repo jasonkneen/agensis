@@ -1,3 +1,4 @@
+import { agentAccentPaletteColor, hashString } from './agentAccent';
 /**
  * The workspace switcher rail's decisions, with no React and no DOM.
  *
@@ -30,6 +31,8 @@ export interface WorkspaceRailTile {
   /** True when the glyph came from the `icon` column rather than the name. */
   fromIcon: boolean;
   isSystem: boolean;
+  /** Solid tile fill, stable per workspace. */
+  color: string;
   active: boolean;
 }
 
@@ -43,7 +46,6 @@ export interface WorkspaceRailModel {
 }
 
 /** Longest run of characters a tile will paint, icon or initials. */
-const MAX_GLYPH_GRAPHEMES = 2;
 
 /** Splits a workspace name into words. Hyphens and underscores count as spaces. */
 const WORD_SEPARATORS = /[\s\-_/\\.·|,:;]+/;
@@ -98,14 +100,32 @@ export function workspaceInitials(name: string | null | undefined): string {
  * The caller wants both: an icon is centred as-is, initials get the tracking and
  * weight of a text tile.
  */
+/**
+ * A tile's letters. ALWAYS initials — never the workspace's emoji.
+ *
+ * The rail is chrome, and emoji in chrome renders as a different typeface at a
+ * different weight on every platform, so a row of tiles stops looking like one
+ * control. Slack's solid-colour-plus-letters is the pattern this follows, and
+ * it is also legible at 20px in a way a colour emoji is not.
+ *
+ * `icon` is deliberately ignored rather than removed from the type: it is still
+ * the workspace's own emoji elsewhere, and a picker for a real image is coming.
+ */
 export function workspaceGlyph(
   workspace: Pick<WorkspaceRailSource, 'name' | 'icon'>,
 ): { glyph: string; fromIcon: boolean } {
-  const icon = String(workspace.icon ?? '').trim();
-  if (icon) {
-    return { glyph: graphemes(icon).slice(0, MAX_GLYPH_GRAPHEMES).join(''), fromIcon: true };
-  }
   return { glyph: workspaceInitials(workspace.name), fromIcon: false };
+}
+
+/**
+ * The tile's solid fill, derived from the workspace id so it is stable across
+ * reloads and devices, and distinct between neighbours. Same palette and hash
+ * the agent avatars use, so the two never disagree about what colour a thing is.
+ */
+export function workspaceTileColor(
+  workspace: Pick<WorkspaceRailSource, 'id' | 'name'>,
+): string {
+  return agentAccentPaletteColor(hashString(`${workspace.id || ''}:${workspace.name || ''}`));
 }
 
 /**
@@ -166,6 +186,7 @@ export function buildWorkspaceRail(
   for (const workspace of workspaces) {
     const { glyph, fromIcon } = workspaceGlyph(workspace);
     const tile: WorkspaceRailTile = {
+      color: workspaceTileColor(workspace),
       id: workspace.id,
       name: String(workspace.name ?? '').trim() || 'Untitled workspace',
       glyph,
