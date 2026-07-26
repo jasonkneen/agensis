@@ -137,6 +137,17 @@ export function HuddlePanel({
           {state.participants.length > 0 && (
             <span className="block truncate">{participantSummary(state.participants)}</span>
           )}
+          {/* Agents are IN the call — they hear the transcript and speak — but
+              they never hold a LiveKit connection, so the webhook/event roster
+              cannot know them. Listed from the session roster instead; without
+              this they haunted the channel list while the huddle showed nobody,
+              which read as ghosts. */}
+          {agents.length > 0 && state.active && (
+            <span className="block truncate">
+              {'With '}
+              {agents.map(agent => agent.name).join(', ')}
+            </span>
+          )}
         </div>
       )}
 
