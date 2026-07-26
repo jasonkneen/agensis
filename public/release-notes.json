@@ -12,6 +12,20 @@
       "Owner and admin only, per workspace — a member of one workspace can never reach another's keys",
       "An orb's signing secret is visible in the list but still rotated from that orb's own panel",
       "When a key is missing, an agent tells you which vault entry to add and stops instead of failing at the provider"
+]
+  },
+  {
+    "version": "huddle-presence-reaper",
+    "date": "2026-07-26",
+    "title": "Huddles stop showing people who left",
+    "summary": "A huddle knew who had joined because each browser said so — and a browser that crashes, loses power or is force-quit never gets to say it left. That person stayed in the roster indefinitely, and a call everyone had walked away from stayed \"live\" in the channel forever. Now a browser in a huddle keeps saying \"still here\" while it holds the call, and presence that stops being refreshed is removed. A huddle nobody is left in closes itself and leaves the same one-line record in the channel as pressing End does. The window is deliberately generous: leaving the tab in the background, or dropping off wifi for a couple of minutes, does not take you out of a call you are still in — and if you are away long enough to be removed, coming back puts you straight back on the roster.",
+    "highlights": [
+      "Someone whose browser crashed or was force-quit disappears from the huddle instead of haunting it",
+      "A huddle everyone has left closes itself, and files the usual \"You were in a huddle\" line in the channel",
+      "Starting a huddle in a channel whose last call is empty opens a new one rather than joining the ghost",
+      "A backgrounded tab or a couple of minutes of bad signal never removes you from a call",
+      "Come back after a long drop and you rejoin the roster automatically",
+      "A huddle stays open while an agent is still answering in it, even if the roster is empty"
     ]
   },
   {
