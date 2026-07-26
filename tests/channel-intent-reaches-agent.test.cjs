@@ -61,3 +61,20 @@ test('loadChannelIntentNote returns "" rather than throwing when the column is m
   // is the failure mode that would take every channel turn down at once.
   assert.equal(typeof __test.loadChannelIntentNote, 'function');
 });
+
+// Spoken aloud, tool narration is worse than useless. A live huddle produced
+// four consecutive spoken messages — "let me add a test to-do", "now I'm going
+// to call the create_thread_item MCP tool", "perfect, now let me call it", then
+// a paragraph about MCP integration internals — and created nothing. The human
+// heard a minute of plumbing and got no outcome.
+test('the voice note forbids tool narration and premature claims', () => {
+  const note = __test.VOICE_HUDDLE_NOTE;
+  // Names of the plumbing the listener cannot see.
+  assert.match(note, /Never narrate your tools/i);
+  for (const word of ['MCP', 'function calls', 'schemas', 'integrations']) {
+    assert.ok(note.includes(word), `the note must name "${word}" as off-limits aloud`);
+  }
+  // And the honesty rule: no claiming success before it happened.
+  assert.match(note, /Do not say you have done something until it has actually succeeded/i);
+  assert.match(note, /ONE sentence/);
+});
