@@ -9,6 +9,7 @@ const {
 // '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
 // backend-core (same helper the generic /backend/db path uses).
 const { toPgArrayLiteral } = require('../shared/backend-core.cjs');
+const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 
 // Native MCP (Model Context Protocol) server for agensis.
 //
@@ -674,7 +675,7 @@ function buildTools() {
 
  add({
   name: 'create_task',
-  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai). Pass parent_id to nest it under an existing task instead of faking hierarchy in the title. Pass start_date/due_date so it appears as a real bar on the timeline, and depends_on to declare what must finish first instead of encoding an order in the title ("1..6").',
+  description: 'Create a task in the workspace. Attributed to this agent (source_type=ai). Pass parent_id to nest it under an existing task instead of faking hierarchy in the title. Pass start_date/due_date so it appears as a real bar on the timeline, and depends_on to declare what must finish first instead of encoding an order in the title ("1..6"). The server STRIPS outline prefixes from the title ("Parent / 3. Foo" and "1.2.1 Foo" are both stored as "Foo"), so numbering a title achieves nothing except losing the words you typed.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -699,13 +700,27 @@ function buildTools() {
    if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
     throw new ToolError('This invite is read-only and cannot create tasks');
    }
-   const title = requireString(args, 'title');
+   // Outline prefixes ("Ship UI work / 1. Push main") are stripped here — see
+   // shared/taskTitle.cjs for exactly which shapes qualify and why the matcher
+   // is deliberately timid.
+   const normalizedTitle = normalizeTaskTitle(requireString(args, 'title'));
+   const title = normalizedTitle.title;
    const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : 'todo';
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : 'normal';
    // Validated before the insert: a bad parent must not create an orphan row.
-   const parentId = typeof args?.parent_id === 'string' && args.parent_id.trim()
+   let parentId = typeof args?.parent_id === 'string' && args.parent_id.trim()
     ? await resolveParentTaskId(db, identity.workspaceId, args.parent_id, null)
     : null;
+   // The stripped prefix named a task ("Ship UI work / …"). If that task really
+   // exists, the agent meant parent_id — so give it the nesting it was typing
+   // out in prose. An explicit parent_id always wins over the guess.
+   if (!parentId && normalizedTitle.parentTitle) {
+    parentId = await resolveTaskParentByTitle(
+     (sql, params) => db.unsafe(sql, params),
+     identity.workspaceId,
+     normalizedTitle.parentTitle,
+    );
+   }
    const startDate = optDateArg(args, 'start_date');
    const dueDate = optDateArg(args, 'due_date');
    // Same rule as the parent: validated BEFORE the insert, so a bad dependency

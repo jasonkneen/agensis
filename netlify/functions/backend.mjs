@@ -25,6 +25,7 @@ import {
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
 } from '../../shared/backend-core.cjs';
+import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -1768,6 +1769,12 @@ async function handleDb(pathname, req, userId) {
    if (!row || typeof row !== 'object') return row;
    let next = stripPrivilegedDbValues(table, row);
    if (table === 'workspaces') next = { ...next, user_id: userId };
+   // Mirrors server/index.cjs — see the comment there for why this route
+   // strips the title but never infers parent_id from it.
+   if (table === 'tasks' && typeof next.title === 'string') {
+    const normalized = normalizeTaskTitle(next.title);
+    if (normalized.changed) next = { ...next, title: normalized.title };
+   }
    return next;
   });
   if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));

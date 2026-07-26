@@ -59,6 +59,8 @@ let root: Root;
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   // Radix ScrollArea observes its viewport; jsdom ships no ResizeObserver.
+  // jsdom implements no scrolling at all; the focus effect calls this for real.
+  if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => { };
   if (typeof globalThis.ResizeObserver === 'undefined') {
     globalThis.ResizeObserver = class {
       observe() { }
@@ -70,7 +72,9 @@ beforeAll(() => {
 
 type Update = { id: string; updates: Partial<Task> };
 
-function render(tasks: Task[], updates: Update[] = []) {
+type RenderOptions = { focusTaskId?: string; onFocusTaskConsumed?: () => void };
+
+function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = {}) {
   act(() => {
     root.render(createElement(TasksWindowContent, {
       tasks,
@@ -84,6 +88,7 @@ function render(tasks: Task[], updates: Update[] = []) {
       onToggleStatus: () => { },
       onDeleteTask: () => { },
       onUpdateAgent: () => { },
+      ...options,
     } as never));
   });
 }
@@ -154,9 +159,51 @@ describe('Gantt timeline rendering', () => {
   });
 
   it('renders an undated task as a single-day marker, not as a span', () => {
-    const marker = bars().find(b => b.textContent?.includes('Totally undated task'));
+    const marker = bars().find(b => b.dataset.ganttId === 'u');
     expect(marker?.dataset.ganttKind).toBe('point');
     expect(Number(marker?.dataset.ganttDays)).toBe(1);
+  });
+
+  // The complaint this view was reported for: the name was drawn twice, once
+  // truncated in a fixed left column and once in full beside the bar, so the
+  // column was squeezed to nothing while the chart sat mostly empty. There is
+  // now one copy, and it belongs to the bar.
+  it('renders each task name exactly once', () => {
+    const text = container.textContent || '';
+    for (const task of TASKS) {
+      const hits = text.split(task.title).length - 1;
+      expect(hits, `"${task.title}" appears ${hits} times`).toBe(1);
+    }
+  });
+
+  it('has no separate name column left to duplicate', () => {
+    // Every rendered title lives inside a bar/marker row.
+    for (const task of TASKS) {
+      const owner = bars().find(b => b.dataset.ganttId === task.id);
+      expect(owner?.textContent).toContain(task.title);
+    }
+  });
+
+  it('gives an undated marker its name alongside, since a diamond holds no text', () => {
+    const marker = bars().find(b => b.dataset.ganttId === 'u');
+    expect(marker?.dataset.ganttLabel).toBe('outside');
+    expect(marker?.textContent).toContain('Totally undated task');
+  });
+
+  it('pins an alongside label rather than letting it scroll out of reach', () => {
+    // With no name column, this is the only thing keeping rows identifiable
+    // once the chart is scrolled into next month. Pure CSS: `sticky` plus a
+    // left offset clamps the label at the viewport edge instead of letting it
+    // follow its bar off-screen. jsdom loads no stylesheet, so the class and
+    // the inline offset are what can be asserted here — the behaviour itself
+    // was checked in a real browser.
+    const marker = bars().find(b => b.dataset.ganttId === 'u');
+    const label = marker?.querySelector<HTMLElement>('[data-gantt-sticky-label]');
+    expect(label).toBeTruthy();
+    expect(label!.classList.contains('sticky')).toBe(true);
+    expect(label!.style.left).not.toBe('');
+    // …and it starts out beside its marker, not jammed at the edge.
+    expect(parseFloat(label!.style.marginLeft)).toBeGreaterThan(0);
   });
 
   it('puts the title OUTSIDE any bar too narrow to hold it', () => {
@@ -178,7 +225,7 @@ describe('Gantt timeline rendering', () => {
     expect(arrows).toHaveLength(1);
   });
 
-  it('labels every row readably in the sticky column', () => {
+  it('labels every row readably', () => {
     for (const task of TASKS) {
       expect(container.textContent).toContain(task.title);
     }
@@ -196,7 +243,104 @@ describe('Gantt timeline with no dates anywhere', () => {
     clickText('Timeline');
     const kinds = bars().map(b => b.dataset.ganttKind);
     expect(kinds).toEqual(['point', 'point', 'point']);
-    expect(container.textContent).toContain('unscheduled');
+    // The dashed diamond and the banner say "no dates" — the row does not also
+    // spell it out, which on an all-unscheduled board was 14 identical words.
+    expect(container.textContent).toContain('Alpha');
+    expect(container.textContent).toContain('Gamma');
+  });
+
+  it('says so in words instead of leaving a wall of identical markers', () => {
+    render([makeTask({ id: 'a', title: 'Alpha' }), makeTask({ id: 'b', title: 'Beta' })]);
+    clickText('Timeline');
+    expect(container.textContent).toContain('Nothing is scheduled yet');
+  });
+
+  it('drops the hint as soon as one task has real dates', () => {
+    render([
+      makeTask({ id: 'a', title: 'Alpha' }),
+      makeTask({ id: 'b', title: 'Beta', start_date: localIso(2026, 8, 3), due_date: localIso(2026, 8, 7) }),
+    ]);
+    clickText('Timeline');
+    expect(container.textContent).not.toContain('Nothing is scheduled yet');
+  });
+});
+
+// --- "Hide done" ------------------------------------------------------------
+// It looked dead in production: the focus effect re-ran on every toggle and,
+// with a focus request pointing at a done task, put the filter straight back.
+
+const MOSTLY_DONE: Task[] = [
+  makeTask({ id: 'open', title: 'Still open task' }),
+  makeTask({ id: 'fin', title: 'Finished task', status: 'done' }),
+  makeTask({ id: 'nope', title: 'Abandoned task', status: 'cancelled' }),
+];
+
+function hideDoneButton() {
+  const node = Array.from(container.querySelectorAll('button'))
+    .find(b => b.textContent === 'Hide done' || b.textContent === 'Show done');
+  if (!node) throw new Error('no hide/show done button');
+  return node;
+}
+
+describe('hide done', () => {
+  it('hides done AND cancelled top-level tasks', () => {
+    render(MOSTLY_DONE);
+    expect(container.textContent).toContain('Finished task');
+    click(hideDoneButton());
+    expect(container.textContent).toContain('Still open task');
+    expect(container.textContent).not.toContain('Finished task');
+    // A lone "Cancelled" section left on screen reads as the same broken button.
+    expect(container.textContent).not.toContain('Abandoned task');
+  });
+
+  it('stays on — a pending focus request must not toggle it back off', () => {
+    // The exact production shape: a stale focusTaskId pointing at a done task.
+    render(MOSTLY_DONE, [], { focusTaskId: 'fin' });
+    click(hideDoneButton());
+    expect(hideDoneButton().textContent).toBe('Show done');
+    expect(container.textContent).not.toContain('Finished task');
+  });
+
+  it('still widens the filters for a genuinely new focus request', () => {
+    render(MOSTLY_DONE);
+    click(hideDoneButton());
+    expect(container.textContent).not.toContain('Finished task');
+    // Now something asks to jump to the done task — that IS worth overriding for.
+    render(MOSTLY_DONE, [], { focusTaskId: 'fin' });
+    expect(container.textContent).toContain('Finished task');
+    expect(hideDoneButton().textContent).toBe('Hide done');
+  });
+
+  it('consumes the focus request in a view with no task rows to scroll to', () => {
+    // Board/Timeline render no `task-row-<id>` element at all, so the old code
+    // hit `if (!node) return` and the request never cleared — which is what let
+    // a stale focus id hold the filters hostage indefinitely.
+    const consumed: number[] = [];
+    const onFocusTaskConsumed = () => { consumed.push(1); };
+    render(MOSTLY_DONE, [], { onFocusTaskConsumed });
+    clickText('Board');
+    expect(consumed).toHaveLength(0);
+    render(MOSTLY_DONE, [], { focusTaskId: 'fin', onFocusTaskConsumed });
+    expect(consumed).toHaveLength(1);
+  });
+
+  it('hides done subtasks under a visible parent', () => {
+    render([
+      makeTask({ id: 'p', title: 'Parent task' }),
+      makeTask({ id: 's1', title: 'Open subtask', parent_id: 'p' }),
+      makeTask({ id: 's2', title: 'Done subtask', parent_id: 'p', status: 'done' }),
+    ]);
+    click(hideDoneButton());
+    expandFirstRow();
+    // Scoped to the subtask list — the dependency picker below it legitimately
+    // still offers every task in the workspace, done or not.
+    const rendered = Array.from(container.querySelectorAll('.task-subtask-row'))
+      .map(node => node.textContent || '');
+    expect(rendered.some(text => text.includes('Open subtask'))).toBe(true);
+    expect(rendered.some(text => text.includes('Done subtask'))).toBe(false);
+    expect(container.textContent).toContain('1 done or cancelled subtask hidden');
+    // The x/y badge still counts every subtask, so nothing is silently lost.
+    expect(container.textContent).toContain('1/2');
   });
 });
 
