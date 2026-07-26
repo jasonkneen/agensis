@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupeSessionParticipants, parseParticipants } from '../../src/lib/sessionParticipants';
+import { buildChannelRoster, dedupeSessionParticipants, parseParticipants } from '../../src/lib/sessionParticipants';
 
 // Two server write sites bound JSON.stringify(...) into a `$n::jsonb`
 // placeholder, which stores a jsonb STRING SCALAR instead of an array. 88 live
@@ -65,5 +65,47 @@ describe('dedupeSessionParticipants', () => {
     const a = { id: 'agent:coder', kind: 'agent', name: 'Coder', handle: 'coder', agent_id: null };
     const b = { id: 'coder', kind: 'agent', name: 'Coder', handle: 'Coder', agent_id: null };
     expect(dedupeSessionParticipants([a, b])).toHaveLength(1);
+  });
+});
+
+// "4 in the room, no one there because they are not really there" — the header
+// counted every agent online ANYWHERE in the workspace as a member of this
+// channel, while the huddle (reading the stored roster) correctly said one.
+describe('buildChannelRoster', () => {
+  const decorate = (p: { id: string }) => ({ ...p, decorated: true });
+
+  it('an online agent that was never added is NOT in the channel', () => {
+    const roster = buildChannelRoster({
+      stored: [],
+      present: [{ id: 'a1', kind: 'agent', name: 'Coder', status: 'online' }],
+      decorate,
+    });
+    expect(roster).toEqual([]);
+  });
+
+  it('a live HUMAN is in the channel — being here is how people join', () => {
+    const roster = buildChannelRoster({
+      stored: [],
+      present: [{ id: 'h1', kind: 'user', name: 'Jason', status: 'online', isCurrentUser: true }],
+      decorate,
+    }) as Array<Record<string, unknown>>;
+    expect(roster).toHaveLength(1);
+    expect(roster[0].name).toBe('You');
+    expect(roster[0].connected).toBe(true);
+  });
+
+  it('a STORED agent stays, and presence only decorates it', () => {
+    const roster = buildChannelRoster({
+      stored: [{ id: 'agent:a1' }],
+      present: [{ id: 'a1', kind: 'agent', name: 'Coder', status: 'online' }],
+      decorate,
+    }) as Array<Record<string, unknown>>;
+    expect(roster).toHaveLength(1);
+    expect(roster[0].decorated).toBe(true);
+  });
+
+  it('caps the list so a busy workspace cannot flood the chip', () => {
+    const present = Array.from({ length: 12 }, (_, i) => ({ id: `h${i}`, kind: 'user', name: `P${i}` }));
+    expect(buildChannelRoster({ stored: [], present, decorate })).toHaveLength(6);
   });
 });

@@ -1,4 +1,4 @@
-import { participantAgentKey } from '../../lib/sessionParticipants';
+import { buildChannelRoster, participantAgentKey } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -1038,25 +1038,30 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [agentConnections, agents, persistedParticipants, presenceUsers],
   );
 
-  const participants = useMemo(() => {
-    const map = new Map<string, DisplayParticipant>();
-    persistedParticipants.forEach(participant => {
-      map.set(participant.id, withLiveParticipantStatus(participant, agents, agentConnections));
-    });
-    presenceUsers.forEach(participant => {
-      const id = participant.kind === 'agent' ? `agent:${participant.id}` : `user:${participant.id}`;
-      map.set(id, {
-        id,
-        name: participant.isCurrentUser ? 'You' : participant.name,
-        kind: participant.kind === 'agent' ? 'agent' : 'user',
-        status: participant.status,
-        user_id: participant.kind === 'agent' ? null : participant.id,
-        agent_id: participant.kind === 'agent' ? participant.id : null,
-        connected: Boolean(participant.status && participant.status !== 'offline'),
-      });
-    });
-    return Array.from(map.values()).slice(0, 6);
-  }, [agentConnections, agents, persistedParticipants, presenceUsers]);
+  // WHO IS IN THIS CHANNEL — the stored roster, and nothing else.
+  //
+  // This used to merge workspace PRESENCE in wholesale, so every agent that
+  // happened to be online anywhere in the workspace appeared as a member of
+  // every channel. The owner caught it exactly: "4 in the room, no one there
+  // because they are not really there" — the header counted four while the
+  // huddle, which reads the stored roster, correctly said one. The add dialog
+  // was telling the truth all along by offering those agents as "Add"; the
+  // dropdown was the liar, and the mismatch is what made adding them look like
+  // it produced duplicates.
+  //
+  // Presence still contributes STATUS to a stored member (withLiveParticipantStatus
+  // and the branch below) — being online is a property of someone in the room,
+  // not a way into it. Humans present in the channel are a separate matter from
+  // agents: a human who has the channel open IS in it, which is what the
+  // presence feed means for people, so live humans are still merged.
+  const participants = useMemo(
+    () => buildChannelRoster<ChannelParticipant, DisplayParticipant>({
+      stored: persistedParticipants,
+      present: presenceUsers,
+      decorate: participant => withLiveParticipantStatus(participant, agents, agentConnections),
+    }),
+    [agentConnections, agents, persistedParticipants, presenceUsers],
+  );
 
   // Agents @mentioned in the current draft that aren't channel participants yet.
   // On send, the server adds them to the roster (ensureMentionedParticipants), so
