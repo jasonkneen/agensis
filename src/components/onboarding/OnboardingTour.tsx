@@ -17,9 +17,11 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiBaseUrl, apiUrl } from '@/lib/backendClient';
 import { AGENT_TEMPLATES, dedupeHandle, type AgentTemplate } from '@/lib/agentTemplates';
+import type { WorkspaceReadiness } from '@/lib/workspaceReadiness';
 import type { CreateAgentInput, CreateAgentResult } from '@/hooks/useAgents';
 import type { AgentConnection, WorkspaceAgent } from '../../types';
 
@@ -29,6 +31,14 @@ interface OnboardingTourProps {
   onInvite?: () => void;
   /** Active workspace — agent creation + key checks are scoped to it. */
   workspaceId: string | null;
+  /**
+   * Whether an agent can be created yet. A brand-new account reaches this tour
+   * before its starter workspaces exist, and every button here writes into a
+   * workspace — so they stay disabled, and say why, until there is one.
+   */
+  workspaceReadiness: WorkspaceReadiness;
+  /** Re-run workspace setup after the user watched it fail. */
+  onRetryWorkspaceSetup?: () => void | Promise<void>;
   /** Existing agents, used to avoid handle collisions on one-click creation. */
   agents: WorkspaceAgent[];
   /** Live daemon connections, used to show the connect step's success state. */
@@ -105,10 +115,50 @@ const CONNECT_CLIS = [
 
 type KeyStatus = 'unknown' | 'configured' | 'missing';
 
-export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, connections, createAgent }: OnboardingTourProps) {
+/**
+ * Why the buttons above are greyed out. Renders nothing once a workspace
+ * exists, so the common path is unchanged; while there is none it replaces the
+ * old behaviour of a live-looking button that failed on click.
+ */
+function WorkspaceNotReadyNotice({
+  readiness,
+  onRetry,
+}: {
+  readiness: WorkspaceReadiness;
+  onRetry?: () => void | Promise<void>;
+}) {
+  if (readiness.ready || !readiness.reason) return null;
+  const failed = readiness.status === 'unavailable';
+  return (
+    <div
+      role="status"
+      className={cn('mt-2 flex items-center justify-center gap-2 text-xs', failed ? 'text-destructive' : 'text-muted-foreground')}
+    >
+      {!failed && <Spinner className="size-3 shrink-0" />}
+      <span className="text-pretty">{readiness.reason}</span>
+      {failed && readiness.canRetry && onRetry && (
+        <Button type="button" variant="outline" size="sm" className="h-6 shrink-0 px-2 text-xs" onClick={() => void onRetry()}>
+          Try again
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export function OnboardingTour({
+  onComplete,
+  onInvite,
+  workspaceId,
+  workspaceReadiness,
+  onRetryWorkspaceSetup,
+  agents,
+  connections,
+  createAgent,
+}: OnboardingTourProps) {
   const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(false);
   const dismissedRef = useRef(false);
+  const workspaceReady = workspaceReadiness.ready;
 
   // Built-in step
   const [addedPresetIds, setAddedPresetIds] = useState<Set<string>>(new Set());
@@ -173,6 +223,13 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
 
   const handleAddPreset = async (tpl: AgentTemplate) => {
     if (addingPresetId || addedPresetIds.has(tpl.id)) return;
+    // Belt and braces: the button is already disabled while the workspace is
+    // missing, so this only fires if something re-enabled it. Report the
+    // workspace's own reason rather than attempting a write with nowhere to go.
+    if (!workspaceReady) {
+      setAddError(workspaceReadiness.reason || 'Your workspace is not ready yet.');
+      return;
+    }
     setAddingPresetId(tpl.id);
     setAddError('');
     try {
@@ -225,6 +282,11 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
 
   const handleConnect = async (cliId: string) => {
     if (connectBusy) return;
+    // The connect step creates an agent too, so it dead-ends the same way.
+    if (!workspaceReady) {
+      setConnectError(workspaceReadiness.reason || 'Your workspace is not ready yet.');
+      return;
+    }
     setConnectBusy(cliId);
     setConnectError('');
     try {
@@ -349,7 +411,8 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
                         type="button"
                         size="sm"
                         variant={added ? 'outline' : 'default'}
-                        disabled={added || addingPresetId !== null}
+                        disabled={added || addingPresetId !== null || !workspaceReady}
+                        title={workspaceReady ? undefined : workspaceReadiness.reason || undefined}
                         onClick={() => void handleAddPreset(tpl)}
                         className="shrink-0"
                       >
@@ -360,6 +423,7 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
                   );
                 })}
               </div>
+              <WorkspaceNotReadyNotice readiness={workspaceReadiness} onRetry={onRetryWorkspaceSetup} />
               {addError && <div className="mt-2 text-xs text-destructive">{addError}</div>}
 
               {keyStatus === 'missing' && (
@@ -405,7 +469,8 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
                         type="button"
                         size="sm"
                         className="mt-1"
-                        disabled={connectBusy !== null}
+                        disabled={connectBusy !== null || !workspaceReady}
+                        title={workspaceReady ? undefined : workspaceReadiness.reason || undefined}
                         onClick={() => void handleConnect(cli.id)}
                       >
                         {connectBusy === cli.id ? 'Creating…' : 'Connect'}
@@ -442,6 +507,7 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
                   </div>
                 </div>
               )}
+              {!connectCommand && <WorkspaceNotReadyNotice readiness={workspaceReadiness} onRetry={onRetryWorkspaceSetup} />}
               {connectError && <div className="mt-2 text-xs text-destructive">{connectError}</div>}
             </div>
           )}

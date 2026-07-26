@@ -620,7 +620,7 @@ function AppContent() {
   const activeSceneRef = useRef<HTMLDivElement>(null);
   const setupCallbackInFlightRef = useRef(false);
 
-  const { workspaces, loading: wsLoading, createWorkspace } = useWorkspaces(user?.id);
+  const { workspaces, loading: wsLoading, createWorkspace, readiness: workspaceReadiness, retryWorkspaceSetup } = useWorkspaces(user?.id);
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
 
   useEffect(() => {
@@ -2133,6 +2133,8 @@ function AppContent() {
             onComplete={handleTourComplete}
             onInvite={handleOpenUsers}
             workspaceId={activeWorkspaceId || null}
+            workspaceReadiness={workspaceReadiness}
+            onRetryWorkspaceSetup={retryWorkspaceSetup}
             agents={agents}
             connections={agentConnections}
             createAgent={createAgent}
