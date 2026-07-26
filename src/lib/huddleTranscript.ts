@@ -138,3 +138,62 @@ export function huddleComposerPlaceholder(activeHandle: string): string {
   const handle = String(activeHandle || '').trim().replace(/^@+/, '');
   return handle ? `Message @${handle} in this huddle` : 'Message in this huddle';
 }
+
+/**
+ * A run of consecutive huddle markers, collapsed into one row.
+ *
+ * Ten "You were in a huddle" lines stacked down a channel is ten rows of
+ * chrome for one fact — that voice happened here — and it buried the actual
+ * conversation. Consecutive markers therefore fold into a single dated row of
+ * small chips, one chip per huddle, each still opening its own transcript.
+ *
+ * Consecutive means adjacent in the rendered list: any real message between
+ * two huddles breaks the group, because the huddles then belong to different
+ * moments in the conversation and merging them would misstate the order.
+ */
+export interface HuddleMarkerGroup {
+  kind: 'huddle-group';
+  key: string;
+  /** The markers in the run, oldest first. */
+  messages: Array<{ id: string; created_at?: string | null; content?: string | null; huddle_id?: string | null }>;
+}
+
+type MarkerLike = Pick<Message, 'message_kind'> & {
+  id: string;
+  created_at?: string | null;
+  content?: string | null;
+  huddle_id?: string | null;
+};
+
+/**
+ * Fold runs of two-or-more markers into groups, leaving everything else — and
+ * any LONE marker — exactly as it was. A single huddle reads better as the
+ * sentence it already is than as a one-chip row.
+ */
+export function groupHuddleMarkers<T extends MarkerLike>(
+  messages: readonly T[],
+): Array<T | HuddleMarkerGroup> {
+  const out: Array<T | HuddleMarkerGroup> = [];
+  let run: T[] = [];
+
+  const flush = () => {
+    if (run.length === 0) return;
+    if (run.length === 1) out.push(run[0]);
+    else out.push({ kind: 'huddle-group', key: `huddle-group-${run[0].id}`, messages: run.slice() });
+    run = [];
+  };
+
+  for (const message of messages) {
+    if (isHuddleMarkerMessage(message)) { run.push(message); continue; }
+    flush();
+    out.push(message);
+  }
+  flush();
+  return out;
+}
+
+/** "3 huddles" / "10 huddles" — the count is the headline, the date the context. */
+export function huddleGroupLabel(group: HuddleMarkerGroup): string {
+  const count = group.messages.length;
+  return `${count} ${count === 1 ? 'huddle' : 'huddles'}`;
+}

@@ -72,6 +72,7 @@ import {
 } from '@/lib/threadWidgetRail';
 import { HuddleCard } from '../huddle/HuddleCard';
 import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
+import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
 import { HuddlePanel } from '../huddle/HuddlePanel';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
@@ -172,7 +173,7 @@ import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
-import { isHuddleMarkerMessage } from '../../lib/huddleTranscript';
+import { groupHuddleMarkers, type HuddleMarkerGroup, isHuddleMarkerMessage } from '../../lib/huddleTranscript';
 import {
   activityLine,
   extractActivityVerb,
@@ -857,6 +858,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // own row at its original position. Order is never changed.
   const shownRows = useMemo(() => buildTranscriptRows(shownMessages), [shownMessages]);
 
+  // Marker runs, resolved once per message list rather than per row: the row
+  // loop needs to know both "does a group START here" and "is this marker
+  // already inside one", and asking that per row would be quadratic.
+  const { huddleGroupByLeadId, huddleGroupedIds } = useMemo(() => {
+    const byLead = new Map<string, HuddleMarkerGroup>();
+    const swallowed = new Set<string>();
+    for (const entry of groupHuddleMarkers(shownMessages)) {
+      if ((entry as HuddleMarkerGroup).kind !== 'huddle-group') continue;
+      const group = entry as HuddleMarkerGroup;
+      byLead.set(group.messages[0].id, group);
+      group.messages.slice(1).forEach(message => swallowed.add(message.id));
+    }
+    return { huddleGroupByLeadId: byLead, huddleGroupedIds: swallowed };
+  }, [shownMessages]);
+
   // Slash menu: built-ins that actually have a home here + the enumerated inserts,
   // fuzzy-ranked and grouped for display. `/split` only when splitting is wired;
   // `/restore` only when there's a cleared view to bring back.
@@ -1187,6 +1203,22 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     });
   };
 
+  // Remove one participant from the dropdown's X. Writes from the PERSISTED
+  // roster (never the presence-merged display list), filtered by the canonical
+  // key so an agent's historical shape-twin rows — `agent:<uuid>` and bare
+  // `<uuid>` — leave together; removing one visual row must not leave a hidden
+  // duplicate behind to keep answering turns. Reversible via the add dialog,
+  // so no confirm. "You" gets no X: removing yourself is leaving, a different
+  // action with different consequences, not roster tidying.
+  const handleRemoveParticipant = async (participant: { id?: unknown; kind?: unknown; agent_id?: unknown; handle?: unknown }) => {
+    const targetKey = dialogParticipantKey(participant);
+    if (!targetKey) return;
+    const source = persistedParticipants.length > 0 ? persistedParticipants : [];
+    const next = source.filter(row => dialogParticipantKey(row) !== targetKey);
+    if (next.length === source.length) return;
+    await persistChannelUpdates({ participants: next });
+  };
+
   const handleSaveParticipants = async () => {
     const selected = participantCandidates
       .filter(participant => selectedParticipantIds.has(dialogParticipantKey(participant)))
@@ -1500,6 +1532,24 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
                         )}
                       </span>
+                      {participant.user_id !== currentUserId && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="shrink-0 opacity-60 hover:opacity-100"
+                          aria-label={`Remove ${participant.name} from this channel`}
+                          onClick={event => {
+                            // Keep the menu open: removing three agents should
+                            // be three clicks, not three menu reopenings.
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleRemoveParticipant(participant);
+                          }}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      )}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -1656,7 +1706,22 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                       // "You were in a huddle" — a fact about the channel, not
                       // something anyone said in it. One quiet line where the
                       // whole voice conversation used to be dumped.
+                      //
+                      // A RUN of them collapses further: ten stacked lines was
+                      // ten rows of chrome for one fact, so consecutive markers
+                      // render as one dated row of numbered chips. A lone
+                      // marker keeps its sentence.
                       if (isHuddleMarkerMessage(msg)) {
+                        const group = huddleGroupByLeadId.get(msg.id);
+                        if (group) {
+                          return (
+                            <MessageScrollerItem key={group.key} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
+                              <HuddleMarkerGroupRow group={group} onOpen={openHuddlePanel} />
+                            </MessageScrollerItem>
+                          );
+                        }
+                        // A marker swallowed by the group above it renders nothing.
+                        if (huddleGroupedIds.has(msg.id)) return null;
                         return (
                           <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
                             <HuddleMarkerRow message={msg} onOpen={openHuddlePanel} />
