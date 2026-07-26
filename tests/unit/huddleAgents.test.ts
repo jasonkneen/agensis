@@ -232,3 +232,34 @@ describe('huddleAgentOptions', () => {
     expect(huddleAgentOptions([], [])).toEqual([]);
   });
 });
+
+// The huddle speaks as whichever agent is ACTIVE, and the strip switches that
+// mid-call. HuddleCard passed a hardcoded voiceId of '', so every agent came
+// out in the same derived default and the voices chosen in the agent panel were
+// never used at all.
+describe('huddleAgentOptions carries the agent voice', () => {
+  const participant = {
+    id: 'agent:a1', kind: 'agent' as const, name: 'Coder', handle: 'coder',
+    agent_id: 'a1', user_id: null, status: null, added_at: null, direct: false,
+  };
+
+  it('reads the stored Cartesia voice from the AGENT row', () => {
+    const agents = [{
+      id: 'a1', name: 'Coder', handle: 'coder', accent_color: null,
+      identity: { voice: { cartesia_voice_id: 'f9fc912e-1234-4a2b-8c3d-5e6f70819203' } },
+    }] as unknown as Parameters<typeof huddleAgentOptions>[0];
+    const [option] = huddleAgentOptions(agents, [participant]);
+    expect(option.voiceId).toBe('f9fc912e-1234-4a2b-8c3d-5e6f70819203');
+  });
+
+  it("is '' when the agent has no voice stored — never a fabricated id", () => {
+    const agents = [{ id: 'a1', name: 'Coder', handle: 'coder', accent_color: null }] as unknown as Parameters<typeof huddleAgentOptions>[0];
+    expect(huddleAgentOptions(agents, [participant])[0].voiceId).toBe('');
+  });
+
+  it("is '' when only a participant row exists — participants are denormalised and carry no identity", () => {
+    // A voice chosen after someone joined the channel would never appear if we
+    // read it from the participant snapshot.
+    expect(huddleAgentOptions([], [participant])[0].voiceId).toBe('');
+  });
+});

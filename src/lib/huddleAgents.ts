@@ -1,3 +1,4 @@
+import { readAgentVoice } from './agentVoice';
 import { agentAccentColor, agentHandle } from './agentAccent';
 import type { ChannelParticipant, WorkspaceAgent } from '../types';
 
@@ -24,6 +25,16 @@ export interface HuddleAgentOption {
   avatar: string;
   /** Hex accent, the same one this agent wears everywhere else in the app. */
   accent: string;
+  /**
+   * The agent's chosen Cartesia voice, or '' when it has none stored.
+   *
+   * Carried on the option because the huddle speaks as whichever agent is
+   * ACTIVE, and that changes mid-call — looking the voice up separately at
+   * speak time means the strip and the voice can disagree about who is
+   * talking. '' means "no voice decided"; the caller derives a default, it
+   * must never be sent to Cartesia as a voice id.
+   */
+  voiceId: string;
 }
 
 function lookupKey(value: unknown): string {
@@ -100,6 +111,10 @@ export function huddleAgentOptions(
       accent: agent
         ? agentAccentColor(agent)
         : agentAccentColor({ id, name: rawName, handle, accent_color: null }),
+      // Read from the resolved AGENT row, never the participant: participant
+      // rows are denormalised snapshots taken when someone joined a channel and
+      // do not carry identity, so a voice chosen afterwards would never appear.
+      voiceId: readAgentVoice(agent).cartesia_voice_id || '',
     });
   }
 

@@ -149,7 +149,12 @@ export function HuddleCard({
     // '' means "the server's default English voice". Every agent sounding the
     // same is still an improvement on every MACHINE sounding different, which
     // is what speechSynthesis gave us.
-    { engine: engines.tts, workspaceId, voiceId: '' },
+    // The ACTIVE agent's voice, not a fixed one — the strip switches who is
+    // speaking mid-call, so a hardcoded '' meant every agent came out in the
+    // same derived default and the voices chosen in the agent panel were never
+    // used. '' still means "none stored"; the speaker derives a default from
+    // the agent id rather than sending an empty voice to Cartesia.
+    { engine: engines.tts, workspaceId, voiceId: activeAgent?.voiceId || '' },
   );
 
   // While a reply is playing (and for a moment after), anything the microphone

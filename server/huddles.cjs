@@ -701,9 +701,17 @@ function mountHuddleRoutes(app, deps = {}) {
  async function createTranscriptSession(huddle, hostTitle) {
   const sessionId = crypto.randomUUID();
   const title = hostTitle ? `Huddle in ${hostTitle}` : 'Huddle';
+  // 'mention', NEVER the host channel's mode. A channel on 'auto' has agents
+  // continue the conversation between themselves for auto_rounds turns — which
+  // in a live voice call means a second agent starts talking over the first
+  // while the human is still listening to it. Inheriting the host's mode did
+  // exactly that: one agent answered, then two.
+  //
+  // In a huddle the HUMAN drives turn-taking. An utterance mentions the active
+  // agent and that agent answers; nothing else should speak unprompted.
   const rows = await getDb().unsafe(
    `insert into chat_sessions (id, workspace_id, title, model, conversation_mode, folder, canvas_id, participants)
-        select $1, $2, $3, host.model, host.conversation_mode, 'huddle', host.canvas_id, host.participants
+        select $1, $2, $3, host.model, 'mention', 'huddle', host.canvas_id, host.participants
           from chat_sessions host
          where host.id = $4
         returning id`,
