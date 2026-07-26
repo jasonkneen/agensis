@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Headphones, Mic, MicOff, Radio, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useHuddleSession } from './HuddleSessionContext';
-import { useSpeechInput, useSpeechOutput } from '@/hooks/useHuddleVoice';
+import { useSpeechInput, useSpeechOutput, useVoiceEngines } from '@/hooks/useHuddleVoice';
 import { echoGuardUntil, trailingCaption } from '@/lib/huddleVoice';
+import { isEchoSuppressed, playbackEchoGuardUntil } from '@/lib/voiceStream';
 import { huddleDuration, isRecentlyEnded, participantSummary } from '@/lib/huddleState';
 import { huddleTranscriptTarget, shouldOpenHuddlePanel } from '@/lib/huddleTranscript';
 import { useHuddleSend } from '@/hooks/useHuddleTranscript';
@@ -131,23 +132,42 @@ export function HuddleCard({
     onOpenPanel(openedForRef.current);
   }, [connection?.huddleId, onOpenPanel]);
 
+  // Which engines this deployment can offer. Asked once, before a microphone is
+  // opened, so a missing key downgrades to the browser engines with a sentence
+  // on screen rather than to a mic that lights up and does nothing.
+  const engines = useVoiceEngines(workspaceId, !!connection);
+
   // Replies are read from the SAME session the transcript goes into. Pointing
   // this at the channel while speech posts into the huddle would mean the agent
   // answers in the huddle and the browser reads the channel aloud — a call
   // where nobody's replies are ever heard.
-  const { unavailable: outputUnavailable, speakingName } = useSpeechOutput(
+  const { unavailable: outputUnavailable, speakingName, playbackEndsAtMs } = useSpeechOutput(
     transcriptSessionId || null,
     !!connection && !outputMuted,
     connection?.joinedAtMs ?? 0,
+    // No voice id yet: per-agent Cartesia voices are agent-identity's work, and
+    // '' means "the server's default English voice". Every agent sounding the
+    // same is still an improvement on every MACHINE sounding different, which
+    // is what speechSynthesis gave us.
+    { engine: engines.tts, workspaceId, voiceId: '' },
   );
 
-  // While the browser is talking (and for a moment after), anything the
-  // recogniser hears is our own voice coming back off the speakers. Posting it
-  // would have the agent answering itself, forever.
+  // While a reply is playing (and for a moment after), anything the microphone
+  // hears is our own voice coming back off the speakers. Posting it would have
+  // the agent answering itself, forever — and Deepgram is BETTER at hearing a
+  // distant speaker than the browser recogniser was, so this got more
+  // important, not less.
+  //
+  // Two sources, because they know different things. Cartesia schedules its
+  // audio on an AudioContext, so it can say exactly when the last sample lands;
+  // speechSynthesis can only say "still talking", so that path keeps the old
+  // boolean-plus-tail guard.
   const echoGuardRef = useRef(0);
   useEffect(() => {
-    echoGuardRef.current = echoGuardUntil(!!speakingName, Date.now());
-  }, [speakingName]);
+    echoGuardRef.current = playbackEndsAtMs > 0
+      ? playbackEchoGuardUntil(playbackEndsAtMs)
+      : echoGuardUntil(!!speakingName, Date.now());
+  }, [speakingName, playbackEndsAtMs]);
 
   // Mirrors `activeAgent` so two utterances in the same tick both see a switch
   // the first one made, without waiting for a render in between.
@@ -156,7 +176,7 @@ export function HuddleCard({
 
   const handleUtterance = useCallback((text: string) => {
     if (!transcriptSessionId) return;
-    if (Date.now() < echoGuardRef.current) return;
+    if (isEchoSuppressed(echoGuardRef.current, Date.now())) return;
     // No agents to choose between (a DM): today's behaviour, unchanged.
     if (agents.length === 0) {
       void send(text);
@@ -184,6 +204,10 @@ export function HuddleCard({
   const { unavailable: inputUnavailable, listening, interim, error: inputError } = useSpeechInput(
     listenEnabled,
     handleUtterance,
+    // `suppressed` stops audio LEAVING the browser while a reply plays. The
+    // guard above is the second line of defence; this is the first, and it also
+    // means we are not paying Deepgram to transcribe our own voice.
+    { engine: engines.stt, suppressed: !!speakingName },
   );
 
   if (!workspaceId || !sessionId || !session) return null;
@@ -276,6 +300,7 @@ export function HuddleCard({
           outputMuted={outputMuted}
           speakingName={speakingName}
           activeHandle={activeAgent?.handle || ''}
+          engineNotice={engines.notice}
         />
       )}
     </div>
@@ -299,6 +324,7 @@ function VoiceCaption({
   outputMuted,
   speakingName,
   activeHandle,
+  engineNotice,
 }: {
   transcribing: boolean;
   micEnabled: boolean;
@@ -311,6 +337,8 @@ function VoiceCaption({
   speakingName: string;
   /** Handle of the agent your voice is addressed to, or '' in a DM. */
   activeHandle: string;
+  /** '' when Deepgram and Cartesia are both in use; otherwise which one is not. */
+  engineNotice: string;
 }) {
   // Input is suppressed while a reply plays, so "listening" must not claim
   // otherwise — the indicator has to match what the mic is actually doing.
@@ -336,6 +364,13 @@ function VoiceCaption({
     status = trailingCaption(interim);
     tone = 'text-foreground/80 italic';
     follow = true;
+  } else if (engineNotice) {
+    // A downgrade is a persistent state, not a toast, so it holds the line
+    // whenever nothing more urgent is happening. Silently running on the
+    // fallback engine is the bug class this pipeline exists to remove: the
+    // difference between Cartesia and speechSynthesis is audible, and someone
+    // who cannot see why will report it as "the voice changed".
+    status = engineNotice;
   } else if (hearing) {
     // Naming the addressee here is the cheapest place to answer "who am I
     // talking to" in words, and it teaches the say-a-name switch by example.

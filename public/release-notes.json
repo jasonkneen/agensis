@@ -13,6 +13,19 @@
     ]
   },
   {
+    "version": "huddle-voice-pipeline",
+    "date": "2026-07-26",
+    "title": "Huddles get a real voice",
+    "summary": "Agents in a huddle used to speak with whatever voice your browser happened to have, and the microphone guessed at when you had finished a sentence — often cutting you off mid-thought. Both halves are now proper streaming services: agents sound the same on every machine, and replies start playing about a tenth of a second after the first sentence is written.",
+    "highlights": [
+      "Agents speak with a consistent voice wherever you open Agensis, instead of a different one on every computer",
+      "Replies are read aloud sentence by sentence as they are written, rather than waiting for the whole paragraph",
+      "The microphone now waits for you to actually finish a sentence before sending it, instead of guessing from a pause",
+      "What you said appears live in the caption row while you are still saying it",
+      "If a voice service is unavailable the huddle falls back to your browser's own speech and tells you which one is missing — it never just goes quiet"
+    ]
+  },
+  {
     "version": "workspaces-and-desktops",
     "date": "2026-07-26",
     "title": "Workspaces and desktops, told apart at last",

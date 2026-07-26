@@ -1,22 +1,50 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nextSpeechChunk, normalizeTranscript, speechItemFor, type SpeechItem, type VoiceMessage, pickSpeechVoice } from '../lib/huddleVoice';
+import {
+  chooseEngines,
+  flushRemainder,
+  IDLE_TURN,
+  readFluxEvent,
+  reduceTurn,
+  sentenceChunks,
+  type EngineChoice,
+  type SttEngine,
+  type TtsEngine,
+  type TurnState,
+  type VoiceCapabilities,
+} from '../lib/voiceStream';
+import { CartesiaSpeaker } from '../lib/cartesiaSpeaker';
+import { DeepgramMic, micUnavailableReason } from '../lib/deepgramMic';
+import { apiAuthHeaders, apiUrl, voiceRealtime } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 
 // Voice for a huddle, WITHOUT putting the agent anywhere near audio.
 //
-// Speech becomes text in this browser (SpeechRecognition) and is posted as an
-// ordinary chat message; text becomes speech in this browser (speechSynthesis)
-// when an agent message lands. The agent, the daemon, the dispatch path and the
-// server are all completely unaware that a microphone exists — which is why
-// this works identically for daemon, builtin and MCP agents and needed no
-// media-plane work at all.
+// Speech becomes text and is posted as an ordinary chat message; text becomes
+// speech when an agent message lands. The agent, the daemon, the dispatch path
+// and the server's chat routes are all completely unaware that a microphone
+// exists — which is why this works identically for daemon, builtin and MCP
+// agents and needed no media-plane work at all.
+//
+// TWO ENGINE PAIRS live behind that plumbing, chosen at runtime by
+// chooseEngines:
+//
+//   Deepgram Flux + Cartesia sonic-3.5 — the real pipeline. Flux decides when a
+//   turn has ENDED rather than guessing from silence, and Cartesia's voices are
+//   server-side, so an agent sounds the same on every machine.
+//
+//   SpeechRecognition + speechSynthesis — the fallback, unchanged and still
+//   here. Verified in Chrome on macOS: 204 voices and not one Microsoft
+//   Natural, because those exist only inside Edge. So the browser can never
+//   give an agent a consistent voice; it can only avoid a dead microphone when
+//   a key is missing, which is worth keeping it for.
 //
 // CLEANUP IS THE WHOLE GAME. An orphaned recogniser keeps posting messages into
 // a channel after the human has left the call, and an orphaned utterance keeps
-// talking over whatever they do next. Every listener, timer, recogniser and
-// utterance below is torn down on unmount AND when `enabled` goes false, and
-// handlers are detached BEFORE abort/cancel so a late event from the dying
-// object cannot re-enter.
+// talking over whatever they do next. Every listener, timer, recogniser,
+// socket, AudioContext and utterance below is torn down on unmount AND when
+// `enabled` goes false, and handlers are detached BEFORE abort/cancel/close so
+// a late event from the dying object cannot re-enter.
 
 // ---------------------------------------------------------------------------
 // Minimal Web Speech typings (TypeScript 5.6's lib.dom has no SpeechRecognition)
@@ -101,13 +129,13 @@ export interface SpeechInputState {
 }
 
 /**
- * Microphone -> text, while `enabled`.
+ * Microphone -> text via the browser's own recogniser, while `enabled`.
  *
- * `onUtterance` fires once per FINAL result (a natural pause), never per
- * interim word: posting every partial would flood the channel and dispatch the
- * agent on half a sentence.
+ * The fallback engine. `onUtterance` fires once per FINAL result (a natural
+ * pause), never per interim word: posting every partial would flood the channel
+ * and dispatch the agent on half a sentence.
  */
-export function useSpeechInput(
+export function useBrowserSpeechInput(
   enabled: boolean,
   onUtterance: (text: string) => void,
 ): SpeechInputState {
@@ -255,6 +283,17 @@ export interface SpeechOutputState {
   unavailable: string;
   /** Display name of whoever is being spoken right now, or ''. */
   speakingName: string;
+  /**
+   * Date.now() timestamp at which the queued reply will have finished playing,
+   * or 0 when nothing is queued.
+   *
+   * Only the Cartesia engine can know this — its audio is scheduled on an
+   * AudioContext, so the end of the last sample is a number rather than an
+   * event that arrives late. The echo guard uses it to stop Deepgram
+   * transcribing our own reply back into the channel. The browser engine
+   * reports 0 and falls back to guarding on `speakingName`, exactly as before.
+   */
+  playbackEndsAtMs: number;
 }
 
 interface PendingSpeech {
@@ -264,7 +303,8 @@ interface PendingSpeech {
 }
 
 /**
- * New AGENT messages in this session -> spoken aloud, while `enabled`.
+ * New AGENT messages in this session -> spoken aloud by the browser, while
+ * `enabled`. The fallback engine.
  *
  * Subscribes to the session's messages under the SAME channel name the chat
  * window uses, so the realtime manager reference-counts one underlying channel
@@ -272,7 +312,7 @@ interface PendingSpeech {
  * must NOT be read aloud, so "arrived after we joined" and "we saw the insert"
  * are the same condition.
  */
-export function useSpeechOutput(
+export function useBrowserSpeechOutput(
   sessionId: string | null,
   enabled: boolean,
   joinedAtMs: number,
@@ -484,5 +524,365 @@ export function useSpeechOutput(
     return () => window.removeEventListener('pagehide', stopSpeaking);
   }, [stopSpeaking]);
 
-  return { unavailable, speakingName };
+  return { unavailable, speakingName, playbackEndsAtMs: 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Hosted engines: Deepgram Flux in, Cartesia sonic-3.5 out
+// ---------------------------------------------------------------------------
+
+/**
+ * What the server can actually do, asked once per huddle.
+ *
+ * Fetched BEFORE a microphone is opened, so a missing key is a sentence on
+ * screen and a fallback to the browser engine rather than a mic that lights up
+ * and transcribes nothing. A failed fetch is treated as "no hosted engines",
+ * which is the same graceful path.
+ */
+export function useVoiceCapabilities(workspaceId: string | null, enabled: boolean): VoiceCapabilities | null {
+  const [capabilities, setCapabilities] = useState<VoiceCapabilities | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !workspaceId) {
+      setCapabilities(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(apiUrl(`/backend/workspaces/${workspaceId}/voice/capabilities`), {
+          headers: apiAuthHeaders(),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        setCapabilities(response.ok ? (payload?.data ?? { stt: null, tts: null }) : { stt: null, tts: null });
+      } catch {
+        // The backend is unreachable, which the rest of the app is already
+        // shouting about. Voice just degrades.
+        if (!cancelled) setCapabilities({ stt: null, tts: null });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, enabled]);
+
+  return capabilities;
+}
+
+/**
+ * Microphone -> Deepgram Flux -> text, while `enabled`.
+ *
+ * The audio goes to OUR server, which holds the key and relays to Deepgram (see
+ * shared/voice-core.cjs). `onUtterance` fires once per EndOfTurn — Flux's own
+ * judgement that the speaker has finished, rather than a silence timer's guess,
+ * which is most of the reason for this engine existing.
+ *
+ * `suppressed` stops audio LEAVING the browser while a reply is playing. The
+ * caller's echo guard is the second line; this is the first, and it also means
+ * we are not paying to transcribe our own voice.
+ */
+export function useDeepgramSpeechInput(
+  enabled: boolean,
+  onUtterance: (text: string) => void,
+  suppressed: boolean,
+): SpeechInputState {
+  const [unavailable] = useState(() => micUnavailableReason());
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
+  const [error, setError] = useState('');
+
+  const utteranceRef = useRef(onUtterance);
+  utteranceRef.current = onUtterance;
+  const micRef = useRef<DeepgramMic | null>(null);
+  // Suppression is applied through refs so muting never re-runs the effect that
+  // owns the capture — restarting a capture to mute it would drop the turn the
+  // human is halfway through.
+  const suppressedRef = useRef(suppressed);
+  suppressedRef.current = suppressed;
+
+  useEffect(() => {
+    micRef.current?.setMuted(suppressed);
+  }, [suppressed]);
+
+  useEffect(() => {
+    if (!enabled || unavailable) {
+      setListening(false);
+      setInterim('');
+      return;
+    }
+
+    let disposed = false;
+    let turn: TurnState = IDLE_TURN;
+
+    const unsubscribe = voiceRealtime.onEvent((payload) => {
+      if (disposed) return;
+      const frame = (payload ?? {}) as { event?: string; reason?: string; message?: unknown };
+      if (frame.event === 'ready') {
+        setListening(true);
+        setError('');
+        return;
+      }
+      if (frame.event === 'unavailable') {
+        setListening(false);
+        setInterim('');
+        setError(frame.reason || 'Transcription is unavailable.');
+        return;
+      }
+      if (frame.event === 'closed') {
+        setListening(false);
+        setInterim('');
+        if (frame.reason) setError(frame.reason);
+        return;
+      }
+      if (frame.event !== 'flux') return;
+
+      turn = reduceTurn(turn, readFluxEvent(frame.message));
+      setInterim(turn.interim);
+      if (turn.error) setError(turn.error);
+      // A turn that ended on silence has an empty transcript. Posting it would
+      // dispatch an agent against nothing.
+      if (turn.utterance) {
+        const text = normalizeTranscript(turn.utterance);
+        if (text) utteranceRef.current(text);
+      }
+    });
+
+    const mic = new DeepgramMic({
+      onReady: () => { if (!disposed) setError(''); },
+      onError: (reason) => {
+        if (disposed) return;
+        setListening(false);
+        setInterim('');
+        setError(reason);
+      },
+    });
+    micRef.current = mic;
+    mic.setMuted(suppressedRef.current);
+    void mic.start();
+
+    return () => {
+      // Order matters, same as the browser path: latch, detach, then close.
+      // A flux frame arriving during teardown must not post a message into a
+      // call the human has already left.
+      disposed = true;
+      unsubscribe();
+      micRef.current = null;
+      void mic.stop();
+      setListening(false);
+      setInterim('');
+    };
+    // `suppressed` is deliberately absent: it reaches the mic through
+    // suppressedRef, because including it here would tear the capture down and
+    // back up on every reply.
+  }, [enabled, unavailable]);
+
+  return { unavailable, listening, interim, error };
+}
+
+interface PendingCartesia {
+  item: SpeechItem;
+  createdMs: number;
+  changedAt: number;
+}
+
+/**
+ * New AGENT messages in this session -> Cartesia sonic-3.5, while `enabled`.
+ *
+ * The difference that matters versus the browser path is WHEN it starts
+ * talking. That one waits for a message to stop changing for 700ms and then
+ * says the block; this hands each sentence over the instant its full stop
+ * arrives, and Cartesia answers in about 110ms — so a streaming reply is being
+ * read aloud while the rest of it is still being written. The 700ms settle
+ * survives for one job only: flushing the trailing fragment of a message that
+ * never ends in punctuation.
+ */
+export function useCartesiaSpeechOutput(
+  workspaceId: string | null,
+  sessionId: string | null,
+  enabled: boolean,
+  joinedAtMs: number,
+  voiceId: string,
+): SpeechOutputState {
+  const [speakingName, setSpeakingName] = useState('');
+  const [playbackEndsAtMs, setPlaybackEndsAtMs] = useState(0);
+  const [unavailable, setUnavailable] = useState('');
+
+  const speakerRef = useRef<CartesiaSpeaker | null>(null);
+  const pendingRef = useRef(new Map<string, PendingCartesia>());
+  const spokenTextRef = useRef(new Map<string, string>());
+  const settleTimerRef = useRef<number | null>(null);
+  const voiceIdRef = useRef(voiceId);
+  voiceIdRef.current = voiceId;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  const active = enabled && !!workspaceId && !!sessionId;
+
+  useEffect(() => {
+    if (!active || !workspaceId) return;
+    const speaker = new CartesiaSpeaker(workspaceId, {
+      onSpeakingChange: setSpeakingName,
+      onPlaybackEnd: setPlaybackEndsAtMs,
+      onError: setUnavailable,
+    });
+    speakerRef.current = speaker;
+    setUnavailable('');
+    // Captured now rather than read in the cleanup: these are the same Map
+    // objects for the life of the hook, and reading `.current` at teardown is
+    // what the lint rule (correctly) warns about.
+    const pending = pendingRef.current;
+    const spoken = spokenTextRef.current;
+    return () => {
+      speakerRef.current = null;
+      pending.clear();
+      spoken.clear();
+      if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+      setSpeakingName('');
+      setPlaybackEndsAtMs(0);
+      void speaker.close();
+    };
+  }, [active, workspaceId]);
+
+  // Emit whatever `split` decided is sayable, and remember it as said.
+  const emit = useCallback((id: string, item: SpeechItem, split: { speak: string[]; spoken: string }) => {
+    spokenTextRef.current.set(id, split.spoken);
+    for (const line of split.speak) speakerRef.current?.speak(line, item.speaker, voiceIdRef.current);
+  }, []);
+
+  const flush = useCallback((id: string) => {
+    const entry = pendingRef.current.get(id);
+    if (!entry) return;
+    pendingRef.current.delete(id);
+    emit(id, entry.item, flushRemainder(entry.item.text, spokenTextRef.current.get(id) || ''));
+  }, [emit]);
+
+  const scheduleSettle = useCallback(() => {
+    if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null;
+      const cutoff = Date.now() - SETTLE_MS;
+      for (const [id, entry] of [...pendingRef.current.entries()]) {
+        if (entry.changedAt <= cutoff) flush(id);
+      }
+      if (pendingRef.current.size > 0) scheduleSettle();
+    }, SETTLE_MS);
+  }, [flush]);
+
+  const deduper = useRealtimeDeduper();
+
+  useTableSubscription<VoiceMessage>(
+    {
+      enabled: active,
+      channelName: `messages:${sessionId}`,
+      table: 'messages',
+      event: '*',
+      schema: 'public',
+      filter: `session_id=eq.${sessionId}`,
+    },
+    (payload) => {
+      if (!deduper.shouldProcess(payload)) return;
+      if (!enabledRef.current) return;
+      if (payload.eventType === 'DELETE') {
+        const id = payload.old?.id;
+        if (id) pendingRef.current.delete(String(id));
+        return;
+      }
+      const row = payload.new;
+      if (!row?.id) return;
+      const id = String(row.id);
+      const createdMs = Date.parse(String(row.created_at ?? ''));
+
+      // A newer row proves every older block is finished — the daemon finalises
+      // one text block and writes the next placeholder together.
+      if (Number.isFinite(createdMs)) {
+        for (const [pendingId, entry] of [...pendingRef.current.entries()]) {
+          if (entry.createdMs < createdMs) flush(pendingId);
+        }
+      }
+
+      const item = speechItemFor(row, joinedAtMs);
+      if (!item) {
+        pendingRef.current.delete(id);
+        return;
+      }
+      const alreadySpoken = spokenTextRef.current.get(id) || '';
+      if (alreadySpoken === item.text) return;
+
+      // Say the finished sentences NOW; hold only the trailing fragment.
+      emit(id, item, sentenceChunks(item.text, alreadySpoken));
+      pendingRef.current.set(id, {
+        item,
+        createdMs: Number.isFinite(createdMs) ? createdMs : Date.now(),
+        changedAt: Date.now(),
+      });
+      scheduleSettle();
+    },
+  );
+
+  // Leaving, muting output, or unmounting stops the voice mid-word.
+  useEffect(() => {
+    if (!enabled) speakerRef.current?.stop();
+  }, [enabled]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stop = () => speakerRef.current?.stop();
+    window.addEventListener('pagehide', stop);
+    return () => window.removeEventListener('pagehide', stop);
+  }, []);
+
+  return { unavailable, speakingName, playbackEndsAtMs };
+}
+
+// ---------------------------------------------------------------------------
+// Engine dispatch
+// ---------------------------------------------------------------------------
+
+const NO_INPUT: SpeechInputState = { unavailable: 'Voice input is not available here.', listening: false, interim: '', error: '' };
+const NO_OUTPUT: SpeechOutputState = { unavailable: 'Replies cannot be read aloud here.', speakingName: '', playbackEndsAtMs: 0 };
+
+/** Which engines this huddle will use, and what to say when they are not the good ones. */
+export function useVoiceEngines(workspaceId: string | null, enabled: boolean): EngineChoice {
+  const capabilities = useVoiceCapabilities(workspaceId, enabled);
+  // Support is a property of the browser, not of the render, so it is read once.
+  const [support] = useState(() => ({
+    sttAvailable: !voiceInputUnavailableReason(),
+    ttsAvailable: typeof window !== 'undefined' && 'speechSynthesis' in window,
+  }));
+  return useMemo(() => chooseEngines(capabilities, support), [capabilities, support]);
+}
+
+/**
+ * Microphone -> text, on whichever engine is available.
+ *
+ * Both engines are instantiated and one is enabled: hooks cannot be called
+ * conditionally, and each is completely inert while `enabled` is false (no
+ * socket, no AudioContext, no recogniser).
+ */
+export function useSpeechInput(
+  enabled: boolean,
+  onUtterance: (text: string) => void,
+  options: { engine?: SttEngine; suppressed?: boolean } = {},
+): SpeechInputState {
+  const { engine = 'browser', suppressed = false } = options;
+  const browser = useBrowserSpeechInput(enabled && engine === 'browser', onUtterance);
+  const hosted = useDeepgramSpeechInput(enabled && engine === 'deepgram', onUtterance, suppressed);
+  if (engine === 'deepgram') return hosted;
+  if (engine === 'browser') return browser;
+  return NO_INPUT;
+}
+
+/** Agent replies -> speech, on whichever engine is available. */
+export function useSpeechOutput(
+  sessionId: string | null,
+  enabled: boolean,
+  joinedAtMs: number,
+  options: { engine?: TtsEngine; workspaceId?: string | null; voiceId?: string } = {},
+): SpeechOutputState {
+  const { engine = 'browser', workspaceId = null, voiceId = '' } = options;
+  const browser = useBrowserSpeechOutput(sessionId, enabled && engine === 'browser', joinedAtMs);
+  const hosted = useCartesiaSpeechOutput(workspaceId, sessionId, enabled && engine === 'cartesia', joinedAtMs, voiceId);
+  if (engine === 'cartesia') return hosted;
+  if (engine === 'browser') return browser;
+  return NO_OUTPUT;
 }

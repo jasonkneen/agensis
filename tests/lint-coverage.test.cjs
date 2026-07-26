@@ -48,6 +48,13 @@ const MUST_BE_LINTED = [
   'server/skills.cjs',
   // Mints LiveKit join tokens and verifies the LiveKit webhook signature.
   'server/huddles.cjs',
+  // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
+  // those two strings out of a browser, so an unlinted edit is exactly the
+  // mistake this whole module was written to prevent.
+  'shared/voice-core.cjs',
+  // Mints the Cartesia access token and relays microphone audio to Deepgram
+  // with the server-held key.
+  'server/voice.cjs',
   'server/inference-broker.cjs',
   'server/farm-integration.cjs',
   'server/flow-integration.cjs',

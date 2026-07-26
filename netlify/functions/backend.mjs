@@ -35,6 +35,7 @@ import {
 } from '../../shared/tenant-admin.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 import { markHumanIdentityWrite, identityLockSql } from '../../shared/agentIdentity.cjs';
+import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -64,6 +65,9 @@ const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // Per-IP FAILED-attempt limiter (L3): bounds credential-stuffing across emails.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// Voice: a Cartesia token is a credential at a metered provider, so minting is
+// bounded per user+workspace. Mirrors the Fly limiter's budget exactly.
+const voiceTokenRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below (mirrors server/index.cjs).
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
@@ -992,6 +996,39 @@ async function handleWorkspaceUsage(workspaceId, userId) {
   },
   error: null,
  });
+}
+
+// Huddle voice. Only the Cartesia half is mirrored here, and that is not an
+// omission: the Deepgram side is an audio RELAY over the realtime websocket
+// (server/voice.cjs), and this runtime has no websockets. Huddles themselves
+// are Fly-only for the same reason, so nothing that can reach these routes is
+// missing its transcription. The token exchange is mirrored anyway because it
+// is plain HTTP and a workspace-scoped 404 here would be a silent dead speaker
+// on any deployment that does route /backend through Netlify.
+async function handleVoiceCapabilities(workspaceId, userId) {
+ if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+ await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+ return json({ data: voiceCapabilities(process.env), error: null });
+}
+
+async function handleVoiceTtsToken(workspaceId, userId) {
+ if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+ await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+ const limit = voiceTokenRateLimiter.check(`${userId}:${workspaceId}`);
+ if (!limit.allowed) {
+  return json({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }, 429);
+ }
+ const reason = unavailableReason('tts', process.env);
+ if (reason) return jsonError(503, new Error(reason));
+ try {
+  const { token, expiresInSeconds } = await mintCartesiaToken({ apiKey: String(process.env.CARTESIA_API_KEY || '').trim() });
+  const capabilities = voiceCapabilities(process.env);
+  return json({ data: { token, expiresInSeconds, ...(capabilities.tts || {}) }, error: null });
+ } catch (error) {
+  // scrubError, not the raw error: jsonError forwards `message` verbatim, and
+  // this is the one route whose upstream is authenticated with a raw secret.
+  return jsonError(error.status || 502, scrubError(error, process.env));
+ }
 }
 
 async function handleSystemCapabilities(req) {
@@ -2137,6 +2174,14 @@ async function route(req) {
  const workspaceUsageMatch = pathname.match(/^\/backend\/workspace\/([^/]+)\/usage$/);
  if (req.method === 'GET' && workspaceUsageMatch) {
   return handleWorkspaceUsage(decodeURIComponent(workspaceUsageMatch[1]), await requireUserId(req));
+ }
+ const voiceCapabilitiesMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/voice\/capabilities$/);
+ if (req.method === 'GET' && voiceCapabilitiesMatch) {
+  return handleVoiceCapabilities(decodeURIComponent(voiceCapabilitiesMatch[1]), await requireUserId(req));
+ }
+ const voiceTtsTokenMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/voice\/tts-token$/);
+ if (req.method === 'POST' && voiceTtsTokenMatch) {
+  return handleVoiceTtsToken(decodeURIComponent(voiceTtsTokenMatch[1]), await requireUserId(req));
  }
  if (req.method === 'GET' && pathname === '/backend/cursorbuddy/connection-keys') {
   return handleCursorBuddyConnectionKeys(req, await requireUserId(req));

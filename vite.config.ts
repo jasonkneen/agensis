@@ -59,6 +59,12 @@ export default defineConfig({
   // rejected for a MIME mismatch and the page renders blank.
   base: isDesktopBuild ? './' : '/',
   build: {
+    // The huddle microphone's AudioWorklet must stay a real file. Vite inlines
+    // any asset under 4 KB as a `data:` URI, and worklet scripts are governed
+    // by CSP's `script-src` — which netlify.toml sets to `'self' 'unsafe-inline'`
+    // with neither `data:` nor `blob:`. Inlined, the microphone works today and
+    // dies silently the day that policy is promoted out of Report-Only.
+    assetsInlineLimit: (filePath) => (filePath.endsWith('.worklet.js') ? false : undefined),
     rollupOptions: {
       output: {
         manualChunks(id) {
