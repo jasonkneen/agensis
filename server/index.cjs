@@ -4631,6 +4631,53 @@ function agentLiveMessageContent(message) {
  return `Thinking ${formatElapsedMs(message?.elapsedMs)}`;
 }
 
+// Every shape the server itself writes into an activity placeholder: the daemon's
+// own clock (`Thinking 0s`, `Thinking 1m 4s` — see agentLiveMessageContent /
+// formatElapsedMs) and the built-in chat's `Thinking…`. Deliberately narrower than
+// a bare `^Thinking`, so an agent reply that happens to OPEN with the word can
+// never be mistaken for a placeholder and rewritten or swept away.
+const PLACEHOLDER_CONTENT_RE = '^Thinking( [0-9]|…)';
+
+// Remove any "Thinking …" placeholder this turn left standing, except the one the
+// caller has already resolved itself.
+//
+// Only the CURRENT placeholder is tracked, in metadata.responseMessageId — but a
+// turn rotates through a fresh one per text block (handleAgentJobSegment), so a
+// job that dies, or a write that races its own finalization, can leave an earlier
+// one behind with nothing to finish it. Those rows then read "Thinking 2m 11s"
+// forever: a present-tense claim that an agent is working, made hours after it
+// stopped. That is worse than no row at all, because a human acts on it. They hold
+// nothing recoverable either — by the time one strands, the block that should have
+// been in it is already lost — so removing them is the honest resolution.
+//
+// Scoped hard: this agent, this session, this turn's own window. The M15 unique
+// index allows only one queued/running job per (session, agent), so no live turn's
+// placeholder can be inside that window while this one terminates.
+async function clearStrandedPlaceholders(job, keepMessageId = null) {
+ if (!job || !job.session_id || !job.agent_id) return;
+ const since = job.started_at || job.created_at;
+ if (!since) return;
+ try {
+  const rows = await getDb().unsafe(
+   `delete from messages
+      where session_id = $1
+        and sender_id = $2
+        and sender_kind = 'agent'
+        and coalesce(message_kind, '') = ''
+        and content ~ $3
+        -- The eager placeholder is inserted just BEFORE the job row it belongs to,
+        -- so the window has to open slightly ahead of the job's own clock.
+        and created_at >= $4::timestamptz - interval '1 minute'
+        and ($5::text is null or id::text <> $5::text)
+      returning *`,
+   [job.session_id, String(job.agent_id), PLACEHOLDER_CONTENT_RE, since, keepMessageId || null],
+  );
+  if (rows.length > 0) notifyDbSubscribers('messages', 'DELETE', rows);
+ } catch {
+  // best effort — tidy-up must never fail a job that otherwise finished correctly
+ }
+}
+
 // Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
 // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
 // a spinner when the daemon disconnects, crashes, or simply never answers.
@@ -4662,19 +4709,25 @@ async function finalizeStuckJob(job, reason) {
   scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
   const meta = parseJsonObject(job.metadata);
   const responseMessageId = meta.responseMessageId || null;
-  if (!responseMessageId) return;
-  const handle = meta.handle || 'agent';
-  const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
-  // Broadcast it for the same reason the reply is broadcast: the placeholder was
-  // working inside a thread, and a channel that shows nothing at all after the
-  // human's message reads as "still thinking" forever.
-  const rows = await getDb().unsafe(
-   `update messages set content = $2, broadcast_to_channel = $4
-       where id = $1 and session_id = $3 and content ~ '^Thinking '
-       returning *`,
-   [responseMessageId, content, job.session_id, meta.broadcastToChannel === true],
-  );
-  if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+  if (responseMessageId) {
+   const handle = meta.handle || 'agent';
+   const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+   // Broadcast it for the same reason the reply is broadcast: the placeholder was
+   // working inside a thread, and a channel that shows nothing at all after the
+   // human's message reads as "still thinking" forever.
+   const rows = await getDb().unsafe(
+    `update messages set content = $2, broadcast_to_channel = $4
+        where id = $1 and session_id = $3 and content ~ $5
+        returning *`,
+    [responseMessageId, content, job.session_id, meta.broadcastToChannel === true, PLACEHOLDER_CONTENT_RE],
+   );
+   if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+  }
+  // A job that died leaves the human with something honest in the placeholder it
+  // was tracking — but a turn that had already rotated through several has others
+  // standing behind it, and those are not covered by the id above. No placeholder
+  // this turn wrote may outlive it still claiming to be live.
+  await clearStrandedPlaceholders(job, responseMessageId);
  } catch {
   // best effort
  }
@@ -5453,6 +5506,14 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   notifyDbSubscribers('messages', 'INSERT', messageRows);
   void mirrorAgentReplyToTaskComment(messageRows[0]);
  }
+ // The turn is over, so nothing in it may still be counting. The branches above
+ // resolve the placeholder the job was TRACKING; a segmented turn rotated through
+ // others, and a tick that raced this finalization can re-create one moments after
+ // it was deleted. Sweep whatever is left rather than leaving a chip ticking at a
+ // run that has finished. `responseMessageId` is held back because that row now
+ // holds the real reply — which, on the day an agent opens one with "Thinking 5s",
+ // would otherwise match the placeholder pattern and be deleted as debris.
+ await clearStrandedPlaceholders(job, responseMessageId);
  void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
   .catch((error) => console.error('continueConversation (job finalize) failed', error));
  return updatedRows[0] || null;
@@ -5795,6 +5856,8 @@ async function handleAgentJobDelta(ws, message) {
          updated_at = now(),
          metadata = $3::jsonb
      where id = $1 and status in ('queued', 'running')
+       and (jsonb_typeof(metadata) <> 'object'
+            or coalesce(metadata->>'responseMessageId', '') = $4)
      returning id`,
   [
    jobId,
@@ -5809,8 +5872,23 @@ async function handleAgentJobDelta(ws, message) {
    // shape. Pass the OBJECT: postgres.js encodes it as real jsonb, whereas a
    // JSON.stringify'd value re-creates the string-scalar bug.
    nextMetadata,
+   // Compare-and-set on the placeholder this tick was written against. The write
+   // above is a WHOLESALE object (see the note directly above — it has to stay that
+   // way to keep self-healing a corrupted column), so a tick that read the job just
+   // before a concurrent `agent_job_segment` rotated the placeholder would REVERT
+   // that rotation, and then stream "Thinking Ns" over the text block the segment
+   // had only just finalised. That is precisely how a live-looking chip ended up
+   // stranded where an agent's reply should have been, taking the reply with it.
+   // Dropping the tick instead costs nothing — another lands a second later.
+   //
+   // The `jsonb_typeof` escape keeps the self-heal reachable: a column corrupted
+   // into a string scalar reads NULL for every key, so a strict comparison would
+   // wedge the job permanently in the one state that most needs repairing.
+   responseMessageId || '',
   ],
  );
+ // Either the job already finished, or a segment moved the placeholder on between
+ // the read above and this write. Everything below is stale either way.
  if (deltaRows.length === 0) return;
  if (responseMessageId) {
   const content = agentLiveMessageContent(message);
@@ -5821,15 +5899,32 @@ async function handleAgentJobDelta(ws, message) {
            sender_id = $3,
            sender_name = $4
        where id = $1 and session_id = $5
+         and ($6::boolean or content ~ $7)
        returning *`,
-   [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', job.session_id],
+   [
+    responseMessageId, content, String(job.agent_id || ''),
+    job.agent_name || auth.name || auth.handle || 'Agent', job.session_id,
+    // A tick carrying TEXT owns the row and overwrites whatever is in it. A
+    // content-free liveness tick carries nothing but a clock, so it may only
+    // refresh a row that is STILL a placeholder — never overwrite words already on
+    // screen. The window is narrow (a segment finalising the block between this
+    // handler's two statements) but it is exactly the one that turned a finished
+    // paragraph back into "Thinking 2m 11s" and left it standing there.
+    deltaText.length > 0,
+    PLACEHOLDER_CONTENT_RE,
+   ],
   );
   if (updatedRows.length > 0) {
    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
-  } else if (metadata.pendingPlaceholder) {
+  } else if (metadata.pendingPlaceholder && deltaText) {
    // A segment handed us an id but deliberately did not create the row, so the
    // thread is not littered with empty "Thinking …" bubbles while the agent runs
    // tools. This is the first content for that block: materialise it now.
+   //
+   // `deltaText` is the whole of "lazily". Without it, a content-free tick
+   // materialised the row as "Thinking Ns" — re-creating the very bubble lazy
+   // creation exists to prevent, and minting the row that then strands when the
+   // turn rotates past it.
    const createdRows = await getDb().unsafe(
     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
@@ -5927,12 +6022,23 @@ async function handleAgentJobStep(ws, message) {
      set updated_at = now(),
          metadata = $2::jsonb
      where id = $1 and status in ('queued', 'running')
+       and (jsonb_typeof(metadata) <> 'object'
+            or coalesce(metadata->>'responseMessageId', '') = $3)
      returning id`,
   // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
   // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
-  [jobId, nextMetadata],
+  //
+  // Compare-and-set for the same reason as the delta pump: this is a wholesale
+  // object write, and steps fire every few seconds, so a step that read the job
+  // just before a segment rotated the placeholder would silently put the OLD id
+  // back — after which the next liveness tick streams "Thinking Ns" over the block
+  // the segment had just finalised.
+  [jobId, nextMetadata, responseMessageId || ''],
  );
- if (stepRows.length === 0) return; // the job already finished; the step is stale
+ // The job already finished, or a segment moved the placeholder on under us. The
+ // step's thread parent was resolved from the old placeholder either way, so it
+ // would land in the wrong place.
+ if (stepRows.length === 0) return;
  const messageRows = await getDb().unsafe(
   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
      values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
@@ -11087,6 +11193,8 @@ module.exports = {
   mintPeerTicket,
   mergeSlashCommands,
   finalizeStuckJob,
+  clearStrandedPlaceholders,
+  PLACEHOLDER_CONTENT_RE,
   reapStuckAgentJobs,
   claimMcpJob,
   submitMcpJobResult,

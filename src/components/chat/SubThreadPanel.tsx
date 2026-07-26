@@ -17,7 +17,11 @@ import {
 } from './ComposerAddContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import {
+  extractActivityVerb,
+  isActivityPlaceholderMessage,
+  isLiveActivityPlaceholder,
+} from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -109,10 +113,12 @@ export function SubThreadPanel({
   // the compact spacing of a side panel.
   const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   useComposerAutosize(inputRef, mentions.input);
+  // Same rule as the channel's status line: a placeholder stranded by a job that
+  // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of messages) {
-      if (!isActivityPlaceholderMessage(m)) continue;
+      if (!isLiveActivityPlaceholder(m)) continue;
       const name = (m.sender_name || 'Agent').trim();
       const activity = extractActivityVerb(safeText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });

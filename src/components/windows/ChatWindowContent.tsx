@@ -169,7 +169,12 @@ import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
-import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import {
+  activityLine,
+  extractActivityVerb,
+  isActivityPlaceholderMessage,
+  isLiveActivityPlaceholder,
+} from '../../lib/activityStatus';
 import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
 import { useSharedNow } from '../../hooks/useSharedNow';
 import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
@@ -981,10 +986,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // Live "who's working right now" for the status line above the composer —
   // derived only from this session's own messages, so it never leaks across
   // windows and auto-clears the instant real content replaces the placeholder.
+  // A placeholder left behind by a job that died is NOT proof of work, so it is
+  // filtered by age here as well as in the transcript's chips.
   const thinkingAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of displayMessages) {
-      if (!isActivityPlaceholderMessage(m)) continue;
+      if (!isLiveActivityPlaceholder(m)) continue;
       const name = (m.sender_name || directAgent?.name || 'Agent').trim();
       const activity = extractActivityVerb(safeMessageText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
