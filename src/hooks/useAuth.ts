@@ -30,9 +30,6 @@ export function useAuth() {
           if (callbackResult?.type === 'oauth') {
             const { data, error } = await backendClient.auth.signInWithOAuthSession();
             if (!error && active) {
-              if (data.user) {
-                await seedWorkspaces(data.user.id);
-              }
               setSession(data.session);
               setUser(data.user);
               return;
@@ -76,12 +73,16 @@ export function useAuth() {
     };
   }, []);
 
+  // Deliberately does NOT seed the starter workspaces. Storing the session is
+  // what renders the app, so seeding here ran concurrently with useWorkspaces'
+  // first fetch: the fetch returned the empty list, cached it, and never
+  // refetched — the account then had no workspace id for the whole session and
+  // the onboarding tour's "Add" buttons failed on every click. useWorkspaces
+  // seeds instead, once its own fetch has settled and come back empty, which
+  // also covers sign-in and OAuth (neither of which ever seeded).
   const signUp = useCallback(async (email: string, password: string) => {
-    const { data, error } = await backendClient.auth.signUp({ email, password });
+    const { error } = await backendClient.auth.signUp({ email, password });
     if (error) return { error: error.message };
-    if (data.user) {
-      await seedWorkspaces(data.user.id);
-    }
     return { error: null };
   }, []);
 
@@ -115,21 +116,6 @@ export function useAuth() {
   }, []);
 
   return { user, session, loading, signUp, signIn, signOut, signInWithOAuth, authNotice, dismissAuthNotice };
-}
-
-async function seedWorkspaces(userId: string) {
-  const { data: existing } = await backendClient
-    .from('workspaces')
-    .select('id')
-    .eq('user_id', userId)
-    .limit(1);
-
-  if (existing && existing.length > 0) return;
-
-  await backendClient.from('workspaces').insert([
-    { name: 'Personal', description: 'Your personal workspace', icon: '🌱', user_id: userId },
-    { name: 'Work', description: 'Professional workspace', icon: '💼', user_id: userId },
-  ]);
 }
 
 function consumeOAuthRedirectStatus() {
