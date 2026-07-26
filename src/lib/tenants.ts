@@ -221,6 +221,24 @@ export function tenantCountLabel(shown: number, total: number, truncated: boolea
   return `${total.toLocaleString()} ${total === 1 ? 'account' : 'accounts'}`;
 }
 
+/**
+ * The line under the list. Two facts, and it must not conflate them: how many
+ * rows the search left, and how much of the deployment is loaded at all. Saying
+ * "3 accounts" while a search is active would misreport the deployment's size to
+ * the one person whose job is to know it.
+ */
+export function tenantListFooter(
+  shown: number,
+  loaded: number,
+  total: number,
+  truncated: boolean,
+  query: string,
+): string {
+  const base = tenantCountLabel(loaded, total, truncated);
+  if (!String(query || '').trim()) return base;
+  return `${shown.toLocaleString()} matching · ${base}`;
+}
+
 export interface TenantWorkspaceRowModel {
   workspace: TenantWorkspace;
   name: string;

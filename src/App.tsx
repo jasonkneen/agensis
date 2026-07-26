@@ -734,14 +734,16 @@ function AppContent() {
   }, []);
   const { layers, layersWorkspaceId, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
 
-  // Rename. Both return false on a rejected write so the inline editor stays
-  // open and says so, rather than closing over a change that never landed.
   // The server answers whether this account may see Tenants. Never inferred
   // from the signed-in email client-side — the browser can be told anything,
-  // and the routes re-check regardless.
-  const isSystemOwner = useTenantAccess(Boolean(user?.id));
+  // and the routes re-check regardless. Keyed on the user id rather than a
+  // boolean, so switching account re-asks instead of carrying the previous
+  // answer over.
+  const { isOwner: isSystemOwner } = useTenantAccess(user?.id ?? null);
   const [tenantsOpen, setTenantsOpen] = useState(false);
 
+  // Rename. Both return false on a rejected write so the inline editor stays
+  // open and says so, rather than closing over a change that never landed.
   const handleRenameWorkspace = useCallback(async (id: string, name: string) => {
     const { workspace } = await updateWorkspace(id, { name });
     return Boolean(workspace);

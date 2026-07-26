@@ -1,218 +1,345 @@
-import { useMemo, useState } from 'react';
-import { Search } from 'lucide-react';
-import { Input } from '@/components/ui/input';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { RotateCw, Search, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import { useTenantDetail, useTenants } from '@/hooks/useTenants';
+import {
+  FOCUS_RING,
+  LIST_COLUMN_CLASS,
+  PANE_HEADER,
+  ROW_PADDING,
+  SCROLL_VIEWPORT_BLOCK,
+  TEXT_BODY,
+  TEXT_META,
+} from '../inbox/inboxPresentation';
+import { useTenants } from '../../hooks/useTenants';
 import {
   buildTenantRows,
-  tenantCountLabel,
-  tenantDisplayName,
-  tenantInitials,
-  tenantJoinedLabel,
-  tenantTileColor,
+  tenantListFooter,
   tenantsEmptyState,
-  tenantWorkspaceInitials,
-  type TenantAccount,
-  type TenantWorkspace,
-} from '@/lib/tenants';
+  type TenantRowModel,
+} from '../../lib/tenants';
+import { TenantDetailPane } from './TenantDetailPane';
+import { TenantRow } from './TenantRow';
 
-// The Tenants admin surface: every registered account, searchable, with the
-// selected one's detail beside it.
+// ---------------------------------------------------------------------------
+// TENANTS — every registered account, and what each one has.
 //
-// Two panes, matching the inbox — roomy rows, no separators, one hairline
-// between the panes. Density was explicitly rejected on the inbox and this is
-// the same kind of list, so it gets the same treatment rather than becoming a
-// data table.
+// The owner-only admin surface. Master-detail, borrowed wholesale from the inbox
+// (InboxWindowContent): a searchable column of roomy rows on the left, the
+// selected account on the right, ONE hairline between them, drag to resize, and
+// a single-column fallback below 42rem where the detail replaces the list.
+// Matching that language rather than inventing a third list style is the point —
+// see inboxPresentation.ts for the type scale and row metrics.
 //
-// Rendering this at all is gated on the server's own answer (useTenantAccess),
-// and every route re-checks. Nothing here is a security boundary.
+// ACCESS CONTROL IS NOT HERE. Every route this window calls independently
+// verifies the caller is the system owner (shared/tenant-admin.cjs,
+// `assertSystemOwner`, on both backends). Rendering this component for a
+// non-owner produces three 403s and an empty list, which is the correct
+// outcome — the button being hidden is a nicety, not the control.
+//
+// Read-only by design in this pass. There is no action on this surface that can
+// change anyone's account; where those will live is marked in the detail pane.
+// ---------------------------------------------------------------------------
 
-export function TenantsWindowContent() {
-  const { accounts, total, truncated, loading, error } = useTenants(true);
+const DEFAULT_LIST_WIDTH = 340;
+const MIN_LIST_WIDTH = 240;
+const MAX_LIST_WIDTH = 520;
+const LIST_WIDTH_KEY = 'agensis.tenants.list-width';
+
+/** The detail pane's readability floor, in rem — see InboxWindowContent. */
+const MIN_DETAIL_REM = 18;
+
+function minDetailPx(): number {
+  if (typeof document === 'undefined') return MIN_DETAIL_REM * 16;
+  const root = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return MIN_DETAIL_REM * (Number.isFinite(root) && root > 0 ? root : 16);
+}
+
+/**
+ * Below 42rem two panes cannot both hold a readable column, so the list goes
+ * full width and the detail replaces it. A container query on the window, not a
+ * media query: this lives in a floating window whose width has nothing to do
+ * with the viewport's. Written out in full because Tailwind scans source text
+ * and never sees a concatenated class name.
+ */
+const SINGLE_COLUMN_HIDE = '@max-2xl/tenantswin:hidden';
+
+function readStoredWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_LIST_WIDTH;
+  try {
+    const raw = Number(window.sessionStorage.getItem(LIST_WIDTH_KEY));
+    if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_LIST_WIDTH;
+    return Math.min(MAX_LIST_WIDTH, Math.max(MIN_LIST_WIDTH, Math.round(raw)));
+  } catch {
+    return DEFAULT_LIST_WIDTH;
+  }
+}
+
+export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
+  const {
+    accounts, total, truncated, loading, error, refetch,
+    detail, detailLoading, detailError, selectedId, select,
+  } = useTenants(true);
+
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { detail, loading: detailLoading } = useTenantDetail(selectedId);
+  const [listWidth, setListWidth] = useState(readStoredWidth);
 
+  // Search and ordering are pure (src/lib/tenants.ts) and run over the loaded
+  // list, so typing costs no round-trip and there is no second server-side
+  // matcher to disagree with.
   const rows = useMemo(() => buildTenantRows(accounts, query), [accounts, query]);
-  const empty = tenantsEmptyState(query, total);
+
+  // Kept by ID, never by index: the list re-sorts on refetch and an index would
+  // silently open a different person's account.
+  const selected = useMemo(
+    () => accounts.find(account => account.id === selectedId) ?? null,
+    [accounts, selectedId],
+  );
+
+  // --- Drag-to-resize, via pointer capture (no window listeners to leak) ----
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ x: number; width: number } | null>(null);
+
+  const clampWidth = useCallback((value: number) => {
+    const container = rootRef.current?.clientWidth ?? 0;
+    const ceiling = container > 0
+      ? Math.max(MIN_LIST_WIDTH, Math.min(MAX_LIST_WIDTH, container - minDetailPx()))
+      : MAX_LIST_WIDTH;
+    return Math.min(ceiling, Math.max(MIN_LIST_WIDTH, Math.round(value)));
+  }, []);
+
+  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { x: event.clientX, width: listWidth };
+  }, [listWidth]);
+
+  const handleResizeMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    setListWidth(clampWidth(drag.width + (event.clientX - drag.x)));
+  }, [clampWidth]);
+
+  const handleResizeEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    try {
+      window.sessionStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
+    } catch {
+      // Width is a nicety; a storage-denied browser just gets the default back.
+    }
+  }, [listWidth]);
+
+  const resetWidth = useCallback(() => setListWidth(DEFAULT_LIST_WIDTH), []);
 
   return (
-    <div className="flex h-full min-h-0 text-foreground">
-      <div className="flex min-h-0 w-[22rem] shrink-0 flex-col border-r border-border/60">
-        <div className="flex h-11 shrink-0 items-center gap-2 px-3">
-          <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <Input
+    <div
+      ref={rootRef}
+      className="@container/tenantswin flex h-full min-h-0 bg-card text-card-foreground"
+    >
+      <section
+        className={cn(
+          'relative flex min-h-0 min-w-0 flex-col',
+          selected ? cn('shrink-0 border-r border-border/60', SINGLE_COLUMN_HIDE) : 'flex-1',
+        )}
+        style={selected ? { width: listWidth, maxWidth: `calc(100% - ${MIN_DETAIL_REM}rem)` } : undefined}
+      >
+        <div className={PANE_HEADER}>
+          {/* The search field IS the header. There is one filter on this surface
+              and it is the only thing an operator arrives wanting. */}
+          <Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            type="search"
             value={query}
             onChange={event => setQuery(event.target.value)}
             placeholder="Search accounts"
-            aria-label="Search accounts"
-            className="h-8 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+            aria-label="Search accounts by email, name or id"
+            className={cn(
+              'min-w-0 flex-1 bg-transparent leading-5 text-foreground placeholder:text-muted-foreground/70',
+              'focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden',
+              TEXT_BODY,
+            )}
           />
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-            {tenantCountLabel(rows.length, total, truncated)}
-          </span>
+          {query && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setQuery('')}
+              aria-label="Clear search"
+            >
+              <X />
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={refetch}
+            aria-label="Refresh accounts"
+            title="Refresh"
+          >
+            <RotateCw className={loading ? 'animate-spin' : undefined} />
+          </Button>
         </div>
 
-        <ScrollArea className="min-h-0 flex-1">
-          {loading ? (
-            <div className="flex flex-col gap-3 p-3">
-              {[0, 1, 2, 3].map(n => (
-                <div key={n} className="flex items-center gap-3">
-                  <Skeleton className="size-9 shrink-0 rounded-md" />
-                  <div className="min-w-0 flex-1"><Skeleton className="h-4 w-2/3" /></div>
-                </div>
-              ))}
-            </div>
-          ) : error ? (
-            <p className="px-4 py-6 text-sm text-destructive">{error}</p>
-          ) : rows.length === 0 ? (
-            <div className="px-4 py-8">
-              <p className="text-sm font-semibold text-foreground">{empty.title}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{empty.description}</p>
-            </div>
-          ) : (
-            rows.map(row => (
-              <TenantRow
-                key={row.account.id}
-                account={row.account}
-                selected={row.account.id === selectedId}
-                onSelect={() => setSelectedId(row.account.id)}
-              />
-            ))
-          )}
-        </ScrollArea>
-      </div>
+        <TenantList
+          rows={rows}
+          query={query}
+          loaded={accounts.length}
+          total={total}
+          truncated={truncated}
+          loading={loading}
+          error={error}
+          selectedId={selectedId}
+          onSelect={select}
+        />
 
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {!selectedId ? (
-          <p className="m-auto text-sm text-muted-foreground">Choose an account to see its details.</p>
-        ) : detailLoading || !detail ? (
-          <div className="flex flex-col gap-3 p-5">
-            <Skeleton className="h-6 w-56" />
-            <Skeleton className="h-4 w-40" />
-          </div>
-        ) : (
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="flex flex-col gap-6 p-5">
-              <header className="flex items-start gap-3">
-                <span
-                  aria-hidden
-                  className="flex size-11 shrink-0 items-center justify-center rounded-[9px] text-[15px] font-semibold text-white"
-                  style={{ backgroundColor: tenantTileColor(detail.account) }}
-                >
-                  {tenantInitials(detail.account)}
-                </span>
-                <div className="min-w-0">
-                  <h2 className="truncate text-base font-semibold">{tenantDisplayName(detail.account)}</h2>
-                  <p className="truncate text-sm text-muted-foreground">{detail.account.email}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Joined {tenantJoinedLabel(detail.account.created_at)}
-                  </p>
-                </div>
-              </header>
-
-              {/* Deliberately empty for now: upgrading an account and adding
-                  credits land here once that layout is settled. Reserving the
-                  space keeps the header from being rebuilt around them later. */}
-
-              <TenantWorkspaceList
-                title="Owns"
-                workspaces={detail.owned_workspaces}
-                emptyText="No workspaces of their own."
-              />
-              <TenantWorkspaceList
-                title="Member of"
-                workspaces={detail.member_workspaces}
-                emptyText="Not a member of anyone else's workspace."
-              />
-            </div>
-          </ScrollArea>
+        {/* An invisible 12px grab strip whose hairline only appears under the
+            pointer — the divider is the pane border, not this. */}
+        {selected && (
+          <button
+            type="button"
+            aria-label="Resize account list"
+            title="Drag to resize. Double-click to reset."
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeEnd}
+            onDoubleClick={resetWidth}
+            className={cn(
+              'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
+              SINGLE_COLUMN_HIDE,
+              FOCUS_RING,
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
+            />
+          </button>
         )}
       </section>
+
+      {selected && (
+        <TenantDetailPane
+          account={selected}
+          detail={detail}
+          loading={detailLoading}
+          error={detailError}
+          /* The back arrow exists only when the detail has replaced the list. */
+          backButtonClass="hidden @max-2xl/tenantswin:inline-flex"
+          onClose={() => select(null)}
+        />
+      )}
     </div>
   );
+});
+
+// ---------------------------------------------------------------------------
+
+interface TenantListProps {
+  rows: TenantRowModel[];
+  query: string;
+  /** How many accounts the route actually returned, before the search filter. */
+  loaded: number;
+  total: number;
+  truncated: boolean;
+  loading: boolean;
+  error: string | null;
+  selectedId: string | null;
+  onSelect: (accountId: string) => void;
 }
 
-function TenantRow({
-  account,
-  selected,
-  onSelect,
-}: {
-  account: TenantAccount;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={selected ? 'true' : undefined}
-      // No separators. Padding plus the selected wash does the separating, the
-      // way the inbox does it.
-      className={cn(
-        'flex w-full items-center gap-3 px-3 py-3 text-left transition-colors',
-        selected ? 'bg-muted' : 'hover:bg-muted/60',
-      )}
-    >
-      <span
-        aria-hidden
-        className="flex size-9 shrink-0 items-center justify-center rounded-[8px] text-[12px] font-semibold text-white"
-        style={{ backgroundColor: tenantTileColor(account) }}
-      >
-        {tenantInitials(account)}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{tenantDisplayName(account)}</span>
-        <span className="block truncate text-xs text-muted-foreground">{account.email}</span>
-      </span>
-      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-        {account.owned_workspace_count}
-      </span>
-    </button>
-  );
-}
+/** Pure list pane — takes pre-formatted rows, so it reads no clock and no store. */
+export function TenantList({
+  rows, query, loaded, total, truncated, loading, error, selectedId, onSelect,
+}: TenantListProps) {
+  // Arrow keys walk the rows; the rows are real buttons, so Enter/Space already
+  // open them and no extra key handling is needed.
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const buttons = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-tenant-row]'),
+    );
+    if (buttons.length === 0) return;
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'ArrowDown'
+      ? (current < 0 ? 0 : Math.min(current + 1, buttons.length - 1))
+      : (current < 0 ? buttons.length - 1 : Math.max(current - 1, 0));
+    event.preventDefault();
+    buttons[next]?.focus();
+  }, []);
 
-function TenantWorkspaceList({
-  title,
-  workspaces,
-  emptyText,
-}: {
-  title: string;
-  workspaces: readonly TenantWorkspace[];
-  emptyText: string;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {title} <span className="tabular-nums">{workspaces.length}</span>
-      </h3>
-      {workspaces.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{emptyText}</p>
-      ) : (
-        <ul className="flex flex-col gap-1.5">
-          {workspaces.map(workspace => (
-            <li key={workspace.id} className="flex items-center gap-2.5 rounded-md px-1 py-1.5 hover:bg-muted/50">
-              <span
-                aria-hidden
-                className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-muted text-[11px] font-semibold text-muted-foreground"
-              >
-                {tenantWorkspaceInitials(workspace)}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm">{workspace.name}</span>
-                <span className="block truncate text-xs text-muted-foreground tabular-nums">
-                  {workspace.member_count} members · {workspace.agent_count} agents
-                </span>
-              </span>
-              {workspace.is_system && <Badge variant="secondary" className="shrink-0">System</Badge>}
-              {workspace.parent_id && <Badge variant="outline" className="shrink-0">Child</Badge>}
-            </li>
+  if (loading && rows.length === 0) {
+    return (
+      <div className="min-h-0 flex-1" data-tenant-skeleton="">
+        <div className={LIST_COLUMN_CLASS}>
+          {[0, 1, 2, 3].map(index => (
+            <div key={index} className={cn('flex items-start gap-2.5', ROW_PADDING)}>
+              <Skeleton className="size-8 shrink-0 rounded-[9px]" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-3 w-28" />
+                  <Skeleton className="ml-auto h-3 w-16" />
+                </div>
+                <Skeleton className="mt-1.5 h-2.5 w-40" />
+                <Skeleton className="mt-2 h-3 w-24" />
+              </div>
+            </div>
           ))}
-        </ul>
-      )}
-    </section>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && rows.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+        <div className="max-w-[18rem]">
+          <p className={cn('font-medium text-foreground', TEXT_BODY)}>Could not load accounts</p>
+          <p className={cn('mt-1 leading-relaxed text-muted-foreground', TEXT_BODY)}>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    const empty = tenantsEmptyState(query, total);
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+        <div className="max-w-[18rem]">
+          <p className={cn('font-medium text-foreground', TEXT_BODY)}>{empty.title}</p>
+          <p className={cn('mt-1 leading-relaxed text-muted-foreground', TEXT_BODY)}>{empty.description}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ScrollArea className={cn('min-h-0 flex-1', SCROLL_VIEWPORT_BLOCK)}>
+      {/* One flat stream, newest account first, nothing drawn between rows.
+          Capped and centred so a wide window does not stretch rows into a thin
+          edge-to-edge ribbon. */}
+      <div className={cn('flex flex-col pb-2', LIST_COLUMN_CLASS)} onKeyDown={handleKeyDown}>
+        {rows.map(row => (
+          <TenantRow
+            key={row.account.id}
+            row={row}
+            selected={row.account.id === selectedId}
+            onSelect={onSelect}
+          />
+        ))}
+        {/* The count sits UNDER the list, not in the header: it is a footnote
+            about what you are looking at, and a capped list has to say so
+            rather than quietly under-reporting the deployment's size. */}
+        <p className={cn('px-3 pt-2 text-muted-foreground/80', TEXT_META)}>
+          {tenantListFooter(rows.length, loaded, total, truncated, query)}
+        </p>
+      </div>
+    </ScrollArea>
   );
 }
