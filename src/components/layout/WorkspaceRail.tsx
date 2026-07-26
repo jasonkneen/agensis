@@ -246,9 +246,10 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           non-interactive, out of flow — not a flex item. */}
       <div aria-hidden="true" className="sidebar-accent-wash" />
 
-      {/* Tiles scroll; the create button below does not. Scrolling the whole
-          rail would carry "+" off the bottom on an account with enough
-          workspaces to need scrolling — exactly when you want it reachable. */}
+      {/* Tiles AND "+" scroll together: "+" is the last row of the list rather
+          than a pinned footer, so it sits directly under the last workspace.
+          Tenants stays pinned below — it is an admin surface, not a workspace,
+          and does not belong in the list it would otherwise appear to join. */}
       <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {model.tiles.map(renderRow)}
 
@@ -272,6 +273,37 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
             {model.systemTiles.map(renderRow)}
           </>
         )}
+
+        {/* "+" is the last row OF THE LIST, not a pinned footer: it reads as
+            "add one more of these" directly under the last workspace, which is
+            what it does. It therefore scrolls with the tiles — on an account
+            with enough workspaces to overflow, reaching it means scrolling to
+            the end of the list. That is the accepted trade for having it sit
+            with the things it creates rather than floating below them. */}
+        <div className="w-full shrink-0 px-2 pt-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-workspace-rail-create
+                onClick={onCreateWorkspace}
+                aria-label="Create workspace"
+                className={cn(
+                  // Same literal radius as a tile — see WorkspaceRow — so the
+                  // "add one of these" button is the same shape as the things it adds.
+                  'flex h-9 items-center rounded-[11px] border border-dashed border-border text-muted-foreground transition-colors',
+                  'hover:border-foreground/40 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
+                )}
+              >
+                <Plus className="size-4 shrink-0" />
+                {expanded && <span className="truncate text-[13px]">New workspace</span>}
+              </button>
+            </TooltipTrigger>
+            {/* Redundant once the button says what it does. */}
+            {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
+          </Tooltip>
+        </div>
       </div>
 
       {/* Tenants — the owner-only admin surface, above "+". Rendering is gated
@@ -302,31 +334,6 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           </Tooltip>
         </div>
       )}
-
-      <div className="w-full shrink-0 px-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              data-workspace-rail-create
-              onClick={onCreateWorkspace}
-              aria-label="Create workspace"
-              className={cn(
-                // Same literal radius as a tile — see WorkspaceRow — so the
-                // "add one of these" button is the same shape as the things it adds.
-                'flex h-9 items-center rounded-[11px] border border-dashed border-border text-muted-foreground transition-colors',
-                'hover:border-foreground/40 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
-              )}
-            >
-              <Plus className="size-4 shrink-0" />
-              {expanded && <span className="truncate text-[13px]">New workspace</span>}
-            </button>
-          </TooltipTrigger>
-          {/* Redundant once the button says what it does. */}
-          {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
-        </Tooltip>
-      </div>
 
       {resizable && (
         <div
