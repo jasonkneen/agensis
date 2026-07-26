@@ -64,6 +64,15 @@ export interface ChatSession {
  /** Canvas layer (project) this session belongs to. Null = unassigned, shown in every project. Mirrors canvas_objects.layer_id (client-generated id, no FK). */
  canvas_id?: string | null;
  folder?: string | null;
+ /** What the channel is for, shown under its name. */
+ description?: string | null;
+ /** Icon KEY (see src/lib/channelProfile.ts), not a glyph. '' = the default hash. */
+ icon?: string | null;
+ /**
+  * How people and AGENTS should behave in this channel, in the owner's words.
+  * The server injects it into every agent turn here, so it sets their tone.
+  */
+ intent?: string | null;
  is_favorite?: boolean;
  participants?: ChannelParticipant[] | null;
  conversation_mode?: 'mention' | 'auto' | null;

@@ -22,6 +22,7 @@ const {
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const { channelIntentNote } = require('../shared/channelIntent.cjs');
 const {
  ORB_MAX_BODY_BYTES,
  ORB_MAX_PAYLOAD_FIELDS,
@@ -532,6 +533,13 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS is_favorite boolean NOT NULL DEFAULT false;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS participants jsonb NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS icon text NOT NULL DEFAULT '';
+    -- How people and AGENTS should behave in this channel, in the owner's own
+    -- words. Injected into every agent turn here (see channelIntentNote), which
+    -- is why it is a channel property and not a per-agent one: the same agent
+    -- is expected to be playful in one channel and terse in another.
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS intent text NOT NULL DEFAULT '';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'auto';
     ALTER TABLE chat_sessions ALTER COLUMN conversation_mode SET DEFAULT 'auto';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS max_agent_turns integer NOT NULL DEFAULT 10;
@@ -2949,7 +2957,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, model, folder, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, version, created_at, updated_at
+   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
        order by updated_at desc nulls last
@@ -4257,11 +4265,36 @@ async function sessionHasLiveHuddle(sessionId) {
  }
 }
 
-function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false) {
+/**
+ * The channel's own house style, or '' when it has none.
+ *
+ * Read per turn rather than cached: an owner editing the intent expects the
+ * next reply to obey it, and a channel turn already costs a model call, so one
+ * more indexed lookup by primary key is not the expensive part.
+ */
+async function loadChannelIntentNote(sessionId) {
+ if (!sessionId) return '';
+ try {
+  const rows = await getDb().unsafe(
+   'select title, intent from chat_sessions where id = $1 limit 1',
+   [String(sessionId)],
+  );
+  if (rows.length === 0) return '';
+  return channelIntentNote(rows[0].intent, rows[0].title);
+ } catch {
+  // A deployment whose schema has not caught up must not lose its agents.
+  return '';
+ }
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false, intentNote = '') {
  const selfHandle = slugHandle(agent.handle || agent.name);
  const lines = [];
  // First, before the roster and the transcript: it changes HOW the agent answers,
  // so it must be read before what it is answering.
+ // Before the voice note, the roster and the transcript: house style changes
+ // HOW every following line should be read.
+ if (intentNote) lines.push(intentNote, '');
  if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
   lines.push(
@@ -4604,6 +4637,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  if (voiceHuddle && agentContext) {
   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<voice_huddle>\n${VOICE_HUDDLE_NOTE}\n</voice_huddle>`.trim();
  }
+ // The channel's house style, for every lane: builtin through the system
+ // prompt, daemon/MCP/external through the daemon prompt.
+ const intentNote = await loadChannelIntentNote(sessionId);
+ if (intentNote && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<channel_intent>\n${intentNote}\n</channel_intent>`.trim();
+ }
 
  // If one or more MCP clients are working AS this agent (joined via the invite link and
  // polling claim_job), serve this turn through the pull queue: enqueue a job; whichever
@@ -4618,7 +4657,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', pendingRows);
-  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle);
+  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote);
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
        values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
@@ -4655,7 +4694,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
        returning *`,
    [
     workspaceId, agent.id, sessionId, createdBy,
-    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle),
+    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote),
     { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
    ],
   );
@@ -4813,7 +4852,7 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  );
  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
- const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle);
+ const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote);
  const jobRows = await insertActiveAgentJob(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
@@ -12372,6 +12411,7 @@ module.exports = {
   buildWhereClause,
   buildDaemonPrompt,
   VOICE_HUDDLE_NOTE,
+  loadChannelIntentNote,
   agentVoiceSettings,
   cartesiaEnglishVoiceIds,
   cartesiaSpeak,

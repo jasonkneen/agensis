@@ -1,0 +1,158 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+import {
+  channelIconChoices, channelProfileDiff, MAX_DESCRIPTION_CHARS, MAX_INTENT_CHARS,
+  normalizeChannelIcon, type ChannelProfileDraft,
+} from '@/lib/channelProfile';
+
+// ---------------------------------------------------------------------------
+// EDIT CHANNEL — name, description, icon, and the channel's INTENT.
+//
+// The intent is the one that does something new. It is the room's house style
+// in the owner's own words, and the server injects it into every agent turn
+// taken in this channel, so writing "joking is fine, clean language" here
+// actually changes how the agents talk here. That is why the field says so
+// plainly rather than being labelled "notes" — a field that silently rewires
+// agent behaviour must announce itself.
+//
+// Save sends a SPARSE diff (channelProfileDiff), so renaming a channel does not
+// rewrite its intent and two people editing different fields do not clobber
+// each other.
+// ---------------------------------------------------------------------------
+
+interface Props {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Current stored values. The dialog seeds from these every time it opens. */
+  baseline: ChannelProfileDraft;
+  /** Persist the diff. Resolves truthy on success; the dialog stays open on failure. */
+  onSave: (patch: Partial<ChannelProfileDraft>) => Promise<boolean>;
+  status?: string;
+}
+
+export function EditChannelDialog({ open, onOpenChange, baseline, onSave, status = '' }: Props) {
+  const [draft, setDraft] = useState<ChannelProfileDraft>(baseline);
+  const [saving, setSaving] = useState(false);
+
+  // Re-seed on every open, not just on mount: the channel may have changed
+  // underneath (someone else renamed it), and a stale draft would silently
+  // revert their edit on save.
+  useEffect(() => {
+    if (open) setDraft(baseline);
+  }, [open, baseline]);
+
+  const icons = useMemo(() => channelIconChoices(), []);
+  const patch = useMemo(() => channelProfileDiff(draft, baseline), [draft, baseline]);
+  const titleEmpty = draft.title.trim().length === 0;
+
+  const handleSave = async () => {
+    if (!patch || titleEmpty) return;
+    setSaving(true);
+    const ok = await onSave(patch);
+    setSaving(false);
+    if (ok) onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100svh-2rem)] max-w-lg overflow-hidden">
+        <DialogHeader>
+          <DialogTitle>Edit channel</DialogTitle>
+          <DialogDescription>
+            How this channel is named, described, and how the people and agents in it behave.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 space-y-4 overflow-auto pr-1">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-channel-title">Name</Label>
+            <Input
+              id="edit-channel-title"
+              value={draft.title}
+              onChange={event => setDraft(prev => ({ ...prev, title: event.target.value }))}
+              placeholder="general"
+              maxLength={200}
+            />
+            {titleEmpty && (
+              <p className="text-xs text-destructive">
+                A channel needs a name to be findable in the sidebar.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-channel-description">Description</Label>
+            <Textarea
+              id="edit-channel-description"
+              value={draft.description}
+              onChange={event => setDraft(prev => ({ ...prev, description: event.target.value }))}
+              placeholder="What this channel is for."
+              rows={2}
+              maxLength={MAX_DESCRIPTION_CHARS}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Icon</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {icons.map(([key, Glyph]) => {
+                const active = normalizeChannelIcon(draft.icon) === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-label={key}
+                    aria-pressed={active}
+                    title={key}
+                    onClick={() => setDraft(prev => ({ ...prev, icon: active ? '' : key }))}
+                    className={cn(
+                      'flex size-9 items-center justify-center rounded-md border transition-colors',
+                      active
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border bg-background text-muted-foreground hover:bg-muted/50',
+                    )}
+                  >
+                    <Glyph className="size-4" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-channel-intent">Intent</Label>
+            <Textarea
+              id="edit-channel-intent"
+              value={draft.intent}
+              onChange={event => setDraft(prev => ({ ...prev, intent: event.target.value }))}
+              placeholder="A fun place to share stuff that's not work related and interact with each other. Joking is fine, clean language."
+              rows={4}
+              maxLength={MAX_INTENT_CHARS}
+            />
+            <p className="text-xs text-muted-foreground">
+              How people should behave here — and how the agents will. Every agent reply in this
+              channel is given this, so it sets their tone and subject matter. It does not change
+              what an agent is allowed to do.
+            </p>
+          </div>
+
+          {status && <p className="text-xs text-destructive">{status}</p>}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="button" onClick={() => void handleSave()} disabled={!patch || titleEmpty || saving}>
+            {saving ? 'Saving' : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

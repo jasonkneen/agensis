@@ -17,7 +17,6 @@ import {
   GitCommitHorizontal,
   Columns2,
   Globe,
-  Hash,
   Layers,
   Link2,
   Loader2,
@@ -25,6 +24,7 @@ import {
   Mic,
   Monitor,
   MoreHorizontal,
+  Settings2,
   Palette,
   PanelRightClose,
   PanelRightOpen,
@@ -73,6 +73,8 @@ import {
 import { HuddleCard } from '../huddle/HuddleCard';
 import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
 import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
+import { EditChannelDialog } from '../chat/EditChannelDialog';
+import { channelIconGlyph, normalizeChannelIcon, type ChannelProfileDraft } from '../../lib/channelProfile';
 import { HuddlePanel } from '../huddle/HuddlePanel';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
@@ -254,7 +256,7 @@ type ChannelPresenceUser = {
 };
 
 
-type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'is_favorite' | 'archived_at' | 'participants' | 'conversation_mode'>;
+type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'description' | 'icon' | 'intent' | 'is_favorite' | 'archived_at' | 'participants' | 'conversation_mode'>;
 
 const CHANNEL_META_COLUMNS = '*';
 
@@ -1186,6 +1188,26 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
   return String(participant?.id ?? '');
 }
 
+  const [editChannelOpen, setEditChannelOpen] = useState(false);
+
+  // The dialog's seed. Built from the PERSISTED meta so a reopened dialog shows
+  // what is stored, never what a previous cancelled edit left in state.
+  const channelProfileBaseline = useMemo<ChannelProfileDraft>(() => ({
+    title: channelMeta?.title || channelTitle || '',
+    description: channelMeta?.description || '',
+    icon: normalizeChannelIcon(channelMeta?.icon),
+    intent: channelMeta?.intent || '',
+  }), [channelMeta?.title, channelMeta?.description, channelMeta?.icon, channelMeta?.intent, channelTitle]);
+
+  // The channel's chosen glyph, or the hash. Capitalised because it is rendered
+  // as a component.
+  const ChannelIcon = useMemo(() => channelIconGlyph(channelMeta?.icon), [channelMeta?.icon]);
+
+  const handleSaveChannelProfile = async (patch: Partial<ChannelProfileDraft>) => {
+    const saved = await persistChannelUpdates(patch as Partial<ChannelSessionMeta>);
+    return Boolean(saved);
+  };
+
   const handleOpenParticipantsDialog = () => {
     const selected = new Set<string>();
     const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
@@ -1460,7 +1482,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
-                    <Hash data-icon="inline-start" />
+                    <ChannelIcon data-icon="inline-start" />
                     <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
                     <ChevronDown className="size-3" />
                   </Button>
@@ -1593,6 +1615,12 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64">
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => setEditChannelOpen(true)}>
+                    <Settings2 data-icon="inline-start" />
+                    Edit channel
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={() => setSidePanel('pins')}>
                   <Pin data-icon="inline-start" />
                   Pins
@@ -2195,6 +2223,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           </div>
         </DialogContent>
       </Dialog>
+
+      <EditChannelDialog
+        open={editChannelOpen}
+        onOpenChange={setEditChannelOpen}
+        baseline={channelProfileBaseline}
+        onSave={handleSaveChannelProfile}
+        status={channelActionStatus}
+      />
 
       <Dialog open={addParticipantsOpen} onOpenChange={setAddParticipantsOpen}>
         <DialogContent className="max-h-[calc(100svh-2rem)] max-w-lg overflow-hidden">
@@ -3866,6 +3902,9 @@ function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMe
   return {
     ...meta,
     folder: meta.folder ?? null,
+    description: meta.description ?? '',
+    icon: normalizeChannelIcon(meta.icon),
+    intent: meta.intent ?? '',
     is_favorite: Boolean(meta.is_favorite),
     archived_at: meta.archived_at ?? null,
     participants: normalizeChannelParticipants(meta.participants),

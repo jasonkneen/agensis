@@ -153,6 +153,11 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   title text NOT NULL DEFAULT 'New Chat',
   model text DEFAULT 'auto',
   folder text DEFAULT 'General',
+  description text NOT NULL DEFAULT '',
+  icon text NOT NULL DEFAULT '',
+  -- How people and AGENTS should behave here, in the owner's own words.
+  -- Injected into every agent turn in this channel.
+  intent text NOT NULL DEFAULT '',
   is_favorite boolean NOT NULL DEFAULT false,
   participants jsonb NOT NULL DEFAULT '[]'::jsonb,
   conversation_mode text NOT NULL DEFAULT 'auto',

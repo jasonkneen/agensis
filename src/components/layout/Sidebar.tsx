@@ -1,3 +1,4 @@
+import { channelIconGlyph } from '../../lib/channelProfile';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -1602,7 +1603,10 @@ function SessionTree({
    <React.Fragment key={session.id}>
     <SessionRow
      session={session}
-     icon={icon}
+     // A channel that chose an icon wears it here too, so the sidebar and the
+     // channel header agree. Threads and DMs pass no icon key and keep the
+     // group's glyph.
+     icon={session.icon ? React.createElement(channelIconGlyph(session.icon)) : icon}
      archiveNoun={archiveNoun}
      depth={depth}
      chip={chip}
