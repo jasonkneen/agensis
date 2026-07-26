@@ -55,6 +55,7 @@ const {
  markHumanIdentityWrite,
  identityWriteSql,
  synthesizeHumanIdentityInsert,
+ repairStoredIdentity,
  FIELD_LIMITS: IDENTITY_FIELD_LIMITS,
  normalizeIdentityDeclaration,
  normalizeVoicePreference,
@@ -1565,6 +1566,17 @@ function invalidJsonValue(table, column) {
  return err;
 }
 
+// Bind the OBJECT, never a pre-stringified value. postgres.js resolves a
+// `$n::jsonb` placeholder to a jsonb parameter and JSON-serializes the JS value
+// itself — so a value that is ALREADY a JSON string gets serialized again and
+// lands as a jsonb STRING SCALAR. That is not a cosmetic difference: `||`
+// treats a scalar operand as an array element (identity.human_set rows became
+// literal arrays, one corrupted append per human edit) and `jsonb_set` on a
+// scalar errors, which is why voice saves failed live. String input is
+// parse-validated and bound as the PARSED value so both input shapes bind
+// identically. The Netlify copy of this function STRINGIFIES — correct for its
+// driver, which sends text params for the cast to parse. The two are
+// deliberately opposite; do not "sync" them.
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
  // Return the PARSED OBJECT, never a JSON string. On this server's porsager
@@ -5421,6 +5433,37 @@ async function applyAgentIdentity({ workspaceId, agentId, row, declared, isNew =
  return null;
 }
 
+/**
+ * Boot-time repair for identity rows corrupted by the double-encoded jsonb
+ * bind (see normalizeJsonParam): `identity` stored as a jsonb string scalar,
+ * or `identity.human_set` degraded into an array by `||` against a scalar
+ * patch. Those rows are not just cosmetically wrong — jsonb_set on a scalar
+ * ERRORS, so a corrupted row is one a human can no longer edit at all. Runs
+ * once per boot after the schema gate; the WHERE selects only diseased rows,
+ * so a healthy database does zero writes.
+ */
+async function repairCorruptedAgentIdentities() {
+ const rows = await getDb().unsafe(
+  `select id, workspace_id, identity from workspace_agents
+     where jsonb_typeof(identity) is distinct from 'object'
+        or (identity ? 'human_set' and jsonb_typeof(identity->'human_set') is distinct from 'object')
+        or (identity ? 'voice' and jsonb_typeof(identity->'voice') is distinct from 'object')`,
+ );
+ for (const row of rows) {
+  const repaired = repairStoredIdentity(row.identity) ?? {};
+  await getDb().unsafe(
+   `update workspace_agents
+      set identity = $1::jsonb, "version" = COALESCE("version", 0) + 1, updated_at = now()
+      where id = $2 and workspace_id = $3`,
+   [repaired, row.id, row.workspace_id],
+  );
+ }
+ if (rows.length > 0) {
+  console.log(`[agensis] repaired ${rows.length} corrupted workspace_agents.identity row(s)`);
+ }
+ return rows.length;
+}
+
 async function registerAgentConnection(ws, message) {
  const auth = ws.agentAuth;
  if (!auth) throw forbidden('Agent token is required');
@@ -6305,10 +6348,11 @@ async function registerAgentRequest({ workspaceId, asHandle = null, name = null,
   [
    workspaceId, agent ? agent.id : null, reqHandle, reqName,
    String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending',
-   // JSON.stringify + an explicit ::jsonb cast, matching every other jsonb bind
-   // in this file (agent_connections.metadata, agent_jobs.metadata). `.unsafe`
-   // sends params untyped, so the cast is what parses the text into jsonb.
-   JSON.stringify(declaredIdentity),
+   // The OBJECT, not JSON.stringify: postgres.js resolves the ::jsonb cast to a
+   // jsonb parameter and serializes the value itself — a pre-stringified value
+   // gets serialized AGAIN and lands as a jsonb string scalar. See
+   // normalizeJsonParam for the full failure mode this caused live.
+   declaredIdentity,
   ],
  );
  const reg = rows[0];
@@ -8468,6 +8512,15 @@ function createApp() {
  // of a green light while every other /backend route is broken.
  let runtimeSchemaError = null;
  runtimeSchemaReady.catch((error) => { runtimeSchemaError = error; });
+
+ // Identity rows corrupted by the double-encoded jsonb bind (see
+ // normalizeJsonParam) are healed right after the schema gate — a corrupted
+ // row errors out of jsonb_set, so until it is repaired no human edit to that
+ // agent can save. Best-effort: a repair failure must not take the backend
+ // down, and the next boot tries again.
+ void runtimeSchemaReady
+  .then(() => repairCorruptedAgentIdentities())
+  .catch((error) => console.warn('[backend] identity repair skipped:', error.message || error));
 
  // Auth is enforced at the route boundary and again per workspace-scoped
  // operation. Keep this server-side; client filters are only UX hints.
@@ -11961,6 +12014,7 @@ module.exports = {
   handleAgentCapabilitiesSync,
   resolveWorkspaceAgentByHandle,
   applyAgentIdentity,
+  repairCorruptedAgentIdentities,
   registerAgentRequest,
   finalizeRegistrationApproval,
   decideAgentRegistration,

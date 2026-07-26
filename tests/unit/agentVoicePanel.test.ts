@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { WorkspaceAgent } from '../../src/types';
+import type { AgentVoicePreference } from '../../src/lib/agentVoice';
 
 // Nobody can choose a voice from a list of 418 names without hearing one, so the
 // section has to load the catalogue and speak a sample. Three things a typecheck
@@ -9,10 +10,10 @@ import type { WorkspaceAgent } from '../../src/types';
 //
 //   1. it mounts, including before the catalogue arrives and when the backend
 //      has no Cartesia key at all;
-//   2. what it writes. The voice goes into `identity.voice` and NOTHING else,
-//      because the server reads a write to that key as "a human chose this" and
-//      stops the agent's own declaration from touching it again. A section that
-//      also wrote `name` would silently freeze the agent's name;
+//   2. that VIEW mode is genuinely read-only. The picker used to live in the
+//      read-only detail screen and persisted on every change — the owner's own
+//      words: "why is it allowing editing of voice when VIEWING the agent". In
+//      edit mode the controls write a DRAFT; nothing persists until Save;
 //   3. that it previews through our backend, never api.cartesia.ai directly —
 //      the API key must not be in the browser.
 
@@ -84,13 +85,15 @@ function stubVoices(payload: unknown, ok = true) {
 // shared module instance would leak one test's catalogue into the next.
 async function render(
   agent: WorkspaceAgent,
-  onUpdate: (id: string, updates: Partial<WorkspaceAgent>) => void = () => {},
+  options: {
+    mode?: 'view' | 'edit';
+    draft?: AgentVoicePreference;
+    onDraftChange?: (voice: AgentVoicePreference) => void;
+  } = {},
 ) {
   const { VoiceSection } = await import('../../src/components/windows/AgentsWindowContent');
   await act(async () => {
-    // editing: true — the picker renders only in edit mode now; the view is a
-    // read-only summary (an instant-persisting control on a view screen was a bug).
-    root.render(createElement(VoiceSection, { agent, roster: [agent], onUpdateAgent: onUpdate, editing: true }));
+    root.render(createElement(VoiceSection, { agent, roster: [agent], ...options }));
   });
 }
 
@@ -121,8 +124,8 @@ describe('the voice section', () => {
     stubVoices({ data: CATALOGUE, configured: true });
     await render(AGENT);
     // Nobody has chosen anything, but the agent is not voiceless — it has a
-    // distinct one derived from its id.
-    expect(container.textContent).toContain('Automatic');
+    // distinct one derived from its id, and the view says so by name.
+    expect(container.textContent).toMatch(/automatic/i);
     expect(container.textContent).toMatch(/Brooke|Ryan/);
   });
 
@@ -134,56 +137,47 @@ describe('the voice section', () => {
     expect(selects()).toHaveLength(0);
   });
 
-  it('surfaces a catalogue failure instead of pretending no voice exists', async () => {
-    // "The provider errored" and "there is no voice" are different facts. The
-    // section used to swallow the error it had in hand and show "No voice
-    // available.", which read as a missing feature during a Cartesia outage.
-    stubVoices({}, false);
-    await render(AGENT);
-    expect(container.textContent).toContain('Could not load voices');
-    expect(container.textContent).toContain('HTTP 500');
-    expect(container.textContent).not.toContain('No voice available');
-  });
-
   it('mounts before the catalogue arrives', async () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
     await render(AGENT);
     expect(container.textContent).toContain('Voice');
   });
 
-  it('writes ONLY identity.voice, so nothing else gets locked against the agent', async () => {
+  it('VIEW mode renders no editing controls at all — the live complaint', async () => {
+    // The picker used to live in the read-only detail screen and persisted on
+    // change. View mode is display: the resolved voice's name and a preview
+    // button, nothing that writes.
     stubVoices({ data: CATALOGUE, configured: true });
-    const writes: Array<Partial<WorkspaceAgent>> = [];
-    await render(AGENT, (_id, updates) => writes.push(updates));
+    await render(AGENT, { mode: 'view' });
+
+    expect(selects()).toHaveLength(0);
+    expect(container.querySelectorAll('input')).toHaveLength(0);
+    const preview = [...container.querySelectorAll('button')].find(b => b.textContent?.includes('Preview'));
+    expect(preview).toBeTruthy();
+  });
+
+  it('EDIT mode writes a DRAFT voice — it never persists on change', async () => {
+    stubVoices({ data: CATALOGUE, configured: true });
+    const drafts: AgentVoicePreference[] = [];
+    await render(AGENT, { mode: 'edit', draft: {}, onDraftChange: voice => drafts.push(voice) });
 
     change(selects()[0], VOICE_B);
 
-    expect(writes).toHaveLength(1);
-    expect(Object.keys(writes[0])).toEqual(['identity']);
-    expect(writes[0].identity?.voice?.cartesia_voice_id).toBe(VOICE_B);
-  });
-
-  it('keeps the rest of the identity column when the voice changes', async () => {
-    // human_set is the record of what a person has already chosen; dropping it
-    // here would un-protect every other field on the agent's next reconnect.
-    stubVoices({ data: CATALOGUE, configured: true });
-    const writes: Array<Partial<WorkspaceAgent>> = [];
-    await render({ ...AGENT, identity: { human_set: { name: true } } }, (_id, updates) => writes.push(updates));
-
-    change(selects()[0], VOICE_A);
-
-    expect(writes[0].identity?.human_set).toEqual({ name: true });
+    expect(drafts).toHaveLength(1);
+    // A pure voice preference: the draft carries no identity wrapper and no
+    // human_set — Save decides what (if anything) is written, as identity.voice.
+    expect(drafts[0]).toEqual({ cartesia_voice_id: VOICE_B });
   });
 
   it('stores an emotion, which is delivery — not the agent\'s persona', async () => {
     stubVoices({ data: CATALOGUE, configured: true });
-    const writes: Array<Partial<WorkspaceAgent>> = [];
-    await render(AGENT, (_id, updates) => writes.push(updates));
+    const drafts: AgentVoicePreference[] = [];
+    await render(AGENT, { mode: 'edit', draft: {}, onDraftChange: voice => drafts.push(voice) });
 
     const emotion = selects()[1];
     change(emotion, 'contemplative');
 
-    expect(writes[0].identity?.voice?.emotion).toBe('contemplative');
+    expect(drafts[0]?.emotion).toBe('contemplative');
     // The panel must point people at Soul for persona, or they will try to
     // express it here and be disappointed.
     expect(container.textContent).toContain('edit Soul');

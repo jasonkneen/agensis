@@ -87,16 +87,16 @@ test('a declaration racing a human edit retries and honours the fresh lock', asy
   assert.equal(updates[1].params.at(-1), 2, 'the retry is guarded on the fresh version');
 
   // And the identity written on the retry carries the human_set flag the human
-  // edit created mid-race — the stale merge would have erased it.
-  // Bound as an OBJECT, never a JSON string: on the porsager driver a
-  // stringified bind under ::jsonb arrives as a jsonb STRING SCALAR — the bug
-  // that corrupted identity.human_set into an array and made voice writes
-  // throw. normalizeJsonParam now returns parsed objects, so the param IS the
-  // object here; asserting a string would be asserting the corruption back.
+  // edit created mid-race — the stale merge would have erased it. The param is
+  // the OBJECT: postgres.js serializes it to jsonb itself, and a pre-stringified
+  // value would land as a jsonb string scalar (the corruption normalizeJsonParam
+  // exists to prevent — see the repair tests below).
   const identityParam = updates[1].params.find(
     (p) => p && typeof p === 'object' && !Array.isArray(p) && 'human_set' in p,
   );
-  assert.ok(identityParam, 'the retry writes the identity jsonb');
+  assert.ok(identityParam, 'the retry writes the identity jsonb, bound as an object');
+  assert.equal(updates[1].params.some((p) => typeof p === 'string' && p.includes('human_set')), false,
+    'no pre-stringified identity bind — that shape corrupts jsonb on this driver');
   assert.deepEqual(identityParam, {
     human_set: { avatar: true },
     voice: { cartesia_voice_id: VOICE_A },
@@ -159,4 +159,71 @@ test('perpetual contention gives way — it NEVER falls back to an unguarded wri
   for (const { sql } of updates) {
     assert.match(sql, /COALESCE\("version", 0\) = \$\d+/, 'every attempt is guarded — clobbering is not a fallback');
   }
+});
+
+// --- the boot-time repair for rows the double-encoded bind corrupted ---------
+//
+// Before normalizeJsonParam bound objects, every jsonb write through the
+// generic path landed as a jsonb STRING SCALAR on this driver. For identity
+// that was not cosmetic: `human_set || $patch` with a scalar operand degrades
+// to ARRAY concatenation (a live row held human_set: [{}, "{\"name\":true}"]),
+// and jsonb_set on a scalar ERRORS — which is why voice saves failed live. The
+// repair collapses both shapes back to the canonical object at boot.
+
+test('the boot repair heals scalar identities and array human_sets, and only touches diseased rows', async () => {
+  const corrupted = [
+    // identity.human_set degraded into an array by `||` against scalar patches
+    // (the exact shape found on the live row): later entries win.
+    {
+      id: 'agent-boris', workspace_id: 'ws-1',
+      identity: { voice: { cartesia_voice_id: VOICE_A }, human_set: [{}, '{"name":true,"avatar":false}', '{"avatar":true}'] },
+    },
+    // the WHOLE identity double-encoded into a jsonb string scalar
+    { id: 'agent-scalar', workspace_id: 'ws-1', identity: JSON.stringify({ voice: { cartesia_voice_id: VOICE_A }, human_set: { voice: true } }) },
+  ];
+  const writes = [];
+  __test.setTestDb({
+    async unsafe(sql, params = []) {
+      const n = norm(sql);
+      if (n.startsWith('select id, workspace_id, identity from workspace_agents')) {
+        assert.match(String(sql), /jsonb_typeof/, 'the select targets diseased rows only');
+        return corrupted;
+      }
+      if (n.startsWith('update workspace_agents set identity')) {
+        writes.push(params);
+        return [{ id: params[1] }];
+      }
+      throw new Error(`Unexpected SQL: ${n}`);
+    },
+  });
+
+  const repaired = await __test.repairCorruptedAgentIdentities();
+  assert.equal(repaired, 2);
+  assert.equal(writes.length, 2);
+
+  // boris: the array folds left-to-right into an object; only genuine `true`
+  // locks survive; the voice is kept.
+  assert.deepEqual(writes[0][0], {
+    voice: { cartesia_voice_id: VOICE_A },
+    human_set: { avatar: true, name: true },
+  });
+  assert.deepEqual(writes[0].slice(1), ['agent-boris', 'ws-1']);
+
+  // the scalar row parses back to the object it was meant to be.
+  assert.deepEqual(writes[1][0], {
+    voice: { cartesia_voice_id: VOICE_A },
+    human_set: { voice: true },
+  });
+});
+
+test('a healthy database repairs nothing', async () => {
+  const calls = [];
+  __test.setTestDb({
+    async unsafe(sql) {
+      calls.push(norm(sql));
+      return [];
+    },
+  });
+  assert.equal(await __test.repairCorruptedAgentIdentities(), 0);
+  assert.equal(calls.length, 1, 'one select, zero writes');
 });

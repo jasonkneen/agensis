@@ -860,6 +860,7 @@ function AgentForm({
   submitting = false,
   submitLabel,
   submitIcon,
+  extraSections = null,
 }: {
   name: string;
   avatar: string;
@@ -898,6 +899,12 @@ function AgentForm({
   submitting?: boolean;
   submitLabel: string;
   submitIcon: React.ReactNode;
+  /**
+   * Extra form sections rendered above the submit row — the edit screen slots
+   * the voice editor here so its draft is committed by the SAME Save button as
+   * every other field, instead of persisting on change from a view screen.
+   */
+  extraSections?: React.ReactNode;
 }) {
   const options = modelOptions(model);
   const canSubmit = Boolean(name.trim());
@@ -1150,6 +1157,8 @@ function AgentForm({
         )}
       </Field>
 
+      {extraSections}
+
       <div className="flex flex-wrap items-center gap-2">
         <NativeSelect
           value={runMode}
@@ -1265,6 +1274,10 @@ function AgentDetailPane({
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
+  // The voice DRAFT for the edit form. The voice controls used to live in the
+  // read-only detail view and persisted on every change; they now render only
+  // while editing, and this draft is committed by Save like any other field.
+  const [editVoice, setEditVoice] = useState<AgentVoicePreference>({});
   const [disconnecting, setDisconnecting] = useState(false);
   // What the form was seeded from, normalized exactly like a save. handleSave
   // diffs against this so it submits ONLY the fields the human changed in THIS
@@ -1272,6 +1285,7 @@ function AgentDetailPane({
   // recorded as a human choice (identity.human_set, shared/agentIdentity.cjs)
   // and lock the field at its current — possibly empty — value forever.
   const editBaseline = useRef<Partial<WorkspaceAgent>>({});
+  const voiceBaseline = useRef<AgentVoicePreference>({});
 
   useEffect(() => {
     if (!agent) return;
@@ -1307,6 +1321,9 @@ function AgentDetailPane({
     setEditRunMode(seed.runMode);
     setEditSandboxProvider(seed.sandboxProvider);
     setEditSandboxConfig(seed.sandboxConfig);
+    const seedVoice = readAgentVoice(agent);
+    setEditVoice(seedVoice);
+    voiceBaseline.current = seedVoice;
     setDisconnecting(false);
     editBaseline.current = agentFormUpdates(seed);
   }, [agent?.id]);
@@ -1370,6 +1387,12 @@ function AgentDetailPane({
         (updates as Record<string, unknown>)[key] = next;
       }
     }
+    // The voice draft rides the same rule: only a CHANGED voice is sent, as
+    // `identity.voice` — the one identity key a client may write. The server
+    // grafts it onto the stored column and records the human's choice.
+    if (JSON.stringify(editVoice) !== JSON.stringify(voiceBaseline.current)) {
+      updates.identity = { voice: editVoice };
+    }
     if (Object.keys(updates).length === 0) {
       // Nothing changed — closing the editor without a write is the whole point.
       onCancelEdit();
@@ -1431,6 +1454,15 @@ function AgentDetailPane({
             onSubmit={handleSave}
             submitLabel="Save"
             submitIcon={<Save data-icon="inline-start" />}
+            extraSections={(
+              <VoiceSection
+                agent={agent}
+                roster={roster}
+                mode="edit"
+                draft={editVoice}
+                onDraftChange={setEditVoice}
+              />
+            )}
           />
         </div>
       </div>
@@ -1521,7 +1553,7 @@ function AgentDetailPane({
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
 
-          <VoiceSection agent={agent} roster={roster} onUpdateAgent={onUpdateAgent} editing={isEditing} />
+          <VoiceSection agent={agent} roster={roster} mode="view" />
 
           {agent.run_mode === 'daemon' && (
             <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
@@ -2116,54 +2148,65 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
 export function VoiceSection({
   agent,
   roster,
-  onUpdateAgent,
-  editing = false,
+  mode = 'view',
+  draft,
+  onDraftChange,
 }: {
   agent: WorkspaceAgent;
   roster: WorkspaceAgent[];
-  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   /**
-   * Controls render only while the panel is in EDIT mode. The view is a view:
-   * an instant-persisting picker sitting in a read-only screen wrote to the
-   * database from a surface that looks like display — the owner's words were
-   * "why is it allowing editing of voice when VIEWING the agent". Preview stays
-   * available in both modes; listening is not a mutation.
+   * 'view' renders what a huddle will actually play — the resolved voice's
+   * name and a preview button, nothing editable. Live-persisting pickers on
+   * the read-only detail screen were a real complaint ("why is it allowing
+   * editing of voice when VIEWING the agent"): every other field there is
+   * display-only, and this one silently wrote to the row. 'edit' renders the
+   * full picker, but into `draft` via onDraftChange — NOTHING persists until
+   * the surrounding form's Save, which sends identity.voice only if it
+   * actually changed (the same sparse-diff rule as every other field).
    */
-  editing?: boolean;
+  mode?: 'view' | 'edit';
+  draft?: AgentVoicePreference;
+  onDraftChange?: (voice: AgentVoicePreference) => void;
 }) {
-  const { voices, loading, configured, error: voicesError } = useCartesiaVoices();
+  const editable = mode === 'edit';
+  const { voices, loading, configured } = useCartesiaVoices();
   const [query, setQuery] = useState('');
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const stored = readAgentVoice(agent);
+  // What the controls edit and the preview speaks: the DRAFT in edit mode (so
+  // the preview plays what Save would keep), the stored row in view mode.
+  const preference = useMemo(
+    () => (editable ? (draft ?? {}) : readAgentVoice(agent)),
+    [agent, draft, editable],
+  );
 
   // Resolved ACROSS THE WHOLE ROSTER, exactly as the pipeline will. Resolving
   // this agent alone would be simpler and would sometimes lie: a derived
   // default steps aside when another agent already holds that voice, so a
-  // preview that ignored its teammates could play a voice it never gets.
-  const resolved = useMemo(
-    () => assignAgentVoices(roster.length > 0 ? roster : [agent], englishVoiceIds(voices)).get(agent.id)
-      ?? resolveAgentVoice(agent, englishVoiceIds(voices)),
-    [agent, roster, voices],
-  );
+  // preview that ignored its teammates could play a voice it never gets. In
+  // edit mode the draft is substituted for this agent's stored preference.
+  const resolved = useMemo(() => {
+    const self: WorkspaceAgent = editable
+      ? { ...agent, identity: { ...(agent.identity || {}), voice: preference } }
+      : agent;
+    const pool = roster.length > 0 ? roster.map(entry => (entry.id === agent.id ? self : entry)) : [self];
+    return assignAgentVoices(pool, englishVoiceIds(voices)).get(agent.id)
+      ?? resolveAgentVoice(self, englishVoiceIds(voices));
+  }, [agent, editable, preference, roster, voices]);
 
   const chosen = voices.find(voice => voice.id === resolved.voiceId) || null;
   const matches = useMemo(() => filterVoices(voices, query), [voices, query]);
 
-  const persist = (voice: AgentVoicePreference) => {
-    // `identity` carries only `voice` from here. The server reads a write to
-    // that key as "a human chose this" (shared/agentIdentity.cjs), so any other
-    // section writing it would silently lock the voice against the agent's own
-    // declaration.
-    onUpdateAgent(agent.id, { identity: { ...(agent.identity || {}), voice } });
+  const setVoice = (voice: AgentVoicePreference) => {
+    onDraftChange?.(voice);
   };
 
   // Pins the derived default as an explicit choice, which is the only way to
   // stop it moving if Cartesia's catalogue changes under it.
   const pinDefault = () => {
-    if (resolved.voiceId) persist({ ...stored, cartesia_voice_id: resolved.voiceId });
+    if (resolved.voiceId) setVoice({ ...preference, cartesia_voice_id: resolved.voiceId });
   };
 
   const stopPreview = useCallback(() => {
@@ -2221,84 +2264,75 @@ export function VoiceSection({
         </div>
       ) : (
         <>
-          {!editing && (
-            // View mode is a VIEW. The resolved voice as a fact, plus preview —
-            // listening is not a mutation. The picker lives behind Edit.
-            <div className="text-sm text-foreground">
-              {stored.cartesia_voice_id && chosen
-                ? describeVoice(chosen)
-                : chosen
-                  ? `Automatic — ${describeVoice(chosen)}`
-                  : 'Automatic'}
-            </div>
-          )}
-          {editing && <FieldGroup className="gap-2">
-            <Field>
-              <FieldLabel htmlFor={`voice-search-${agent.id}`}>Find a voice</FieldLabel>
-              <Input
-                id={`voice-search-${agent.id}`}
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                placeholder={loading ? 'Loading voices…' : 'Name, accent or description'}
-                className="h-8 text-xs"
-              />
-            </Field>
+          {editable && (
+            <FieldGroup className="gap-2">
+              <Field>
+                <FieldLabel htmlFor={`voice-search-${agent.id}`}>Find a voice</FieldLabel>
+                <Input
+                  id={`voice-search-${agent.id}`}
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder={loading ? 'Loading voices…' : 'Name, accent or description'}
+                  className="h-8 text-xs"
+                />
+              </Field>
 
-            <Field>
-              <FieldLabel htmlFor={`voice-id-${agent.id}`}>Voice</FieldLabel>
-              <NativeSelect
-                id={`voice-id-${agent.id}`}
-                value={stored.cartesia_voice_id || ''}
-                onChange={event => persist({ ...stored, cartesia_voice_id: event.target.value })}
-                className="h-8 text-xs"
-                disabled={loading}
-              >
-                <NativeSelectOption value="">
-                  {resolved.voiceId && chosen
-                    ? `Automatic — ${describeVoice(chosen)}`
-                    : 'Automatic'}
-                </NativeSelectOption>
-                {/* Capped: 418 English voices in one select is a scroll nobody
-                    finishes, so the search box above is the real control and
-                    this shows the top of whatever it matched. */}
-                {matches.slice(0, VOICE_OPTION_LIMIT).map(voice => (
-                  <NativeSelectOption key={voice.id} value={voice.id}>{describeVoice(voice)}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-              {matches.length > VOICE_OPTION_LIMIT && (
-                <p className="mt-1 text-xs text-muted-foreground/70">
-                  Showing {VOICE_OPTION_LIMIT} of {matches.length} — narrow the search to see more.
-                </p>
-              )}
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor={`voice-emotion-${agent.id}`}>Delivery</FieldLabel>
-              <NativeSelect
-                id={`voice-emotion-${agent.id}`}
-                value={resolved.emotion}
-                onChange={event => persist({ ...stored, emotion: event.target.value })}
-                className="h-8 text-xs"
-              >
-                {VOICE_EMOTIONS.map(emotion => (
-                  <NativeSelectOption key={emotion} value={emotion}>
-                    {emotion.charAt(0).toUpperCase() + emotion.slice(1)}
+              <Field>
+                <FieldLabel htmlFor={`voice-id-${agent.id}`}>Voice</FieldLabel>
+                <NativeSelect
+                  id={`voice-id-${agent.id}`}
+                  value={preference.cartesia_voice_id || ''}
+                  onChange={event => setVoice({ ...preference, cartesia_voice_id: event.target.value })}
+                  className="h-8 text-xs"
+                  disabled={loading}
+                >
+                  <NativeSelectOption value="">
+                    {resolved.voiceId && chosen
+                      ? `Automatic — ${describeVoice(chosen)}`
+                      : 'Automatic'}
                   </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <p className="mt-1 text-xs text-muted-foreground/70">
-                Changes how a line is delivered, not what the agent says. For persona, edit Soul.
-              </p>
-            </Field>
+                  {/* Capped: 418 English voices in one select is a scroll nobody
+                      finishes, so the search box above is the real control and
+                      this shows the top of whatever it matched. */}
+                  {matches.slice(0, VOICE_OPTION_LIMIT).map(voice => (
+                    <NativeSelectOption key={voice.id} value={voice.id}>{describeVoice(voice)}</NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {matches.length > VOICE_OPTION_LIMIT && (
+                  <p className="mt-1 text-xs text-muted-foreground/70">
+                    Showing {VOICE_OPTION_LIMIT} of {matches.length} — narrow the search to see more.
+                  </p>
+                )}
+              </Field>
 
-            <VoiceSpeedField
-              id={`voice-speed-${agent.id}`}
-              value={resolved.speed}
-              onChange={value => persist({ ...stored, speed: value })}
-            />
-          </FieldGroup>}
+              <Field>
+                <FieldLabel htmlFor={`voice-emotion-${agent.id}`}>Delivery</FieldLabel>
+                <NativeSelect
+                  id={`voice-emotion-${agent.id}`}
+                  value={resolved.emotion}
+                  onChange={event => setVoice({ ...preference, emotion: event.target.value })}
+                  className="h-8 text-xs"
+                >
+                  {VOICE_EMOTIONS.map(emotion => (
+                    <NativeSelectOption key={emotion} value={emotion}>
+                      {emotion.charAt(0).toUpperCase() + emotion.slice(1)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <p className="mt-1 text-xs text-muted-foreground/70">
+                  Changes how a line is delivered, not what the agent says. For persona, edit Soul.
+                </p>
+              </Field>
 
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+              <VoiceSpeedField
+                id={`voice-speed-${agent.id}`}
+                value={resolved.speed}
+                onChange={value => setVoice({ ...preference, speed: value })}
+              />
+            </FieldGroup>
+          )}
+
+          <div className={cn('flex flex-wrap items-center gap-2', editable && 'mt-2')}>
             <Button
               type="button"
               variant="secondary"
@@ -2309,24 +2343,19 @@ export function VoiceSection({
               <Volume2 data-icon="inline-start" />
               {previewing ? 'Speaking' : 'Preview'}
             </Button>
-            {resolved.isDefault && resolved.voiceId && (
+            {editable && resolved.isDefault && resolved.voiceId && (
               <Button type="button" variant="ghost" size="sm" onClick={pinDefault}>
                 Keep this one
               </Button>
             )}
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={resolved.voiceId}>
-              {/* "The catalogue failed to load" and "there genuinely is no
-                  voice" are different facts — swallowing the error here is how
-                  a Cartesia outage read as a missing feature. */}
               {previewError
                 ? previewError
                 : loading
                   ? 'Loading voices…'
-                  : voicesError
-                    ? `Could not load voices: ${voicesError}`
-                    : chosen
-                      ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
-                      : 'No voice available.'}
+                  : chosen
+                    ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
+                    : 'No voice available.'}
             </span>
           </div>
         </>
