@@ -30,7 +30,11 @@ function fakeDb({ session, onUpdate }) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       if (n.startsWith('select id, name, handle, enabled from workspace_agents')) return AGENTS;
       if (n.startsWith('update chat_sessions set participants')) {
-        const merged = JSON.parse(params[0]);
+        // The bind is the ARRAY itself, not JSON.stringify(array). A stringified
+        // bind into a jsonb column stores a string scalar, which is how 88 live
+        // sessions ended up with participants nobody could read.
+        assert.ok(Array.isArray(params[0]), 'participants must be bound as an array');
+        const merged = params[0];
         if (onUpdate) onUpdate(merged);
         return [{ ...session, participants: merged }];
       }

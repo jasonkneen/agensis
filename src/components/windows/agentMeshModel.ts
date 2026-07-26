@@ -1,3 +1,4 @@
+import { parseParticipants } from '../../lib/sessionParticipants';
 import type { AgentConnection, ChatSession, Task, WorkspaceAgent } from '../../types';
 import { agentAccentColor } from '../../lib/agentAccent';
 import { CX, CY, KIND_META, STATUS_META, agentKind, agentStatus, initials, providerLabel, type NodeStatus } from './agentNetworkModel';
@@ -97,8 +98,10 @@ function lookupKey(value: unknown): string {
  * (id, then handle, then name) because participant rows are denormalised and an
  * older row may carry only a handle.
  */
+type ParticipantRow = { kind?: string; agent_id?: string; handle?: string; name?: string } | null;
+
 export function sessionHasAgent(session: ChatSession, agent: WorkspaceAgent): boolean {
-  const participants = Array.isArray(session.participants) ? session.participants : [];
+  const participants = parseParticipants(session.participants) as ParticipantRow[];
   const keys = new Set([agent.id, agent.handle, agent.name].map(lookupKey).filter(Boolean));
   if (keys.size === 0) return false;
   return participants.some(participant => {
@@ -112,10 +115,10 @@ export function sessionHasAgent(session: ChatSession, agent: WorkspaceAgent): bo
 /** A DM is a session with exactly one agent and at most one human. */
 export function isDirectSession(session: ChatSession): boolean {
   if (session.folder === 'Direct messages') return true;
-  const participants = Array.isArray(session.participants) ? session.participants : [];
-  const agents = participants.filter(p => p.kind === 'agent');
+  const participants = parseParticipants(session.participants) as ParticipantRow[];
+  const agents = participants.filter(p => p?.kind === 'agent');
   if (agents.length !== 1) return false;
-  return participants.filter(p => p.kind === 'user').length <= 1;
+  return participants.filter(p => p?.kind === 'user').length <= 1;
 }
 
 /**
