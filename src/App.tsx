@@ -1523,6 +1523,16 @@ function AppContent() {
     if (session) handleSessionOpen(session);
   }, [sessions, handleSessionOpen]);
 
+  // A sidebar thread row: open the session it lives in, then focus the thread
+  // itself. Both steps are needed — opening only the session drops the person
+  // into a channel with the reply they came for somewhere up the scrollback.
+  const handleOpenThreadFromSidebar = useCallback((sessionId: string, parentMessageId: string) => {
+    const session = sessions.find(item => item.id === sessionId);
+    if (!session) return;
+    handleSessionOpen(session);
+    openThread(parentMessageId);
+  }, [sessions, handleSessionOpen, openThread]);
+
   const handleSplitThread = useCallback(async (source: ChatSession) => {
     const pending = toast.loading(`Splitting “${source.title || 'thread'}”…`);
     const forked = await splitSession(source);
@@ -1940,6 +1950,7 @@ function AppContent() {
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
             onOpenInbox={handleOpenInbox}
+            onOpenThread={handleOpenThreadFromSidebar}
             onOpenMemory={handleOpenMemory}
             onOpenSkills={handleOpenSkills}
             onOpenTasks={handleOpenTasks}

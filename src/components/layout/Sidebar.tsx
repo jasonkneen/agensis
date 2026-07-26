@@ -156,6 +156,9 @@ import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 import { partitionSidebarSessions } from '../../lib/sidebarSessions';
 import { isHuddleSession } from '../../lib/huddleTranscript';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { cn } from '../../lib/utils';
+import { useThreadInbox } from '../../hooks/useThreadInbox';
+import { threadReplyLabel, threadRowTitle } from '../../lib/threadInbox';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
 
@@ -230,6 +233,12 @@ interface SidebarProps {
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
  onOpenInbox?: () => void;
+ /**
+  * Open one message thread — the session it lives in, and the parent message
+  * whose replies to show. The sidebar knows both; the app decides how to
+  * present them (window, panel), which is why this is a prop and not a route.
+  */
+ onOpenThread?: (sessionId: string, parentMessageId: string) => void;
  onOpenMemory: () => void;
  onOpenSkills?: () => void;
  onOpenTasks?: () => void;
@@ -286,6 +295,7 @@ export const Sidebar = React.memo(function Sidebar({
  onSessionSplit,
  onSessionMerge,
  onOpenInbox,
+ onOpenThread,
  onOpenMemory,
  onOpenSkills,
  onOpenTasks,
@@ -381,13 +391,18 @@ export const Sidebar = React.memo(function Sidebar({
  // desktop of it. A desktop is a window/wallpaper configuration, not a place
  // content lives, so nothing here is filtered by the open desktop — see
  // partitionSidebarSessions for why that filter was removed.
- const { activeChannelSessions, directSessions, threadSessions } = React.useMemo(() => {
+ // threadSessions is still partitioned OUT even though the Threads section no
+ // longer renders it: those sessions must not fall through into the channel or
+ // DM lists, which is what the partition is for. The section itself is now
+ // driven by useThreadInbox (message threads), not by folder.
+ const { activeChannelSessions, directSessions } = React.useMemo(() => {
   const { channels, direct, threads } = partitionSidebarSessions(uniqueSessions, {
    isDirect: isDirectSession,
    isThread: isThreadSession,
    exclude: isHuddleSession,
   });
-  return { activeChannelSessions: channels, directSessions: direct, threadSessions: threads };
+  void threads;
+  return { activeChannelSessions: channels, directSessions: direct };
  }, [uniqueSessions]);
  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
  // A split of a DM is itself a DM session (same agent participant), so the
@@ -412,7 +427,13 @@ export const Sidebar = React.memo(function Sidebar({
   if (dmFilter === 'busy') return directMessageTargets.filter(a => a.status === 'busy');
   return directMessageTargets.filter(a => !a.status || (a.status !== 'online' && a.status !== 'busy'));
  }, [directMessageTargets, dmFilter]);
- const groupedThreadSessions = React.useMemo(() => groupSessionsByFolder(threadSessions, 'Threads'), [threadSessions]);
+
+
+ // The Threads SECTION is about message threads — replies under a message —
+ // not about sessions that happen to sit in a folder called Threads. Those are
+ // different things (see server/thread-inbox.cjs), and it is the message
+ // threads a person means when they ask what they still need to read.
+ const threadInbox = useThreadInbox(workspace?.id ?? null);
  const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
  const focusedWindow = floatingWindows
@@ -505,7 +526,7 @@ export const Sidebar = React.memo(function Sidebar({
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
-    <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadSessions.length} onClick={() => revealSection('threads')} />
+    <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
     <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
@@ -630,51 +651,51 @@ export const Sidebar = React.memo(function Sidebar({
        id="threads"
        label="Threads"
        icon={<MessageSquare />}
-       count={threadSessions.length}
+       count={threadInbox.unreadCount}
        open={openSections.has('threads')}
        onOpenChange={open => toggleSection('threads', open)}
       >
-       {groupedThreadSessions.map(group => (
-        group.folder === 'General' ? (
-         <SessionTree
-          key={group.folder}
-          sessions={group.sessions}
-          icon={<MessageSquare />}
-          archiveNoun="thread"
-          limit={8}
-          chatPresence={chatPresence}
-          onSessionOpen={onSessionOpen}
-          onSessionUpdate={onSessionUpdate}
-          onSessionArchive={onSessionArchive}
-          onSessionDelete={onSessionDelete}
-          onSessionSplit={onSessionSplit}
-          onSessionMerge={onSessionMerge}
-         />
-        ) : (
-         <SidebarFolderGroup
-          key={group.folder}
-          id={`threads-folder:${group.folder}`}
-          label={group.folder}
-          count={group.sessions.length}
-          open={openSections.has(`threads-folder:${group.folder}`)}
-          onOpenChange={open => toggleSection(`threads-folder:${group.folder}`, open)}
+       {/* Threads a person FOLLOWS, unread first — the section exists so a
+           reply you have not seen is the top row. An empty list is a real,
+           good state and says so rather than rendering nothing. */}
+       {threadInbox.items.length === 0 ? (
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+         {threadInbox.loading ? 'Loading threads' : 'No threads yet'}
+        </p>
+       ) : (
+        threadInbox.items.map(thread => (
+         <button
+          key={thread.parentId}
+          type="button"
+          data-thread-unread={thread.unread ? 'true' : undefined}
+          className={cn(
+           'flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring',
+           thread.unread && 'font-medium',
+          )}
+          onClick={() => {
+           // Read on OPEN, not on render: a thread scrolling past in the
+           // sidebar has not been read by anyone.
+           threadInbox.markThreadRead(thread.parentId);
+           if (thread.sessionId) onOpenThread?.(thread.sessionId, thread.parentId);
+          }}
          >
-          <SessionTree
-           sessions={group.sessions}
-           icon={<MessageSquare />}
-           archiveNoun="thread"
-           limit={8}
-           chatPresence={chatPresence}
-           onSessionOpen={onSessionOpen}
-           onSessionUpdate={onSessionUpdate}
-           onSessionArchive={onSessionArchive}
-           onSessionDelete={onSessionDelete}
-           onSessionSplit={onSessionSplit}
-           onSessionMerge={onSessionMerge}
-          />
-         </SidebarFolderGroup>
-        )
-       ))}
+          <span className="flex min-w-0 items-center gap-1.5">
+           {/* The unread dot carries the state on its own, so the row does
+               not depend on weight alone — weight is easy to miss against a
+               wallpaper. */}
+           {thread.unread && (
+            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-primary" />
+           )}
+           <span className={cn('min-w-0 flex-1 truncate text-sm', !thread.unread && 'text-muted-foreground')}>
+            {threadRowTitle(thread)}
+           </span>
+          </span>
+          <span className="truncate pl-0 text-xs text-muted-foreground">
+           {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+          </span>
+         </button>
+        ))
+       )}
       </SidebarSection>
       <SidebarSection
        id="channels"
