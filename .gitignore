@@ -39,3 +39,7 @@ desktop/third_party/
 
 # Local session scratchpad (not repo content)
 SCRATCHPAD.md
+
+# Agent/Playwright debug screenshots dropped at the repo root. Deliberately
+# root-only: public/ and desktop/assets/ images are real assets.
+/*.png
