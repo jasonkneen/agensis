@@ -152,6 +152,11 @@
      short soft falloff. Deliberately short — a long one just muddies the first
      40px of sidebar content. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.45), 8px 0 18px -8px rgba(0, 0, 0, 0.75);
+ /* The same cast, thrown LEFT. The canvas column sits above the sidebar too, so
+    it has to land on the sidebar's right edge exactly as the rail lands on its
+    left — otherwise the sidebar reads as recessed on one side and flush on the
+    other, which is not a shape any light source makes. */
+ --chrome-cast-left: -1px 0 0 rgba(0, 0, 0, 0.45), -8px 0 18px -8px rgba(0, 0, 0, 0.75);
  --home-bg-image-opacity: 0.42;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.04) 72%, var(--canvas-base) 100%);
  /* Always-on radial vignette that darkens the edges and lifts the focal
@@ -195,6 +200,7 @@
  /* Sideways chrome elevation — see the dark-scheme note. Lighter and one step
      tighter here: on a pale sidebar the same falloff reads as a smudge. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.10), 7px 0 14px -8px rgba(0, 0, 0, 0.22);
+ --chrome-cast-left: -1px 0 0 rgba(0, 0, 0, 0.10), -7px 0 14px -8px rgba(0, 0, 0, 0.22);
  --home-bg-image-opacity: 0.34;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.08) 72%, var(--canvas-base) 100%);
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30, 24, 12, 0.10) 76%, rgba(20, 16, 8, 0.20) 100%);
@@ -1141,6 +1147,18 @@
 [data-workspace-rail] {
  z-index: var(--z-workspace-rail);
  box-shadow: var(--chrome-cast);
+}
+
+/* The canvas column is above the sidebar as well, so it casts back onto it.
+   Both raised columns now throw onto the recessed one between them, which is
+   the whole point of putting the sidebar at the bottom of the ladder — without
+   this the sidebar had a shadow on its left edge and nothing on its right, and
+   read as tilted rather than recessed. `overflow` is left alone: a box-shadow
+   paints outside the box and does not need the clip relaxing. */
+[data-workspace-viewport] {
+ position: relative;
+ z-index: var(--z-content);
+ box-shadow: var(--chrome-cast-left);
 }
 
 /* Accent wash — a soft bleed of the active theme's accent in from the sidebar's

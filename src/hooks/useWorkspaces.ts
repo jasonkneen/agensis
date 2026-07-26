@@ -163,14 +163,26 @@ export function useWorkspaces(userId: string | undefined) {
     return { workspace: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, [userId]);
 
-  const updateWorkspace = useCallback(async (id: string, updates: Partial<Workspace>) => {
-    const { data } = await backendClient
+  // Returns the row, or the failure. It used to discard `error` and return
+  // void, so a rejected update was indistinguishable from a successful one and
+  // every caller could only assume it worked — the optimistic lie this app was
+  // full of until today.
+  const updateWorkspace = useCallback(async (
+    id: string,
+    updates: Partial<Workspace>,
+  ): Promise<{ workspace: Workspace | null; failure: WriteFailure | null }> => {
+    const { data, error } = await backendClient
       .from('workspaces')
       .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select()
       .single();
-    if (data) setWorkspaces(prev => prev.map(w => w.id === id ? data : w));
+    if (data) {
+      const ws = data as unknown as Workspace;
+      setWorkspaces(prev => prev.map(w => w.id === id ? ws : w));
+      return { workspace: ws, failure: null };
+    }
+    return { workspace: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, []);
 
   return { workspaces, loading, createWorkspace, updateWorkspace, readiness, retryWorkspaceSetup };

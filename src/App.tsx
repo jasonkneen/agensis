@@ -88,6 +88,7 @@ import {
   DESKTOP_TIER_PENDING_MESSAGE,
   type OverlayWorkspaceTile,
 } from './lib/desktopOverlay';
+import { InlineRename } from './components/common/InlineRename';
 import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -657,7 +658,7 @@ function AppContent() {
   const activeSceneRef = useRef<HTMLDivElement>(null);
   const setupCallbackInFlightRef = useRef(false);
 
-  const { workspaces, loading: wsLoading, createWorkspace, readiness: workspaceReadiness, retryWorkspaceSetup } = useWorkspaces(user?.id);
+  const { workspaces, loading: wsLoading, createWorkspace, updateWorkspace, readiness: workspaceReadiness, retryWorkspaceSetup } = useWorkspaces(user?.id);
   // NOT simply workspaces[0]. The list is ordered by updated_at, so the newest
   // workspace sorts first — and the System workspace (the feedback inbox) sorts
   // first the moment it is created. Neither an empty starter pair nor the
@@ -730,6 +731,19 @@ function AppContent() {
     applyNeoTheme(settings.ui_neo_theme);
   }, []);
   const { layers, layersWorkspaceId, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
+
+  // Rename. Both return false on a rejected write so the inline editor stays
+  // open and says so, rather than closing over a change that never landed.
+  const handleRenameWorkspace = useCallback(async (id: string, name: string) => {
+    const { workspace } = await updateWorkspace(id, { name });
+    return Boolean(workspace);
+  }, [updateWorkspace]);
+
+  const handleRenameDesktop = useCallback((id: string, name: string) => {
+    updateLayer(id, { name });
+    return true;
+  }, [updateLayer]);
+
   const {
     windows,
     openWindow,
@@ -1851,6 +1865,7 @@ function AppContent() {
             workspaces={workspaces}
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={setActiveWorkspaceId}
+            onRenameWorkspace={handleRenameWorkspace}
             onCreateWorkspace={handleCreateWorkspace}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // Phone: the rail rides inside the off-canvas drawer beside a
@@ -2135,6 +2150,7 @@ function AppContent() {
                   onCreateLayer={handleCreateCanvasFromGrid}
                   onDeleteLayer={handleDeleteCanvasFromGrid}
                   onOpenSettings={(layerId) => openLayerSettings(layerId)}
+                  onRenameLayer={handleRenameDesktop}
                   baseLayerId={baseLayerId}
                 />
               )}
@@ -3638,6 +3654,7 @@ function WorkspaceDesktopOverlay({
   onCreateLayer,
   onDeleteLayer,
   onOpenSettings,
+  onRenameLayer,
   baseLayerId,
 }: {
   workspaces: Workspace[];
@@ -3656,8 +3673,10 @@ function WorkspaceDesktopOverlay({
   onCreateLayer: () => void;
   onDeleteLayer: (id: string) => void;
   onOpenSettings: (id: string) => void;
+  onRenameLayer: (id: string, name: string) => Promise<boolean> | boolean;
   baseLayerId: string;
 }) {
+  const [renamingDesktopId, setRenamingDesktopId] = useState<string | null>(null);
   const model = useMemo(
     () => buildDesktopOverlay({
       workspaces,
@@ -3818,8 +3837,25 @@ function WorkspaceDesktopOverlay({
                           </div>
                         </div>
                         <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h3 className="truncate text-sm font-bold text-foreground">{tile.name}</h3>
+                          <div className="min-w-0 flex-1">
+                            {renamingDesktopId === tile.id ? (
+                              <InlineRename
+                                value={tile.name}
+                                ariaLabel={`Rename ${tile.name}`}
+                                onCommit={(name: string) => onRenameLayer(tile.id, name)}
+                                onCancel={() => setRenamingDesktopId(null)}
+                              />
+                            ) : (
+                              <h3
+                                // Double-click, matching the rail: a single click
+                                // on a desktop tile switches to it.
+                                onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); setRenamingDesktopId(tile.id); }}
+                                title="Double-click to rename"
+                                className="truncate text-sm font-bold text-foreground"
+                              >
+                                {tile.name}
+                              </h3>
+                            )}
                             <p className="text-xs text-muted-foreground">
                               {tile.itemCount} items - {tile.windowCount} windows
                             </p>
