@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseParticipants } from '../../src/lib/sessionParticipants';
+import { dedupeSessionParticipants, parseParticipants } from '../../src/lib/sessionParticipants';
 
 // Two server write sites bound JSON.stringify(...) into a `$n::jsonb`
 // placeholder, which stores a jsonb STRING SCALAR instead of an array. 88 live
@@ -30,5 +30,40 @@ describe('parseParticipants', () => {
     expect(parseParticipants('"a string"')).toEqual([]);
     expect(parseParticipants('{"kind":"agent"}')).toEqual([]);
     expect(parseParticipants(42)).toEqual([]);
+  });
+});
+
+// The double voice's last root. Two writers produced two id shapes for the
+// SAME agent — `agent:<uuid>` (people dialog, mention path) and bare `<uuid>`
+// (sub-thread creation) — and nothing deduped across them.
+// continueConversation dispatches per agent row, so the duplicate answered
+// every turn twice and a huddle read both replies aloud.
+describe('dedupeSessionParticipants', () => {
+  const prefixed = { id: 'agent:u1', kind: 'agent', name: 'Coder', handle: 'coder', agent_id: 'u1' };
+  const bare = { id: 'u1', kind: 'agent', name: 'Coder', handle: null, agent_id: 'u1' };
+
+  it('collapses the two shapes of one agent into a single row', () => {
+    expect(dedupeSessionParticipants([prefixed, bare])).toHaveLength(1);
+    expect(dedupeSessionParticipants([bare, prefixed])).toHaveLength(1);
+  });
+
+  it('backfills fields the kept row was missing instead of dropping them', () => {
+    // The shapes disagree about which fields they populate; dropping the later
+    // row wholesale can drop the only copy of `handle`.
+    const [kept] = dedupeSessionParticipants([bare, prefixed]) as Array<Record<string, unknown>>;
+    expect(kept.handle).toBe('coder');
+    expect(kept.id).toBe('u1'); // first row wins identity fields it already had
+  });
+
+  it('keeps different agents apart and leaves humans untouched', () => {
+    const other = { id: 'agent:u2', kind: 'agent', name: 'Scout', agent_id: 'u2' };
+    const human = { id: 'user:h1', kind: 'user', name: 'Jason', user_id: 'h1' };
+    expect(dedupeSessionParticipants([prefixed, other, human, bare])).toHaveLength(3);
+  });
+
+  it('falls back to the handle when no uuid exists in any field', () => {
+    const a = { id: 'agent:coder', kind: 'agent', name: 'Coder', handle: 'coder', agent_id: null };
+    const b = { id: 'coder', kind: 'agent', name: 'Coder', handle: 'Coder', agent_id: null };
+    expect(dedupeSessionParticipants([a, b])).toHaveLength(1);
   });
 });

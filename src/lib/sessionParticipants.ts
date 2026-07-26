@@ -28,3 +28,52 @@ export function parseParticipants(value: unknown): unknown[] {
     return [];
   }
 }
+
+/**
+ * The one true key for an agent participant, whatever shape wrote it.
+ *
+ * Two writers produced two shapes for the SAME agent — `agent:<uuid>` from the
+ * add-people dialog and the mention path, bare `<uuid>` from the sub-thread
+ * creation path — and nothing deduped across them. The same agent twice in a
+ * roster is not cosmetic: continueConversation iterates agent participants, so
+ * a duplicated agent was dispatched twice per turn and a huddle read BOTH
+ * replies aloud. That was the double voice.
+ */
+export function participantAgentKey(participant: unknown): string {
+  if (!participant || typeof participant !== 'object') return '';
+  const source = participant as Record<string, unknown>;
+  if (source.kind !== 'agent') return '';
+  const raw = String(source.agent_id ?? source.id ?? '').trim();
+  const bare = raw.replace(/^agent:/, '');
+  if (bare) return bare;
+  return String(source.handle ?? '').trim().toLowerCase();
+}
+
+/**
+ * Collapse duplicate agents, keeping the FIRST row seen for each agent but
+ * upgrading it with any fields a later duplicate carries that it lacks —
+ * the two shapes disagree about which fields they populate, and dropping the
+ * later row wholesale would sometimes drop the only copy of `handle`.
+ * Non-agent rows pass through untouched, order preserved.
+ */
+export function dedupeSessionParticipants<T>(participants: readonly T[]): T[] {
+  const out: T[] = [];
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const participant of participants) {
+    const key = participantAgentKey(participant);
+    if (!key) { out.push(participant); continue; }
+    const existing = byKey.get(key);
+    if (!existing) {
+      const copy = { ...(participant as Record<string, unknown>) };
+      byKey.set(key, copy);
+      out.push(copy as T);
+      continue;
+    }
+    for (const [field, value] of Object.entries(participant as Record<string, unknown>)) {
+      if ((existing[field] === null || existing[field] === undefined || existing[field] === '') && value != null && value !== '') {
+        existing[field] = value;
+      }
+    }
+  }
+  return out;
+}
