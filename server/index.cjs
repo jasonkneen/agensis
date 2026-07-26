@@ -2825,7 +2825,24 @@ function buildInboxSql(perCategory) {
     )
     select i.id, i.category, i.title, i.body, i.context_key, i.session_id,
            i.entity_type, i.entity_id, i.actor_name, i.created_at,
-           (r.read_at is null or i.created_at > r.read_at) as unread
+           /* MILLISECOND resolution, not microsecond — and this truncation is the
+              whole reason read state persists at all.
+
+              created_at is timestamptz (microseconds). The marker is not: it
+              round-trips through the client as an ISO-8601 string from
+              Date#toISOString(), which carries milliseconds. An item written at
+              …:04.638748 comes back as the marker …:04.638000, and comparing
+              those two raw calls it unread by 748µs — every time, forever.
+              Reading an item appeared to work and never survived a reload;
+              45 of 45 live markers were being defeated this way.
+
+              So compare at the coarsest precision the wire can represent. The
+              cost is that an item created in the SAME millisecond as the marker
+              reads as read — a sub-millisecond race, against a marker that could
+              not have addressed it either way. src/components/inbox/inboxModel.ts
+              (isUnreadAt) applies the identical rule client-side, so the
+              optimistic flip and the authoritative answer cannot diverge. */
+           (r.read_at is null or date_trunc('milliseconds', i.created_at) > r.read_at) as unread
       from items i
       left join inbox_read_state r
         on r.user_id = $2::uuid and r.workspace_id = $1::uuid and r.context_key = i.context_key
@@ -9308,9 +9325,14 @@ function createApp() {
     ? new Date()
     : new Date(rawReadAt);
    if (Number.isNaN(readAt.getTime())) return jsonError(res, 400, new Error('readAt must be an ISO timestamp'));
+   // Stored at MILLISECOND resolution to match what the read predicate compares
+   // against (see buildInboxSql). Normalising on the way in means the column's
+   // contract holds whoever writes it, not just callers that happen to be
+   // JavaScript — and it keeps the monotonic guard below comparing like with
+   // like, so a marker cannot creep forward by sub-millisecond noise.
    await getDb().unsafe(
     `insert into inbox_read_state (user_id, workspace_id, context_key, read_at)
-         values ($1::uuid, $2::uuid, $3, $4::timestamptz)
+         values ($1::uuid, $2::uuid, $3, date_trunc('milliseconds', $4::timestamptz))
          on conflict (user_id, workspace_id, context_key)
          do update set read_at = excluded.read_at, updated_at = now()
          where inbox_read_state.read_at < excluded.read_at`,

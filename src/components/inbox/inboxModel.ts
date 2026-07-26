@@ -106,6 +106,135 @@ export function groupReadAt(group: InboxGroup): string {
   return group.latestAt;
 }
 
+// --- Read state ------------------------------------------------------------
+//
+// The whole feature turns on ONE fact about resolution.
+//
+// A read marker travels as an ISO-8601 string produced by `Date#toISOString()`,
+// which carries MILLISECONDS. Postgres `timestamptz` carries MICROSECONDS. An
+// item stored at `…:04.638748+00` reaches the client as `…:04.638Z`, comes back
+// as the marker `…:04.638Z`, is stored as `…:04.638000+00` — and a naive
+// `created_at > read_at` then reports it unread by 748µs, forever. Marking
+// something read appeared to work and never survived a reload; every one of the
+// 51 markers in production had exactly this shape, and 45 of 45 that still
+// matched a live item were being resurrected by it.
+//
+// So the comparison resolution is pinned here, at the coarsest precision the
+// wire can represent, and BOTH sides compare at it — this module for the
+// optimistic flip, and the server's `unread` predicate (which truncates
+// `created_at` to milliseconds) for the authoritative answer. If those two ever
+// disagree again, the list and the count disagree with each other.
+
+/** Everything that crosses the wire is millisecond-resolution. See above. */
+export const MARKER_RESOLUTION_MS = 1;
+
+/** Epoch ms at marker resolution, or null when the timestamp is unusable. */
+export function markerTime(iso: string): number | null {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.floor(parsed / MARKER_RESOLUTION_MS) * MARKER_RESOLUTION_MS;
+}
+
+/**
+ * Is this item newer than the marker? A null marker means "never read", so
+ * everything is unread. Compared at wire resolution: an item in the SAME
+ * millisecond as the marker counts as read, because the marker physically
+ * cannot address anything finer.
+ */
+export function isUnreadAt(item: Pick<InboxItem, 'createdAt'>, markerMs: number | null): boolean {
+  if (markerMs === null) return true;
+  const at = markerTime(item.createdAt);
+  if (at === null) return false;
+  return at > markerMs;
+}
+
+/**
+ * Forward only. Two devices reading the same group race: the one that got there
+ * second may be carrying an OLDER marker, and applying it would resurrect
+ * everything in between. The server's upsert carries the same guard — this is
+ * the client-side half, so a stale marker is never even sent.
+ */
+export function advanceMarker(current: number | null, next: number | null): number | null {
+  if (next === null) return current;
+  if (current === null) return next;
+  return next > current ? next : current;
+}
+
+/** What a "mark this group read" action should do. Null when there is nothing to mark. */
+export interface ReadMarkerPlan {
+  contextKey: string;
+  /** Newest item in the context — the point the marker moves to. */
+  readAtMs: number;
+  /** The ISO string the POST carries. Millisecond precision, by construction. */
+  readAtIso: string;
+  /** Ids this action turns unread → read, so a failed write can put them back. */
+  flippedIds: string[];
+  /**
+   * False when the marker already sent for this context is at or ahead of this
+   * point: the server holds it, re-posting would be a no-op, and the local flip
+   * (if any) still stands.
+   */
+  needsSend: boolean;
+}
+
+/**
+ * Given the items on screen, plan the read of one context.
+ *
+ * Deliberately takes the whole item list rather than a group: the optimistic
+ * flip has to touch every item sharing the contextKey, including ones filtered
+ * out of the current view, or the badge and the list stop agreeing.
+ */
+export function planReadMarker(
+  items: readonly InboxItem[],
+  contextKey: string,
+  sentMarkerMs: number | null,
+): ReadMarkerPlan | null {
+  if (!contextKey) return null;
+
+  let readAtMs: number | null = null;
+  for (const item of items) {
+    if (item.contextKey !== contextKey) continue;
+    readAtMs = advanceMarker(readAtMs, markerTime(item.createdAt));
+  }
+  if (readAtMs === null) return null;
+
+  // Only items at or before the marker flip. A reply that landed AFTER the
+  // newest thing the user actually saw stays unread — this is what stops a
+  // mid-read arrival from being silently swallowed.
+  const flippedIds: string[] = [];
+  for (const item of items) {
+    if (item.contextKey !== contextKey || !item.unread) continue;
+    if (isUnreadAt(item, readAtMs)) continue;
+    flippedIds.push(item.id);
+  }
+
+  return {
+    contextKey,
+    readAtMs,
+    readAtIso: new Date(readAtMs).toISOString(),
+    flippedIds,
+    needsSend: sentMarkerMs === null || readAtMs > sentMarkerMs,
+  };
+}
+
+/** Apply the plan's flip. Returns the same array when nothing changed. */
+export function applyReadPlan(items: readonly InboxItem[], plan: ReadMarkerPlan): InboxItem[] {
+  if (plan.flippedIds.length === 0) return items as InboxItem[];
+  const flipped = new Set(plan.flippedIds);
+  return items.map(item => (flipped.has(item.id) && item.unread ? { ...item, unread: false } : item));
+}
+
+/**
+ * Put back exactly what the plan flipped, for when the write did not land. The
+ * UI must not go on claiming a row is read when the server never agreed —
+ * that is the state the user reloads into and finds unchanged.
+ */
+export function revertReadPlan(items: readonly InboxItem[], plan: ReadMarkerPlan): InboxItem[] {
+  if (plan.flippedIds.length === 0) return items as InboxItem[];
+  const flipped = new Set(plan.flippedIds);
+  return items.map(item => (flipped.has(item.id) && !item.unread ? { ...item, unread: true } : item));
+}
+
 /**
  * Relative time, computed ONCE against a caller-supplied `now`. Deliberately
  * not live: nothing in this feature runs on a timer, so a label going stale is

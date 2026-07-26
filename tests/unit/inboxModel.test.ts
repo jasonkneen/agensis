@@ -17,13 +17,19 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { InboxCategory, InboxItem } from '../../src/types';
 import {
+  advanceMarker,
+  applyReadPlan,
   buildInboxRows,
   groupInboxItems,
   inboxEmptyState,
   inboxPreview,
   inboxTimestamp,
   inboxTypeLabel,
+  isUnreadAt,
+  markerTime,
+  planReadMarker,
   relativeTime,
+  revertReadPlan,
   senderInitials,
   senderLabel,
 } from '../../src/components/inbox/inboxModel';
@@ -302,5 +308,141 @@ describe('InboxList rendering', () => {
     const html = render([], null, true);
     expect(html).toContain('data-inbox-skeleton');
     expect(html).not.toContain(inboxEmptyState(false).title);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Read state.
+//
+// This is the part that shipped broken. The marker is written from an ISO-8601
+// string (milliseconds); the item it points at is a Postgres timestamptz
+// (microseconds). Compared naively, an item is newer than the marker written
+// FROM it by up to 999µs, so every row came back unread after a reload — 45 of
+// 45 live markers were being defeated exactly this way. The rule that fixes it
+// is "compare at wire resolution", and it has to hold identically here and in
+// the server's unread predicate or the list and the badge disagree.
+// ---------------------------------------------------------------------------
+
+describe('read marker resolution', () => {
+  it('floors a timestamp to the precision the wire can carry', () => {
+    // What a microsecond-precision row degrades to once it has been an ISO string.
+    expect(markerTime('2026-07-19T01:39:04.638Z')).toBe(Date.parse('2026-07-19T01:39:04.638Z'));
+    expect(markerTime('nonsense')).toBeNull();
+  });
+
+  it('treats an item in the same millisecond as the marker as READ', () => {
+    // The regression, stated directly: created_at 04.638748 vs marker 04.638000.
+    const marker = markerTime('2026-07-19T01:39:04.638Z')!;
+    expect(isUnreadAt({ createdAt: '2026-07-19T01:39:04.638Z' }, marker)).toBe(false);
+  });
+
+  it('treats an item newer than the marker as unread', () => {
+    const marker = markerTime('2026-07-19T01:39:04.638Z')!;
+    expect(isUnreadAt({ createdAt: '2026-07-19T01:39:04.639Z' }, marker)).toBe(true);
+  });
+
+  it('treats everything as unread when there is no marker at all', () => {
+    expect(isUnreadAt({ createdAt: T(1) }, null)).toBe(true);
+  });
+});
+
+describe('advanceMarker', () => {
+  it('only ever moves forward', () => {
+    const older = Date.parse(T(30));
+    const newer = Date.parse(T(10));
+    expect(advanceMarker(older, newer)).toBe(newer);
+    expect(advanceMarker(newer, older)).toBe(newer);
+    expect(advanceMarker(newer, newer)).toBe(newer);
+  });
+
+  it('takes the first real value it is given, and ignores unusable ones', () => {
+    const at = Date.parse(T(5));
+    expect(advanceMarker(null, at)).toBe(at);
+    expect(advanceMarker(at, null)).toBe(at);
+    expect(advanceMarker(null, null)).toBeNull();
+  });
+});
+
+describe('planReadMarker', () => {
+  const thread = [
+    item({ id: 'a1', createdAt: T(30), contextKey: 'thread:abc', unread: false }),
+    item({ id: 'a2', createdAt: T(20), contextKey: 'thread:abc', unread: true }),
+    item({ id: 'a3', createdAt: T(10), contextKey: 'thread:abc', unread: true }),
+    item({ id: 'b1', createdAt: T(5), contextKey: 'thread:other', unread: true }),
+  ];
+
+  it('marks to the NEWEST item in the context and flips only what was unread', () => {
+    const plan = planReadMarker(thread, 'thread:abc', null)!;
+    expect(plan.readAtIso).toBe(T(10));
+    // a1 was already read; b1 belongs to another conversation.
+    expect(plan.flippedIds).toEqual(['a2', 'a3']);
+    expect(plan.needsSend).toBe(true);
+  });
+
+  it('leaves an item that arrived AFTER the marker unread', () => {
+    // The marker the user's device already sent is older than the new arrival.
+    const sent = Date.parse(T(20));
+    const plan = planReadMarker(thread, 'thread:abc', sent)!;
+    // The plan still advances to the newest item...
+    expect(plan.readAtIso).toBe(T(10));
+    expect(plan.needsSend).toBe(true);
+    // ...and an item newer than THAT is untouched by applying it.
+    const withArrival = [...thread, item({ id: 'a4', createdAt: T(2), contextKey: 'thread:abc', unread: true })];
+    const stale = planReadMarker(thread, 'thread:abc', null)!;
+    const after = applyReadPlan(withArrival, stale);
+    expect(after.find(i => i.id === 'a4')!.unread).toBe(true);
+    expect(after.find(i => i.id === 'a3')!.unread).toBe(false);
+  });
+
+  it('does not re-send a marker the server already holds', () => {
+    const sent = Date.parse(T(10));
+    const plan = planReadMarker(thread, 'thread:abc', sent)!;
+    expect(plan.needsSend).toBe(false);
+  });
+
+  it('never walks a marker backwards when the same group is read on two devices', () => {
+    // Device A read the whole thread. Device B, still showing a stale list that
+    // stops at a2, reads the "same" group — its marker is older.
+    const deviceA = planReadMarker(thread, 'thread:abc', null)!;
+    const staleList = thread.filter(i => i.id !== 'a3');
+    const deviceB = planReadMarker(staleList, 'thread:abc', deviceA.readAtMs)!;
+    expect(deviceB.readAtMs).toBeLessThan(deviceA.readAtMs);
+    // ...so it is never sent, and a3 does not come back to life.
+    expect(deviceB.needsSend).toBe(false);
+    expect(advanceMarker(deviceA.readAtMs, deviceB.readAtMs)).toBe(deviceA.readAtMs);
+  });
+
+  it('returns nothing for a context with no items, or no context at all', () => {
+    expect(planReadMarker(thread, 'thread:missing', null)).toBeNull();
+    expect(planReadMarker(thread, '', null)).toBeNull();
+  });
+});
+
+describe('applyReadPlan / revertReadPlan', () => {
+  const mixedGroup = [
+    item({ id: 'a1', createdAt: T(30), contextKey: 'thread:abc', unread: false }),
+    item({ id: 'a2', createdAt: T(20), contextKey: 'thread:abc', unread: true }),
+    item({ id: 'b1', createdAt: T(5), contextKey: 'thread:other', unread: true }),
+  ];
+
+  it('flips exactly the planned items and leaves the rest alone', () => {
+    const plan = planReadMarker(mixedGroup, 'thread:abc', null)!;
+    const after = applyReadPlan(mixedGroup, plan);
+    expect(after.map(i => i.unread)).toEqual([false, false, true]);
+  });
+
+  it('puts back exactly what it flipped when the write fails', () => {
+    const plan = planReadMarker(mixedGroup, 'thread:abc', null)!;
+    const reverted = revertReadPlan(applyReadPlan(mixedGroup, plan), plan);
+    // a1 was already read BEFORE the action and must not be resurrected.
+    expect(reverted.map(i => i.unread)).toEqual([false, true, true]);
+  });
+
+  it('is a no-op, identity included, when there was nothing unread to flip', () => {
+    const allRead = mixedGroup.map(i => ({ ...i, unread: false }));
+    const plan = planReadMarker(allRead, 'thread:abc', null)!;
+    expect(plan.flippedIds).toEqual([]);
+    expect(applyReadPlan(allRead, plan)).toBe(allRead);
+    expect(revertReadPlan(allRead, plan)).toBe(allRead);
   });
 });

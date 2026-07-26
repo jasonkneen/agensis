@@ -2,7 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { groupInboxItems, type InboxGroup } from '../components/inbox/inboxModel';
+import {
+  applyReadPlan,
+  groupInboxItems,
+  planReadMarker,
+  revertReadPlan,
+  type InboxGroup,
+} from '../components/inbox/inboxModel';
 import type { InboxFilter, InboxItem, ThreadItem } from '../types';
 
 const INBOX_LIMIT = 50;
@@ -18,7 +24,14 @@ export interface UseInboxResult {
   groups: InboxGroup[];
   unreadCount: number;
   loading: boolean;
-  markRead: (contextKey: string) => Promise<void>;
+  /**
+   * Advance this context's read marker. Resolves TRUE only when the marker is
+   * durable — the server accepted it, or already holds one at least as new.
+   * Resolves false on a rejected/failed write, having put the rows back to
+   * unread, so no caller can report success over a read that will come back on
+   * the next reload.
+   */
+  markRead: (contextKey: string) => Promise<boolean>;
   /**
    * Close a blocker. 'answered' writes `response` back for the agent to read;
    * 'dismissed' retires one that stopped mattering. Resolves false on failure so
@@ -94,48 +107,55 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
   );
 
   // Markers only move forward: remember the newest readAt sent per context so a
-  // re-select of an older item can never walk a marker backwards.
+  // re-select of an older item can never walk a marker backwards. Cleared for a
+  // context whose write failed, so the retry actually goes out.
   const sentMarkers = useRef<Map<string, number>>(new Map());
 
-  const markRead = useCallback(async (contextKey: string) => {
-    if (!workspaceId || !contextKey) return;
+  const markRead = useCallback(async (contextKey: string): Promise<boolean> => {
+    if (!workspaceId || !contextKey) return false;
 
-    let readAt = 0;
-    for (const item of items) {
-      if (item.contextKey !== contextKey) continue;
-      const at = Date.parse(item.createdAt);
-      if (Number.isFinite(at) && at > readAt) readAt = at;
-    }
-    if (!readAt) return;
+    // All of the "which items, which marker, is this newer than what we sent"
+    // reasoning is pure and lives in inboxModel — including the millisecond
+    // resolution the marker is compared at, which is the whole reason read
+    // state survives a reload. See the note above isUnreadAt.
+    const plan = planReadMarker(items, contextKey, sentMarkers.current.get(contextKey) ?? null);
+    if (!plan) return false;
 
     // Optimistic: the row goes read the moment it is opened, before the network.
-    let flipped = 0;
-    setItems(prev => prev.map(item => {
-      if (item.contextKey !== contextKey || !item.unread) return item;
-      if (Date.parse(item.createdAt) > readAt) return item;
-      flipped += 1;
-      return { ...item, unread: false };
-    }));
-    setUnreadCount(prev => Math.max(0, prev - flipped));
+    // The badge moves by exactly what the list moved by — same plan, same
+    // number — so the two cannot drift apart between refetches. (The server's
+    // count legitimately runs ahead of the visible rows: it counts the whole
+    // candidate window, the list is capped at INBOX_LIMIT.)
+    if (plan.flippedIds.length > 0) {
+      setItems(prev => applyReadPlan(prev, plan));
+      setUnreadCount(prev => Math.max(0, prev - plan.flippedIds.length));
+    }
 
     // Re-opening the same group with nothing newer in it would only re-send a
     // marker the server already holds — skip the POST, keep the local flip.
-    const previous = sentMarkers.current.get(contextKey) ?? 0;
-    if (readAt <= previous) return;
-    sentMarkers.current.set(contextKey, readAt);
+    if (!plan.needsSend) return true;
+    sentMarkers.current.set(contextKey, plan.readAtMs);
 
     try {
       const response = await fetch(apiUrl('/backend/inbox/read'), {
         method: 'POST',
         headers: { ...apiAuthHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId, contextKey, readAt: new Date(readAt).toISOString() }),
+        body: JSON.stringify({ workspaceId, contextKey, readAt: plan.readAtIso }),
       });
       if (!response.ok) throw new Error(`Inbox read HTTP ${response.status}`);
+      return true;
     } catch (error) {
-      // Read state is low stakes and the marker is monotonic server-side, so a
-      // dropped POST self-heals on the next open. Never bounce the row back to
-      // unread under the user's cursor.
+      // The row was marked read on screen and the server never agreed. Leaving
+      // it that way is precisely the bug this feature had: the user reloads and
+      // it is unread again, with nothing having warned them. Put it back and
+      // report the failure, so the caller can say so.
       console.warn('inbox: read marker not persisted', error);
+      sentMarkers.current.delete(contextKey);
+      if (plan.flippedIds.length > 0) {
+        setItems(prev => revertReadPlan(prev, plan));
+        setUnreadCount(prev => prev + plan.flippedIds.length);
+      }
+      return false;
     }
   }, [workspaceId, items]);
 

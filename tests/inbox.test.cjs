@@ -312,6 +312,58 @@ test('GET inbox rejects an unknown filter', async () => {
 
 // --- read state -------------------------------------------------------------
 
+// --- read-marker resolution -------------------------------------------------
+//
+// The bug this guards: `created_at` is a Postgres timestamptz (MICROSECONDS),
+// the marker is an ISO-8601 string built by Date#toISOString() (MILLISECONDS).
+// Compared as-is, an item is newer than the marker written FROM it by up to
+// 999us, so it comes back unread on every reload — which is exactly what
+// happened in production: all 51 stored markers had .000 microseconds and 45 of
+// the 45 that still matched a live item were being resurrected by it.
+//
+// A fake DB cannot evaluate the predicate, so what is asserted here is that the
+// emitted SQL still carries the truncation. That is the same bargain the
+// monotonic-guard test above makes, and it fails if anyone takes it back out.
+
+test('GET inbox compares read markers at millisecond resolution', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' } });
+  __test.setTestDb(db);
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/inbox`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+
+    const call = db.calls.find((c) => c.normalized.startsWith('with items as'));
+    assert.ok(call, 'the aggregate query ran');
+    // Both halves matter: the truncation is present...
+    assert.match(call.normalized, /date_trunc\('milliseconds', i\.created_at\) > r\.read_at/);
+    // ...and the raw microsecond comparison that caused the bug is gone.
+    assert.doesNotMatch(call.normalized, /\(r\.read_at is null or i\.created_at > r\.read_at\)/);
+  });
+});
+
+test('POST /backend/inbox/read stores the marker at millisecond resolution', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' } });
+  __test.setTestDb(db);
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/inbox/read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ workspaceId: WS, contextKey: 'blocker:b1', readAt: isoDaysAgo(1) }),
+    });
+    assert.equal(res.status, 200);
+
+    const write = db.calls.find((c) => c.normalized.startsWith('insert into inbox_read_state'));
+    assert.ok(write, 'the marker write ran');
+    // Normalising on the way in keeps the column comparable with the read
+    // predicate whoever writes it, not only JavaScript callers.
+    assert.match(write.normalized, /values \(\$1::uuid, \$2::uuid, \$3, date_trunc\('milliseconds', \$4::timestamptz\)\)/);
+  });
+});
+
 test('POST /backend/inbox/read requires auth', async () => {
   const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' } });
   __test.setTestDb(db);
