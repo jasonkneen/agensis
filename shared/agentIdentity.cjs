@@ -331,6 +331,55 @@ function identityWriteSql(voicePlaceholder, patchPlaceholder) {
 }
 
 /**
+ * Repair a stored identity written through the era of the double-encoded jsonb
+ * bind on the Fly server: a pre-stringified value bound into `$n::jsonb` on
+ * postgres.js is JSON-serialized AGAIN and lands as a jsonb STRING SCALAR.
+ * From there `human_set || patch` degrades to ARRAY concatenation (one
+ * corrupted append per human edit) and `jsonb_set` errors outright — both
+ * confirmed against live rows.
+ *
+ * Collapses either corruption back to the canonical object: a whole-value
+ * scalar is parsed; a human_set array is folded left-to-right (string elements
+ * parsed, later entries winning); only genuine `field: true` locks on known
+ * fields survive; the voice is re-validated. Returns null when the stored
+ * value is already canonical — the caller writes nothing for those.
+ */
+function repairStoredIdentity(raw) {
+ const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+ if (isPlainObject(raw)
+  && (!('human_set' in raw) || isPlainObject(raw.human_set))
+  && (!('voice' in raw) || isPlainObject(raw.voice))) {
+  return null;
+ }
+ const identity = asObject(raw);
+ const out = {};
+ const voice = normalizeVoicePreference(identity.voice);
+ if (Object.keys(voice).length > 0) out.voice = voice;
+
+ const entries = [];
+ const collect = (candidate) => {
+  if (typeof candidate === 'string') {
+   try {
+    collect(JSON.parse(candidate));
+   } catch {
+    // an unparseable fragment carries no recoverable lock — drop it
+   }
+   return;
+  }
+  if (isPlainObject(candidate)) entries.push(candidate);
+ };
+ if (Array.isArray(identity.human_set)) identity.human_set.forEach(collect);
+ else collect(identity.human_set);
+ const merged = Object.assign({}, ...entries);
+ const humanSet = {};
+ for (const field of IDENTITY_FIELDS) {
+  if (merged[field] === true) humanSet[field] = true;
+ }
+ if (Object.keys(humanSet).length > 0) out.human_set = humanSet;
+ return out;
+}
+
+/**
  * The INSERT half: a row a human creates through the generic /backend/db/insert
  * path carries their creation-time choices, which must survive the agent's
  * FIRST connect just as they survive every later one. Synthesizes
@@ -379,5 +428,6 @@ module.exports = {
  markHumanIdentityWrite,
  identityWriteSql,
  synthesizeHumanIdentityInsert,
+ repairStoredIdentity,
  FIELD_LIMITS,
 };

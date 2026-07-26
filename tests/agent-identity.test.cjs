@@ -27,6 +27,7 @@ const {
   markHumanIdentityWrite,
   identityWriteSql,
   synthesizeHumanIdentityInsert,
+  repairStoredIdentity,
   normalizeIdentityDeclaration,
   normalizeVoicePreference,
   resolveAgentVoice,
@@ -321,6 +322,32 @@ test('a human insert discards a forged human_set and junk identity keys', () => 
 test('inserts into other tables are left alone', () => {
   const row = { title: 'x', identity: { human_set: { name: true } } };
   assert.equal(synthesizeHumanIdentityInsert('tasks', row), row);
+});
+
+// --- repairing rows the double-encoded jsonb bind corrupted ------------------
+
+test('a canonical identity is left alone — repair returns null', () => {
+  assert.equal(repairStoredIdentity({}), null);
+  assert.equal(repairStoredIdentity({ voice: { cartesia_voice_id: VOICE_A }, human_set: { name: true } }), null);
+});
+
+test('a whole-value string scalar parses back to the object it was meant to be', () => {
+  const repaired = repairStoredIdentity(JSON.stringify({ voice: { cartesia_voice_id: VOICE_A }, human_set: { voice: true } }));
+  assert.deepEqual(repaired, { voice: { cartesia_voice_id: VOICE_A }, human_set: { voice: true } });
+});
+
+test('an array-degraded human_set folds back into locks, later entries winning', () => {
+  // The live shape: `human_set || $patch` with a stringified patch appends one
+  // corrupted element per human edit instead of merging.
+  const repaired = repairStoredIdentity({
+    human_set: [{}, '{"name":true,"avatar":false}', '{"avatar":true}', 'not json', 42],
+  });
+  assert.deepEqual(repaired, { human_set: { name: true, avatar: true } });
+});
+
+test('repair keeps only genuine locks on known fields', () => {
+  const repaired = repairStoredIdentity({ human_set: ['{"name":"yes","mcp_approved":true,"soul":true}'] });
+  assert.deepEqual(repaired, { human_set: { soul: true } }, 'non-boolean and unknown keys must not become locks');
 });
 
 // --- the guarantee, in one scenario ------------------------------------------
