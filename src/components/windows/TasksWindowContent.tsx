@@ -26,6 +26,8 @@ import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, Work
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
+import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
@@ -141,6 +143,15 @@ const TASK_COMMENT_AVATAR_COLORS = [
 
 type AssignmentFilter = TaskAssignmentFilter;
 
+type TaskView = 'list' | 'kanban' | 'gantt';
+
+// Remembered per workspace: reopening Tasks and being shown every completed
+// item again, every single time, is the whole complaint these three answer.
+// Search text and the selected task stay in memory — a search box that survives
+// a reload shows a filtered list with nothing on screen explaining why.
+const ASSIGNMENT_FILTER_PREF = oneOf<AssignmentFilter>(['all', 'mine', 'others']);
+const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt']);
+
 // A task dispatched to an agent records the chat it is being worked in:
 // source_type 'chat' + the session id. Every other source_type stores a
 // different kind of id (an agent id for 'ai', a canvas object id for 'canvas'),
@@ -199,9 +210,15 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
-  const [filter, setFilter] = useState<AssignmentFilter>('all');
-  const [hideDone, setHideDone] = useState(false);
-  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('list');
+  const [filter, setFilter] = usePersistedPreference(
+    viewPreferenceKey('tasks.filter', workspaceId), ASSIGNMENT_FILTER_PREF, 'all' as AssignmentFilter,
+  );
+  const [hideDone, setHideDone] = usePersistedPreference(
+    viewPreferenceKey('tasks.hide-done', workspaceId), booleanPreference, false,
+  );
+  const [view, setView] = usePersistedPreference(
+    viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const childrenMap = useMemo(() => {
@@ -336,7 +353,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
     onFocusTaskConsumed?.();
-  }, [focusRowId, filter, hideDone, filteredTopLevel, onFocusTaskConsumed]);
+    // setFilter/setHideDone are stable (see usePersistedPreference) but are not
+    // the useState setters the lint rule knows to ignore, so they are listed.
+  }, [focusRowId, filter, hideDone, filteredTopLevel, onFocusTaskConsumed, setFilter, setHideDone]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">

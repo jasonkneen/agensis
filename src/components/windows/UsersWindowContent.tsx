@@ -23,6 +23,8 @@ import {
   visibleInvites,
   type InviteLifecycleState,
 } from '@/lib/inviteDismissal';
+import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -47,6 +49,8 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Spinner } from '@/components/ui/spinner';
 
 interface UsersWindowContentProps {
+  /** Scopes the remembered "show dismissed invites" toggle. Optional: without it the toggle is session-only. */
+  workspaceId?: string | null;
   workspaceName: string;
   currentUserId?: string;
   currentUserEmail?: string;
@@ -63,6 +67,7 @@ interface UsersWindowContentProps {
 }
 
 export const UsersWindowContent = memo(function UsersWindowContent({
+  workspaceId = null,
   workspaceName,
   currentUserId,
   currentUserEmail,
@@ -82,7 +87,12 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   const [creating, setCreating] = useState(false);
   const [copiedCreate, setCopiedCreate] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
-  const [showDismissed, setShowDismissed] = useState(false);
+  // Remembered: someone tidying up old invites reopens this window repeatedly,
+  // and re-clicking "Show dismissed" each time is the same paper cut as
+  // re-hiding done tasks.
+  const [showDismissed, setShowDismissed] = usePersistedPreference(
+    viewPreferenceKey('users.show-dismissed', workspaceId), booleanPreference, false,
+  );
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
 

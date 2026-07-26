@@ -23,6 +23,8 @@ import {
   ROW_PADDING,
   SCROLL_VIEWPORT_BLOCK,
 } from './inboxPresentation';
+import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
 import {
   NO_SELECTION,
@@ -140,7 +142,13 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
   // STABLE SELECTION: the contextKey, never an index and never the newest item's
   // id. New arrivals re-sort the list around the user without moving them.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  // The one filter this surface has, and it is remembered per workspace: an
+  // inbox opened on Unread is a deliberate triage stance, not a per-visit whim.
+  // What is NOT remembered is the selected row — that is where you were, not
+  // how you look at the list.
+  const [unreadOnly, setUnreadOnly] = usePersistedPreference(
+    viewPreferenceKey('inbox.unread-only', workspaceId), booleanPreference, false,
+  );
   const [listWidth, setListWidth] = useState(readStoredWidth);
 
   // `now` is sampled here and nowhere else — one timestamp per data load, no

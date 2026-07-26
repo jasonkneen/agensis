@@ -72,7 +72,7 @@ beforeAll(() => {
 
 type Update = { id: string; updates: Partial<Task> };
 
-type RenderOptions = { focusTaskId?: string; onFocusTaskConsumed?: () => void };
+type RenderOptions = { focusTaskId?: string; onFocusTaskConsumed?: () => void; workspaceId?: string };
 
 function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = {}) {
   act(() => {
@@ -123,6 +123,11 @@ function bars() {
 }
 
 beforeEach(() => {
+  // The toolbar's view / filter / hide-done choices are now remembered per
+  // workspace in localStorage (src/lib/viewPreferences.ts), and jsdom keeps one
+  // store for the whole file. Without this, the first test to click "Timeline"
+  // would open every later test on the Gantt.
+  window.localStorage.clear();
   container = document.createElement('div');
   document.body.appendChild(container);
   act(() => { root = createRoot(container); });
@@ -131,6 +136,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  window.localStorage.clear();
 });
 
 describe('Gantt timeline rendering', () => {
@@ -437,5 +443,64 @@ describe('task editor: dependency picker', () => {
     expect(ticked).toBeTruthy();
     click(ticked!);
     expect(updates).toEqual([{ id: 'b', updates: { depends_on: [] } }]);
+  });
+});
+
+// The complaint this feature answers, asserted through the real toolbar rather
+// than through the storage helper: close the window, open it again, and the
+// done items are still hidden. Everything below remounts the component the way
+// reopening the window does.
+describe('the toolbar remembers how you left it', () => {
+  function reopen(workspaceId = 'ws-1') {
+    act(() => root.unmount());
+    act(() => { root = createRoot(container); });
+    render(TASKS, [], { workspaceId });
+  }
+
+  function toolbarButtonLabels() {
+    return Array.from(container.querySelectorAll('.task-window-toolbar button'))
+      .map(button => button.textContent || '');
+  }
+
+  /** Which of List / Board / Timeline the view ToggleGroup has lit. */
+  function selectedView() {
+    return Array.from(container.querySelectorAll('.task-window-toolbar button[data-state="on"]'))
+      .map(button => button.textContent || '')
+      .find(label => ['List', 'Board', 'Timeline'].includes(label));
+  }
+
+  it('keeps done tasks hidden across a reopen', () => {
+    render(TASKS);
+    // The button reads "Hide done" while they are shown, "Show done" once hidden.
+    expect(toolbarButtonLabels()).toContain('Hide done');
+    clickText('Hide done');
+    expect(toolbarButtonLabels()).toContain('Show done');
+
+    reopen();
+    expect(toolbarButtonLabels()).toContain('Show done');
+  });
+
+  it('keeps the chosen view across a reopen', () => {
+    render(TASKS);
+    expect(selectedView()).toBe('List');
+    clickText('Board');
+    expect(selectedView()).toBe('Board');
+
+    reopen();
+    expect(selectedView()).toBe('Board');
+    // And the Gantt is genuinely not what got rendered.
+    expect(container.querySelectorAll('[data-gantt-kind]')).toHaveLength(0);
+  });
+
+  it('does not carry a choice from one workspace into another', () => {
+    render(TASKS);
+    clickText('Hide done');
+    expect(toolbarButtonLabels()).toContain('Show done');
+
+    reopen('ws-2');
+    expect(toolbarButtonLabels()).toContain('Hide done');
+
+    reopen('ws-1');
+    expect(toolbarButtonLabels()).toContain('Show done');
   });
 });

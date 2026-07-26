@@ -70,6 +70,15 @@ import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAcce
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
+import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+
+// Remembered per workspace: how the roster is sliced and drawn. The search box
+// and which agent is open are NOT — those are where you are, not how you look.
+const AGENT_OWNER_FILTER_PREF = oneOf<'all' | 'mine'>(['all', 'mine']);
+const AGENT_LAYOUT_VIEW_PREF = oneOf<'grid' | 'network'>(['grid', 'network']);
+const AGENT_STATUS_FILTER_PREF = setOf<AgentPresence>(['busy', 'idle', 'disconnected', 'inactive']);
+const NO_STATUS_FILTER: Set<AgentPresence> = new Set();
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
@@ -198,10 +207,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
-  const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
+  const [statusFilter, setStatusFilter] = usePersistedPreference(
+    viewPreferenceKey('agents.status-filter', workspaceId), AGENT_STATUS_FILTER_PREF, NO_STATUS_FILTER,
+  );
   const [searchTerm, setSearchTerm] = useState('');
-  const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
-  const [layoutView, setLayoutView] = useState<'grid' | 'network'>('grid');
+  const [ownerFilter, setOwnerFilter] = usePersistedPreference(
+    viewPreferenceKey('agents.owner-filter', workspaceId), AGENT_OWNER_FILTER_PREF, 'all' as 'all' | 'mine',
+  );
+  const [layoutView, setLayoutView] = usePersistedPreference(
+    viewPreferenceKey('agents.layout-view', workspaceId), AGENT_LAYOUT_VIEW_PREF, 'grid' as 'grid' | 'network',
+  );
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);

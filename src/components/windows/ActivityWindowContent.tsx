@@ -32,6 +32,8 @@ import {
   activityMetadataText,
   hasActivityMetadata,
 } from '../../lib/activityEntry';
+import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useActivityEventComments } from '../../hooks/useActivityEventComments';
 
 interface ActivityWindowContentProps {
@@ -117,6 +119,14 @@ const ACTIVITY_FAMILY: Record<ActivityEventType, Exclude<ActivityFilter, 'all'>>
   agent_connected: 'agents',
   agent_disconnected: 'agents',
 };
+
+// Remembered per workspace. The tab list is also filtered down to families that
+// actually appear in the log, so `activeFilter` below still has the last word:
+// a stored tab whose family has scrolled out of the loaded page falls back to
+// All without ever having to touch storage.
+const ACTIVITY_FILTER_PREF = oneOf<ActivityFilter>(
+  ['all', 'docs', 'tasks', 'messages', 'comments', 'agents', 'memory', 'people', 'canvas'],
+);
 
 const ACTIVITY_FILTERS: Array<{ id: ActivityFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -286,7 +296,9 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
 
 export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading, workspaceId, currentUserId }: ActivityWindowContentProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ActivityFilter>('all');
+  const [filter, setFilter] = usePersistedPreference(
+    viewPreferenceKey('activity.filter', workspaceId), ACTIVITY_FILTER_PREF, 'all' as ActivityFilter,
+  );
 
   const counts = useMemo(() => countByFamily(events), [events]);
   // Only offer a tab for something that is actually in the log. A workspace that
