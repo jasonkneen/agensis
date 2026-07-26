@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
@@ -43,7 +44,7 @@ export function HomeCanvas({
   memoryFacts,
   onSendMessage,
   workspaceName,
-  backgroundOpacity = 0.42,
+  backgroundOpacity = DEFAULT_BACKGROUND_OPACITY,
   backgroundImage,
   onOpenSchedules,
 }: HomeCanvasProps) {
@@ -273,7 +274,7 @@ export function HomeCanvas({
           regardless of the user's background-opacity setting. */}
       <div
         className="pointer-events-none absolute inset-0"
-        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,0.42) 100%))' }}
+        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,DEFAULT_BACKGROUND_OPACITY) 100%))' }}
       />
 
 
