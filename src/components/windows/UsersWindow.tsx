@@ -27,6 +27,7 @@ export function UsersWindow({ workspaceId, workspaceName, currentUserId, current
 
   return (
     <UsersWindowContent
+      workspaceId={workspaceId || null}
       workspaceName={workspaceName}
       currentUserId={currentUserId}
       currentUserEmail={currentUserEmail}

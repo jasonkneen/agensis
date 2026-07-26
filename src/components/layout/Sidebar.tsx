@@ -151,6 +151,12 @@ function AgentStatusFeedOverlay({
 }
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
+import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+
+// Which agents the DM section lists, remembered per workspace alongside the
+// other view preferences (see src/lib/viewPreferences.ts).
+const DM_FILTER_PREF = oneOf<DmFilter>(['active', 'idle', 'busy', 'all']);
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
@@ -391,7 +397,9 @@ export const Sidebar = React.memo(function Sidebar({
   () => buildDirectMessageTargets(dmPrimarySessions, directAgents, favoriteAgentKeys),
   [dmPrimarySessions, directAgents, favoriteAgentKeys],
  );
- const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('all');
+ const [dmFilter, setDmFilter] = usePersistedPreference(
+  viewPreferenceKey('sidebar.dm-filter', workspace?.id), DM_FILTER_PREF, 'all' as DmFilter,
+ );
  const filteredDmTargets = React.useMemo(() => {
   if (dmFilter === 'all') return directMessageTargets;
   if (dmFilter === 'active') return directMessageTargets.filter(a => a.status === 'online');

@@ -31,6 +31,18 @@ import {
 } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
+import { viewPreferenceKey, type PreferenceCodec } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+
+// The one filter here whose options are user-defined, so there is no closed set
+// to validate against on read: anything non-empty parses, and `activeCategory`
+// in the component does the "is this still a real category" check. An empty
+// string is how "no filter" is stored, and readPreference already turns that
+// back into the default.
+const CATEGORY_FILTER_PREF: PreferenceCodec<string | null> = {
+  parse: raw => (raw.trim() ? raw : null),
+  serialize: value => value ?? '',
+};
 
 interface MemorySectionProps {
   facts: MemoryFact[];
@@ -51,12 +63,20 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editFact, setEditFact] = useState('');
   const [editCategory, setEditCategory] = useState('');
-  const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [filterCategory, setFilterCategory] = usePersistedPreference(
+    viewPreferenceKey('memory.category-filter', workspaceId), CATEGORY_FILTER_PREF, null as string | null,
+  );
   const [addingNew, setAddingNew] = useState(false);
 
   const allCategories = [...new Set(['general', 'about me', 'preferences', 'work', 'goals', 'notes', ...categories])];
   const categoriesInUse = allCategories.filter(category => facts.some(fact => fact.category === category));
-  const filteredFacts = filterCategory ? facts.filter(fact => fact.category === filterCategory) : facts;
+  // Categories are user-defined, so unlike the app's other filters the stored
+  // one cannot be validated on read — the valid set only exists once the facts
+  // have loaded. Derived here instead: a remembered category that no longer has
+  // any facts (renamed, or its last fact deleted) falls back to All rather than
+  // opening the window on an empty list with no chip lit to explain it.
+  const activeCategory = filterCategory && categoriesInUse.includes(filterCategory) ? filterCategory : null;
+  const filteredFacts = activeCategory ? facts.filter(fact => fact.category === activeCategory) : facts;
 
   const handleAdd = () => {
     if (!newFact.trim()) return;
@@ -123,7 +143,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <Badge asChild variant={!filterCategory ? 'default' : 'outline'} className="memory-filter-chip cursor-pointer">
+          <Badge asChild variant={!activeCategory ? 'default' : 'outline'} className="memory-filter-chip cursor-pointer">
             <button type="button" onClick={() => setFilterCategory(null)}>
               All
             </button>
@@ -132,12 +152,12 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
             <Badge
               key={category}
               asChild
-              variant={filterCategory === category ? 'default' : 'outline'}
+              variant={activeCategory === category ? 'default' : 'outline'}
               className="memory-filter-chip cursor-pointer"
             >
               <button
                 type="button"
-                onClick={() => setFilterCategory(filterCategory === category ? null : category)}
+                onClick={() => setFilterCategory(activeCategory === category ? null : category)}
               >
                 <Tag data-icon="inline-start" />
                 {category}
@@ -169,13 +189,13 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
                   <Brain />
                 </EmptyMedia>
                 <EmptyTitle>
-                  {filterCategory ? `No facts in "${filterCategory}"` : 'No memories stored yet'}
+                  {activeCategory ? `No facts in "${activeCategory}"` : 'No memories stored yet'}
                 </EmptyTitle>
                 <EmptyDescription>
-                  {filterCategory ? 'Choose another category or add a new fact.' : 'Add a memory to keep durable workspace context.'}
+                  {activeCategory ? 'Choose another category or add a new fact.' : 'Add a memory to keep durable workspace context.'}
                 </EmptyDescription>
               </EmptyHeader>
-              {!filterCategory && (
+              {!activeCategory && (
                 <Button type="button" variant="outline" size="sm" onClick={() => setAddingNew(true)}>
                   <Plus data-icon="inline-start" />
                   Add Memory

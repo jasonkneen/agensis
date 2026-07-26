@@ -1,5 +1,18 @@
 [
   {
+    "version": "filters-persist",
+    "date": "2026-07-26",
+    "title": "Your filters stay put",
+    "summary": "Windows now open the way you left them. Hide done tasks once and they stay hidden — no more re-hiding them every time you open Tasks.",
+    "highlights": [
+      "Tasks remembers Hide done, All/Mine/Others, and whether you were on List, Board or Timeline",
+      "Inbox remembers Unread-only; Activity remembers which tab you were on",
+      "Agents remembers the status and owner filters and the grid/network view",
+      "The sidebar's DM filter, the Users window's \"Show dismissed\", and the Memory category chips are remembered too",
+      "Each workspace keeps its own choices, and searches and selections still start fresh"
+    ]
+  },
+  {
     "version": "inbox-read-persists",
     "date": "2026-07-26",
     "title": "The inbox remembers what you've read",
