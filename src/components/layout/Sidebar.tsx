@@ -33,6 +33,7 @@ import {
  Settings,
  Star,
  UserRound,
+ Check,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
@@ -1199,7 +1200,11 @@ function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: 
     {DM_FILTER_OPTIONS.map(opt => (
      <DropdownMenuItem key={opt.value} onSelect={() => onChange(opt.value)}>
       {opt.label}
-      {filter === opt.value && <span className="ml-auto text-xs text-primary">✓</span>}
+      {/* A lucide icon, not a check GLYPH: a text tick renders in whatever the
+          user's emoji font decides, which on some platforms is a coloured
+          emoji — and this repo has an absolute no-emoji rule. An icon also
+          inherits currentColor, so it follows the theme. */}
+      {filter === opt.value && <Check className="ml-auto size-3.5 text-primary" aria-hidden />}
      </DropdownMenuItem>
     ))}
    </DropdownMenuContent>
