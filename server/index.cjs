@@ -1567,15 +1567,29 @@ function invalidJsonValue(table, column) {
 
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
+ // Return the PARSED OBJECT, never a JSON string. On this server's porsager
+ // driver a stringified bind — even under an explicit ::jsonb cast — arrives as
+ // a jsonb STRING SCALAR. Proved against the live database:
+ //
+ //   stringified ::jsonb -> 'string'   and  '{}'::jsonb || it -> [{}, "…"]
+ //   object      ::jsonb -> 'object'   and  '{}'::jsonb || it -> merged object
+ //
+ // The string form is what corrupted identity.human_set into an array (one
+ // bogus element per human edit) and made jsonb_set() on the voice write throw,
+ // so voice choices silently never saved. String input is parse-validated and
+ // returned AS THE OBJECT so both input shapes bind identically.
+ //
+ // The Netlify function has its own copy of this helper that DOES stringify —
+ // correct for @netlify/database, whose driver is the exact opposite. Do not
+ // "unify" them; the drivers disagree and each side matches its own.
  if (typeof value === 'string') {
   try {
-   JSON.parse(value);
-   return value;
+   return JSON.parse(value);
   } catch {
    throw invalidJsonValue(table, column);
   }
  }
- return JSON.stringify(value);
+ return value;
 }
 
 function bindDbParam(params, table, column, value) {

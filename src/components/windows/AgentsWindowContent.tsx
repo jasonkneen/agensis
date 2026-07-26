@@ -1521,7 +1521,7 @@ function AgentDetailPane({
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
 
-          <VoiceSection agent={agent} roster={roster} onUpdateAgent={onUpdateAgent} />
+          <VoiceSection agent={agent} roster={roster} onUpdateAgent={onUpdateAgent} editing={isEditing} />
 
           {agent.run_mode === 'daemon' && (
             <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
@@ -2117,10 +2117,19 @@ export function VoiceSection({
   agent,
   roster,
   onUpdateAgent,
+  editing = false,
 }: {
   agent: WorkspaceAgent;
   roster: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  /**
+   * Controls render only while the panel is in EDIT mode. The view is a view:
+   * an instant-persisting picker sitting in a read-only screen wrote to the
+   * database from a surface that looks like display — the owner's words were
+   * "why is it allowing editing of voice when VIEWING the agent". Preview stays
+   * available in both modes; listening is not a mutation.
+   */
+  editing?: boolean;
 }) {
   const { voices, loading, configured, error: voicesError } = useCartesiaVoices();
   const [query, setQuery] = useState('');
@@ -2212,7 +2221,18 @@ export function VoiceSection({
         </div>
       ) : (
         <>
-          <FieldGroup className="gap-2">
+          {!editing && (
+            // View mode is a VIEW. The resolved voice as a fact, plus preview —
+            // listening is not a mutation. The picker lives behind Edit.
+            <div className="text-sm text-foreground">
+              {stored.cartesia_voice_id && chosen
+                ? describeVoice(chosen)
+                : chosen
+                  ? `Automatic — ${describeVoice(chosen)}`
+                  : 'Automatic'}
+            </div>
+          )}
+          {editing && <FieldGroup className="gap-2">
             <Field>
               <FieldLabel htmlFor={`voice-search-${agent.id}`}>Find a voice</FieldLabel>
               <Input
@@ -2276,7 +2296,7 @@ export function VoiceSection({
               value={resolved.speed}
               onChange={value => persist({ ...stored, speed: value })}
             />
-          </FieldGroup>
+          </FieldGroup>}
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Button

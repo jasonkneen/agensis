@@ -88,7 +88,9 @@ async function render(
 ) {
   const { VoiceSection } = await import('../../src/components/windows/AgentsWindowContent');
   await act(async () => {
-    root.render(createElement(VoiceSection, { agent, roster: [agent], onUpdateAgent: onUpdate }));
+    // editing: true — the picker renders only in edit mode now; the view is a
+    // read-only summary (an instant-persisting control on a view screen was a bug).
+    root.render(createElement(VoiceSection, { agent, roster: [agent], onUpdateAgent: onUpdate, editing: true }));
   });
 }
 
