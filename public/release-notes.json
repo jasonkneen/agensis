@@ -1,5 +1,17 @@
 [
   {
+    "version": "inbox-read-persists",
+    "date": "2026-07-26",
+    "title": "The inbox remembers what you've read",
+    "summary": "Reading an inbox item now sticks. Until today every item came back unread the next time you loaded the app, however many times you'd already been through them.",
+    "highlights": [
+      "What you've read stays read, across a reload and across your devices",
+      "The unread count now matches what's actually in the list",
+      "Reading an older item never brings newer ones back",
+      "If a read can't be saved, the item stays unread and says so, instead of pretending"
+    ]
+  },
+  {
     "version": "invite-link-dismiss",
     "date": "2026-07-26",
     "title": "Tidy up your invite links",

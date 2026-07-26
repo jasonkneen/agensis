@@ -160,10 +160,20 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     [groups, selectedKey],
   );
 
+  // Marking read, with the failure actually surfaced. If the marker does not
+  // reach the server the row goes back to unread (markRead reverts it) and the
+  // user is told — an inbox that silently forgets what you read is the failure
+  // this surface is least able to survive, and it is the one it shipped with.
+  const markReadReporting = useCallback((key: string) => {
+    void markRead(key).then(ok => {
+      if (!ok) toast.error('Could not mark that as read. It will still be here on reload.');
+    });
+  }, [markRead]);
+
   const handleSelect = useCallback((key: string) => {
     setSelectedKey(key);
-    markRead(key);
-  }, [markRead]);
+    markReadReporting(key);
+  }, [markReadReporting]);
 
   // --- Bulk selection -----------------------------------------------------
   //
@@ -218,16 +228,13 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     try {
       if (id === 'mark-read') {
         const keys = unreadGroupKeys(groups, selection);
-        // markRead flips the row locally FIRST and treats a dropped POST as a
-        // non-event — the marker is monotonic server-side and self-heals on the
-        // next open — so it reports no failure and there is none to report. The
-        // count is still worth showing: it is the only confirmation that a
-        // select-all touched everything the user thought it did.
-        const result = await runBulk(keys, async key => {
-          await markRead(key);
-          return true;
-        });
-        toast.success(bulkResultMessage('Marked read', result));
+        // markRead resolves false when the marker did not reach the server, so
+        // a partly-applied select-all is reported as one — "Marked read 40 of
+        // 50" over ten rows that will be unread again after a reload is the
+        // same lie as the row-level one, at scale.
+        const result = await runBulk(keys, key => markRead(key));
+        if (result.failed > 0) toast.error(bulkResultMessage('Marked read', result));
+        else toast.success(bulkResultMessage('Marked read', result));
       } else {
         const ids = dismissableBlockerIds(groups, selection);
         const result = await runBulk(ids, id2 => resolveBlocker(id2, 'dismissed'));
@@ -377,7 +384,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           selectedKeys={selection.keys}
           onSelect={handleSelect}
           onToggleSelect={handleToggleSelect}
-          onMarkRead={markRead}
+          onMarkRead={markReadReporting}
           onOpenSession={onOpenSession}
         />
 
