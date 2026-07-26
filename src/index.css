@@ -1119,8 +1119,11 @@
    (--shadow-md + --shadow-xl). Between them the seam read inside out: the panel
    that should look recessed was the one throwing shadow over its neighbours.
    It now sits under both and casts nothing outward; its right border does the
-   separating, the rail's --chrome-cast lands ON it, and the canvas column's
-   floating windows carry their own elevation above it. */
+   separating, the canvas column casts back onto it from the right, and its
+   floating windows carry their own elevation above it. (The rail used to cast
+   onto it from the left too; that shadow is gone — the rail is at the window's
+   edge with nothing behind it, so the cast described no surface and read as a
+   smudge.) */
 [data-sidebar-panel] {
  position: relative;
  z-index: var(--z-sidebar);
@@ -1153,7 +1156,13 @@
    on a full-height column is invisible. */
 [data-workspace-rail] {
  z-index: var(--z-workspace-rail);
- box-shadow: var(--chrome-cast);
+ /* No cast shadow. The rail sits at the far edge of the window with nothing
+    behind it to fall onto, so the shadow had no surface to describe — it read
+    as a smudge down the sidebar's left edge rather than as depth. The
+    z-index stays: the rail is still above the sidebar for stacking, it just
+    does not advertise it. The viewport keeps its cast (below), which is the
+    one that does real work — it makes the sidebar read as recessed between
+    two raised columns instead of tilted. */
 }
 
 /* The canvas column is above the sidebar as well, so it casts back onto it.
