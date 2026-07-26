@@ -61,6 +61,8 @@ import {
 } from '../chat/ComposerAddContent';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import { HuddleCard } from '../huddle/HuddleCard';
+import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
+import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
@@ -1306,6 +1308,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   return (
     <div className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <HuddleSessionProvider
+          workspaceId={showHuddleCard ? workspaceId : null}
+          sessionId={showHuddleCard ? inferredSessionId : null}
+        >
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
           <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
             {isDirectMessage ? (
@@ -1366,6 +1372,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </span>
               )}
             </Button>
+            {showHuddleCard && <HuddleToolbarButton />}
             <div className="min-w-2 flex-1" />
             {!isDirectMessage && (
               <DropdownMenu>
@@ -1474,6 +1481,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             agents={huddleAgents}
           />
         )}
+        </HuddleSessionProvider>
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             <MessageScrollerViewport onScroll={handleScrollerScroll}>
