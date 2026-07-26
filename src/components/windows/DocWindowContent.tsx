@@ -25,6 +25,10 @@ interface DocWindowContentProps {
   onCommentCreated?: (docTitle?: string) => void;
   tasks?: Task[];
   onUpdateTask?: (id: string, updates: Partial<Task>) => void;
+  // NET-06 made the documents LIST metadata-only — `document.content` is
+  // `undefined` for a doc opened from Sidebar/search/picker, not just empty.
+  // This fetches (and caches) the one doc's body on demand; see useDocuments.
+  fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
 }
 
 type FormatAction = 'bold' | 'italic' | 'h1' | 'h2' | 'ul' | 'ol' | 'code' | 'quote';
@@ -309,6 +313,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   onCommentCreated,
   tasks = [],
   onUpdateTask,
+  fetchDocumentContent,
 }: DocWindowContentProps) {
   const [title, setTitle] = useState(doc.title);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -356,13 +361,27 @@ export const DocWindowContent = React.memo(function DocWindowContent({
 
   useEffect(() => {
     setTitle(doc.title);
-    if (contentRef.current) {
-      contentRef.current.innerHTML = sanitizeHtml(doc.content || '');
-      hydrateSketchCanvases(contentRef.current);
+    let cancelled = false;
+    const applyBody = (body: string) => {
+      if (cancelled) return;
+      if (contentRef.current) {
+        contentRef.current.innerHTML = sanitizeHtml(body || '');
+        hydrateSketchCanvases(contentRef.current);
+      }
+      lastSnapshotContentRef.current = body || '';
+      lastSnapshotTimeRef.current = Date.now();
+    };
+    // NET-06: the documents LIST is metadata-only, so `doc.content` is
+    // `undefined` for a doc opened by id (Sidebar, search, picker) — fetch the
+    // body on demand. A doc that already carries content (e.g. straight from a
+    // just-created-doc response) skips the round trip.
+    if (doc.content !== undefined) {
+      applyBody(doc.content);
+    } else {
+      fetchDocumentContent(doc.id).then(applyBody);
     }
-    lastSnapshotContentRef.current = doc.content || '';
-    lastSnapshotTimeRef.current = Date.now();
-  }, [doc.id]);
+    return () => { cancelled = true; };
+  }, [doc.id, doc.content, fetchDocumentContent]);
 
   // Keep embedded "Task list" blocks in sync with live task status. `tasks` is
   // websocket-backed (see useTasks), so this re-runs whenever a task's status

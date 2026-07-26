@@ -12,6 +12,10 @@ interface AppletDocWindowContentProps {
   onDelete: (id: string) => void;
   onTitleChange: (title: string) => void;
   onAddToCanvas?: (doc: Document) => void;
+  // NET-06 made the documents LIST metadata-only — `document.content` is
+  // `undefined` for a doc opened from Sidebar/search/picker, not just empty.
+  // This fetches (and caches) the one doc's body on demand; see useDocuments.
+  fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
 }
 
 // Applets are stored as documents (folder === APPLETS_FOLDER, see canvasApps.ts)
@@ -29,16 +33,37 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
   onDelete,
   onTitleChange,
   onAddToCanvas,
+  fetchDocumentContent,
 }: AppletDocWindowContentProps) {
   const [title, setTitle] = useState(doc.title);
   const [content, setContent] = useState(doc.content || '');
+  const [loadingContent, setLoadingContent] = useState(doc.content === undefined);
   const [view, setView] = useState<'preview' | 'code'>('preview');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards the async fetch below from clobbering an edit the user already made
+  // while the body was still in flight (fetch is not instant, autosave is 800ms).
+  const editedRef = useRef(false);
 
   useEffect(() => {
     setTitle(doc.title);
-    setContent(doc.content || '');
-  }, [doc.id]);
+    editedRef.current = false;
+    // NET-06: the documents LIST is metadata-only, so `doc.content` is
+    // `undefined` for a doc opened by id (Sidebar, picker) — fetch the body on
+    // demand instead of rendering blank code/preview forever.
+    if (doc.content !== undefined) {
+      setContent(doc.content);
+      setLoadingContent(false);
+      return;
+    }
+    let cancelled = false;
+    setLoadingContent(true);
+    fetchDocumentContent(doc.id).then(body => {
+      if (cancelled || editedRef.current) return;
+      setContent(body);
+      setLoadingContent(false);
+    });
+    return () => { cancelled = true; };
+  }, [doc.id, doc.content, fetchDocumentContent]);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -63,6 +88,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
 
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const next = e.target.value;
+    editedRef.current = true;
     setContent(next);
     triggerAutoSave(undefined, next);
   };
@@ -134,7 +160,11 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden px-6 pb-5">
-        {view === 'preview' ? (
+        {loadingContent ? (
+          <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
+            Loading applet source…
+          </div>
+        ) : view === 'preview' ? (
           previewHtml ? (
             <iframe
               title={title}

@@ -690,7 +690,7 @@ function AppContent() {
 
   const {
     documents, recents,
-    createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite
+    createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite, fetchDocumentContent
   } = useDocuments(activeWorkspaceId, (workspaceBootstrap?.documents as import('./types').Document[] | undefined) || null);
 
   const {
@@ -2099,6 +2099,7 @@ function AppContent() {
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
                   onAddToCanvasApplet={handleCreateDocApp}
+                  fetchDocumentContent={fetchDocumentContent}
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
                   onUpdateFact={updateFact}
@@ -2411,6 +2412,7 @@ function CanvasLayerScene({
   onDeleteDocument,
   onAutoSaveDocument,
   onAddToCanvasApplet,
+  fetchDocumentContent,
   onToggleFavorite,
   onAddFact,
   onUpdateFact,
@@ -2506,6 +2508,7 @@ function CanvasLayerScene({
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onAddToCanvasApplet: (doc: Document) => void;
+  fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
@@ -2751,6 +2754,7 @@ function CanvasLayerScene({
                 onUpdateWindow={onUpdateWindow}
                 onRequestConfirm={onRequestConfirm}
                 onAddToCanvasApplet={onAddToCanvasApplet}
+                fetchDocumentContent={fetchDocumentContent}
                 document={doc}
                 workspaceId={workspaceId}
                 userId={userId}
