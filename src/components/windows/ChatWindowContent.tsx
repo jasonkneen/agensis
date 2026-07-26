@@ -802,19 +802,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // session so the call belongs to the conversation it was called from.
   const showHuddleCard = !readOnly && !!inferredSessionId && !!workspaceId;
   const rail = useMemo(
-    () => resolveRailState({ hasContent: railHasContent, preference: railPreference, surfaceWidth: railSurfaceWidth }),
-    [railHasContent, railPreference, railSurfaceWidth],
+    () => resolveRailState({
+      hasContent: railHasContent,
+      preference: railPreference,
+      surfaceWidth: railSurfaceWidth,
+      applies: showWidgetRail,
+    }),
+    [railHasContent, railPreference, railSurfaceWidth, showWidgetRail],
   );
-  const railOpen = showWidgetRail && rail.open;
+  const railOpen = rail.open;
   // Space the chat body gives up so the rail can sit BESIDE the conversation.
   // Zero unless there's room for it without narrowing the message column.
   const railReserve = railOpen ? rail.reserve : 0;
   // Only while floating on top does anything inside a message row need to dodge
   // the cards — beside the conversation, the row never reaches them.
   const railOverlaying = railOpen && rail.layout === 'overlay';
-  // Nothing to toggle until the session has widgets — but once the user has
-  // closed the rail by hand the control has to stay, or there's no way back.
-  const showWidgetRailToggle = showWidgetRail && (railHasContent || railPreference !== 'auto');
   const toggleWidgetRail = useCallback(() => {
     const next = toggledRailPreference(rail.open);
     setRailPreference(next);
@@ -1473,20 +1475,22 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {/* Thread widgets show themselves once they have content, so this is
-                only ever the "put it back" / "get it out of my way" control —
-                which is why it appears next to the "..." menu instead of inside
-                it, and why it isn't rendered at all for a session with no
-                widgets and no choice on record. */}
-            {showWidgetRailToggle && (
+            {/* Thread widgets show themselves once they have content, so most of
+                the time this is the "put it back" / "get it out of my way"
+                control — which is why it sits next to the "..." menu rather than
+                inside it. It is rendered for EVERY session the rail applies to,
+                including one with no widgets yet: this button is the only thing
+                on screen that says the feature exists, and pressing it opens the
+                rail on its empty states. See rule 3 in lib/threadWidgetRail.ts. */}
+            {rail.toggleVisible && (
               <Button
                 type="button"
                 variant={railOpen ? 'secondary' : 'ghost'}
                 size="sm"
                 className="h-8 px-2"
-                disabled={rail.layout === 'hidden'}
+                disabled={!rail.toggleEnabled}
                 aria-pressed={railOpen}
-                title={rail.layout === 'hidden'
+                title={!rail.toggleEnabled
                   ? 'Widen the window to show thread widgets'
                   : railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
                 aria-label={railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
@@ -1913,7 +1917,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           side="top"
                           align="start"
                           sideOffset={8}
-                          className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                          className="z-[var(--z-nested-modal)] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
                         >
                           <ComposerAddContent
                             documents={documents}

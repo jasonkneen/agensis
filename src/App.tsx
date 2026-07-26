@@ -1800,15 +1800,15 @@ function AppContent() {
         <img
           src={workspaceBackdropImage}
           alt=""
-          className="pointer-events-none absolute inset-0 z-0 size-full object-cover"
+          className="pointer-events-none absolute inset-0 z-[var(--z-backdrop)] size-full object-cover"
           style={{ opacity: workspaceBackdropOpacity }}
         />
-        <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
+        <div className="pointer-events-none absolute inset-0 z-[var(--z-backdrop)] bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
         <div
           className={cn(
             isMobile
               ? cn(
-                'fixed inset-y-0 left-0 z-[12000] flex transition-transform duration-200 ease-out',
+                'fixed inset-y-0 left-0 z-[var(--z-drawer)] flex transition-transform duration-200 ease-out',
                 mobileDrawerOpen ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
               )
               : 'contents',
@@ -1915,14 +1915,18 @@ function AppContent() {
         </div>
         {isMobile && mobileDrawerOpen && (
           <div
-            className="fixed inset-0 z-[11999] bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-[var(--z-drawer-scrim)] bg-black/50 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
             aria-hidden
           />
         )}
 
+        {/* Canvas column. Above the sidebar, below the workspace rail — see the
+            ladder in src/lib/chromeDepth.ts. Its rung is also the ceiling for
+            every floating window, which numbers itself from 100 up inside this
+            stacking context (useWindows.ts). */}
         <div
-          className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          className="relative z-[var(--z-content)] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           style={{
             // Canvas column sits to the RIGHT of the full-height sidebar, so the
             // macOS traffic lights (top-left, over the sidebar) never overlap it —

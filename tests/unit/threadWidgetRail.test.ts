@@ -14,11 +14,13 @@ import {
 } from '../../src/lib/threadWidgetRail';
 
 // The rail's whole job is to appear without being asked and then get out of the
-// way — which makes two failure modes worth pinning down here rather than in a
+// way — which makes three failure modes worth pinning down here rather than in a
 // browser. One is a rail that feels possessed: you close it, an agent posts a
-// to-do, and it shoves itself back over your reading. The other is the reason
+// to-do, and it shoves itself back over your reading. The second is the reason
 // this module exists at all — a rail that pays for its own width out of the
-// message column instead of out of the empty gutter beside it.
+// message column instead of out of the empty gutter beside it. The third is the
+// one that actually shipped: hiding the TOGGLE along with the rail, so a session
+// with no widgets showed no button and the feature looked deleted.
 
 const ROOMY = 1440;   // gutter layout: column + rail both fit
 const SNUG = 900;     // overlay layout: they don't
@@ -117,6 +119,59 @@ describe('resolveRailState — what it costs the message column', () => {
     // out of room 16px before the message column does.
     expect(surface - reserve).toBeGreaterThanOrEqual(CHAT_COLUMN_MAX_WIDTH);
     expect(surface - reserve - COMPOSER_SHELL_PADDING * 2).toBeGreaterThanOrEqual(CHAT_COLUMN_MAX_WIDTH);
+  });
+});
+
+describe('resolveRailState — the control is part of the surface, not the content', () => {
+  it('offers the toggle on a session with no widgets and no choice on record', () => {
+    // The regression this file exists to stop coming back: an empty session used
+    // to render no rail AND no button, so nothing on screen said thread widgets
+    // were a thing. Most sessions are empty, so most of the app looked like the
+    // feature had been removed.
+    const result = state(false, 'auto');
+    expect(result.open).toBe(false);
+    expect(result.toggleVisible).toBe(true);
+    expect(result.toggleEnabled).toBe(true);
+  });
+
+  it('opens an empty rail when that toggle is used', () => {
+    // Pressing it has to do something visible. The rail's three empty-state
+    // cards are that something.
+    expect(toggledRailPreference(false)).toBe('open');
+    expect(state(false, 'open').open).toBe(true);
+  });
+
+  it('keeps offering the toggle in every content/preference combination', () => {
+    for (const hasContent of [false, true]) {
+      for (const preference of ['auto', 'open', 'closed'] as RailPreference[]) {
+        expect(state(hasContent, preference).toggleVisible).toBe(true);
+      }
+    }
+  });
+
+  it('shows the toggle but disables it when the surface is too narrow', () => {
+    // "Widen the window" is a state the control can explain; taking the control
+    // away is not.
+    const result = state(true, 'open', TINY);
+    expect(result.layout).toBe('hidden');
+    expect(result.toggleVisible).toBe(true);
+    expect(result.toggleEnabled).toBe(false);
+  });
+
+  it('offers nothing at all on a surface the rail does not apply to', () => {
+    // A read-only transcript, or a chat whose session/workspace has not resolved
+    // yet: no rail, and no button advertising one.
+    const result = resolveRailState({
+      hasContent: true, preference: 'open', surfaceWidth: ROOMY, applies: false,
+    });
+    expect(result.open).toBe(false);
+    expect(result.reserve).toBe(0);
+    expect(result.toggleVisible).toBe(false);
+    expect(result.toggleEnabled).toBe(false);
+  });
+
+  it('applies by default, so an omitted flag can never hide the feature', () => {
+    expect(resolveRailState({ hasContent: false, preference: 'auto', surfaceWidth: ROOMY }).toggleVisible).toBe(true);
   });
 });
 

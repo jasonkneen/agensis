@@ -83,11 +83,17 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   // sidebar's own content hides the backdrop bleeding through it, and a
   // mostly-empty column at the same alpha reads as a hole punched in the chrome
   // rather than as part of it.
+  //
+  // Depth and elevation are NOT set here: `[data-workspace-rail]` in index.css
+  // owns both, next to the `[data-sidebar-panel]` rule it has to be read
+  // against. The rail is the top of the three shell columns and casts onto the
+  // sidebar — see the ladder in src/lib/chromeDepth.ts. `relative` stays,
+  // because the accent wash below is absolutely positioned against it.
   return (
     <nav
       data-workspace-rail
       aria-label="Workspaces"
-      className="relative z-10 flex h-full shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border bg-card/85 py-2 text-card-foreground"
+      className="relative flex h-full shrink-0 flex-col items-center gap-1.5 overflow-hidden border-r border-border bg-card/85 py-2 text-card-foreground"
       style={{ width: WORKSPACE_RAIL_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
       onKeyDown={handleKeyDown}
     >

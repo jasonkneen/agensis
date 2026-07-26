@@ -34,7 +34,7 @@ export function MobileWindowSwitcher({ windows, activeWindowId, onFocus, onClose
   return (
     <div
       data-mobile-window-switcher
-      className="pointer-events-auto absolute inset-x-0 bottom-0 z-[11500] flex items-center gap-1.5 overflow-x-auto border-t border-border bg-card/85 px-2 py-1.5 backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="pointer-events-auto absolute inset-x-0 bottom-0 z-[var(--z-app-dock)] flex items-center gap-1.5 overflow-x-auto border-t border-border bg-card/85 px-2 py-1.5 backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
     >
       <button

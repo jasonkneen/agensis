@@ -50,6 +50,32 @@
  --transition-fast: 120ms ease;
  --transition-base: 200ms ease;
  --transition-slow: 350ms ease;
+
+ /* Chrome depth ladder — the CSS mirror of CHROME_DEPTH in
+    src/lib/chromeDepth.ts, which carries the full explanation of what each rung
+    is for and why the three shell columns stack the way they do. The two are
+    asserted equal by tests/unit/chromeDepth.test.ts; edit both or neither.
+    Short version: the sidebar is the recess, the canvas column and the
+    workspace rail are raised out of it, and nothing here may reach --z-overlay
+    (50) or Radix portals start opening behind panels. */
+ --z-backdrop: 0;
+ --z-sidebar: 10;
+ --z-content: 20;
+ --z-sidebar-flyout: 30;
+ --z-workspace-rail: 40;
+ --z-overlay: 50;
+ --z-agent-feed: 9500;
+ --z-cursors: 9999;
+ --z-app-dock: 11500;
+ --z-modal-scrim: 11990;
+ --z-drawer-scrim: 11999;
+ --z-modal: 12000;
+ --z-drawer: 12000;
+ --z-context-menu: 12010;
+ --z-menu: 12050;
+ --z-nested-modal: 12060;
+ --z-picker: 12080;
+ --z-picker-hud: 12090;
  --background: oklch(1 0 0);
  --foreground: oklch(0.145 0 0);
  --card: oklch(1 0 0);
@@ -119,6 +145,13 @@
      bleeding far down the viewport and from compounding into a muddy pool where
      windows overlap, while still reading as clear depth. */
  --shadow-window: 0 10px 24px -14px rgba(0, 0, 0, 0.7);
+ /* Lateral elevation for the chrome. Every other shadow token here offsets
+     DOWNWARD, which on a full-height column casts nothing anyone can see —
+     the workspace rail needs to throw its shadow SIDEWAYS, onto the sidebar it
+     sits above. Two layers: a hairline contact line right at the edge, and a
+     short soft falloff. Deliberately short — a long one just muddies the first
+     40px of sidebar content. */
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.45), 8px 0 18px -8px rgba(0, 0, 0, 0.75);
  --home-bg-image-opacity: 0.42;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.04) 72%, var(--canvas-base) 100%);
  /* Always-on radial vignette that darkens the edges and lifts the focal
@@ -159,6 +192,9 @@
  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.15);
  --shadow-window: 0 10px 24px -14px rgba(0, 0, 0, 0.18);
+ /* Sideways chrome elevation — see the dark-scheme note. Lighter and one step
+     tighter here: on a pale sidebar the same falloff reads as a smudge. */
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.10), 7px 0 14px -8px rgba(0, 0, 0, 0.22);
  --home-bg-image-opacity: 0.34;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.08) 72%, var(--canvas-base) 100%);
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30, 24, 12, 0.10) 76%, rgba(20, 16, 8, 0.20) 100%);
@@ -1064,24 +1100,47 @@
  line-height: 1;
 }
 
+/* The sidebar is the BOTTOM of the three shell columns — see the ladder in
+   src/lib/chromeDepth.ts. It used to sit at z-index 40, above both the workspace
+   rail and the canvas column, and carried the heaviest shadow stack in the app
+   (--shadow-md + --shadow-xl). Between them the seam read inside out: the panel
+   that should look recessed was the one throwing shadow over its neighbours.
+   It now sits under both and casts nothing outward; its right border does the
+   separating, the rail's --chrome-cast lands ON it, and the canvas column's
+   floating windows carry their own elevation above it. */
 [data-sidebar-panel] {
  position: relative;
- z-index: 40;
+ z-index: var(--z-sidebar);
  border-color: color-mix(in srgb, var(--border) 62%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
   color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 74%), transparent) !important;
- box-shadow:
-  var(--shadow-md),
-  var(--shadow-xl);
+ box-shadow: none;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  contain: layout paint;
 }
 
+/* The collapsed icon rail is the one exception to "sidebar is lowest", and the
+   `overflow: visible` below is why: each button's hover label (.sidebar-rail-label)
+   flies out to the RIGHT, across the canvas column. Left on the sidebar rung
+   those labels would paint behind whatever window sits under them — which, on a
+   collapsed sidebar, is the normal case. `contain: layout` makes this panel a
+   stacking context regardless, so the labels cannot escape it; the rung is the
+   only lever. It stays below --z-workspace-rail, which it never overlaps. */
 [data-sidebar-panel].sidebar-collapsed-panel {
+ z-index: var(--z-sidebar-flyout);
  contain: layout;
  overflow: visible !important;
+}
+
+/* The workspace switcher is the TOP of the three columns: the outermost frame of
+   the app, raised over the sidebar it borders. --chrome-cast is the only
+   sideways shadow token in the theme — every other one offsets downward, which
+   on a full-height column is invisible. */
+[data-workspace-rail] {
+ z-index: var(--z-workspace-rail);
+ box-shadow: var(--chrome-cast);
 }
 
 /* Accent wash — a soft bleed of the active theme's accent in from the sidebar's

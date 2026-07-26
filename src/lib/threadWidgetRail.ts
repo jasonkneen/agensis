@@ -1,7 +1,7 @@
 // Thread widget rail — the "is it open, and where does it sit?" decisions,
 // deliberately free of React and the DOM so they can be tested directly.
 //
-// Two rules drive everything here.
+// Three rules drive everything here.
 //
 // 1. **The rail shows itself, but a hand beats it.** A session's widgets appear
 //    on their own the moment they have something to show (an agent posts a
@@ -17,6 +17,15 @@
 //    keeps its full rendered width — it slides left, it does not shrink. Below
 //    that the rail FLOATS OVER the messages rather than squeezing them into a
 //    ribbon, and below `RAIL_MIN_SURFACE_WIDTH` it is not shown at all.
+//
+// 3. **The rail can hide; its control cannot.** Rule 1 makes the rail itself
+//    conditional on content, and the toggle was briefly made conditional on the
+//    same thing — which meant a session with no widgets showed no rail AND no
+//    button, so nothing on screen said the feature existed. Since most sessions
+//    have no items, most of the app looked like the feature had been deleted.
+//    The toggle belongs to the SURFACE: if a session can have widgets, its
+//    control is on screen, and pressing it opens the rail on its empty states.
+//    An empty rail you asked for is a fine answer; no button at all is not.
 //
 // The previous layout did the opposite: every message row carried a 300px right
 // padding while the rail was open, which cost the 800px column 220px of text
@@ -76,6 +85,21 @@ export interface RailState {
    * leaves the message column exactly as wide as it was with the rail closed.
    */
   reserve: number;
+  /**
+   * Should the toolbar render the rail's toggle?
+   *
+   * True for any surface the rail applies to — INCLUDING a session that has no
+   * widget items yet. See rule 3 in the module header: the control advertises
+   * the feature, so it cannot be conditional on the feature already having been
+   * used.
+   */
+  toggleVisible: boolean;
+  /**
+   * ...and can pressing it do anything? False only when the surface is too
+   * narrow to hold a rail at all, which is a "widen the window" state rather
+   * than a reason to take the control away.
+   */
+  toggleEnabled: boolean;
 }
 
 export interface RailStateInput {
@@ -89,6 +113,12 @@ export interface RailStateInput {
    * because the ResizeObserver reports a real width within the first frame.
    */
   surfaceWidth: number | null;
+  /**
+   * Does the rail apply to this surface at all? A read-only transcript, or a
+   * chat with no session or workspace resolved yet, has nothing to hang widgets
+   * on — no rail, and no toggle either. Defaults to true.
+   */
+  applies?: boolean;
 }
 
 /** Where the rail can sit at this surface width, independent of whether it's open. */
@@ -99,19 +129,30 @@ export function railLayout(surfaceWidth: number | null | undefined): RailLayout 
 }
 
 /**
- * The single answer to "should the rail be open, and what does that cost the
- * message column?" — auto-show from content, overridden by an explicit choice,
- * and forced shut when the window is genuinely too narrow.
+ * The single answer to "should the rail be open, is its control on screen, and
+ * what does either cost the message column?" — auto-show from content,
+ * overridden by an explicit choice, and forced shut when the window is genuinely
+ * too narrow.
  */
 export function resolveRailState(input: RailStateInput): RailState {
+  const applies = input.applies !== false;
   const layout = railLayout(input.surfaceWidth);
-  if (layout === 'hidden') return { open: false, layout, reserve: 0 };
+  // Whether the CONTROL is offered is a question about the surface, not about
+  // the content: see rule 3 in the module header.
+  const toggleVisible = applies;
+  const toggleEnabled = applies && layout !== 'hidden';
+
+  if (!applies || layout === 'hidden') {
+    return { open: false, layout, reserve: 0, toggleVisible, toggleEnabled };
+  }
 
   const open = input.preference === 'auto' ? input.hasContent : input.preference === 'open';
   return {
     open,
     layout,
     reserve: open && layout === 'gutter' ? RAIL_RESERVE_WIDTH : 0,
+    toggleVisible,
+    toggleEnabled,
   };
 }
 
