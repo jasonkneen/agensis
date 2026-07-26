@@ -5,6 +5,8 @@ import { useHuddleSession } from './HuddleSessionContext';
 import { useSpeechInput, useSpeechOutput } from '@/hooks/useHuddleVoice';
 import { echoGuardUntil, trailingCaption } from '@/lib/huddleVoice';
 import { huddleDuration, isRecentlyEnded, participantSummary } from '@/lib/huddleState';
+import { huddleTranscriptTarget, shouldOpenHuddlePanel } from '@/lib/huddleTranscript';
+import { useHuddleSend } from '@/hooks/useHuddleTranscript';
 import { matchLeadingAgentName, withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { HuddleBar, type HuddleLocalState } from './HuddleBar';
 import { HuddleAgentStrip } from './HuddleAgentStrip';
@@ -12,44 +14,49 @@ import type { HuddleState } from '@/types';
 
 // The huddle card: one slim strip between the channel header and the transcript.
 //
-// It is deliberately bound to THIS channel's session. The conversation that
-// happens in a huddle belongs to the channel it was called from, so there is no
-// "view thread" button pointing somewhere else — a seam an earlier
-// implementation shipped, where the link opened an empty thread while the real
-// conversation had been archived elsewhere.
+// It owns the CALL — LiveKit, the microphone, the speech pipeline — and stays
+// mounted for the whole of it. It does NOT own the conversation: that lives in
+// HuddlePanel, on the right. The split is deliberate. A huddle is ad-hoc and
+// the channel is the record, so what is said in a call must not land in the
+// channel's permanent history; but a panel can be closed, and mounting
+// LiveKitRoom inside something that can unmount is how closing a panel would
+// silently drop the call.
 //
 // Participant state comes from the server's append-only event log (folded in
 // useHuddle), which is fed only by LiveKit's signed webhook. A browser cannot
 // add itself to the roster; it can only ask for a token for itself.
 //
 // AGENTS IN THE HUDDLE happen here, not in the media plane. While connected,
-// this card turns microphone speech into an ordinary chat message (which
-// dispatches the agent exactly as typing would) and reads new agent messages
-// aloud. The agent never touches audio, so this works for daemon, builtin and
-// MCP agents alike and needed no server-side media work at all.
+// this card turns microphone speech into an ordinary chat message — now
+// addressed to the huddle's OWN session — which dispatches the agent exactly as
+// typing would, and reads new agent messages from that session aloud. The agent
+// never touches audio, so this works for daemon, builtin and MCP agents alike
+// and needed no server-side media work at all.
 //
 // A CHANNEL needs one more thing than a DM: an addressee. A plain message wakes
 // nobody in a channel, so the strip picks an ACTIVE AGENT and the transcript is
 // posted @mentioning them — the composer's own dispatch path, no second route.
 // Hand it no agents (a DM) and none of that happens: the utterance is posted
-// verbatim, exactly as before.
+// verbatim. The transcript session copies its host's participants, so the DM's
+// `direct: true` shortcut works there exactly as it does in the DM itself.
 
 const IDLE_LOCAL: HuddleLocalState = { connected: false, micEnabled: false, speaker: '' };
 
 interface HuddleCardProps {
   workspaceId: string | null;
+  /** The channel/DM this card sits in. NOT where the transcript goes. */
   sessionId: string | null;
-  /**
-   * Post a recognised utterance into this session as a normal message. Omit it
-   * and the huddle stays voice-only between humans — nothing is transcribed.
-   */
-  onTranscript?: (text: string) => void;
   /**
    * The channel's agents, in roster order — one of them is active and hears
    * what you say. Empty in a DM, where the single agent already answers a
    * plain message and a strip would be a control with one option.
    */
   agents?: HuddleAgentOption[];
+  /** Which agent is active, lifted so the panel's composer addresses the same one. */
+  activeAgentId?: string;
+  onActiveAgentChange?: (agentId: string) => void;
+  /** Open the huddle panel — where the conversation actually is. */
+  onOpenPanel?: (huddleId: string) => void;
   className?: string;
 }
 
@@ -58,8 +65,10 @@ const NO_AGENTS: HuddleAgentOption[] = [];
 export function HuddleCard({
   workspaceId,
   sessionId,
-  onTranscript,
   agents = NO_AGENTS,
+  activeAgentId = '',
+  onActiveAgentChange,
+  onOpenPanel,
   className,
 }: HuddleCardProps) {
   // Shared with the toolbar trigger via context, so both drive one hook.
@@ -69,7 +78,21 @@ export function HuddleCard({
   const [outputMuted, setOutputMuted] = useState(false);
   // Which agent hears you. Pure UI state for THIS huddle: nothing is persisted,
   // because "who am I talking to right now" is not a property of the channel.
-  const [selectedAgentId, setSelectedAgentId] = useState('');
+  // Lifted to the parent so the panel's composer addresses the same agent your
+  // voice does; the local fallback keeps the card usable on its own.
+  const [ownAgentId, setOwnAgentId] = useState('');
+  const selectedAgentId = onActiveAgentChange ? activeAgentId : ownAgentId;
+  const setSelectedAgentId = useCallback((id: string) => {
+    if (onActiveAgentChange) onActiveAgentChange(id);
+    else setOwnAgentId(id);
+  }, [onActiveAgentChange]);
+
+  // WHERE THE WORDS GO. The huddle's own session when it has one; the host
+  // channel only for huddles that predate transcript sessions, where the
+  // channel genuinely was the transcript — so the fallback is the old
+  // behaviour, not a leak of the new one.
+  const transcriptSessionId = huddleTranscriptTarget(state, sessionId);
+  const { send } = useHuddleSend(workspaceId, transcriptSessionId || null);
   // The first agent is active until you pick another, and an agent that leaves
   // the roster mid-call hands the floor back to the first rather than leaving
   // the strip pointing at nobody.
@@ -92,8 +115,28 @@ export function HuddleCard({
     if (!connection) setLocal(IDLE_LOCAL);
   }, [connection]);
 
+  // Joining a huddle opens the panel — that is where the conversation is now,
+  // and a call whose transcript is behind a control you have to find is a call
+  // people will keep holding in the channel instead.
+  //
+  // Exactly once per connection, hence the ref: re-opening a panel the user
+  // just closed mid-call is a fight they cannot win. Keyed on the huddle id
+  // rather than on `connection` so rejoining the SAME huddle after a reconnect
+  // does not reopen it either.
+  const openedForRef = useRef('');
+  useEffect(() => {
+    if (!onOpenPanel) return;
+    if (!shouldOpenHuddlePanel(connection?.huddleId, openedForRef.current)) return;
+    openedForRef.current = connection?.huddleId || '';
+    onOpenPanel(openedForRef.current);
+  }, [connection?.huddleId, onOpenPanel]);
+
+  // Replies are read from the SAME session the transcript goes into. Pointing
+  // this at the channel while speech posts into the huddle would mean the agent
+  // answers in the huddle and the browser reads the channel aloud — a call
+  // where nobody's replies are ever heard.
   const { unavailable: outputUnavailable, speakingName } = useSpeechOutput(
-    sessionId,
+    transcriptSessionId || null,
     !!connection && !outputMuted,
     connection?.joinedAtMs ?? 0,
   );
@@ -112,11 +155,11 @@ export function HuddleCard({
   activeAgentRef.current = activeAgent;
 
   const handleUtterance = useCallback((text: string) => {
-    if (!onTranscript) return;
+    if (!transcriptSessionId) return;
     if (Date.now() < echoGuardRef.current) return;
     // No agents to choose between (a DM): today's behaviour, unchanged.
     if (agents.length === 0) {
-      onTranscript(text);
+      void send(text);
       return;
     }
     let target = activeAgentRef.current;
@@ -131,13 +174,13 @@ export function HuddleCard({
       body = named.remainder;
     }
     if (!body) return;
-    onTranscript(target ? withAgentMention(body, target.handle) : body);
-  }, [agents, onTranscript]);
+    void send(target ? withAgentMention(body, target.handle) : body);
+  }, [agents, send, setSelectedAgentId, transcriptSessionId]);
 
   // Three gates, all of which must hold: we hold a connection, LiveKit says the
   // session is up, and the mic is not muted. Muting the mic stops transcribing
   // as well as transmitting — one control, no second thing to remember.
-  const listenEnabled = !!connection && !!onTranscript && local.connected && local.micEnabled;
+  const listenEnabled = !!connection && !!transcriptSessionId && local.connected && local.micEnabled;
   const { unavailable: inputUnavailable, listening, interim, error: inputError } = useSpeechInput(
     listenEnabled,
     handleUtterance,
@@ -176,6 +219,19 @@ export function HuddleCard({
       {live && <HuddleLiveDetail state={live} localConnected={local.connected} />}
       {!live && recentlyEnded && <EndedDetail state={recentlyEnded} />}
 
+      {/* The conversation is in the panel, not below this strip. Without a way
+          back to it, closing the panel mid-call would strand the transcript
+          with no affordance to reopen it. */}
+      {onOpenPanel && state && (live || connection) && (
+        <button
+          type="button"
+          className="shrink-0 font-medium text-foreground underline-offset-2 hover:underline"
+          onClick={() => onOpenPanel(state.id)}
+        >
+          Open huddle
+        </button>
+      )}
+
       {error && <span className="min-w-0 truncate text-destructive">{error}</span>}
 
       {/* Only while we are in the call: off it there is no "your voice", so a
@@ -210,7 +266,7 @@ export function HuddleCard({
           original height the rest of the time. */}
       {connection && local.connected && (
         <VoiceCaption
-          transcribing={!!onTranscript}
+          transcribing={!!transcriptSessionId}
           micEnabled={local.micEnabled}
           listening={listening}
           interim={interim}
@@ -273,7 +329,7 @@ function VoiceCaption({
   } else if (!micEnabled) {
     status = activeHandle
       ? `Mic muted — unmute to talk to @${activeHandle}.`
-      : 'Mic muted — unmute to talk to this channel.';
+      : 'Mic muted — unmute to talk in this huddle.';
   } else if (speakingName) {
     status = 'Paused while the reply plays.';
   } else if (interim) {
@@ -285,7 +341,7 @@ function VoiceCaption({
     // talking to" in words, and it teaches the say-a-name switch by example.
     status = activeHandle
       ? `Listening — @${activeHandle} hears you. Start with another agent's name to switch.`
-      : 'Listening — say something and it posts here.';
+      : 'Listening — what you say goes in the huddle, not the channel.';
   } else if (transcribing) {
     status = 'Starting the microphone…';
   } else if (outputUnavailable) {

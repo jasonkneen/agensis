@@ -70,6 +70,10 @@ export function foldHuddleState(huddle: Huddle | null, events: HuddleEvent[] = [
     id: huddle.id,
     workspaceId: huddle.workspace_id,
     sessionId: huddle.session_id,
+    // Null for a huddle started before transcript sessions existed. Callers
+    // fall back to sessionId (huddleTranscriptTarget), which is what those
+    // huddles actually did — the channel WAS their transcript.
+    transcriptSessionId: huddle.transcript_session_id ?? null,
     roomName: huddle.room_name,
     startedBy: huddle.started_by ?? null,
     startedAt: huddle.started_at ?? null,

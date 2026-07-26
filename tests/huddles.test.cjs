@@ -46,6 +46,10 @@ const MEMBER = 'user-member';
 const VIEWER = 'user-viewer';
 const STRANGER = 'user-stranger';
 const HUDDLE_ID = '44444444-4444-4444-8444-444444444444';
+// The huddle's OWN conversation session — where the transcript goes. SESSION
+// above is the channel it was called from; the two are deliberately different
+// everywhere in this file, because conflating them is the bug being prevented.
+const TRANSCRIPT = '55555555-5555-4555-8555-555555555555';
 const ROOM = `agensis-${HUDDLE_ID}`;
 
 const API_KEY = 'APItestkey';
@@ -68,9 +72,25 @@ async function requireAuth(req, res, next) {
   next();
 }
 
-function makeDb({ roles = {}, owners = {}, sessions = { [SESSION]: WS }, huddleRows = [], eventRows = [] } = {}) {
+// The huddle select list. Matched loosely below (`from huddles where …`) rather
+// than by full prefix, so ADDING a column to HUDDLE_COLUMNS does not silently
+// turn every route test into an "Unexpected SQL" throw — which is exactly what
+// happened when transcript_session_id landed.
+const HUDDLE_SELECT = /^select .*from huddles where /;
+
+function makeDb({
+  roles = {},
+  owners = {},
+  sessions = { [SESSION]: WS },
+  huddleRows = [],
+  eventRows = [],
+  // Messages already in a huddle's transcript session, keyed by session id.
+  // Only the COUNT matters here: it is one half of "did this huddle leave a
+  // trace worth marking in the channel".
+  transcriptCounts = {},
+} = {}) {
   const calls = [];
-  const state = { huddles: [...huddleRows], events: [...eventRows] };
+  const state = { huddles: [...huddleRows], events: [...eventRows], messages: [], chatSessions: [] };
   let seq = state.events.length;
   const db = {
     calls,
@@ -96,23 +116,57 @@ function makeDb({ roles = {}, owners = {}, sessions = { [SESSION]: WS }, huddleR
       if (n.startsWith('select display_name, email from app_users')) {
         return [{ display_name: 'Member', email: 'member@example.com' }];
       }
-      if (n.startsWith('select id from chat_sessions where id = $1 and workspace_id = $2')) {
-        return sessions[params[0]] === params[1] ? [{ id: params[0] }] : [];
+      if (n.startsWith('select id, title from chat_sessions where id = $1 and workspace_id = $2')) {
+        return sessions[params[0]] === params[1] ? [{ id: params[0], title: 'general' }] : [];
       }
-      if (n.startsWith('select id, workspace_id, session_id, room_name, started_by, started_at, ended_at from huddles where session_id = $1 and ended_at is null')) {
+      if (n.startsWith('select count(*)::int as count from messages where session_id = $1')) {
+        return [{ count: Number(transcriptCounts[params[0]] || 0) }];
+      }
+      if (n.startsWith('insert into chat_sessions')) {
+        const [id, workspaceId, title, hostId] = params;
+        // The select-into-insert copies from the host; no host row, no session
+        // (which is what the real statement does too).
+        if (!sessions[hostId]) return [];
+        const row = { id, workspace_id: workspaceId, title, folder: 'huddle', host_id: hostId };
+        state.chatSessions.push(row);
+        return [{ id }];
+      }
+      if (n.startsWith('insert into messages')) {
+        const [sessionId, content, kind, huddleId] = params;
+        const row = {
+          id: `msg-${state.messages.length + 1}`,
+          session_id: sessionId,
+          role: 'assistant',
+          content,
+          message_kind: kind,
+          huddle_id: huddleId,
+          sender_kind: 'system',
+          sender_name: 'Huddle',
+          created_at: new Date().toISOString(),
+        };
+        state.messages.push(row);
+        return [row];
+      }
+      if (HUDDLE_SELECT.test(n) && n.includes('where session_id = $1 and ended_at is null')) {
         return state.huddles.filter((h) => h.session_id === params[0] && !h.ended_at);
       }
-      if (n.startsWith('select id, workspace_id, session_id, room_name, started_by, started_at, ended_at from huddles where session_id = $1 order by started_at desc')) {
+      if (HUDDLE_SELECT.test(n) && n.includes('where session_id = $1 order by started_at desc')) {
         return state.huddles.filter((h) => h.session_id === params[0]).slice(-1);
       }
-      if (n.startsWith('select id, workspace_id, session_id, room_name, started_by, started_at, ended_at from huddles where id = $1 and workspace_id = $2')) {
+      if (HUDDLE_SELECT.test(n) && n.includes('where id = $1 and workspace_id = $2')) {
         return state.huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]);
       }
-      if (n.startsWith('select id, workspace_id, session_id, room_name, started_by, started_at, ended_at from huddles where room_name = $1')) {
+      if (HUDDLE_SELECT.test(n) && n.includes('where room_name = $1')) {
         return state.huddles.filter((h) => h.room_name === params[0]);
       }
       if (n.startsWith('select id, huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, seq, created_at from huddle_events')) {
         return state.events.filter((e) => e.huddle_id === params[0]);
+      }
+      if (n.startsWith('update huddles set transcript_session_id')) {
+        const row = state.huddles.find((h) => h.id === params[1]);
+        if (!row) return [];
+        row.transcript_session_id = params[0];
+        return [row];
       }
       if (n.startsWith('insert into huddles')) {
         const [id, workspaceId, sessionId, roomName, startedBy] = params;
@@ -124,6 +178,7 @@ function makeDb({ roles = {}, owners = {}, sessions = { [SESSION]: WS }, huddleR
         const row = {
           id, workspace_id: workspaceId, session_id: sessionId, room_name: roomName,
           started_by: startedBy, started_at: new Date().toISOString(), ended_at: null,
+          transcript_session_id: null,
         };
         state.huddles.push(row);
         return [row];
@@ -224,6 +279,7 @@ function liveHuddleRow(overrides = {}) {
     started_by: MEMBER,
     started_at: new Date(Date.now() - 60_000).toISOString(),
     ended_at: null,
+    transcript_session_id: TRANSCRIPT,
     ...overrides,
   };
 }
@@ -674,6 +730,264 @@ test('token TTL is clamped so a bad env var cannot mint a long-lived credential'
   }
 });
 
+// ---------------------------------------------------------------------------
+// The huddle's own conversation, and the marker it leaves behind
+// ---------------------------------------------------------------------------
+//
+// The change this section guards: a huddle is ad-hoc, the channel is the
+// record. Transcribed speech used to be posted into the host channel as
+// ordinary messages, which turned a live call into permanent channel history.
+// It now goes into the huddle's OWN session, and the channel gets ONE marker.
+//
+// Four ways that can be wrong, all of them silent:
+//   1. the transcript session is never created (the feature is inert and every
+//      utterance falls back into the channel — the old behaviour, shipped as
+//      though it were the new one),
+//   2. it is created without the host's participants, so @mention dispatch
+//      resolves nobody and talking to an agent in a huddle does nothing,
+//   3. the marker is never written (a call leaves no trace at all), or
+//   4. the marker is written twice, or for a huddle nobody attended.
+
+test('starting a huddle creates its OWN conversation session, linked to the huddle', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' } });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` },
+    });
+    assert.equal(res.status, 201);
+    const body = await res.json();
+
+    // A session of its own, and NOT the channel it was called from. If these
+    // are ever equal the transcript is back in the channel.
+    const transcriptId = body.data.huddle.transcript_session_id;
+    assert.ok(transcriptId, 'the huddle must carry a transcript session');
+    assert.notEqual(transcriptId, SESSION);
+    assert.equal(body.data.state.transcriptSessionId, transcriptId);
+
+    const created = db.state.chatSessions.find((s) => s.id === transcriptId);
+    assert.ok(created, 'the transcript session row was written');
+    assert.equal(created.folder, 'huddle', 'folder="huddle" is what keeps it out of the sidebar');
+    assert.equal(created.host_id, SESSION, 'it is built from the host session');
+  });
+});
+
+test('the transcript session copies the host row in SQL, never through a jsonb bind', () => {
+  // participants is jsonb, and the two backends bind jsonb OPPOSITELY (postgres
+  // takes the object, @netlify/database wants it stringified). A select-into-
+  // insert sidesteps the disagreement entirely — and copying participants is
+  // not cosmetic: /backend/agents/dispatch resolves @mentions and the DM
+  // `direct: true` shortcut from the SESSION's participants, so a transcript
+  // session with an empty roster is a room where talking to an agent silently
+  // does nothing.
+  const source = read('server/huddles.cjs');
+  const statement = /insert into chat_sessions[\s\S]*?returning id/.exec(source);
+  assert.ok(statement, 'the transcript session insert must exist');
+  assert.match(statement[0], /select \$1, \$2, \$3, host\.model/, 'must be a select-into-insert');
+  assert.match(statement[0], /host\.participants/, 'participants must be copied from the host');
+  assert.match(statement[0], /host\.canvas_id/, 'the project scoping must be copied too');
+  assert.match(statement[0], /from chat_sessions host/);
+  assert.equal(
+    /insert into chat_sessions[\s\S]*?JSON\.stringify/.test(source),
+    false,
+    'nothing about this insert may stringify a jsonb value',
+  );
+});
+
+test('an OLD huddle with no transcript session is served, not repaired or crashed', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ transcript_session_id: null })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    // Null, and honestly null. The client falls back to the channel, which is
+    // where that huddle's conversation actually happened.
+    assert.equal(body.data.state.transcriptSessionId, null);
+    // A read must not quietly mint a session for a huddle that ran without one.
+    assert.equal(db.state.chatSessions.length, 0);
+  });
+});
+
+test('a marker is written into the CHANNEL when the huddle ends — one row, not a replay', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    eventRows: [
+      { id: 'e1', huddle_id: HUDDLE_ID, workspace_id: WS, session_id: SESSION, kind: 'participant_joined', identity: 'user:a', display_name: 'Ada', event_id: 'lk-1', seq: 1, created_at: new Date(Date.now() - 50_000).toISOString() },
+      { id: 'e2', huddle_id: HUDDLE_ID, workspace_id: WS, session_id: SESSION, kind: 'participant_joined', identity: 'user:s', display_name: 'Sam', event_id: 'lk-2', seq: 2, created_at: new Date(Date.now() - 40_000).toISOString() },
+    ],
+  });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, { method: 'POST', headers: auth });
+    assert.equal(res.status, 200);
+
+    assert.equal(db.state.messages.length, 1, 'exactly one marker, not a transcript replay');
+    const marker = db.state.messages[0];
+    // In the CHANNEL — the whole point is that the conversation is not here but
+    // the record of it is.
+    assert.equal(marker.session_id, SESSION);
+    assert.equal(marker.message_kind, 'huddle');
+    assert.equal(marker.huddle_id, HUDDLE_ID, 'the marker must be able to reopen its transcript');
+    assert.equal(marker.sender_kind, 'system');
+    assert.match(marker.content, /^You were in a huddle/);
+    assert.match(marker.content, /Ada, Sam/);
+    assert.ok(marker.content.includes(' · '), 'the duration and roster ride in the sentence itself');
+    // Realtime, or the channel shows it only after a reload.
+    assert.ok(broadcasts.some((b) => b.table === 'messages' && b.eventType === 'INSERT'));
+  });
+});
+
+test('ending twice leaves ONE marker (the ended_at guard, not a second mechanism)', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    transcriptCounts: { [TRANSCRIPT]: 4 },
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, { method: 'POST', headers: auth });
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, { method: 'POST', headers: auth });
+    assert.equal(db.state.messages.length, 1);
+  });
+});
+
+test('a huddle nobody joined and nothing was said in leaves NO marker', async () => {
+  // A misclick. "You were in a huddle · 0:03 · nobody joined" in the channel
+  // for every accidental press is exactly the noise this change removes.
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, { method: 'POST', headers: auth });
+    assert.equal(res.status, 200);
+    assert.equal(db.state.messages.length, 0);
+  });
+});
+
+test('a transcript alone is enough to earn a marker, with no webhook joins at all', () => {
+  // everJoinedCount is 0 whenever LiveKit's webhook is not configured, so on its
+  // own it would suppress the marker for a real, fully-transcribed conversation.
+  const ended = { everJoinedCount: 0 };
+  assert.equal(huddles.huddleLeftATrace(ended, 0), false);
+  assert.equal(huddles.huddleLeftATrace(ended, 3), true);
+  assert.equal(huddles.huddleLeftATrace({ everJoinedCount: 2 }, 0), true);
+  assert.equal(huddles.huddleLeftATrace(null, 5), false);
+});
+
+test('room_finished writes the marker too — both ways a huddle ends leave a record', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    transcriptCounts: { [TRANSCRIPT]: 2 },
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const body = webhookBody({ event: 'room_finished', id: 'lk-finish' });
+    const res = await fetch(`${baseUrl}/backend/livekit-webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: signWebhook(body) },
+      body,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(db.state.messages.length, 1);
+    assert.equal(db.state.messages[0].session_id, SESSION);
+    assert.equal(db.state.messages[0].huddle_id, HUDDLE_ID);
+
+    // A redelivery updates zero rows, so it must not collect a second marker.
+    const again = webhookBody({ event: 'room_finished', id: 'lk-finish-2' });
+    await fetch(`${baseUrl}/backend/livekit-webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: signWebhook(again) },
+      body: again,
+    });
+    assert.equal(db.state.messages.length, 1);
+  });
+});
+
+test('the marker sentence is truthful, and stands on its own', () => {
+  const startedAt = '2026-07-26T10:00:00.000Z';
+  const endedAt = '2026-07-26T10:12:04.000Z';
+  const ended = { startedAt, endedAt, active: false, everJoinedCount: 2, participants: [] };
+
+  assert.equal(
+    huddles.huddleMarkerContent(ended, ['Ada', 'Sam']),
+    'You were in a huddle · 12:04 · Ada, Sam',
+  );
+  // No names delivered (no webhook) — still a true statement about the count.
+  assert.equal(
+    huddles.huddleMarkerContent(ended, []),
+    'You were in a huddle · 12:04 · 2 people joined',
+  );
+  // Long rosters summarise rather than running off the row.
+  assert.match(
+    huddles.huddleMarkerContent(ended, ['Ada', 'Sam', 'Kit', 'Lee', 'Max']),
+    /Ada, Sam and 3 others$/,
+  );
+  assert.equal(huddles.huddleMarkerContent(null), '');
+});
+
+test('the marker roster comes from the LOG, not from the (empty) live participant list', () => {
+  // state.participants is empty for an ended huddle BY DESIGN. Reading it here
+  // is how a call four people attended ends up claiming nobody was there.
+  const events = [
+    { kind: 'participant_joined', identity: 'user:a', display_name: 'Ada', created_at: '2026-07-26T10:01:00.000Z', seq: 1 },
+    { kind: 'participant_joined', identity: 'user:s', display_name: 'Sam', created_at: '2026-07-26T10:02:00.000Z', seq: 2 },
+    // Left before the end, but was still in the huddle.
+    { kind: 'participant_left', identity: 'user:s', display_name: 'Sam', created_at: '2026-07-26T10:03:00.000Z', seq: 3 },
+    // A redelivered join must not duplicate the name.
+    { kind: 'participant_joined', identity: 'user:a', display_name: 'Ada', created_at: '2026-07-26T10:04:00.000Z', seq: 4 },
+    { kind: 'ended', identity: 'user:a', created_at: '2026-07-26T10:05:00.000Z', seq: 5 },
+  ];
+  assert.deepEqual(huddles.everJoinedNames(events), ['Ada', 'Sam']);
+
+  const state = huddles.foldHuddleState(
+    { id: HUDDLE_ID, workspace_id: WS, session_id: SESSION, room_name: ROOM, started_at: '2026-07-26T10:00:00.000Z', ended_at: null },
+    events,
+  );
+  assert.deepEqual(state.participants, [], 'an ended huddle has nobody in it');
+  assert.equal(state.everJoinedCount, 2);
+  assert.match(huddles.huddleMarkerContent(state, huddles.everJoinedNames(events)), /Ada, Sam$/);
+});
+
+test('a marker can reopen its huddle by id, long after the channel has moved on', async () => {
+  // The per-channel route answers with the channel's CURRENT huddle, which for
+  // a marker written months ago is a completely different call. Without a
+  // by-id route "Open transcript" would open the wrong conversation.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'viewer' },
+    huddleRows: [liveHuddleRow({ ended_at: new Date().toISOString() })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}`, { headers: auth });
+    assert.equal(res.status, 200, 'reading a past huddle is a READ — a viewer may');
+    const body = await res.json();
+    assert.equal(body.data.huddle.id, HUDDLE_ID);
+    assert.equal(body.data.state.transcriptSessionId, TRANSCRIPT);
+
+    // And it is still workspace-scoped: no borrowing an id across workspaces.
+    const other = await fetch(`${baseUrl}/backend/workspaces/${OTHER_WS}/huddles/${HUDDLE_ID}`, { headers: auth });
+    assert.equal(other.status, 403);
+  });
+});
+
 // --- 4. schema + allowlists -------------------------------------------------
 
 test('huddles + huddle_events are declared in all three schema places', () => {
@@ -700,6 +1014,55 @@ test('huddles + huddle_events are declared in all three schema places', () => {
     assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles\(session_id\) WHERE ended_at IS NULL/, label);
     // Webhook redelivery is a no-op at the DB level, not just in app code.
     assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events\(event_id\) WHERE event_id <> ''/, label);
+  }
+});
+
+test('the transcript link and the channel marker are declared in all three schema places', () => {
+  // Same rule, second change. transcript_session_id is what moves the huddle
+  // conversation out of the channel and messages.huddle_id is what lets the
+  // channel point back at it — a fresh DB missing either one silently reverts
+  // the whole feature to "type your voice into the channel".
+  const runtime = huddles.HUDDLES_SCHEMA_SQL;
+  const canonical = read('database/neon-schema.sql');
+  const named = fs.readdirSync(path.join(root, 'supabase/migrations'))
+    .filter((n) => n.endsWith('_huddle_transcript_sessions.sql'));
+  assert.equal(named.length, 1, 'expected exactly one transcript-session migration');
+  const migration = read(path.join('supabase/migrations', named[0]));
+
+  for (const [label, source] of [['runtime', runtime], ['neon-schema', canonical], ['migration', migration]]) {
+    // ON DELETE SET NULL, never CASCADE: deleting a transcript must not delete
+    // the record that the call happened.
+    assert.match(
+      source,
+      /ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions\(id\) ON DELETE SET NULL/,
+      label,
+    );
+    assert.match(source, /ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid/, label);
+    assert.match(
+      source,
+      /CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages\(huddle_id\) WHERE huddle_id IS NOT NULL/,
+      label,
+    );
+  }
+});
+
+test('every huddle read carries transcript_session_id (the blank-column trap)', () => {
+  // The routes list huddle columns EXPLICITLY. A column left out of that list
+  // reads back as undefined, the client falls through to "no transcript", and
+  // speech quietly goes back into the channel — the exact failure this whole
+  // change exists to fix, wearing the exact disguise that has hidden it twice
+  // before in this repo.
+  const source = read('server/huddles.cjs');
+  const columns = /const HUDDLE_COLUMNS = '([^']+)'/.exec(source);
+  assert.ok(columns, 'HUDDLE_COLUMNS must exist');
+  assert.match(columns[1], /\btranscript_session_id\b/);
+  // And nothing may select huddles with an ad-hoc list that skips it.
+  const selects = source.match(/select [^`;]*from huddles/g) || [];
+  for (const statement of selects) {
+    assert.ok(
+      statement.includes('${HUDDLE_COLUMNS}') || statement.includes('transcript_session_id') || statement.includes('select 1 '),
+      `a huddle select bypasses HUDDLE_COLUMNS: ${statement}`,
+    );
   }
 });
 
@@ -845,7 +1208,15 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   assert.match(source, /voiceHuddle && agentContext[\s\S]{0,200}<voice_huddle>/);
   // Derived from the huddles table, not from anything a client sends.
   assert.match(source, /const voiceHuddle = await sessionHasLiveHuddle\(sessionId\)/);
-  assert.match(source, /select 1 from huddles where session_id = \$1 and ended_at is null/);
+  // BOTH columns. The agent now answers in the huddle's OWN session, so a
+  // lookup that only matched session_id would stop adding the note the moment
+  // transcripts moved out of the channel — every reply would come back as one
+  // block of prose read out six seconds late, with nothing visibly broken.
+  assert.match(
+    source,
+    /where \(session_id = \$1 or transcript_session_id = \$1\) and ended_at is null/,
+    'the voice note must follow the huddle into its own session',
+  );
   // Off unless asked for: a caller that forgets the argument must not opt every
   // agent into voice etiquette.
   assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false\)/);

@@ -29,6 +29,42 @@ interface HuddlePayload {
 }
 
 /**
+ * ONE huddle by id, live or long finished — what a channel marker links to.
+ *
+ * Read-only and un-subscribed on purpose. This exists so "You were in a huddle"
+ * still opens its transcript months later, when the per-channel lookup below
+ * would answer with a completely different, newer huddle. A finished huddle
+ * cannot change, so there is nothing to watch; a live one reached this way is
+ * already being watched by useHuddle in the same channel.
+ */
+export function useHuddleRecord(workspaceId: string | null, huddleId: string | null) {
+  const [state, setState] = useState<HuddleState | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState(null);
+    if (!workspaceId || !huddleId) return;
+    setLoading(true);
+    const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}`;
+    void fetch(apiUrl(path), { headers: apiAuthHeaders() })
+      .then(async (response) => (response.ok ? response.json().catch(() => null) : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const data = payload?.data as HuddlePayload | undefined;
+        setState(foldHuddleState(data?.huddle ?? null, Array.isArray(data?.events) ? data.events : []));
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [workspaceId, huddleId]);
+
+  return { state, loading };
+}
+
+/**
  * The huddle for one channel.
  *
  * State model (copied from a prior hand-rolled implementation that got this
@@ -43,6 +79,11 @@ interface HuddlePayload {
  * Authority is server-side. This hook can ask for a token for the CURRENT user
  * and nothing else; who was actually in the room comes from LiveKit's signed
  * webhook, never from a browser claim.
+ *
+ * NOTE the two session ids on the state it returns. `sessionId` is this
+ * channel — the huddle was called from here. `transcriptSessionId` is the
+ * huddle's OWN conversation, and it is where the transcript goes; see
+ * lib/huddleTranscript.
  */
 export function useHuddle(workspaceId: string | null, sessionId: string | null) {
   const [huddle, setHuddle] = useState<Huddle | null>(null);

@@ -70,6 +70,8 @@ import {
   type RailPreference,
 } from '@/lib/threadWidgetRail';
 import { HuddleCard } from '../huddle/HuddleCard';
+import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
+import { HuddlePanel } from '../huddle/HuddlePanel';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
@@ -169,6 +171,7 @@ import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
+import { isHuddleMarkerMessage } from '../../lib/huddleTranscript';
 import {
   activityLine,
   extractActivityVerb,
@@ -263,7 +266,7 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads' | 'huddle';
 
 // The chat column: message list and composer share ONE width so they line up.
 // They were independent before — the composer was centred at max-w-[800px] while
@@ -515,14 +518,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       inputRef.current?.focus();
     }
   };
-
-  // A huddle utterance takes exactly the composer's path: a normal message,
-  // which dispatches the agent exactly as typing would. Deliberately NOT gated
-  // on `streaming` — in a live call you talk over the agent's last answer, and
-  // a dropped sentence is invisible to someone who is looking away.
-  const sendTranscript = useCallback((text: string) => {
-    onSendMessage(text, selectedModel);
-  }, [onSendMessage, selectedModel]);
 
   const insertComposerText = (text: string) => {
     const target = inputRef.current;
@@ -1081,6 +1076,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => (isDirectMessage ? [] : huddleAgentOptions(agents, persistedParticipants)),
     [agents, isDirectMessage, persistedParticipants],
   );
+  // Which agent a huddle utterance is addressed to. Lifted here so the strip in
+  // the card and the composer in the panel talk to the SAME agent — two
+  // controls disagreeing about who is listening is worse than one.
+  const [huddleActiveAgentId, setHuddleActiveAgentId] = useState('');
+  // Which huddle the panel is showing. Null means "this channel's current one";
+  // a marker from an old huddle sets it explicitly.
+  const [huddlePanelId, setHuddlePanelId] = useState<string | null>(null);
+  const openHuddlePanel = useCallback((huddleId?: string | null) => {
+    setHuddlePanelId(huddleId || null);
+    setSidePanel('huddle');
+  }, []);
   // Who replied and when, per parent message — derived from the messages already
   // in memory (threadReplyCounts stays the source of truth for the number itself).
   const threadReplySummaries = useMemo(
@@ -1376,11 +1382,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
   return (
     <div className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
+      {/* Wraps the message column AND the side panel, because the huddle panel
+          is one of the side panels and drives off the same hook the toolbar
+          button and the card do. It stays scoped to this channel rather than
+          the app: the hook is realtime-driven and only re-renders on a real
+          huddle event (start / join / leave / end), never per message — the
+          transcript itself lives in the panel's own hook. */}
+      <HuddleSessionProvider
+        workspaceId={showHuddleCard ? workspaceId : null}
+        sessionId={showHuddleCard ? inferredSessionId : null}
+      >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <HuddleSessionProvider
-          workspaceId={showHuddleCard ? workspaceId : null}
-          sessionId={showHuddleCard ? inferredSessionId : null}
-        >
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
           <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
             {isDirectMessage ? (
@@ -1554,11 +1566,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           <HuddleCard
             workspaceId={workspaceId}
             sessionId={inferredSessionId}
-            onTranscript={sendTranscript}
             agents={huddleAgents}
+            activeAgentId={huddleActiveAgentId}
+            onActiveAgentChange={setHuddleActiveAgentId}
+            onOpenPanel={openHuddlePanel}
           />
         )}
-        </HuddleSessionProvider>
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             {/* The rail's width comes out of the SURFACE, never out of the
@@ -1622,6 +1635,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                         );
                       }
                       const msg = row.message;
+                      // "You were in a huddle" — a fact about the channel, not
+                      // something anyone said in it. One quiet line where the
+                      // whole voice conversation used to be dumped.
+                      if (isHuddleMarkerMessage(msg)) {
+                        return (
+                          <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
+                            <HuddleMarkerRow message={msg} onOpen={openHuddlePanel} />
+                          </MessageScrollerItem>
+                        );
+                      }
                       return (
                       <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
                         <ChatMessageBubble
@@ -1996,7 +2019,15 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             onPointerDown={beginPanelResize}
             aria-hidden
           />
-          {sidePanel === 'profile' ? (
+          {sidePanel === 'huddle' ? (
+            <HuddlePanel
+              workspaceId={workspaceId}
+              huddleId={huddlePanelId}
+              agents={huddleAgents}
+              activeAgentId={huddleActiveAgentId}
+              onClose={closeSidePanel}
+            />
+          ) : sidePanel === 'profile' ? (
             <AgentProfileSidePanel
               agent={profileAgent}
               currentUserId={currentUserId}
@@ -2064,6 +2095,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           ) : null}
         </aside>
       )}
+      </HuddleSessionProvider>
 
 
       <Dialog open={catchUpOpen} onOpenChange={setCatchUpOpen}>

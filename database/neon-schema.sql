@@ -824,6 +824,14 @@ END $$;
 -- because the LiveKit project is shared with other apps.
 -- idx_huddles_one_live_per_session is load-bearing, not an optimisation: it is
 -- what makes two people pressing "Huddle" at the same moment land in ONE room.
+--
+-- TWO session links, meaning different things. session_id is the channel/DM the
+-- huddle was CALLED FROM. transcript_session_id is the huddle's OWN
+-- conversation — its own chat_sessions row (folder='huddle', participants and
+-- canvas_id copied from the host) where speech-to-text and the agents' replies
+-- land, so a live voice call is not dumped into the channel's permanent
+-- history. Nullable: huddles predating it have none, and every reader falls
+-- back to session_id, which is what those huddles actually did.
 CREATE TABLE IF NOT EXISTS huddles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -831,8 +839,10 @@ CREATE TABLE IF NOT EXISTS huddles (
   room_name text NOT NULL UNIQUE,
   started_by uuid,
   started_at timestamptz NOT NULL DEFAULT now(),
-  ended_at timestamptz
+  ended_at timestamptz,
+  transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL
 );
+ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
@@ -857,6 +867,15 @@ CREATE TABLE IF NOT EXISTS huddle_events (
 CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, created_at, seq);
 CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
+
+-- The channel marker: ONE message per finished huddle, in the channel it was
+-- called from, saying it happened and pointing back at the transcript.
+-- Deliberately no foreign key — messages is created hundreds of lines above
+-- huddles, and a dangling huddle_id degrades to a plain sentence with a dead
+-- link, which is the same graceful path an old huddle with no transcript
+-- session already takes.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE huddle_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- In-app feedback -> the System workspace.

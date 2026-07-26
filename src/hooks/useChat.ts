@@ -6,6 +6,7 @@ import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { channelMessages } from '../components/chat/channelView';
+import { isHuddleSession } from '../lib/huddleTranscript';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -28,10 +29,23 @@ export interface SendMessageResult {
   failure: WriteFailure | null;
 }
 
+/**
+ * The sessions that are CHANNELS — the ones a person navigates between.
+ *
+ * Sub-threads are excluded by their parent_message_id, as they always were.
+ * Huddle transcripts have to be excluded explicitly: they carry no
+ * parent_message_id, so without this they are indistinguishable from a channel,
+ * and since the list is ordered by `updated_at` the app would open into the
+ * last voice call anybody held instead of into a real channel.
+ */
+function mainSessionsOf(sessions: ChatSession[]): ChatSession[] {
+  return sessions.filter(s => !s.parent_message_id && !s.deleted_at && !isHuddleSession(s));
+}
+
 export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     if (!seedSessions?.length) return [];
-    return seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+    return mainSessionsOf(seedSessions);
   });
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -53,7 +67,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
   useEffect(() => {
     if (!seedSessions) return;
-    const mainSessions = seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+    const mainSessions = mainSessionsOf(seedSessions);
     setSessions(mainSessions);
     if (mainSessions.length > 0) {
       setActiveSession(prev => prev ?? mainSessions[0]);
@@ -71,7 +85,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       return data;
     });
     if (data) {
-      const mainSessions = data.filter(s => !s.parent_message_id && !s.deleted_at);
+      const mainSessions = mainSessionsOf(data);
       setSessions(mainSessions);
       if (mainSessions.length > 0) {
         setActiveSession(prev => prev ?? mainSessions[0]);

@@ -25,6 +25,8 @@
 export interface SidebarSessionPredicates<T> {
   isDirect: (session: T) => boolean;
   isThread: (session: T) => boolean;
+  /** Sessions that exist but should never appear in the sidebar. */
+  exclude?: (session: T) => boolean;
 }
 
 export interface SidebarSessionGroups<T> {
@@ -41,7 +43,7 @@ export interface SidebarSessionGroups<T> {
  */
 export function partitionSidebarSessions<T extends { archived_at?: string | null }>(
   sessions: readonly T[],
-  { isDirect, isThread }: SidebarSessionPredicates<T>,
+  { isDirect, isThread, exclude }: SidebarSessionPredicates<T>,
 ): SidebarSessionGroups<T> {
   const channels: T[] = [];
   const direct: T[] = [];
@@ -49,6 +51,14 @@ export function partitionSidebarSessions<T extends { archived_at?: string | null
 
   for (const session of sessions) {
     if (session.archived_at) continue;
+    // `exclude` is for sessions that exist but are not places you NAVIGATE to.
+    // A huddle transcript is the case: it is reached from the live huddle card
+    // or the "You were in a huddle" marker in the channel that held it. Left
+    // in, it would land in the CHANNEL bucket (no parent_message_id, no
+    // agent-only participant list) and list every call anyone ever started
+    // beside the real channels — the exact clutter that moving the huddle
+    // conversation out of the channel was meant to remove.
+    if (exclude?.(session)) continue;
     if (isDirect(session)) direct.push(session);
     else if (isThread(session)) threads.push(session);
     else channels.push(session);

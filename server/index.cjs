@@ -3976,11 +3976,26 @@ const VOICE_HUDDLE_NOTE = [
 // table (idx_huddles_one_live_per_session covers exactly this predicate).
 // Fails CLOSED: any error means "no huddle", so a missing table or a slow
 // query can never break a turn — it only means the voice note is not added.
+// Is this session part of a live voice call — and therefore about to be read
+// aloud? Decides whether the agent gets VOICE_HUDDLE_NOTE.
+//
+// BOTH columns, and the second one is the load-bearing half. A huddle keeps its
+// conversation in its OWN session (huddles.transcript_session_id) rather than in
+// the channel, so the session an agent is answering in during a call is the
+// transcript one. Matching only `session_id` silently stopped adding the note
+// the moment transcripts moved out of the channel: every reply would come back
+// as one long block of prose, read out six seconds after the question, and
+// nothing would look broken.
+//
+// `session_id` still matches because a huddle that predates transcript sessions
+// really did run in its channel.
 async function sessionHasLiveHuddle(sessionId) {
  if (!sessionId) return false;
  try {
   const rows = await getDb().unsafe(
-   'select 1 from huddles where session_id = $1 and ended_at is null limit 1',
+   `select 1 from huddles
+      where (session_id = $1 or transcript_session_id = $1) and ended_at is null
+      limit 1`,
    [String(sessionId)],
   );
   return rows.length > 0;

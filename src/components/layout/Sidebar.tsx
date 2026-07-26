@@ -152,6 +152,7 @@ function AgentStatusFeedOverlay({
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 import { partitionSidebarSessions } from '../../lib/sidebarSessions';
+import { isHuddleSession } from '../../lib/huddleTranscript';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 
@@ -379,6 +380,7 @@ export const Sidebar = React.memo(function Sidebar({
   const { channels, direct, threads } = partitionSidebarSessions(uniqueSessions, {
    isDirect: isDirectSession,
    isThread: isThreadSession,
+   exclude: isHuddleSession,
   });
   return { activeChannelSessions: channels, directSessions: direct, threadSessions: threads };
  }, [uniqueSessions]);
