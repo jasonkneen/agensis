@@ -82,4 +82,10 @@
     # connect-src also allows *.livekit.cloud: the LiveKit client opens a wss://
     # signalling connection to the project's own host, not to our backend. Listed
     # now so promoting this policy from Report-Only cannot silently kill voice.
-    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev https://*.livekit.cloud wss://*.livekit.cloud; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'; report-uri https://agensis-backend.fly.dev/backend/csp-report"
+    #
+    # api.cartesia.ai is listed for the same reason: huddle text-to-speech opens
+    # a wss:// straight to Cartesia, authenticated with a 120-second token our
+    # backend mints (the API key never reaches the browser). Deepgram is
+    # deliberately ABSENT — speech-to-text audio goes to our own backend, which
+    # relays it, so no Deepgram host is ever contacted from a page.
+    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev https://*.livekit.cloud wss://*.livekit.cloud https://api.cartesia.ai wss://api.cartesia.ai; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'; report-uri https://agensis-backend.fly.dev/backend/csp-report"

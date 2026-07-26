@@ -22,6 +22,7 @@ const {
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
@@ -1689,6 +1690,12 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // authenticated non-owner turning the 403 into a free query loop. Keyed per
 // caller, and low: the owner browses a list, they do not poll it.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Voice: minting a Cartesia token and opening a Deepgram stream both cost money
+// at a provider we do not control, so both are bounded per user. 20/min is far
+// above a real huddle (one token per socket connect, one stream per mic unmute)
+// and far below anything worth farming a token from.
+const voiceTokenRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+const voiceStreamRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -8040,6 +8047,9 @@ async function authorizeRealtimeBroadcast(userId, channel) {
  await enforceWorkspaceRole(userId, workspaceId, 'read');
 }
 
+// One relay for the process; per-socket state hangs off `ws.voiceStt`.
+const voiceRelay = createVoiceRelay();
+
 function attachRealtime(server) {
  const wss = new WebSocketServer({ server, path: '/backend/ws' });
 
@@ -8097,7 +8107,20 @@ function attachRealtime(server) {
   }, 10_000);
   if (authTimer.unref) authTimer.unref();
 
-  ws.on('message', async (raw) => {
+  ws.on('message', async (raw, isBinary) => {
+   // Binary frames are microphone audio for the Deepgram relay and nothing
+   // else. Checked FIRST: String()-ing a 1600-byte PCM buffer and handing it to
+   // JSON.parse is pure waste on a frame that arrives twenty times a second,
+   // and an authenticated socket is the only place audio may come from.
+   // ws.userId is set only by finalizeAuthenticated, and only for a HUMAN
+   // session token — a daemon's agent-token socket has none and can never open
+   // a stream, let alone feed one.
+   if (isBinary) {
+    if (!ws.userId) return;
+    voiceRelay.handleAudio(ws, raw);
+    return;
+   }
+
    let message;
    try {
     message = JSON.parse(String(raw || '{}'));
@@ -8146,6 +8169,17 @@ function attachRealtime(server) {
      await authorizeRealtimeBroadcast(ws.userId, message.channel);
      relayBroadcast(message.channel, message.event, message.payload);
      return;
+    }
+    // Huddle speech-to-text. Replies ride the `system` event channel the
+    // browser already listens on, so no client-side plumbing was needed to
+    // receive them.
+    if (message.action === 'voice_stt_start' || message.action === 'voice_stt_stop') {
+     if (!ws.userId) return;
+     const handled = await voiceRelay.handleControl(ws, message, {
+      send: (payload) => sendWs(ws, { type: 'system', event: 'voice_stt', payload }),
+      rateLimited: () => !voiceStreamRateLimiter.check(String(ws.userId)).allowed,
+     });
+     if (handled) return;
     }
     if (message.action === 'agent_register') {
      await registerAgentConnection(ws, message);
@@ -8203,6 +8237,8 @@ function attachRealtime(server) {
    clearTimeout(authTimer);
    settleAuth(false);
    websocketClients.delete(ws);
+   // A leaked upstream keeps billing Deepgram for a browser that is gone.
+   voiceRelay.teardown(ws);
    void markAgentConnectionOffline(ws);
   });
  });
@@ -9369,6 +9405,13 @@ function createApp() {
  mountHuddleRoutes(app, {
   getDb, requireAuth, enforceWorkspaceRole, jsonError, notifyDbSubscribers,
   rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
+ });
+
+ // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
+ // mirrored on Netlify; the Deepgram audio relay is not a route at all — it
+ // rides the realtime websocket, which only exists here. See server/voice.cjs.
+ mountVoiceRoutes(app, {
+  requireAuth, enforceWorkspaceRole, jsonError, rateLimitBlocked, voiceTokenRateLimiter,
  });
 
  // Per-workspace usage/storage stats in one round-trip. Read-role only. Bytes

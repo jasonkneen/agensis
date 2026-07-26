@@ -652,6 +652,30 @@ class RealtimeManager {
     this.ensureConnected();
   }
 
+  /**
+   * Raw binary onto the realtime socket — microphone audio for the huddle
+   * speech-to-text relay, and nothing else today.
+   *
+   * Deliberately NOT queued like `send`. A control frame is worth holding until
+   * the socket comes back; a 50ms slice of audio from ten seconds ago is not,
+   * and replaying a buffer of it into a live transcription would produce a
+   * garbled utterance the agent then answers. Dropped is correct.
+   */
+  sendBinary(data: ArrayBufferLike): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.socket.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Is the socket usable right now? Voice needs to know before it opens a mic. */
+  isOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
   private flushPending() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     while (this.pendingMessages.length > 0) {
@@ -821,6 +845,34 @@ export function onDeployPublished(callback: (payload: DeployPublishedPayload) =>
     callback((payload ?? {}) as DeployPublishedPayload);
   });
 }
+
+// Huddle voice rides the realtime socket rather than opening one of its own.
+//
+// The Deepgram key must never reach a browser and the account cannot mint a
+// short-lived one (see shared/voice-core.cjs), so the server holds the key and
+// relays the audio. This socket is already authenticated, already open for the
+// length of the call, already pinged for liveness and already torn down on
+// close — a second connection would have to re-earn all four.
+export const voiceRealtime = {
+  /** Ask the server to open a Deepgram stream for this socket. */
+  start(sampleRate: number) {
+    realtimeManager.send({ action: 'voice_stt_start', sampleRate });
+  },
+  stop() {
+    realtimeManager.send({ action: 'voice_stt_stop' });
+  },
+  /** One slice of microphone PCM. Returns false when it was dropped. */
+  sendAudio(data: ArrayBufferLike): boolean {
+    return realtimeManager.sendBinary(data);
+  },
+  isOpen(): boolean {
+    return realtimeManager.isOpen();
+  },
+  /** Server -> client transcription events. Returns an unsubscribe function. */
+  onEvent(callback: (payload: unknown) => void): () => void {
+    return realtimeManager.onSystemEvent('voice_stt', callback);
+  },
+};
 
 export const backendClient: BackendClient = {
   from(table: string) {
