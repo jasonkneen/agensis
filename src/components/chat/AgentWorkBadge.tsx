@@ -46,12 +46,16 @@ function SidebarElapsed({ anchorAt, jobs }: { anchorAt: number; jobs: number }) 
   const elapsed = useElapsedLabel(anchorAt);
   if (!elapsed) return null;
   return (
+    // A chip, not a whisper. At 10px with a 6px dot this read as decoration and
+    // was missed entirely; "is this agent actually working" is the single most
+    // asked question of the sidebar, so it gets a filled pill and legible
+    // digits. tabular-nums keeps the row from twitching as the seconds tick.
     <span
-      className="flex shrink-0 items-center gap-1 pl-1 text-primary"
+      className="flex shrink-0 items-center gap-1.5 rounded-full bg-primary/12 px-2 py-0.5 text-primary"
       title={workingTitle(jobs, elapsed)}
     >
-      <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
-      <span className="text-[10px] font-medium tabular-nums leading-none">{elapsed}</span>
+      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-primary" />
+      <span className="text-[12px] font-semibold tabular-nums leading-none">{elapsed}</span>
     </span>
   );
 }
