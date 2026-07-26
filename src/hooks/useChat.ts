@@ -337,6 +337,21 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     return data as ChatSession | null;
   }, []);
 
+  /**
+   * Patch a session already saved elsewhere into the local list.
+   *
+   * updateSession WRITES then patches; this only patches. The channel editor
+   * saves through its own validating route (which normalizes icon, intent and
+   * participants), so re-writing here would be a second write with a weaker
+   * shape — but the sidebar reads THIS list and has to be told, or a rename
+   * shows in the channel header and nowhere else until a reload.
+   */
+  const patchSessionLocal = useCallback((id: string, patch: Partial<ChatSession>) => {
+    if (!id) return;
+    setSessions(prev => prev.map(session => (session.id === id ? { ...session, ...patch } : session)));
+    setActiveSession(prev => (prev?.id === id ? { ...prev, ...patch } : prev));
+  }, []);
+
   const archiveSession = useCallback((id: string, archived = true) => {
     return updateSession(id, { archived_at: archived ? new Date().toISOString() : null });
   }, [updateSession]);
@@ -944,6 +959,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     createSession,
     splitSession,
     updateSession,
+    patchSessionLocal,
     archiveSession,
     sendMessage,
     deleteSession,

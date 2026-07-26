@@ -223,6 +223,13 @@ interface ChatWindowContentProps {
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
   // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
   onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  /**
+   * Tell the app a channel's own row changed (title, icon, description,
+   * intent, participants). The window keeps its own copy of the channel for
+   * its header, but the SIDEBAR reads the app's session list — so without this
+   * a rename showed in the header and nowhere else until a reload.
+   */
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   readOnly?: boolean;
   channelTitle?: string;
   workspaceId?: string | null;
@@ -299,6 +306,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   onOpenThread,
   onCloseThread,
   onSendThreadReply,
+  onSessionMetaSaved,
   readOnly = false,
   channelTitle = 'general',
   workspaceId = null,
@@ -1169,6 +1177,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }
     const next = normalizeChannelSessionMeta({ ...session, ...normalizedUpdates, ...data });
     setChannelMeta(next);
+    // The sidebar reads the app's session list, not this window's channelMeta,
+    // so it has to be told. Sent as the SAVED fields rather than the whole
+    // row: the app's ChatSession and this window's ChannelSessionMeta are
+    // different shapes, and pushing a foreign row into the list is how you get
+    // a sidebar entry with half its fields missing.
+    if (session.id) onSessionMetaSaved?.(session.id, normalizedUpdates as Record<string, unknown>);
     return next;
   };
 

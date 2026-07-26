@@ -700,7 +700,7 @@ function AppContent() {
     hasMoreMessages, loadingEarlier, loadEarlierMessages,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
+    createSession, splitSession, updateSession, patchSessionLocal, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
   } = useChat(
     activeWorkspaceId,
     user?.email?.split('@')[0] || undefined,
@@ -1391,6 +1391,16 @@ function AppContent() {
     })();
   }, [user]);
 
+  // A channel edited its own row (title, icon, description, intent,
+  // participants). The window that saved it updates its own header, but the
+  // SIDEBAR reads this session list — so a rename showed in the header and
+  // nowhere else until a reload. updateSession already patches both the list
+  // and the active session; this just routes the save into it. No second write:
+  // the row is already saved, so only the local list is patched.
+  const handleSessionMetaSaved = useCallback((sessionId: string, patch: Record<string, unknown>) => {
+    patchSessionLocal(sessionId, patch as Partial<import('./types').ChatSession>);
+  }, [patchSessionLocal]);
+
   const handleOpenAgentProfile = useCallback((agentIdOrHandle?: string | null) => {
     if (agentIdOrHandle) setFocusedAgentKey(agentIdOrHandle);
     handleOpenAgents({ preserveFocus: true });
@@ -2071,6 +2081,7 @@ function AppContent() {
                   contextCountsTitle={contextCountsTitle}
                   onSelectAgent={setSelectedAgent}
                   onAgentProfile={handleOpenAgentProfile}
+                  onSessionMetaSaved={handleSessionMetaSaved}
                   onCreateAgent={handleCreateAgent}
                   onUpdateAgent={updateAgent}
                   onDeleteAgent={deleteAgent}
@@ -2406,6 +2417,7 @@ function CanvasLayerScene({
   onDisconnectAgent,
   focusedAgentKey,
   onAgentProfile,
+  onSessionMetaSaved,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
   onConfigureAgentWebhook,
@@ -2500,6 +2512,7 @@ function CanvasLayerScene({
   onDisconnectAgent: (id: string) => Promise<unknown>;
   focusedAgentKey: string | null;
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
   onConfigureAgentWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
@@ -2679,6 +2692,7 @@ function CanvasLayerScene({
                     selectedAgent={selectedAgent}
                     onSelectAgent={onSelectAgent}
                     onAgentProfile={onAgentProfile}
+                    onSessionMetaSaved={onSessionMetaSaved}
                     canvasGroups={canvasGroups}
                     canvasObjects={canvasObjects}
                     workspaceId={workspaceId}
@@ -3196,6 +3210,7 @@ function InactiveChatWindow({
   selectedAgent,
   onSelectAgent,
   onAgentProfile,
+  onSessionMetaSaved,
   canvasGroups,
   canvasObjects,
   workspaceId,
@@ -3218,6 +3233,8 @@ function InactiveChatWindow({
   selectedAgent: WorkspaceAgent | null;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
+  /** Propagate a channel row edit to the app session list (sidebar). */
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   canvasGroups: CanvasGroup[];
   canvasObjects: CanvasObject[];
   workspaceId: string;
@@ -3289,6 +3306,7 @@ function InactiveChatWindow({
       systemCapabilities={systemCapabilities}
       contextControls={contextControls}
       onSendMessage={handleSendMessage}
+      onSessionMetaSaved={onSessionMetaSaved}
       onOpenThread={handleOpenThread}
       channelTitle={session.title || windowTitle}
     />
