@@ -3,12 +3,14 @@ import type { Task } from '../../types';
 // ---------------------------------------------------------------------------
 // Task scheduling model shared by the task editor and the Gantt timeline.
 //
-// Three things live here because they must agree, and because they are the only
-// parts of the timeline worth unit-testing without a DOM:
+// Four things live here because they must agree, and because they are the only
+// parts of the task window worth unit-testing without a DOM:
 //   1. date <-> <input type="date"> conversion (local-midnight round-trip),
 //   2. the dependency graph (candidate filtering + cycle rejection),
 //   3. the span each row draws (a real range, a parent rollup, or the
-//      single-day marker an undated task falls back to).
+//      single-day marker an undated task falls back to),
+//   4. what a focus request ("scroll me to task X") is allowed to do to the
+//      filters the user set by hand.
 // ---------------------------------------------------------------------------
 
 export const DAY_MS = 86400000;
@@ -255,4 +257,124 @@ export function buildGanttRows(topLevel: Task[], allTasks: Task[], maxDepth = 8)
  */
 export function dueDateFromExclusiveEnd(endMs: number): string {
   return new Date(endMs - DAY_MS).toISOString();
+}
+
+// --- Timeline labels --------------------------------------------------------
+
+/**
+ * Rough advance width of one character of a timeline label, in px.
+ *
+ * Deliberately an OVER-estimate of Inter at the label's size: guessing too wide
+ * moves a label that would have just fitted to the outside of its bar, which
+ * costs nothing, while guessing too narrow puts it inside and truncates it —
+ * and a truncated title is the thing this view was reported for.
+ */
+export const GANTT_LABEL_CHAR_WIDTH = 7.4;
+/** Horizontal padding inside a bar, plus the width of the resize handle. */
+const GANTT_INSIDE_LABEL_CHROME = 26;
+/** The `↳` glyph shown on a nested row. */
+const GANTT_DEPTH_GLYPH_WIDTH = 18;
+/**
+ * Floor on the bar width that may hold a label at all. Without it an empty or
+ * one-character title would "fit" a two-day bar on arithmetic alone and render
+ * as a sliver of text wedged against the resize handle.
+ */
+const GANTT_INSIDE_LABEL_MIN = 68;
+
+/**
+ * Can a bar this wide hold the whole title, or does the title have to sit
+ * beside it?
+ *
+ * A bar's width is its DATES — it cannot be grown to fit text. So the only two
+ * honest options are "the bar contains the title" and "the title sits next to
+ * the bar", and this is the single rule that picks between them for every row.
+ * Estimating from character count rather than measuring keeps the decision
+ * pure, testable and identical on every render.
+ */
+export function labelFitsInsideBar(title: string, barWidth: number, depth = 0): boolean {
+  const text = String(title || '').trim();
+  if (!text || barWidth < GANTT_INSIDE_LABEL_MIN) return false;
+  const needed = text.length * GANTT_LABEL_CHAR_WIDTH
+    + GANTT_INSIDE_LABEL_CHROME
+    + (depth > 0 ? GANTT_DEPTH_GLYPH_WIDTH : 0);
+  return barWidth >= needed;
+}
+
+// --- Filters ----------------------------------------------------------------
+
+/**
+ * "Done" in the toolbar means CLOSED — done OR cancelled.
+ *
+ * The open-count badge has always treated the two together, so hiding one and
+ * not the other leaves a lone "Cancelled" section on screen after the click and
+ * reads as a toggle that half-worked.
+ */
+export function isClosedTask(task: Pick<Task, 'status'>): boolean {
+  return task.status === 'done' || task.status === 'cancelled';
+}
+
+/** Drop closed tasks when the toolbar toggle is on. Identity when it is off. */
+export function applyHideDone<T extends Pick<Task, 'status'>>(tasks: T[], hideDone: boolean): T[] {
+  return hideDone ? tasks.filter(task => !isClosedTask(task)) : tasks;
+}
+
+// --- Focus requests ---------------------------------------------------------
+
+export type TaskAssignmentFilter = 'all' | 'mine' | 'others';
+
+export interface TaskFocusFilters {
+  filter: TaskAssignmentFilter;
+  hideDone: boolean;
+}
+
+/** Nothing is hidden at these settings, so widening past them is impossible. */
+export const WIDEST_TASK_FILTERS: TaskFocusFilters = { filter: 'all', hideDone: false };
+
+export type TaskFocusAction =
+  /** No request pending — forget whatever was last handled. */
+  | { kind: 'reset' }
+  /** Already handled this request: leave the filters, and the DOM, alone. */
+  | { kind: 'idle' }
+  /** The row is hidden by a filter — relax them, then re-decide. */
+  | { kind: 'widen'; next: TaskFocusFilters }
+  /** The row is on screen: scroll to it (best effort) and consume. */
+  | { kind: 'reveal' }
+  /** The row cannot be shown at all. Consume anyway — see below. */
+  | { kind: 'consume' };
+
+/**
+ * Decide what a pending "focus task X" request may do.
+ *
+ * Two rules, both learned from a bug where "Hide done" looked dead:
+ *
+ *  1. **Widen at most once per request.** The caller re-runs this on every
+ *     filter change, so an unbounded rule would fight the user: click
+ *     "Hide done" while a done task is focused, the row leaves the list, and
+ *     the effect turns the toggle straight back off. `handledFocusId` marks a
+ *     request as spent, and a spent request never touches the filters again —
+ *     from then on the user's own choices win.
+ *
+ *  2. **Always reach a terminal action.** Both `reveal` and `consume` tell the
+ *     caller to clear the request. Bailing out without consuming is what let a
+ *     stale focus id hold the filters hostage indefinitely — and in the Board /
+ *     Timeline views there is no `task-row-<id>` element to scroll to at all,
+ *     so that path was guaranteed there. A missed smooth-scroll is a far
+ *     smaller failure than a toolbar button that does nothing.
+ */
+export function resolveTaskFocus(input: {
+  /** The row that should come into view, if any. */
+  focusRowId?: string | null;
+  /** The last request this caller took a terminal action on. */
+  handledFocusId?: string | null;
+  /** Is `focusRowId` in the currently-rendered, filtered list? */
+  isVisible: boolean;
+  filters: TaskFocusFilters;
+}): TaskFocusAction {
+  const { focusRowId, handledFocusId, isVisible, filters } = input;
+  if (!focusRowId) return { kind: 'reset' };
+  if (focusRowId === handledFocusId) return { kind: 'idle' };
+  if (isVisible) return { kind: 'reveal' };
+  const alreadyWidest = filters.filter === WIDEST_TASK_FILTERS.filter
+    && filters.hideDone === WIDEST_TASK_FILTERS.hideDone;
+  return alreadyWidest ? { kind: 'consume' } : { kind: 'widen', next: WIDEST_TASK_FILTERS };
 }

@@ -31,6 +31,9 @@ async function configFor(relativePath) {
 // lands; do not remove an entry to make the test pass.
 const MUST_BE_LINTED = [
   'shared/backend-core.cjs',
+  // Silently rewrites user-authored task titles on every create — a correctness
+  // problem, not a style one.
+  'shared/taskTitle.cjs',
   'server/index.cjs',
   'server/mcp.cjs',
   'server/skills.cjs',

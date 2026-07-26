@@ -31,15 +31,19 @@ import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
 import {
   DAY_MS,
+  applyHideDone,
   buildGanttRows,
   buildTaskSpans,
   dependencyCandidates as resolveDependencyCandidates,
   dueDateFromExclusiveEnd,
   fromDateInputValue,
+  labelFitsInsideBar,
+  resolveTaskFocus,
   startOfDay,
   taskDependsOn,
   toDateInputValue,
   type GanttRow,
+  type TaskAssignmentFilter,
   type TaskSpan,
 } from './taskSchedule';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -135,7 +139,7 @@ const TASK_COMMENT_AVATAR_COLORS = [
   'bg-pink-500',
 ];
 
-type AssignmentFilter = 'all' | 'mine' | 'others';
+type AssignmentFilter = TaskAssignmentFilter;
 
 // A task dispatched to an agent records the chat it is being worked in:
 // source_type 'chat' + the session id. Every other source_type stores a
@@ -221,10 +225,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       list = allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
     }
     // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
-    if (hideDone) {
-      list = list.filter(task => task.status !== 'done');
-    }
-    return list;
+    // "Done" here means closed — done AND cancelled; see isClosedTask.
+    return applyHideDone(list, hideDone);
   }, [allTopLevel, filter, hideDone, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
@@ -298,19 +300,41 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     return target?.parent_id || focusTaskId;
   }, [focusTaskId, tasks]);
 
+  // The last focus request that reached a terminal action. Kept in a ref so it
+  // does not re-trigger the effect: its only job is to stop a spent request
+  // from widening the filters a second time, every time the user narrows them.
+  const handledFocusRef = useRef<string | null>(null);
+
+  // The current assignment filter or "hide done" toggle may hide the focused
+  // task's row entirely — e.g. jumping in from a comment/@mention link on a
+  // task that's already done. resolveTaskFocus decides whether that is worth
+  // overriding the user's filters for; the rules (and the bug that produced
+  // them) are documented there.
   useEffect(() => {
-    if (!focusRowId) return;
-    // The current assignment filter or "hide done" toggle may hide the focused
-    // task's row entirely — e.g. jumping in from a comment/@mention link on a
-    // task that's already done.
-    if (!filteredTopLevel.some(task => task.id === focusRowId)) {
-      if (filter !== 'all') setFilter('all');
-      if (hideDone) setHideDone(false);
-      return; // re-run once the wider list renders
+    const action = resolveTaskFocus({
+      focusRowId,
+      handledFocusId: handledFocusRef.current,
+      isVisible: Boolean(focusRowId) && filteredTopLevel.some(task => task.id === focusRowId),
+      filters: { filter, hideDone },
+    });
+    if (action.kind === 'reset') {
+      handledFocusRef.current = null;
+      return;
     }
-    const node = document.getElementById(`task-row-${focusRowId}`);
-    if (!node) return;
-    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (action.kind === 'idle') return;
+    if (action.kind === 'widen') {
+      setFilter(action.next.filter);
+      setHideDone(action.next.hideDone);
+      return; // re-runs once the wider list renders
+    }
+    // Terminal: mark the request spent BEFORE consuming, so a re-render in
+    // between cannot re-enter the widening branch.
+    handledFocusRef.current = focusRowId ?? null;
+    if (action.kind === 'reveal') {
+      // Best effort — the Board and Timeline views have no task-row element.
+      document.getElementById(`task-row-${focusRowId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
     onFocusTaskConsumed?.();
   }, [focusRowId, filter, hideDone, filteredTopLevel, onFocusTaskConsumed]);
 
@@ -335,7 +359,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           variant="ghost"
           size="xs"
           onClick={() => setHideDone(v => !v)}
-          title={hideDone ? 'Show done tasks' : 'Hide done tasks'}
+          title={hideDone ? 'Show done and cancelled tasks' : 'Hide done and cancelled tasks'}
           className={cn(hideDone && 'text-primary')}
         >
           {hideDone ? 'Show done' : 'Hide done'}
@@ -436,6 +460,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                           workspaceId={workspaceId}
                           currentUserId={currentUserId}
                           currentUserEmail={currentUserEmail}
+                          hideDone={hideDone}
                           autoExpand={task.id === focusRowId}
                           onToggle={() => onToggleStatus(task)}
                           onDelete={() => onDeleteTask(task.id)}
@@ -471,6 +496,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               <TaskGantt
                 tasks={filteredTopLevel}
                 allTasks={tasks}
+                hideDone={hideDone}
                 memberLabel={memberLabel}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
@@ -490,6 +516,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               workspaceId={workspaceId}
               currentUserId={currentUserId}
               currentUserEmail={currentUserEmail}
+              hideDone={hideDone}
               onClose={() => setSelectedTaskId(null)}
               onChangeTitle={title => onUpdateTask(selectedTask.id, { title })}
               onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
@@ -522,6 +549,7 @@ function TaskRow({
   workspaceId,
   currentUserId,
   currentUserEmail,
+  hideDone,
   autoExpand,
   onToggle,
   onDelete,
@@ -534,6 +562,7 @@ function TaskRow({
   onDeleteSubtask,
 }: {
   task: Task;
+  /** ALL of this task's subtasks — the x/y badge counts the real total. */
   subtasks: Task[];
   allTasks: Task[];
   assigneeLabel: string | null;
@@ -545,6 +574,7 @@ function TaskRow({
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
+  hideDone?: boolean;
   autoExpand?: boolean;
   onToggle: () => void;
   onDelete: () => void;
@@ -669,6 +699,7 @@ function TaskRow({
         <TaskDetail
           task={task}
           subtasks={subtasks}
+          hideDone={hideDone}
           allTasks={allTasks}
           onChangeDependsOn={onChangeDependsOn}
           onChangeDates={onChangeDates}
@@ -691,6 +722,7 @@ function TaskRow({
 function TaskDetail({
   task,
   subtasks,
+  hideDone,
   allTasks,
   members,
   agents,
@@ -707,6 +739,8 @@ function TaskDetail({
 }: {
   task: Task;
   subtasks: Task[];
+  /** Toolbar toggle: hide closed subtasks too, so it means the same thing here. */
+  hideDone?: boolean;
   allTasks: Task[];
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
@@ -839,6 +873,11 @@ function TaskDetail({
     onChangeDependsOn(Array.from(set));
   };
 
+  // The x/y badge on the row above counts EVERY subtask, so the hidden ones are
+  // still accounted for — this only stops "Hide done" leaving them on screen.
+  const visibleSubtasks = useMemo(() => applyHideDone(subtasks, Boolean(hideDone)), [subtasks, hideDone]);
+  const hiddenSubtaskCount = subtasks.length - visibleSubtasks.length;
+
   const startValue = toDateInputValue(task.start_date);
   const dueValue = toDateInputValue(task.due_date);
   // Both dates set, and due lands before start. Rendering still copes (the span
@@ -926,9 +965,14 @@ function TaskDetail({
           </MarkerIcon>
           <MarkerContent>Subtasks</MarkerContent>
         </Marker>
-        {subtasks.length > 0 && (
+        {hiddenSubtaskCount > 0 && (
+          <p className="px-1 text-xs text-muted-foreground">
+            {hiddenSubtaskCount} done or cancelled {hiddenSubtaskCount === 1 ? 'subtask' : 'subtasks'} hidden.
+          </p>
+        )}
+        {visibleSubtasks.length > 0 && (
           <ItemGroup className="gap-1">
-            {subtasks.map(subtask => {
+            {visibleSubtasks.map(subtask => {
               const subDone = subtask.status === 'done';
               return (
                 <Item key={subtask.id} size="xs" variant="muted" className="task-subtask-row">
@@ -1163,6 +1207,7 @@ function TaskEditPanel({
   workspaceId,
   currentUserId,
   currentUserEmail,
+  hideDone,
   onClose,
   onChangeTitle,
   onChangeDescription,
@@ -1185,6 +1230,7 @@ function TaskEditPanel({
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
+  hideDone?: boolean;
   onClose: () => void;
   onChangeTitle: (title: string) => void;
   onChangeDescription: (description: string) => void;
@@ -1317,6 +1363,7 @@ function TaskEditPanel({
           <TaskDetail
             task={task}
             subtasks={subtasks}
+            hideDone={hideDone}
             allTasks={allTasks}
             members={members}
             agents={agents}
@@ -1619,13 +1666,25 @@ function TaskKanban({
 // ---------------------------------------------------------------------------
 
 const GANTT_DAY_WIDTH = 32;
-const GANTT_ROW_HEIGHT = 36;
-const GANTT_LABEL_WIDTH = 208;
-// Room to the right of the grid for labels that don't fit inside their bar.
-const GANTT_LABEL_GUTTER = 168;
-// Narrower than this and the title goes outside the bar rather than being
-// truncated into a single character.
-const GANTT_INSIDE_LABEL_MIN = 68;
+// One line of text (text-sm, matching the List view) plus room to breathe. The
+// old 36px held two jammed lines because the name lived in a side column; the
+// name now rides the bar, so a row is a single line again — just a taller one.
+const GANTT_ROW_HEIGHT = 40;
+const GANTT_HEADER_HEIGHT = 36;
+// Bars sit inside the row with breathing room above and below.
+const GANTT_BAR_HEIGHT = 24;
+// Depth indent applied to a row's label (never to its bar — a bar's position
+// means a date and must not be nudged to show hierarchy).
+const GANTT_DEPTH_INDENT = 14;
+// Closest two axis labels may sit before one is dropped.
+const GANTT_TICK_MIN_GAP = 56;
+// A label that rides beside its bar truncates at this width, with the full
+// title on hover. ~66 characters — longer than any title in practice, and 2.5x
+// what the old fixed name column could show before it cut a title off.
+const GANTT_ALONGSIDE_LABEL_MAX = 520;
+// Room to the right of the grid so the last row's alongside label is fully
+// reachable by scrolling instead of being clipped by the content width.
+const GANTT_LABEL_GUTTER = GANTT_ALONGSIDE_LABEL_MAX + 48;
 
 interface GanttDrag {
   taskId: string;
@@ -1638,6 +1697,7 @@ interface GanttDrag {
 function TaskGantt({
   tasks,
   allTasks,
+  hideDone,
   memberLabel,
   selectedTaskId,
   onSelectTask,
@@ -1647,6 +1707,8 @@ function TaskGantt({
   tasks: Task[];
   /** EVERY task in the workspace — needed to resolve children and rollups. */
   allTasks: Task[];
+  /** Toolbar toggle: closed subtasks drop out of the rows, not the rollups. */
+  hideDone?: boolean;
   memberLabel: (assigneeId: string | null) => string | null;
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
@@ -1656,7 +1718,10 @@ function TaskGantt({
   // Preview offset (in snapped days) applied to the dragging bar before commit.
   const [previewDays, setPreviewDays] = useState(0);
 
-  const rows = useMemo<GanttRow[]>(() => buildGanttRows(tasks, allTasks), [tasks, allTasks]);
+  // Only the ROWS honour "hide done" — spans below still resolve over every
+  // task, so a parent's rollup keeps spanning the children it is hiding.
+  const rowSource = useMemo(() => applyHideDone(allTasks, Boolean(hideDone)), [allTasks, hideDone]);
+  const rows = useMemo<GanttRow[]>(() => buildGanttRows(tasks, rowSource), [tasks, rowSource]);
   // Spans are resolved over ALL tasks so a parent still rolls up over a child
   // the assignment filter hides.
   const spans = useMemo(() => buildTaskSpans(allTasks), [allTasks]);
@@ -1760,247 +1825,270 @@ function TaskGantt({
   }
 
   // Day header ticks — label the 1st of each month plus every 7th day so the
-  // axis stays readable at 32px/day without crowding.
+  // axis stays readable at 32px/day. The two rules collide near a month
+  // boundary ("1 Aug" landing right beside "2 Aug"), so a tick that would sit
+  // on top of the previous label is dropped.
   const ticks: Array<{ x: number; label: string }> = [];
   for (let i = 0; i < dayCount; i++) {
     const ms = windowStart + i * DAY_MS;
     const d = new Date(ms);
-    if (d.getDate() === 1 || i === 0 || i % 7 === 0) {
-      ticks.push({ x: i * GANTT_DAY_WIDTH, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
-    }
+    if (d.getDate() !== 1 && i !== 0 && i % 7 !== 0) continue;
+    const x = i * GANTT_DAY_WIDTH;
+    const previous = ticks[ticks.length - 1];
+    if (previous && x - previous.x < GANTT_TICK_MIN_GAP) continue;
+    ticks.push({ x, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
   }
   const todayX = dayToX(Date.now());
   const todayVisible = todayX >= 0 && todayX <= gridWidth;
+  // Every row is an undated marker, so the chart is a column of identical
+  // diamonds conveying nothing. Say so once, above the rows, rather than
+  // leaving the user to work out that the timeline has no timeline in it.
+  const nothingScheduled = rows.every(row => spanOf(row.task).kind === 'point');
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
-      <div className="flex" style={{ width: GANTT_LABEL_WIDTH + contentWidth }}>
-        {/* Sticky task-label column */}
-        <div className="sticky left-0 z-10 shrink-0 border-r border-border bg-background" style={{ width: GANTT_LABEL_WIDTH }}>
-          <div className="h-8 border-b border-border" />
-          {rows.map(row => {
-            const assignee = memberLabel(row.task.assignee_id);
-            const span = spanOf(row.task);
-            return (
-              <div
-                key={row.task.id}
-                className={cn(
-                  'flex cursor-pointer flex-col justify-center overflow-hidden border-b border-border/60 pr-2',
-                  selectedTaskId === row.task.id && 'bg-primary/10',
-                )}
-                style={{ height: GANTT_ROW_HEIGHT, paddingLeft: 8 + row.depth * 12 }}
-                onClick={() => onSelectTask(row.task.id)}
-                title={row.task.title}
-              >
-                <span className="flex min-w-0 items-center gap-1">
-                  {row.depth > 0 && <CornerDownRight className="size-3 shrink-0 text-muted-foreground" aria-hidden />}
-                  <span className={cn(
-                    'truncate text-xs',
-                    row.hasChildren && 'font-medium',
-                    row.task.status === 'done' && 'text-muted-foreground line-through',
-                  )}>
-                    {row.task.title}
-                  </span>
-                </span>
-                <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
-                  {span.kind === 'point' && <span className="shrink-0">unscheduled</span>}
-                  {assignee && <span className="truncate">{assignee}</span>}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {nothingScheduled && (
+        <p className="shrink-0 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+          Nothing is scheduled yet. Give a task a start or due date — or drag its marker
+          along the timeline — and it draws as a bar.
+        </p>
+      )}
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex" style={{ width: contentWidth }}>
+          {/* Timeline grid. There is no separate name column: every task's name
+              rides its own bar or marker (see the label block below). */}
+          <div className="relative" style={{ width: contentWidth }}>
+            {/* Day header */}
+            <div className="relative border-b border-border" style={{ width: contentWidth, height: GANTT_HEADER_HEIGHT }}>
+              {ticks.map(tick => (
+                <div
+                  key={tick.x}
+                  className="absolute top-0 flex h-full items-center border-l border-border/40 pl-1.5 text-xs text-muted-foreground"
+                  style={{ left: tick.x }}
+                >
+                  {tick.label}
+                </div>
+              ))}
+            </div>
 
-        {/* Timeline grid */}
-        <div className="relative" style={{ width: contentWidth }}>
-          {/* Day header */}
-          <div className="relative h-8 border-b border-border" style={{ width: contentWidth }}>
-            {ticks.map(tick => (
-              <div
-                key={tick.x}
-                className="absolute top-0 flex h-full items-center border-l border-border/40 pl-1 text-[10px] text-muted-foreground"
-                style={{ left: tick.x }}
-              >
-                {tick.label}
-              </div>
-            ))}
-          </div>
-
-          <div className="relative" style={{ width: contentWidth, height: gridHeight }}>
-            {/* Row backgrounds */}
-            {rows.map((row, i) => (
-              <div
-                key={row.task.id}
-                className={cn(
-                  'absolute left-0 border-b border-border/40',
-                  selectedTaskId === row.task.id && 'bg-primary/5',
-                )}
-                style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
-              />
-            ))}
-
-            {/* Today marker */}
-            {todayVisible && (
-              <div className="absolute top-0 z-0 w-px bg-primary/40" style={{ left: todayX, height: gridHeight }} aria-hidden />
-            )}
-
-            {/* Dependency arrows */}
-            <svg className="pointer-events-none absolute inset-0 overflow-visible" width={gridWidth} height={gridHeight} aria-hidden>
-              <defs>
-                <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
-                </marker>
-              </defs>
-              {arrows.map(arrow => (
-                <path
-                  key={arrow.key}
-                  d={`M${arrow.x1},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y2} L${arrow.x2},${arrow.y2}`}
-                  fill="none"
-                  className={cn('stroke-[1.5]', arrow.violation ? 'stroke-destructive/70' : 'stroke-muted-foreground/40')}
-                  markerEnd="url(#gantt-arrow)"
+            <div className="relative" style={{ width: contentWidth, height: gridHeight }}>
+              {/* Row backgrounds. Also the row's click target: with the name
+                  column gone, clicking anywhere on the band selects the task,
+                  so selection no longer depends on hitting a 12px diamond. */}
+              {rows.map((row, i) => (
+                <div
+                  key={row.task.id}
+                  className={cn(
+                    'absolute left-0 cursor-pointer border-b border-border/40',
+                    selectedTaskId === row.task.id && 'bg-muted',
+                  )}
+                  style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                  onClick={() => onSelectTask(row.task.id)}
                 />
               ))}
-            </svg>
 
-            {/* Bars */}
-            {rows.map((row, i) => {
-              const task = row.task;
-              const span = spanOf(task);
-              const isDragging = drag?.taskId === task.id;
-              const shiftDays = isDragging ? previewDays : 0;
-              const moveShift = isDragging && drag?.mode === 'move' ? shiftDays : 0;
-              const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
-              const left = dayToX(span.startMs + moveShift * DAY_MS);
-              const days = Math.max(1, (span.endMs - span.startMs) / DAY_MS + resizeShift);
-              const width = days * GANTT_DAY_WIDTH;
-              const deps = taskDependsOn(task);
-              const violation = deps.some(depId => {
-                const depRow = rowIndex.get(depId);
-                if (depRow === undefined) return false;
-                return span.startMs < spanOf(rows[depRow].task).endMs;
-              });
-              // A narrow bar cannot hold its title: truncating inside it is what
-              // produced the "T…" / "A…" labels, so the title moves outside instead.
-              const labelInside = span.kind === 'span' && width >= GANTT_INSIDE_LABEL_MIN;
-              const statusTint = task.status === 'done'
-                ? 'border-emerald-500/40 bg-emerald-500/25'
-                : task.status === 'cancelled'
-                  ? 'border-border bg-muted'
-                  : 'border-primary/40 bg-primary/25';
-              const tooltip = [
-                task.title,
-                span.kind === 'point'
-                  ? 'no dates set — drag to schedule'
-                  : span.kind === 'rollup'
-                    ? 'rolled up from subtasks'
-                    : `${new Date(span.startMs).toLocaleDateString()} → ${new Date(span.endMs - DAY_MS).toLocaleDateString()}`,
-                violation ? 'starts before a dependency ends' : null,
-              ].filter(Boolean).join(' — ');
+              {/* Today marker */}
+              {todayVisible && (
+                <div className="absolute top-0 z-0 w-px bg-primary/40" style={{ left: todayX, height: gridHeight }} aria-hidden />
+              )}
 
-              const startDrag = (e: React.PointerEvent, mode: 'move' | 'resize') => {
-                if (e.button !== 0) return;
-                e.preventDefault();
-                if (mode === 'resize') e.stopPropagation();
-                setDrag({ taskId: task.id, mode, originX: e.clientX, startMs: span.startMs, endMs: span.endMs });
-                setPreviewDays(0);
-              };
+              {/* Dependency arrows */}
+              <svg className="pointer-events-none absolute inset-0 overflow-visible" width={gridWidth} height={gridHeight} aria-hidden>
+                <defs>
+                  <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
+                  </marker>
+                </defs>
+                {arrows.map(arrow => (
+                  <path
+                    key={arrow.key}
+                    d={`M${arrow.x1},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y2} L${arrow.x2},${arrow.y2}`}
+                    fill="none"
+                    className={cn('stroke-[1.5]', arrow.violation ? 'stroke-destructive/70' : 'stroke-muted-foreground/40')}
+                    markerEnd="url(#gantt-arrow)"
+                  />
+                ))}
+              </svg>
 
-              return (
-                <div
-                  key={task.id}
-                  className="pointer-events-none absolute flex items-center gap-1.5"
-                  style={{ left, top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT }}
-                  // Which of the three shapes this row drew, and where its title
-                  // ended up. Asserted by tests/unit/tasksWindowRender.test.ts —
-                  // "every bar is a narrow block with a one-character label" is
-                  // otherwise only visible to a human looking at the screen.
-                  data-gantt-kind={span.kind}
-                  data-gantt-label={labelInside ? 'inside' : 'outside'}
-                  data-gantt-days={Math.round(days)}
-                >
-                  {span.kind === 'point' ? (
-                    // Single-day marker: a diamond, NOT a bar. An undated task
-                    // must not look like a real one-day span.
-                    <span
-                      className="pointer-events-auto grid cursor-pointer place-items-center"
-                      style={{ width: GANTT_DAY_WIDTH, height: GANTT_ROW_HEIGHT }}
-                      title={tooltip}
-                      onPointerDown={e => startDrag(e, 'move')}
-                    >
+              {/* Bars */}
+              {rows.map((row, i) => {
+                const task = row.task;
+                const span = spanOf(task);
+                const isDragging = drag?.taskId === task.id;
+                const shiftDays = isDragging ? previewDays : 0;
+                const moveShift = isDragging && drag?.mode === 'move' ? shiftDays : 0;
+                const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
+                const left = dayToX(span.startMs + moveShift * DAY_MS);
+                const days = Math.max(1, (span.endMs - span.startMs) / DAY_MS + resizeShift);
+                const width = days * GANTT_DAY_WIDTH;
+                const assigneeLabel = memberLabel(task.assignee_id);
+                const deps = taskDependsOn(task);
+                const violation = deps.some(depId => {
+                  const depRow = rowIndex.get(depId);
+                  if (depRow === undefined) return false;
+                  return span.startMs < spanOf(rows[depRow].task).endMs;
+                });
+                // Where this row's name goes. There is exactly one copy of it,
+                // and it belongs to the shape: inside the bar when the bar is
+                // wide enough to hold the WHOLE title, immediately alongside
+                // when it is not (which includes every undated marker — a
+                // diamond can hold no text at all). One rule for every row, no
+                // per-row guesswork, and no title is ever truncated by a bar
+                // whose width is really just its date range.
+                const labelInside = span.kind === 'span' && labelFitsInsideBar(task.title, width, row.depth);
+                const labelPlacement = labelInside ? 'inside' : 'outside';
+                // Width of the shape the alongside label has to clear.
+                const shapeWidth = span.kind === 'point' ? GANTT_DAY_WIDTH : width;
+                const statusTint = task.status === 'done'
+                  ? 'border-emerald-500/40 bg-emerald-500/25'
+                  : task.status === 'cancelled'
+                    ? 'border-border bg-muted'
+                    : 'border-primary/40 bg-primary/25';
+                const tooltip = [
+                  task.title,
+                  span.kind === 'point'
+                    ? 'no dates set — drag to schedule'
+                    : span.kind === 'rollup'
+                      ? 'rolled up from subtasks'
+                      : `${new Date(span.startMs).toLocaleDateString()} → ${new Date(span.endMs - DAY_MS).toLocaleDateString()}`,
+                  violation ? 'starts before a dependency ends' : null,
+                ].filter(Boolean).join(' — ');
+
+                const startDrag = (e: React.PointerEvent, mode: 'move' | 'resize') => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  if (mode === 'resize') e.stopPropagation();
+                  setDrag({ taskId: task.id, mode, originX: e.clientX, startMs: span.startMs, endMs: span.endMs });
+                  setPreviewDays(0);
+                };
+
+                return (
+                  <div
+                    key={task.id}
+                    // Spans the full row rather than starting at the bar, so the
+                    // alongside label below can be `sticky` — see its comment.
+                    className="pointer-events-none absolute left-0 flex items-center"
+                    style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                    // Which of the three shapes this row drew, and where its title
+                    // ended up. Asserted by tests/unit/tasksWindowRender.test.ts —
+                    // "every bar is a narrow block with a one-character label" is
+                    // otherwise only visible to a human looking at the screen.
+                    data-gantt-kind={span.kind}
+                    data-gantt-label={labelPlacement}
+                    data-gantt-days={Math.round(days)}
+                    data-gantt-id={task.id}
+                  >
+                    <span className="absolute flex items-center" style={{ left, height: GANTT_ROW_HEIGHT }}>
+                    {span.kind === 'point' ? (
+                      // Single-day marker: a diamond, NOT a bar. An undated task
+                      // must not look like a real one-day span.
+                      <span
+                        className="pointer-events-auto grid cursor-pointer place-items-center"
+                        style={{ width: GANTT_DAY_WIDTH, height: GANTT_ROW_HEIGHT }}
+                        title={tooltip}
+                        onPointerDown={e => startDrag(e, 'move')}
+                      >
+                        <span
+                          className={cn(
+                            // Neutral whatever the status. A marker means "no
+                            // dates set", and a screen of green diamonds spent
+                            // the loudest colour available on the one thing in
+                            // this view carrying no schedule at all. Done still
+                            // reads: the title beside it is struck through,
+                            // exactly as it is in the List view.
+                            'size-3 rotate-45 border border-dashed border-muted-foreground/70 bg-muted-foreground/15',
+                            selectedTaskId === task.id && 'border-primary bg-primary/40',
+                            isDragging && 'opacity-70',
+                          )}
+                          aria-hidden
+                        />
+                      </span>
+                    ) : span.kind === 'rollup' ? (
+                      // Summary bar: slim, with end caps, spanning its children. It
+                      // is derived from them, so it CLICKS to select rather than
+                      // dragging — moving a summary would move nothing real.
+                      <span
+                        className="pointer-events-auto relative flex cursor-pointer items-center"
+                        style={{ width, height: GANTT_ROW_HEIGHT }}
+                        title={tooltip}
+                        onClick={() => onSelectTask(task.id)}
+                      >
+                        <span
+                          className={cn(
+                            'absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-sm bg-foreground/45',
+                            selectedTaskId === task.id && 'bg-primary',
+                            violation && 'bg-destructive/70',
+                          )}
+                          aria-hidden
+                        />
+                        <span className="absolute top-1/2 left-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
+                        <span className="absolute top-1/2 right-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
+                      </span>
+                    ) : (
                       <span
                         className={cn(
-                          'size-2.5 rotate-45 border border-dashed',
-                          task.status === 'done' ? 'border-emerald-500/70 bg-emerald-500/20' : 'border-muted-foreground/70 bg-muted-foreground/15',
-                          selectedTaskId === task.id && 'border-primary bg-primary/40',
-                          isDragging && 'opacity-70',
+                          'pointer-events-auto flex cursor-pointer items-center overflow-hidden rounded-md border text-xs shadow-sm',
+                          statusTint,
+                          violation && 'ring-1 ring-destructive/60',
+                          selectedTaskId === task.id && 'ring-2 ring-primary',
+                          isDragging && 'opacity-80',
                         )}
-                        aria-hidden
-                      />
+                        style={{ width, height: GANTT_BAR_HEIGHT }}
+                        title={tooltip}
+                        onPointerDown={e => startDrag(e, 'move')}
+                      >
+                        {labelInside && (
+                          <span className="pointer-events-none flex min-w-0 flex-1 items-center gap-1 truncate px-2">
+                            {row.depth > 0 && <CornerDownRight className="size-3.5 shrink-0 opacity-70" aria-hidden />}
+                            <span className={cn('truncate', task.status === 'done' && 'line-through')}>{task.title}</span>
+                          </span>
+                        )}
+                        {/* Right-edge resize handle (due_date only) */}
+                        <span
+                          className="ml-auto h-full w-2 shrink-0 cursor-ew-resize bg-foreground/10 hover:bg-foreground/25"
+                          onPointerDown={e => startDrag(e, 'resize')}
+                          aria-label="Resize due date"
+                        />
+                      </span>
+                    )}
                     </span>
-                  ) : span.kind === 'rollup' ? (
-                    // Summary bar: slim, with end caps, spanning its children. It
-                    // is derived from them, so it CLICKS to select rather than
-                    // dragging — moving a summary would move nothing real.
-                    <span
-                      className="pointer-events-auto relative flex cursor-pointer items-center"
-                      style={{ width, height: GANTT_ROW_HEIGHT }}
-                      title={tooltip}
-                      onClick={() => onSelectTask(task.id)}
-                    >
+                    {/* The name, when the shape is too small to hold it — which
+                        is every undated marker. It is `sticky`, so it travels
+                        with its bar until the bar scrolls off the left edge and
+                        then pins there: with no name column left, that is the
+                        only thing keeping rows identifiable once you scroll into
+                        next month. The chip background is what makes it legible
+                        when it is pinned over the grid. */}
+                    {labelPlacement === 'outside' && (
                       <span
+                        data-gantt-sticky-label=""
                         className={cn(
-                          'absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-sm bg-foreground/45',
-                          selectedTaskId === task.id && 'bg-primary',
-                          violation && 'bg-destructive/70',
+                          'pointer-events-auto sticky z-10 cursor-pointer truncate rounded-sm bg-card/80 px-1 text-sm',
+                          row.hasChildren && 'font-medium',
+                          task.status === 'done' ? 'text-muted-foreground line-through' : 'text-foreground',
                         )}
-                        aria-hidden
-                      />
-                      <span className="absolute top-1/2 left-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
-                      <span className="absolute top-1/2 right-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
-                    </span>
-                  ) : (
-                    <span
-                      className={cn(
-                        'pointer-events-auto flex cursor-pointer items-center overflow-hidden rounded-md border text-[10px] shadow-sm',
-                        statusTint,
-                        violation && 'ring-1 ring-destructive/60',
-                        selectedTaskId === task.id && 'ring-2 ring-primary',
-                        isDragging && 'opacity-80',
-                      )}
-                      style={{ width, height: GANTT_ROW_HEIGHT - 12 }}
-                      title={tooltip}
-                      onPointerDown={e => startDrag(e, 'move')}
-                    >
-                      {labelInside && (
-                        <span className="pointer-events-none min-w-0 flex-1 truncate px-1.5">{task.title}</span>
-                      )}
-                      {/* Right-edge resize handle (due_date only) */}
-                      <span
-                        className="ml-auto h-full w-2 shrink-0 cursor-ew-resize bg-foreground/10 hover:bg-foreground/25"
-                        onPointerDown={e => startDrag(e, 'resize')}
-                        aria-label="Resize due date"
-                      />
-                    </span>
-                  )}
-                  {/* Labels that don't fit inside their bar sit beside it, so a
-                      one-day bar still reads as its title rather than "T…". */}
-                  {!labelInside && (
-                    <span
-                      className={cn(
-                        'whitespace-nowrap text-[10px]',
-                        span.kind === 'point' ? 'text-muted-foreground' : 'text-foreground/80',
-                        task.status === 'done' && 'text-muted-foreground line-through',
-                      )}
-                    >
-                      {task.title}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+                        style={{
+                          marginLeft: left + shapeWidth + 6 + row.depth * GANTT_DEPTH_INDENT,
+                          left: 8 + row.depth * GANTT_DEPTH_INDENT,
+                          maxWidth: GANTT_ALONGSIDE_LABEL_MAX,
+                        }}
+                        title={tooltip}
+                        onClick={() => onSelectTask(task.id)}
+                      >
+                        {row.depth > 0 && (
+                          <CornerDownRight className="mr-1 inline size-3.5 shrink-0 align-[-3px] text-muted-foreground" aria-hidden />
+                        )}
+                        {task.title}
+                        {assigneeLabel && <span className="text-muted-foreground"> · {assigneeLabel}</span>}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
-    </ScrollArea>
+      </ScrollArea>
+    </div>
   );
 }

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Task } from '../../src/types';
 import {
   DAY_MS,
+  GANTT_LABEL_CHAR_WIDTH,
+  WIDEST_TASK_FILTERS,
+  applyHideDone,
   buildGanttRows,
   buildTaskSpans,
   collectDependents,
@@ -9,6 +12,8 @@ import {
   dependencyWouldCycle,
   dueDateFromExclusiveEnd,
   fromDateInputValue,
+  labelFitsInsideBar,
+  resolveTaskFocus,
   startOfDay,
   taskDependsOn,
   toDateInputValue,
@@ -281,5 +286,128 @@ describe('dueDateFromExclusiveEnd', () => {
     const start = startOfDay(new Date(localIso(2026, 8, 3)).getTime());
     expect(toDateInputValue(dueDateFromExclusiveEnd(start + DAY_MS))).toBe('2026-08-03');
     expect(toDateInputValue(dueDateFromExclusiveEnd(start + 5 * DAY_MS))).toBe('2026-08-07');
+  });
+});
+
+describe('applyHideDone', () => {
+  it('drops done AND cancelled — "not open" has always meant both', () => {
+    const list = [
+      makeTask({ id: 'a', status: 'todo' }),
+      makeTask({ id: 'b', status: 'in_progress' }),
+      makeTask({ id: 'c', status: 'done' }),
+      makeTask({ id: 'd', status: 'cancelled' }),
+    ];
+    expect(applyHideDone(list, true).map(t => t.id)).toEqual(['a', 'b']);
+  });
+
+  it('is the identity when the toggle is off', () => {
+    const list = [makeTask({ id: 'a', status: 'done' })];
+    expect(applyHideDone(list, false)).toBe(list);
+  });
+});
+
+describe('resolveTaskFocus', () => {
+  const narrowed = { filter: 'mine' as const, hideDone: true };
+
+  it('does nothing without a request', () => {
+    expect(resolveTaskFocus({ isVisible: false, filters: narrowed })).toEqual({ kind: 'reset' });
+  });
+
+  it('scrolls to a row that is already visible, then consumes it', () => {
+    expect(resolveTaskFocus({ focusRowId: 't1', isVisible: true, filters: narrowed }))
+      .toEqual({ kind: 'reveal' });
+  });
+
+  it('widens the filters once for a hidden row', () => {
+    expect(resolveTaskFocus({ focusRowId: 't1', isVisible: false, filters: narrowed }))
+      .toEqual({ kind: 'widen', next: WIDEST_TASK_FILTERS });
+  });
+
+  // The bug this whole function exists for: "Hide done" looked dead because the
+  // effect re-widened on every toggle while a done task was still focused.
+  it('never widens again once the request has been handled', () => {
+    expect(resolveTaskFocus({
+      focusRowId: 't1',
+      handledFocusId: 't1',
+      isVisible: false,
+      filters: narrowed,
+    })).toEqual({ kind: 'idle' });
+  });
+
+  it('leaves the user alone when they narrow the filters after being taken there', () => {
+    // Reveal (terminal) -> user clicks "Hide done" -> the row leaves the list.
+    // That must NOT bounce the toggle back off.
+    const first = resolveTaskFocus({ focusRowId: 't1', isVisible: true, filters: WIDEST_TASK_FILTERS });
+    expect(first).toEqual({ kind: 'reveal' });
+    const afterUserHidesDone = resolveTaskFocus({
+      focusRowId: 't1',
+      handledFocusId: 't1',
+      isVisible: false,
+      filters: { filter: 'all', hideDone: true },
+    });
+    expect(afterUserHidesDone).toEqual({ kind: 'idle' });
+  });
+
+  it('consumes rather than looping when the widest filters still cannot show it', () => {
+    // e.g. the Board/Timeline views, or a task that was deleted. Bailing out
+    // without consuming is what let a stale id hold the filters hostage.
+    expect(resolveTaskFocus({ focusRowId: 'gone', isVisible: false, filters: WIDEST_TASK_FILTERS }))
+      .toEqual({ kind: 'consume' });
+  });
+
+  it('re-arms once the request is cleared, so the same task can be focused twice', () => {
+    expect(resolveTaskFocus({ handledFocusId: 't1', isVisible: false, filters: WIDEST_TASK_FILTERS }))
+      .toEqual({ kind: 'reset' });
+  });
+
+  it('treats a different task as a new request even after one was handled', () => {
+    expect(resolveTaskFocus({
+      focusRowId: 't2',
+      handledFocusId: 't1',
+      isVisible: false,
+      filters: narrowed,
+    })).toEqual({ kind: 'widen', next: WIDEST_TASK_FILTERS });
+  });
+});
+
+describe('labelFitsInsideBar', () => {
+  const DAY = 32; // GANTT_DAY_WIDTH — a bar's width is (days * this).
+
+  it('puts a short name inside a long bar', () => {
+    // "Design review" over three weeks: the bar is the obvious place for it.
+    expect(labelFitsInsideBar('Design review', 21 * DAY)).toBe(true);
+  });
+
+  it('keeps a long name out of a bar that cannot hold it', () => {
+    // A bar's width is its DATE RANGE — it cannot be grown to fit text, so the
+    // only alternative to putting the name outside is truncating it, which is
+    // exactly what this view was reported for.
+    expect(labelFitsInsideBar('A title far too long to fit inside its own three-day bar', 3 * DAY)).toBe(false);
+  });
+
+  it('never puts anything inside a one-day bar', () => {
+    expect(labelFitsInsideBar('Ship', DAY)).toBe(false);
+    expect(labelFitsInsideBar('', DAY)).toBe(false);
+  });
+
+  it('accounts for the depth glyph on a nested row', () => {
+    // A width that fits at depth 0 can stop fitting once the ↳ is prepended.
+    const title = 'Wire the panel';
+    const width = title.length * GANTT_LABEL_CHAR_WIDTH + 30;
+    expect(labelFitsInsideBar(title, width, 0)).toBe(true);
+    expect(labelFitsInsideBar(title, width, 1)).toBe(false);
+  });
+
+  it('errs towards putting the label outside', () => {
+    // Over-estimating the text width costs a label that sits beside its bar;
+    // under-estimating costs a truncated title. Only one of those is a bug.
+    const title = 'Exactly this long';
+    const generous = title.length * GANTT_LABEL_CHAR_WIDTH;
+    expect(labelFitsInsideBar(title, generous)).toBe(false);
+  });
+
+  it('refuses a blank title however wide the bar', () => {
+    expect(labelFitsInsideBar('   ', 30 * DAY)).toBe(false);
+    expect(labelFitsInsideBar(undefined as unknown as string, 30 * DAY)).toBe(false);
   });
 });

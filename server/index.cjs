@@ -43,6 +43,7 @@ const {
  evaluatePasswordServerSide,
  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
 } = require('../shared/backend-core.cjs');
+const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -10408,6 +10409,14 @@ function createApp() {
     if (!row || typeof row !== 'object') return row;
     let next = stripPrivilegedDbValues(table, row);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
+    // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
+    // titles. Title only on this route: inferring parent_id from a title string
+    // is the right call for the MCP tool (server/mcp.cjs, where agents create
+    // tasks) but would silently re-nest a human's task from what they typed.
+    if (table === 'tasks' && typeof next.title === 'string') {
+     const normalized = normalizeTaskTitle(next.title);
+     if (normalized.changed) next = { ...next, title: normalized.title };
+    }
     return next;
    });
    if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
