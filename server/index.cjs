@@ -1003,9 +1003,16 @@ async function ensureRuntimeSchema() {
       accepted_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
       accepted_at timestamptz,
       expires_at timestamptz,
+      dismissed_at timestamptz,
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
+    -- Soft-dismiss: a SPENT invite link (revoked / accepted / already past
+    -- expires_at) can be cleared out of the Users window without destroying the
+    -- row — an accepted invite is the record of how a member got in. NULL =
+    -- shown. Never set for a still-active link: the routes carry the predicate
+    -- in SQL so a live link cannot vanish from the only place it can be seen.
+    ALTER TABLE workspace_invites ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
 
@@ -10011,6 +10018,10 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // Returns DISMISSED rows too, on purpose: only 'manage' can read this list,
+   // and the client's "Show dismissed" toggle then costs no round trip. The
+   // include/exclude rule lives in src/lib/inviteDismissal.ts. `i.*` also means
+   // dismissed_at needs no mention here to survive.
    const rows = await getDb().unsafe(
     `select i.*, cu.email as created_by_email, au.email as accepted_by_email
            from workspace_invites i
@@ -10066,6 +10077,83 @@ function createApp() {
    );
    notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
    res.json({ data: rows[0] ?? null, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // A link is SPENT when it can no longer let anyone new in: revoked, already
+ // accepted, or a still-pending one past its expires_at (there is no 'expired'
+ // status column, so expiry has to be derived here as well as in the UI —
+ // src/lib/inviteDismissal.ts holds the matching client-side rule).
+ //
+ // This predicate is the security boundary for dismissal, which is why it lives
+ // in the SQL rather than only in the button's disabled state: dismissing an
+ // ACTIVE link would leave it granting access while vanishing from the only
+ // surface that lists it. Revoke first, then dismiss.
+ const SPENT_INVITE_SQL = `(
+        status in ('accepted', 'revoked')
+        or (status = 'pending' and expires_at is not null and expires_at <= now())
+      )`;
+
+ // Soft-dismiss / restore one spent invite. Nothing is deleted — an accepted
+ // invite is the audit trail of how a member got into the workspace, so the row
+ // (and its accepted_by/accepted_at) always survives being tidied away.
+ app.patch('/backend/workspaces/:id/invites/:inviteId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const inviteId = String(req.params.inviteId || '').trim();
+   if (!workspaceId || !inviteId) return jsonError(res, 400, new Error('workspace id and invite id are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const dismissed = req.body?.dismissed;
+   if (typeof dismissed !== 'boolean') return jsonError(res, 400, new Error('dismissed must be true or false'));
+   const rows = dismissed
+    ? await getDb().unsafe(
+     `update workspace_invites set dismissed_at = now(), updated_at = now()
+            where id = $1 and workspace_id = $2 and dismissed_at is null and ${SPENT_INVITE_SQL}
+            returning *`,
+     [inviteId, workspaceId],
+    )
+    : await getDb().unsafe(
+     `update workspace_invites set dismissed_at = null, updated_at = now()
+            where id = $1 and workspace_id = $2 and dismissed_at is not null
+            returning *`,
+     [inviteId, workspaceId],
+    );
+   if (rows.length === 0) {
+    // No row changed: either it isn't ours, or a guard refused. Re-read to tell
+    // the two apart — a wrong id must not look like a policy failure.
+    const existing = await getDb().unsafe(
+     'select * from workspace_invites where id = $1 and workspace_id = $2 limit 1',
+     [inviteId, workspaceId],
+    );
+    if (existing.length === 0) return jsonError(res, 404, new Error('Invite not found'));
+    // Already in the requested state → idempotent success.
+    if (Boolean(existing[0].dismissed_at) === dismissed) return res.json({ data: existing[0], error: null });
+    return jsonError(res, 409, new Error('Only a revoked, accepted or expired invite can be dismissed. Revoke it first.'));
+   }
+   notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+   res.json({ data: rows[0], error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Bulk clear: dismiss every spent link in one go. Same predicate, so an active
+ // link is skipped rather than hidden, however many rows the caller sweeps.
+ app.post('/backend/workspaces/:id/invites/dismiss-spent', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `update workspace_invites set dismissed_at = now(), updated_at = now()
+          where workspace_id = $1 and dismissed_at is null and ${SPENT_INVITE_SQL}
+          returning *`,
+    [workspaceId],
+   );
+   notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+   res.json({ data: rows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

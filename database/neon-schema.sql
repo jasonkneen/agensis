@@ -349,6 +349,43 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace_id ON workspace_members(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id ON workspace_members(user_id);
 
+-- Invite links. This table existed ONLY in the runtime DDL (ensureRuntimeSchema,
+-- server/index.cjs) — a fresh `npm run db:neon:push` / `npm run migrate` DB never
+-- got it, so every invite route 500'd there. Restated here (and in
+-- supabase/migrations/20260726120000_*) to match the runtime bootstrap exactly.
+--
+-- `token` holds hashAgentToken(plaintext) for rows created after the L4
+-- hardening; the plaintext is returned once, at creation, and never again.
+--
+-- `dismissed_at` is a soft delete for the LIST only: a spent link (revoked,
+-- accepted, or past expires_at) can be cleared out of the Users window while the
+-- row survives — an accepted invite is the record of how a member got into the
+-- workspace. NULL = shown. The routes refuse to set it on a still-active link,
+-- because hiding a live invite would leave it granting access with nowhere left
+-- to see or revoke it.
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  token text NOT NULL UNIQUE,
+  email text DEFAULT '',
+  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+  created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  accepted_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  accepted_at timestamptz,
+  expires_at timestamptz,
+  dismissed_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Idempotent so re-pushing this file over an existing database backfills the
+-- column on a table that predates it.
+ALTER TABLE workspace_invites ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
+
 CREATE TABLE IF NOT EXISTS canvas_groups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
