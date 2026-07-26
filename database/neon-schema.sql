@@ -160,6 +160,14 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   intent text NOT NULL DEFAULT '',
   is_favorite boolean NOT NULL DEFAULT false,
   participants jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- How eagerly this channel answers a post that named nobody, on ONE axis:
+  --   'auto'    someone answers at once (the default, and every existing row)
+  --   'social'  someone answers, unhurried — replies are paced seconds apart and
+  --             at most two agents answer (shared/replyCadence.cjs)
+  --   'mention' nobody answers unless asked
+  -- Deliberately UNCONSTRAINED text, normalized in shared/channelMentions.cjs:
+  -- an unreadable value reads as 'auto', so a row written by a newer client can
+  -- never make a channel go silent. That is why adding 'social' needed no DDL.
   conversation_mode text NOT NULL DEFAULT 'auto',
   max_agent_turns integer NOT NULL DEFAULT 10,
   auto_rounds integer NOT NULL DEFAULT 3,

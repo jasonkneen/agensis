@@ -125,6 +125,7 @@ const {
  reservedAgentHandleMessage,
  slugMentionHandle,
 } = require('../shared/channelMentions.cjs');
+const { replyCadencePlan } = require('../shared/replyCadence.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -582,6 +583,12 @@ async function ensureRuntimeSchema() {
     -- is why it is a channel property and not a per-agent one: the same agent
     -- is expected to be playful in one channel and terse in another.
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS intent text NOT NULL DEFAULT '';
+    -- Reply eagerness for a post that named nobody: 'auto' (at once, the
+    -- default), 'social' (unhurried — see shared/replyCadence.cjs) or 'mention'
+    -- (not at all). UNCONSTRAINED text on purpose, normalized in
+    -- shared/channelMentions.cjs: an unreadable value reads as 'auto', so a row
+    -- written by a newer client cannot silence a channel — and so widening the
+    -- set of values needs no DDL and no migration in either backend.
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'auto';
     ALTER TABLE chat_sessions ALTER COLUMN conversation_mode SET DEFAULT 'auto';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS max_agent_turns integer NOT NULL DEFAULT 10;
@@ -3453,6 +3460,84 @@ const CHANNEL_CONTEXT_LIMIT = 40;
 const CHANNEL_CONTEXT_MAX_BYTES = 8 * 1024;
 const conversationLocks = new Set();
 
+// --- reply cadence: the pending wakes ---------------------------------------
+//
+// A social channel's turn is HELD, never dropped: continueConversation returns
+// without dispatching and books a wake for itself here, keyed by the same
+// `sessionId::threadParentId` the conversation lock uses. On the wake it re-reads
+// the whole conversation and re-decides from scratch — which is why the wait is
+// derived from the message id rather than from Math.random (a fresh draw each
+// pass would compound or reset it), and why an agent that has been overtaken in
+// the meantime stands down naturally instead of needing to be cancelled.
+//
+// IN MEMORY, deliberately, with no persisted schedule:
+//   * The wait is at most replyCadence.MAX_DELAY_MS, and only in channels an
+//     operator explicitly set to 'social'.
+//   * A restart inside that window loses the automatic reply, never the message.
+//     The burst is unchanged in the database, so the very next @mention re-drives
+//     it and pickMentionNextAgent still picks the agent that was waiting.
+//   * A blind periodic sweep would be worse than the gap it closes: re-driving an
+//     un-addressed social post every tick means a paid relevance call every tick,
+//     forever, for a message everyone already declined.
+//   * A durable `next_reply_at` column would have to be cleared on every one of
+//     continueConversation's exits; one missed clear is a channel that re-answers
+//     an old message on a timer, which is a worse bug than the one it prevents.
+// Restarts already truncate an in-flight burst today (the finalize-to-continue
+// chain is in memory too, and reapStuckAgentJobs fails running jobs), so this
+// widens an existing window by seconds rather than adding a new kind of loss.
+const cadenceWakes = new Map();
+
+/**
+ * Book ONE wake for this conversation. Returns false when a wake is already
+ * pending — the earlier one is kept rather than pushed back, so a busy channel
+ * cannot starve a reply by repeatedly re-scheduling it.
+ */
+function scheduleCadenceWake(lockKey, delayMs, target) {
+ if (cadenceWakes.has(lockKey)) return false;
+ const timer = setTimeout(() => {
+  cadenceWakes.delete(lockKey);
+  void continueConversation(target).catch(
+   (error) => console.error('continueConversation (reply cadence) failed', error),
+  );
+ }, delayMs);
+ // Unref'd so a pending social reply never holds the process (or a test runner)
+ // open. On a clean exit the reply is deferred to the next thing that drives the
+ // channel, which is the same trade the note above accepts for a restart.
+ if (typeof timer.unref === 'function') timer.unref();
+ cadenceWakes.set(lockKey, timer);
+ return true;
+}
+
+/** Drop every pending wake. Called by resetTestState so suites do not bleed. */
+function clearCadenceWakes() {
+ for (const timer of cadenceWakes.values()) clearTimeout(timer);
+ cadenceWakes.clear();
+}
+
+/** Whole milliseconds since a timestamp column; 0 for anything unreadable. */
+function msSinceTimestamp(value) {
+ const at = value ? new Date(value).getTime() : Number.NaN;
+ if (!Number.isFinite(at)) return 0;
+ return Math.max(0, Date.now() - at);
+}
+
+/**
+ * Was this agent named by handle anywhere in the burst? `@channel` does NOT
+ * count — that is the whole distinction cadence turns on: being named is a
+ * question addressed to you, being included in a broadcast is not.
+ * parseAgentMentions already strips the reserved `channel` handle.
+ */
+function agentNamedInBurst(agent, burst) {
+ if (!agent) return false;
+ const selfHandles = new Set([slugHandle(agent.handle || agent.name), slugHandle(agent.name)]);
+ for (const row of burst || []) {
+  for (const handle of parseAgentMentions(row.content)) {
+   if (selfHandles.has(handle)) return true;
+  }
+ }
+ return false;
+}
+
 function agentContextBytes(messages) {
  return (Array.isArray(messages) ? messages : []).reduce(
   (total, message) => total
@@ -3945,7 +4030,13 @@ const taskQueueStrikes = new Map();
 const taskQueueSelecting = new Set();
 // A run outcome that means "the agent is busy, try again when it frees up".
 // These requeue the task with no strike.
-const TASK_QUEUE_BUSY_RUN_REASONS = new Set(['agent_busy', 'locked', 'refused']);
+// 'cadence_*' cannot happen on the task path — task work lands in the agent's DM
+// (findOrCreateDirectSession) and replyCadencePlan answers immediately for a DM
+// before it reads the mode. Listed anyway so that if a task ever IS dispatched
+// into a social channel, the task is REQUEUED rather than reported as a failure:
+// a paced turn is one the agent will get to, which is exactly what 'busy' means
+// here. Silence on this list would have logged it as "could not start".
+const TASK_QUEUE_BUSY_RUN_REASONS = new Set(['agent_busy', 'locked', 'refused', 'cadence_deferred', 'cadence_stand_down']);
 // Dispatch refusals that are about THIS task, not the agent: move to the next
 // candidate. (The drain's own SQL already filters most of them out.)
 const TASK_QUEUE_SKIP_REASONS = new Set(['task_not_found', 'terminal', 'stale_assignee', 'not_an_agent', 'missing_input', 'no_workspace']);
@@ -5530,6 +5621,13 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    const isFolderDm = session.folder === 'Direct messages';
    const isDirectMessage = Boolean(directTarget && (directTarget.direct || isFolderDm)) || isFolderDm;
    let nextAgent = null;
+   // Was the agent we end up choosing NAMED, or merely included? Reply cadence
+   // turns on exactly this: an @mention, a DM and a reply inside an agent's own
+   // thread are questions put to that agent and are answered at once; `@channel`
+   // and an unprompted election are not, and in a social channel they are paced.
+   // Set by whichever branch below picks the agent, so a new branch that forgets
+   // it gets the cautious answer (paced) rather than the loud one.
+   let addressedIndividually = false;
    if (isDirectMessage) {
     if (agentTurns === 0) {
      // Prefer the explicit direct participant; fall back to matching the DM
@@ -5564,6 +5662,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
      limit: CHANNEL_MENTION_MAX_AGENTS,
     });
     nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId, channelAgents);
+    if (nextAgent) addressedIndividually = agentNamedInBurst(nextAgent, burst);
     // A channel with exactly ONE agent participant has a directTarget even
     // though it is not a DM (directAgentParticipantFromSession falls back to the
     // sole agent), and an un-addressed post there used to wake it
@@ -5574,12 +5673,19 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     if (!nextAgent && agentTurns === 0 && directTarget && unpromptedAllowed) {
      nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
       || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
+     // The sole agent in a one-agent channel is the only one who could be meant,
+     // so a post there is addressed to it in everything but syntax. Paced replies
+     // in a room of one would just be a laggy DM.
+     if (nextAgent) addressedIndividually = true;
     }
     if (!nextAgent && agentTurns === 0 && threadParentId) {
      const target = await inferThreadAgentTarget(sessionId, threadParentId);
      if (target) {
       nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((target.agentId && String(agent.id) === target.agentId)
        || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
+      // Replying inside an agent's own thread is asking that agent, in the same
+      // way naming it is.
+      if (nextAgent) addressedIndividually = true;
      }
     }
     // An UN-ADDRESSED post: nobody was @mentioned, there is no direct target and
@@ -5592,13 +5698,17 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     //               unprompted. One cheap Haiku call picks an agent or null, and
     //               fails CLOSED. Still the default; unchanged for every
     //               existing channel.
+    //   'social'  — the same election, then paced by the reply-cadence gate
+    //               further down (shared/replyCadence.cjs). The agent still
+    //               answers; it just does not answer in 400ms, and it is not
+    //               joined by every teammate at once.
     //   'mention' — nobody is dispatched. The message is posted and read like
     //               any other, and any agent can be pulled in later with an
     //               @mention or @channel. "They don't have to answer now, but
     //               they can whenever."
     //
     // Only the un-addressed case is governed. An @mention, a DM and a reply in
-    // an agent's thread dispatch in BOTH modes — the mode decides whether
+    // an agent's thread dispatch in EVERY mode — the mode decides whether
     // silence is allowed, never whether being asked directly is.
     //
     // Fires once per human message (agentTurns === 0, latest author is the
@@ -5637,6 +5747,46 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    }
    if (!nextAgent) return { started, reason: 'no_agent' };
    if (await hasActiveBurstJob(sessionId, nextAgent.id)) return { started, reason: 'agent_busy' };
+
+   // --- reply cadence -------------------------------------------------------
+   // In a channel an operator set to 'social', this turn may be held for a few
+   // seconds — or, if the room has already answered a message that named nobody,
+   // skipped so the reply is a conversation rather than a chorus.
+   //
+   // WHY HERE. This is the last point before a turn goes in flight, and the only
+   // point that knows all four things the decision needs: the mode, whether this
+   // agent was named, how many voices have already answered, and how long ago the
+   // message it answers landed. It is also AFTER the busy check, so a paced turn
+   // is never booked for an agent that could not run anyway.
+   //
+   // The reference message is the one this reply answers — the human's seed for
+   // the first reply, the previous message for a later one — because the wait is
+   // "land N seconds after that", not "wait N more seconds from now". Measuring
+   // it that way is what makes re-entry idempotent: on the wake, elapsed has
+   // grown, the same target is already met, and the turn runs.
+   //
+   // Nothing here can slow a DM, a huddle or a channel on 'auto'/'mention':
+   // replyCadencePlan answers delayMs 0 for all of them before it looks at
+   // anything else, and cadenceWakes is only ever written from this one place.
+   const cadenceRef = agentTurns === 0 ? burst[0] : latest;
+   const cadence = replyCadencePlan({
+    conversationMode: session.conversation_mode,
+    isDirectMessage,
+    folder: session.folder,
+    agentTurnsSoFar: agentTurns,
+    addressedIndividually,
+    jitterKey: String(cadenceRef?.id || ''),
+    elapsedMs: msSinceTimestamp(cadenceRef?.created_at),
+   });
+   if (cadence.standDown) {
+    // Not a lost reply: the room answered, this agent did not have to, and it is
+    // still reachable by name. That is the behaviour 'social' is chosen FOR.
+    return { started, reason: 'cadence_stand_down' };
+   }
+   if (cadence.delayMs > 0) {
+    scheduleCadenceWake(lockKey, cadence.delayMs, { workspaceId, sessionId, threadParentId: threadParentId || null });
+    return { started, reason: 'cadence_deferred' };
+   }
 
    const involved = new Map();
    for (const id of participantAgentIds) {
@@ -13355,6 +13505,8 @@ function resetTestState() {
  recentTaskDispatches.clear();
  taskQueueStrikes.clear();
  taskQueueSelecting.clear();
+ conversationLocks.clear();
+ clearCadenceWakes();
 }
 
 // Test seam: register a fake WS client so the realtime-revocation path can be
@@ -13392,6 +13544,16 @@ module.exports = {
   insertActiveAgentJob,
   buildWhereClause,
   buildDaemonPrompt,
+  // Reply cadence — the pending-wake bookkeeping. The DECISION is pure and lives
+  // in shared/replyCadence.cjs; these are only the seams a test needs to prove
+  // that a held turn is booked (and never double-booked) rather than dropped.
+  // continueConversation itself is already exported further down.
+  cadenceWakes,
+  clearCadenceWakes,
+  scheduleCadenceWake,
+  agentNamedInBurst,
+  msSinceTimestamp,
+  TASK_QUEUE_BUSY_RUN_REASONS,
   VOICE_HUDDLE_NOTE,
   streamFlushDue,
   BUILTIN_FLUSH_INTERVAL_MS,

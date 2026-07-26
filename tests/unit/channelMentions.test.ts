@@ -92,8 +92,20 @@ describe('reply timing', () => {
 
   it("only 'mention' stops an un-addressed post from waking anyone", () => {
     expect(allowsUnpromptedReply({ conversationMode: 'auto' })).toBe(true);
+    expect(allowsUnpromptedReply({ conversationMode: 'social' })).toBe(true);
     expect(allowsUnpromptedReply({ conversationMode: 'mention' })).toBe(false);
     expect(allowsUnpromptedReply()).toBe(true);
+  });
+
+  it("keeps 'social' on the answerable side of the axis", () => {
+    // 'social' paces replies (src/lib/replyCadence.ts); it does not stop them.
+    // Written as "not mention" so a value added here answers by default — the
+    // other phrasing would have muted every channel that adopted it, silently.
+    expect(normalizeConversationMode('social')).toBe('social');
+    expect(CONVERSATION_MODES).toContain('social');
+    for (const mode of CONVERSATION_MODES) {
+      expect(allowsUnpromptedReply({ conversationMode: mode })).toBe(mode !== 'mention');
+    }
   });
 
   it('never silences a DM', () => {

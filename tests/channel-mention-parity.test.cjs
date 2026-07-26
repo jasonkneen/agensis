@@ -194,15 +194,28 @@ test('conversation_mode normalizes to auto for anything unrecognised', () => {
   assert.equal(shared.normalizeConversationMode('mention'), 'mention');
   assert.equal(shared.normalizeConversationMode('MENTION'), 'mention');
   assert.equal(shared.normalizeConversationMode('  auto '), 'auto');
+  assert.equal(shared.normalizeConversationMode('social'), 'social');
   for (const value of ['', null, undefined, 'nonsense', 'all', 0, {}]) {
     assert.equal(shared.normalizeConversationMode(value), 'auto', `${JSON.stringify(value)} => auto`);
   }
 });
 
-test("'auto' may wake someone nobody named; 'mention' may not", () => {
+test("only 'mention' refuses to wake someone nobody named", () => {
   assert.equal(shared.allowsUnpromptedReply({ conversationMode: 'auto' }), true);
+  assert.equal(shared.allowsUnpromptedReply({ conversationMode: 'social' }), true);
   assert.equal(shared.allowsUnpromptedReply({ conversationMode: 'mention' }), false);
   assert.equal(shared.allowsUnpromptedReply({}), true, 'default is auto');
+  // Asserted over the whole enum, not by listing values: 'mention' is the one
+  // that means silence, so a value added to this axis is answerable by default
+  // instead of silently muting every channel that adopts it. See the note on
+  // allowsUnpromptedReply in shared/channelMentions.cjs.
+  for (const mode of shared.CONVERSATION_MODES) {
+    assert.equal(
+      shared.allowsUnpromptedReply({ conversationMode: mode }),
+      mode !== 'mention',
+      `${mode} must ${mode === 'mention' ? 'not ' : ''}allow an unprompted reply`,
+    );
+  }
 });
 
 test('a DM always answers a plain message, whatever its stored mode says', () => {

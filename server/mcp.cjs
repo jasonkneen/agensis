@@ -502,7 +502,7 @@ function buildTools() {
    properties: {
     title: { type: 'string', description: 'Channel title.' },
     folder: { type: 'string', description: 'Folder to file it under (default "General").' },
-    conversation_mode: { type: 'string', enum: ['mention', 'auto'], description: 'auto (default; an agent may answer a post that named nobody) or mention (nobody answers unless asked).' },
+    conversation_mode: { type: 'string', enum: ['mention', 'social', 'auto'], description: 'How eagerly this channel answers a post that named nobody: auto (default; someone answers at once), social (someone answers, but replies are paced seconds apart and at most two agents answer — for non-work rooms) or mention (nobody answers unless asked).' },
    },
    required: ['title'],
    additionalProperties: false,

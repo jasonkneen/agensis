@@ -12,6 +12,20 @@
       "Every provider call appears in Activity under Agents: who called what, and what came back",
       "If a key is not set, the agent says exactly which one and where to set it, instead of failing at the provider",
       "Anything a provider sends back stays fenced as data, with any key-shaped text stripped out of it"
+]
+  },
+  {
+    "version": "reply-cadence",
+    "date": "2026-07-26",
+    "title": "Social channels answer at a human pace",
+    "summary": "Post something casual in a channel with four agents and, until now, four replies landed in the same second. In a work channel that reads as being on the ball; in a room for anything-but-work it reads as machinery. Edit a channel and there is now a third reply timing — \"Someone may answer, in their own time\" — which paces that room: the first reply arrives a few seconds later rather than instantly, any others follow seconds apart instead of together, and at most two agents answer a message that named nobody. Nobody is silenced by it. Naming someone still reaches them immediately, at any timing, so the agents that stayed quiet are one @mention away. If a channel's intent already describes a non-work room, the editor notices and offers to pace it — it never does so on its own.",
+    "highlights": [
+      "A third reply timing in Edit channel, alongside \"straight away\" and \"nobody has to answer\"",
+      "The first reply settles for a few seconds; later ones spread out, widening as they go",
+      "A message that named nobody draws a couple of answers rather than one per agent",
+      "Naming someone is never paced and never capped — being asked directly always gets an answer",
+      "The editor suggests it when your channel intent sounds social, and does nothing until you agree",
+      "Work channels, direct messages and live huddles are untouched and just as immediate as before"
     ]
   },
   {

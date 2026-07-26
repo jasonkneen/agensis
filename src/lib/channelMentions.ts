@@ -83,9 +83,14 @@ export function agentMentionHandles(content: unknown): string[] {
 /** How many distinct agents ONE `@channel` may wake. See the server's copy. */
 export const CHANNEL_MENTION_MAX_AGENTS = 8;
 
-/** chat_sessions.conversation_mode — reply eagerness for un-addressed posts. */
-export type ConversationMode = 'auto' | 'mention';
-export const CONVERSATION_MODES: readonly ConversationMode[] = ['auto', 'mention'];
+/**
+ * chat_sessions.conversation_mode — reply eagerness for un-addressed posts.
+ * ONE axis: never ('mention'), unhurried ('social', see src/lib/replyCadence.ts),
+ * at once ('auto', the default). See shared/channelMentions.cjs for why cadence
+ * is a value here rather than a column of its own.
+ */
+export type ConversationMode = 'auto' | 'social' | 'mention';
+export const CONVERSATION_MODES: readonly ConversationMode[] = ['auto', 'social', 'mention'];
 export const DEFAULT_CONVERSATION_MODE: ConversationMode = 'auto';
 
 export function normalizeConversationMode(value: unknown): ConversationMode {
@@ -98,10 +103,14 @@ export function normalizeConversationMode(value: unknown): ConversationMode {
 /**
  * Whether an un-addressed post here may wake an agent nobody named. A DM always
  * may: its single agent answering a plain message is what makes it a DM.
+ *
+ * "Not 'mention'" rather than "is 'auto'": 'mention' is the one value that means
+ * silence, so a new value on this axis defaults to being answerable instead of
+ * silently muting every channel that adopts it.
  */
 export function allowsUnpromptedReply(
   { conversationMode, isDirectMessage = false }: { conversationMode?: unknown; isDirectMessage?: boolean } = {},
 ): boolean {
   if (isDirectMessage) return true;
-  return normalizeConversationMode(conversationMode) === 'auto';
+  return normalizeConversationMode(conversationMode) !== 'mention';
 }
