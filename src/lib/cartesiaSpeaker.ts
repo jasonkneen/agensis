@@ -58,6 +58,24 @@ interface QueuedSpeech {
  * against the live API on 2026-07-26), and a huddle is exactly the situation
  * where the first sentence is the one people judge.
  */
+/**
+ * When to start the next audio chunk.
+ *
+ * `head` is the playback timeline's write head — the moment the audio scheduled
+ * so far runs out. Chunks are scheduled AHEAD of it so a reply plays as one
+ * continuous voice, and the head is carried ACROSS sentences: Cartesia reports
+ * `done` when it has finished generating, long before the audio it generated has
+ * played, so a new sentence arriving is no evidence that the previous one has
+ * been heard. Zeroing the head per sentence made two sentences play at once.
+ *
+ * The floor keeps a chunk out of the past: after a gap in generation the head
+ * can lag `currentTime`, and scheduling at exactly `currentTime` races the audio
+ * thread and clips the opening syllable, so a small lead is always applied.
+ */
+export function nextChunkStart(head: number, currentTime: number, lead = 0.05): number {
+  return Math.max(head, currentTime + lead);
+}
+
 export class CartesiaSpeaker {
   private socket: WebSocket | null = null;
   private context: AudioContext | null = null;
@@ -149,7 +167,17 @@ export class CartesiaSpeaker {
 
     this.current = next;
     this.contextId = `agensis-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    this.nextStartAt = 0;
+    // DO NOT reset nextStartAt here. It is the playback timeline's write head,
+    // and the previous sentence's audio is almost certainly still scheduled
+    // ahead of `context.currentTime`: Cartesia's `done` means it finished
+    // GENERATING, not that anything finished playing, and finishCurrent pumps
+    // the next sentence the moment it arrives. Zeroing the head made the next
+    // sentence schedule at "now", so two sentences played SIMULTANEOUSLY —
+    // which is what the double voice actually was. Carrying the head forward is
+    // what makes a multi-sentence reply one continuous voice.
+    //
+    // stop() still zeroes it, because there the scheduled audio is being
+    // cancelled and the timeline genuinely restarts.
     try {
       this.socket?.send(JSON.stringify({
         model_id: this.credentials?.model || 'sonic-3.5',
@@ -275,7 +303,7 @@ export class CartesiaSpeaker {
 
     // A small lead on the first chunk: scheduling at exactly currentTime races
     // the audio thread and drops the opening syllable.
-    const startAt = Math.max(this.nextStartAt, context.currentTime + 0.05);
+    const startAt = nextChunkStart(this.nextStartAt, context.currentTime);
     source.start(startAt);
     this.nextStartAt = startAt + buffer.duration;
     this.sources.add(source);
