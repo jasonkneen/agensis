@@ -1057,6 +1057,15 @@ function buildTools() {
    const name = (typeof args?.name === 'string' && args.name.trim()) ? args.name.trim() : null;
    const handle = (typeof args?.handle === 'string' && args.handle.trim()) ? args.handle.trim() : null;
    if (!asHandle && !name && !handle) throw new ToolError('Pass `as: "<handle>"` to work as an existing agent, or `name` to create a new one.');
+   // Registering a brand-new agent is what invite links are for, and a
+   // declaration for an agent that is pending approval only lands after a
+   // human approves it. But `as` + `identity` against an ALREADY-APPROVED
+   // agent is applied immediately — a write — so an invite whose role cannot
+   // write must not re-avatar or re-voice an agent from a read-only link.
+   if (asHandle && args?.identity && identity.kind === 'invite'
+    && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+    throw new ToolError('This invite is read-only and cannot change an existing agent\'s identity');
+   }
    try {
     return await deps.registerAgentRequest({
      workspaceId: identity.workspaceId,

@@ -270,43 +270,94 @@ function applyIdentityDeclaration({ current = null, declared = null, isNew = fal
  * here rather than in the UI means a field edited from a screen nobody has
  * written yet is still protected.
  *
- * Returns `{ values, lockPatch }`. `lockPatch` is null when the update touched
- * no identity field; otherwise it is the `{field: true}` object the caller must
- * merge INTO the stored `identity.human_set` (see identityLockSql) rather than
- * over it — a rename must not un-protect a previously chosen avatar.
+ * Returns `{ values, voice, lockPatch }`:
  *
- * Note what is NOT returned: the caller's own `human_set`, if they sent one, is
- * discarded by that merge. A client cannot forge locks for fields it did not
- * actually write.
+ * - `values` — the caller's values with `identity` REMOVED. The identity jsonb
+ *   is never written wholesale from a client object: the only key a human may
+ *   set through this path is `voice`, so a payload like
+ *   `{"identity":{"human_set":{...}}}` (or `{"identity":{}}`) can neither
+ *   forge a lock nor erase one — it simply writes nothing.
+ * - `voice` — undefined when the update did not touch `identity.voice`;
+ *   otherwise the NORMALIZED preference to graft onto the stored column
+ *   (`{}` = the human cleared it).
+ * - `lockPatch` — null when no identity field was touched; otherwise a
+ *   `{field: boolean}` object the caller must merge INTO the stored
+ *   `identity.human_set` (see identityWriteSql) rather than over it — a rename
+ *   must not un-protect a previously chosen avatar. A field written non-empty
+ *   locks (`true`); a field explicitly CLEARED unlocks (`false`) — locking a
+ *   field at '' would pin emptiness against the agent's own declaration, and
+ *   "clear" reads as "go back to the default".
  */
 function markHumanIdentityWrite(table, values) {
- if (table !== 'workspace_agents') return { values, lockPatch: null };
- if (!values || typeof values !== 'object' || Array.isArray(values)) return { values, lockPatch: null };
+ if (table !== 'workspace_agents') return { values, voice: undefined, lockPatch: null };
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return { values, voice: undefined, lockPatch: null };
  const lockPatch = {};
  for (const field of IDENTITY_COLUMNS) {
-  if (Object.prototype.hasOwnProperty.call(values, field)) lockPatch[field] = true;
+  if (!Object.prototype.hasOwnProperty.call(values, field)) continue;
+  lockPatch[field] = String(values[field] ?? '').trim() !== '';
  }
  // The voice is not a column: it is set by writing `identity.voice`, which only
- // the voice editor does.
- const identity = values.identity;
- if (identity && typeof identity === 'object' && !Array.isArray(identity)
-  && Object.prototype.hasOwnProperty.call(identity, 'voice')) {
-  lockPatch.voice = true;
+ // the voice editor does. Validated here exactly like a declaration — a human's
+ // browser is still a client we do not control.
+ let voice;
+ const identityTouched = Object.prototype.hasOwnProperty.call(values, 'identity');
+ if (identityTouched) {
+  const identity = asObject(values.identity);
+  if (Object.prototype.hasOwnProperty.call(identity, 'voice')) {
+   voice = normalizeVoicePreference(identity.voice);
+   lockPatch.voice = Object.keys(voice).length > 0;
+  }
  }
- return { values, lockPatch: Object.keys(lockPatch).length > 0 ? lockPatch : null };
+ const next = { ...values };
+ if (identityTouched) delete next.identity;
+ return { values: next, voice, lockPatch: Object.keys(lockPatch).length > 0 ? lockPatch : null };
 }
 
 /**
- * The SET fragment that merges a lock patch into `identity.human_set`.
+ * The SET fragment for every client-driven `identity` write.
  *
- * `base` is the SQL expression for the identity value being written — the
- * column itself when the update did not touch it, or the caller's bound
- * parameter when it did. Either way `human_set` comes from the STORED row
- * unioned with the patch, never from the caller.
+ * The base is ALWAYS the stored column — never a caller's object — with the
+ * validated voice grafted in when the update touched it, and `human_set` taken
+ * from the STORED row unioned with the lock patch. There is deliberately no
+ * spelling of this fragment in which any part of the caller's own `human_set`
+ * reaches the row.
  */
-function identityLockSql(base, patchPlaceholder) {
- return `jsonb_set(coalesce(${base}, '{}'::jsonb), '{human_set}',`
+function identityWriteSql(voicePlaceholder, patchPlaceholder) {
+ const base = voicePlaceholder
+  ? `jsonb_set(coalesce("identity", '{}'::jsonb), '{voice}', ${voicePlaceholder})`
+  : `coalesce("identity", '{}'::jsonb)`;
+ return `jsonb_set(${base}, '{human_set}',`
   + ` coalesce("identity"->'human_set', '{}'::jsonb) || ${patchPlaceholder})`;
+}
+
+/**
+ * The INSERT half: a row a human creates through the generic /backend/db/insert
+ * path carries their creation-time choices, which must survive the agent's
+ * FIRST connect just as they survive every later one. Synthesizes
+ * `identity.human_set` server-side from what was actually provided — non-empty
+ * fields lock, empty ones stay open for the agent's declaration to fill — and
+ * rebuilds `identity` from scratch, so a client-supplied `human_set` (or any
+ * other junk key) never reaches the row. Only a validated `voice` survives.
+ */
+function synthesizeHumanIdentityInsert(table, row) {
+ if (table !== 'workspace_agents') return row;
+ if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+ const humanSet = {};
+ for (const field of IDENTITY_COLUMNS) {
+  if (!Object.prototype.hasOwnProperty.call(row, field)) continue;
+  if (String(row[field] ?? '').trim() !== '') humanSet[field] = true;
+ }
+ const identity = {};
+ const supplied = asObject(row.identity);
+ if (Object.prototype.hasOwnProperty.call(supplied, 'voice')) {
+  const voice = normalizeVoicePreference(supplied.voice);
+  if (Object.keys(voice).length > 0) {
+   identity.voice = voice;
+   humanSet.voice = true;
+  }
+ }
+ if (Object.keys(humanSet).length > 0) identity.human_set = humanSet;
+ return { ...row, identity };
 }
 
 module.exports = {
@@ -326,5 +377,7 @@ module.exports = {
  humanSetFields,
  applyIdentityDeclaration,
  markHumanIdentityWrite,
- identityLockSql,
+ identityWriteSql,
+ synthesizeHumanIdentityInsert,
+ FIELD_LIMITS,
 };

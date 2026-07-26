@@ -34,7 +34,7 @@ import {
  getTenantAccount,
 } from '../../shared/tenant-admin.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
-import { markHumanIdentityWrite, identityLockSql } from '../../shared/agentIdentity.cjs';
+import { markHumanIdentityWrite, identityWriteSql, synthesizeHumanIdentityInsert } from '../../shared/agentIdentity.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
@@ -1925,6 +1925,10 @@ async function handleDb(pathname, req, userId) {
     const normalized = normalizeTaskTitle(next.title);
     if (normalized.changed) next = { ...next, title: normalized.title };
    }
+   // Mirrors server/index.cjs: creation-time identity choices are HUMAN
+   // choices — synthesize the human_set locks server-side (discarding any
+   // client-supplied ones) so an agent's first connect cannot replace them.
+   next = synthesizeHumanIdentityInsert(table, next);
    return next;
   });
   if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
@@ -1961,23 +1965,22 @@ async function handleDb(pathname, req, userId) {
   if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
   await enforceDbOperationAccess({ userId, table, op: 'update', filters, payload: { values }, db: query });
   const safeValues = stripPrivilegedDbValues(table, values);
-  const keys = Object.keys(safeValues);
 
   // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded
   // in identity.human_set, so the agent's next self-declaration on connect
-  // treats it as already chosen. See shared/agentIdentity.cjs.
-  const { lockPatch } = markHumanIdentityWrite(table, safeValues);
+  // treats it as already chosen. The identity jsonb is NEVER written from the
+  // client's object — only a validated `voice` is grafted onto the STORED
+  // column in SQL — so a payload like {"identity":{"human_set":{...}}} (or
+  // {"identity":{}}) can neither forge a lock nor erase one.
+  // See shared/agentIdentity.cjs.
+  const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
+  const keys = Object.keys(markedValues);
 
   const params = [];
-  const setParts = keys.map((column) => {
-   const bound = bindDbParam(params, table, column, safeValues[column]);
-   if (column === 'identity' && lockPatch) {
-    return `"identity" = ${identityLockSql(bound, bindDbParam(params, table, 'identity', lockPatch))}`;
-   }
-   return `${quoteIdent(column)} = ${bound}`;
-  });
-  if (lockPatch && !Object.prototype.hasOwnProperty.call(safeValues, 'identity')) {
-   setParts.push(`"identity" = ${identityLockSql('"identity"', bindDbParam(params, table, 'identity', lockPatch))}`);
+  const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+  if (lockPatch) {
+   const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
+   setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
   }
   if (VERSIONED_TABLES.has(table) && values.version == null) {
    setParts.push('"version" = COALESCE("version", 0) + 1');

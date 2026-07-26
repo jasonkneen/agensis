@@ -146,6 +146,47 @@ function safeParseSandboxConfig(raw: string): Record<string, unknown> {
   try { const v = JSON.parse(raw || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
 }
 
+// The raw strings the edit form holds for an agent.
+interface AgentEditForm {
+  name: string;
+  avatar: string;
+  openPetAvatarId: string;
+  accentColor: string;
+  handle: string;
+  description: string;
+  systemPrompt: string;
+  soul: string;
+  instructions: string;
+  tools: string;
+  skills: string;
+  model: string;
+  runMode: 'builtin' | 'daemon' | 'sandbox';
+  sandboxProvider: string;
+  sandboxConfig: string;
+}
+
+// One normalization for BOTH the save candidate and the baseline captured when
+// the form was seeded — handleSave diffs the two field-by-field, and they only
+// stay comparable if they went through the same trims and fallbacks.
+function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
+  return {
+    name: form.name.trim(),
+    avatar: form.avatar.trim() || DEFAULT_AGENT_AVATAR,
+    openpet_avatar_id: form.openPetAvatarId,
+    accent_color: validAgentAccentColor(form.accentColor),
+    handle: form.handle.trim() || agentHandle(form.name),
+    description: form.description.trim(),
+    system_prompt: form.systemPrompt.trim(),
+    soul: form.soul.trim(),
+    instructions: form.instructions.trim(),
+    tools: splitList(form.tools),
+    skills: splitList(form.skills),
+    model: form.model,
+    run_mode: form.runMode,
+    ...(form.runMode === 'sandbox' ? { sandbox_provider: form.sandboxProvider, sandbox_config: safeParseSandboxConfig(form.sandboxConfig) } : {}),
+  };
+}
+
 // Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
 // documented as coming soon so the picker reflects reality, not aspiration.
 const CODING_AGENT_PROVIDERS: Array<{ id: string; name: string; note: string; available: boolean }> = [
@@ -1225,25 +1266,49 @@ function AgentDetailPane({
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
   const [disconnecting, setDisconnecting] = useState(false);
+  // What the form was seeded from, normalized exactly like a save. handleSave
+  // diffs against this so it submits ONLY the fields the human changed in THIS
+  // edit session: an untouched identity field sent along for the ride would be
+  // recorded as a human choice (identity.human_set, shared/agentIdentity.cjs)
+  // and lock the field at its current — possibly empty — value forever.
+  const editBaseline = useRef<Partial<WorkspaceAgent>>({});
 
   useEffect(() => {
     if (!agent) return;
-    setEditName(agent.name);
-    setEditAvatar(agent.avatar || DEFAULT_AGENT_AVATAR);
-    setEditOpenPetAvatarId(agent.openpet_avatar_id || '');
-    setEditAccentColor(agentAccentColor(agent));
-    setEditHandle(agent.handle || agentHandle(agent.name));
-    setEditDescription(agent.description || '');
-    setEditSystemPrompt(agent.system_prompt || '');
-    setEditSoul(agent.soul || '');
-    setEditInstructions(agent.instructions || '');
-    setEditTools(joinList(agent.tools));
-    setEditSkills(joinList(agent.skills));
-    setEditModel(agent.model || 'auto');
-    setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin');
-    setEditSandboxProvider(agent.sandbox_provider || 'e2b');
-    setEditSandboxConfig(JSON.stringify(agent.sandbox_config || {}, null, 2));
+    const seed = {
+      name: agent.name,
+      avatar: agent.avatar || DEFAULT_AGENT_AVATAR,
+      openPetAvatarId: agent.openpet_avatar_id || '',
+      accentColor: agentAccentColor(agent),
+      handle: agent.handle || agentHandle(agent.name),
+      description: agent.description || '',
+      systemPrompt: agent.system_prompt || '',
+      soul: agent.soul || '',
+      instructions: agent.instructions || '',
+      tools: joinList(agent.tools),
+      skills: joinList(agent.skills),
+      model: agent.model || 'auto',
+      runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
+      sandboxProvider: agent.sandbox_provider || 'e2b',
+      sandboxConfig: JSON.stringify(agent.sandbox_config || {}, null, 2),
+    };
+    setEditName(seed.name);
+    setEditAvatar(seed.avatar);
+    setEditOpenPetAvatarId(seed.openPetAvatarId);
+    setEditAccentColor(seed.accentColor);
+    setEditHandle(seed.handle);
+    setEditDescription(seed.description);
+    setEditSystemPrompt(seed.systemPrompt);
+    setEditSoul(seed.soul);
+    setEditInstructions(seed.instructions);
+    setEditTools(seed.tools);
+    setEditSkills(seed.skills);
+    setEditModel(seed.model);
+    setEditRunMode(seed.runMode);
+    setEditSandboxProvider(seed.sandboxProvider);
+    setEditSandboxConfig(seed.sandboxConfig);
     setDisconnecting(false);
+    editBaseline.current = agentFormUpdates(seed);
   }, [agent?.id]);
 
   if (!agent) {
@@ -1276,22 +1341,41 @@ function AgentDetailPane({
   };
 
   const handleSave = () => {
-    onSave({
-      name: editName.trim(),
-      avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
-      openpet_avatar_id: editOpenPetAvatarId,
-      accent_color: validAgentAccentColor(editAccentColor),
-      handle: editHandle.trim() || agentHandle(editName),
-      description: editDescription.trim(),
-      system_prompt: editSystemPrompt.trim(),
-      soul: editSoul.trim(),
-      instructions: editInstructions.trim(),
-      tools: splitList(editTools),
-      skills: splitList(editSkills),
+    // A SPARSE diff against the seed baseline, not the full form. Submitting an
+    // untouched field would (a) human-lock identity fields the human never
+    // chose — permanently, and at '' when they were empty — and (b) overwrite
+    // a concurrent edit with the stale value this form was opened on.
+    const candidate = agentFormUpdates({
+      name: editName,
+      avatar: editAvatar,
+      openPetAvatarId: editOpenPetAvatarId,
+      accentColor: editAccentColor,
+      handle: editHandle,
+      description: editDescription,
+      systemPrompt: editSystemPrompt,
+      soul: editSoul,
+      instructions: editInstructions,
+      tools: editTools,
+      skills: editSkills,
       model: editModel,
-      run_mode: editRunMode,
-      ...(editRunMode === 'sandbox' ? { sandbox_provider: editSandboxProvider, sandbox_config: safeParseSandboxConfig(editSandboxConfig) } : {}),
+      runMode: editRunMode,
+      sandboxProvider: editSandboxProvider,
+      sandboxConfig: editSandboxConfig,
     });
+    const baseline = editBaseline.current as Record<string, unknown>;
+    const updates: Partial<WorkspaceAgent> = {};
+    for (const key of Object.keys(candidate) as (keyof WorkspaceAgent)[]) {
+      const next = (candidate as Record<string, unknown>)[key];
+      if (JSON.stringify(next) !== JSON.stringify(baseline[key])) {
+        (updates as Record<string, unknown>)[key] = next;
+      }
+    }
+    if (Object.keys(updates).length === 0) {
+      // Nothing changed — closing the editor without a write is the whole point.
+      onCancelEdit();
+      return;
+    }
+    onSave(updates);
   };
 
   if (isEditing) {
