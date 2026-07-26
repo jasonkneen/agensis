@@ -52,7 +52,8 @@ const SYSTEM_OWNER_EMAIL_ENV = 'AGENSIS_SYSTEM_OWNER_EMAIL';
 const TENANT_LIST_LIMIT = 500;
 
 /**
- * Normalize an email for comparison: trim, lowercase.
+ * Normalize an email for comparison: trim, lowercase ASCII A-Z and nothing
+ * else.
  *
  * Deliberately `typeof === 'string'` rather than `String(value)`. A JSON body
  * can carry `['owner@example.com']` or `{ toString() {...} }`, and String()
@@ -61,11 +62,17 @@ const TENANT_LIST_LIMIT = 500;
  *
  * Also deliberately NOT clever: no plus-address stripping, no dot-folding, no
  * unicode confusable folding. Every one of those makes MORE addresses equal to
- * the owner's, and this comparison must only ever make one.
+ * the owner's, and this comparison must only ever make one. That is also why
+ * the case fold is ASCII-only rather than `toLowerCase()`: full Unicode
+ * lowercasing folds U+212A (the Kelvin sign) to `k` and friends, quietly
+ * making visually-distinct addresses equal to an ASCII owner address. A
+ * configured owner address containing non-ASCII letters therefore matches
+ * nothing — signup stores addresses ASCII-lowercased, so such a
+ * configuration fails closed instead of approximately.
  */
 function normalizeOwnerEmail(value) {
  if (typeof value !== 'string') return '';
- return value.trim().toLowerCase();
+ return value.trim().replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 /**
@@ -90,6 +97,27 @@ function isSystemOwnerEmail(callerEmail, configuredOwnerEmail) {
 /** The configured owner address, normalized. '' when unset — see fail-closed above. */
 function configuredSystemOwnerEmail(env = process.env) {
  return normalizeOwnerEmail(env?.[SYSTEM_OWNER_EMAIL_ENV]);
+}
+
+/**
+ * PURE: must ordinary signup refuse to CREATE an account with `email`?
+ *
+ * Authority on this surface derives from the email stored on the caller's
+ * app_users row, and no signup door verifies mailbox ownership. On a
+ * deployment where the configured owner has not registered yet, the first
+ * stranger to sign up with that address would therefore BECOME the system
+ * owner of every tenant. So the address is reserved: both password-signup
+ * doors and the OAuth account-creation door refuse it.
+ *
+ * Creation only. An owner account that already exists signs in exactly as
+ * before — nothing here runs against an existing row. And it is the same
+ * normalization and comparison as `isSystemOwnerEmail`, in the same file, so
+ * the reservation and the gate can never disagree about which address is
+ * special. With the env var unset this reserves NOTHING: an unconfigured
+ * deployment behaves exactly as it did before this check existed.
+ */
+function isReservedSignupEmail(email, env = process.env) {
+ return isSystemOwnerEmail(email, env?.[SYSTEM_OWNER_EMAIL_ENV]);
 }
 
 /**
@@ -265,6 +293,7 @@ module.exports = {
  normalizeOwnerEmail,
  isSystemOwnerEmail,
  configuredSystemOwnerEmail,
+ isReservedSignupEmail,
  isSystemOwnerUser,
  assertSystemOwner,
  tenantUserColumns,

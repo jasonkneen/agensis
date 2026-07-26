@@ -62,7 +62,7 @@ const {
 } = require('../shared/agentIdentity.cjs');
 const {
  assertSystemOwner,
- isSystemOwnerUser,
+ isReservedSignupEmail,
  listTenantAccounts,
  getTenantAccount,
 } = require('../shared/tenant-admin.cjs');
@@ -9997,11 +9997,20 @@ function createApp() {
  // Whether the CALLER is the owner. Answers for the caller and nobody else, so
  // it is safe for any signed-in user to ask — it is how the client decides
  // whether to render the button at all, and a 403 there would be a console
- // error on every ordinary user's session.
+ // error on every ordinary user's session. Authorization is still the ONE
+ // gate: `assertSystemOwner` runs here exactly as on the data routes, and only
+ // its 403 is translated into `{ owner: false }`. Anything else (a DB failure,
+ // say) propagates — a broken check is an error, not "not the owner".
  app.get('/backend/tenants/access', requireAuth, async (req, res) => {
   try {
    if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
-   const owner = await isSystemOwnerUser({ userId: req.userId, db: dbQuery });
+   let owner = true;
+   try {
+    await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   } catch (error) {
+    if (error?.status !== 403) throw error;
+    owner = false;
+   }
    res.json({ data: { owner }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -10487,6 +10496,13 @@ function createApp() {
    if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
    const passwordPolicy = evaluatePasswordServerSide(password);
    if (!passwordPolicy.valid) return jsonError(res, 400, new Error(passwordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
+
+   // The configured system owner's address cannot be claimed through public
+   // signup: Tenants-surface authority derives from the stored email, and
+   // signup never verifies mailbox ownership (shared/tenant-admin.cjs has the
+   // full story). Same status and message as the duplicate-account refusal
+   // below, on purpose — this response must not mark the address as special.
+   if (isReservedSignupEmail(email)) return jsonError(res, 409, new Error('An account with that email already exists'));
 
    const existing = await getDb().unsafe('select id from app_users where email = $1 limit 1', [email]);
    if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));

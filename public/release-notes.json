@@ -1,5 +1,18 @@
 [
   {
+    "version": "tenants-admin",
+    "date": "2026-07-26",
+    "title": "A Tenants view for whoever runs the deployment",
+    "summary": "If you self-host Agensis, there is now a Tenants window listing every account on your deployment and the workspaces each one owns or belongs to. It is visible only to the deployment owner — the account whose email is named in the server's AGENSIS_SYSTEM_OWNER_EMAIL setting — and it is read-only. Most people will never see it, and nothing changes for them.",
+    "highlights": [
+      "Every registered account, oldest first, with its workspace and membership counts",
+      "Open an account to see the workspaces it owns and the ones it was invited into",
+      "Owner-only, enforced on the server for every request — hiding the button is not the protection",
+      "Read-only on purpose: nothing on this screen can change or delete anyone's data",
+      "The owner's email address can no longer be claimed by someone else signing up with it first"
+    ]
+  },
+  {
     "version": "agent-voices",
     "date": "2026-07-26",
     "title": "Every agent gets its own voice",

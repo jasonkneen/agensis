@@ -29,7 +29,7 @@ import {
 } from '../../shared/backend-core.cjs';
 import {
  assertSystemOwner,
- isSystemOwnerUser,
+ isReservedSignupEmail,
  listTenantAccounts,
  getTenantAccount,
 } from '../../shared/tenant-admin.cjs';
@@ -1624,6 +1624,14 @@ async function handleAuth(pathname, req) {
 
   const policy = evaluatePasswordServerSide(password);
   if (!policy.valid) return jsonError(400, new Error(policy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
+
+  // The configured system owner's address cannot be claimed through public
+  // signup: Tenants-surface authority derives from the stored email, and
+  // signup never verifies mailbox ownership (shared/tenant-admin.cjs has the
+  // full story). Same status and message as the duplicate-account refusal
+  // below, on purpose — this response must not mark the address as special.
+  if (isReservedSignupEmail(email)) return jsonError(409, new Error('An account with that email already exists'));
+
   const existing = await query('select id from app_users where email = $1 limit 1', [email]);
   if (existing.length > 0) return jsonError(409, new Error('An account with that email already exists'));
 
@@ -1666,6 +1674,14 @@ async function handleOAuthAuth() {
  if (!email) return jsonError(401, new Error('Social login was not completed'));
 
  const existing = await query('select id, email, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
+ // This door CREATES accounts too, so the owner-address reservation applies
+ // here as well: the email is whatever the identity provider asserted, and
+ // providers differ on whether the mailbox was ever actually verified. Only
+ // creation is refused — an owner account that already exists signs in
+ // through OAuth exactly as before.
+ if (!existing[0] && isReservedSignupEmail(email)) {
+  return jsonError(409, new Error('An account with that email already exists'));
+ }
  const row = existing[0] || (await query(
   'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at, token_version',
   [email, `oauth:netlify:${identityUser.id}`],
@@ -2267,12 +2283,21 @@ async function route(req) {
  // read from app_users by their authenticated userId and compared to
  // AGENSIS_SYSTEM_OWNER_EMAIL, which must be set. No email is ever taken from
  // the request, and there is no workspace-membership path to this data.
- // `/access` answers only about the CALLER, which is why it is not owner-gated.
+ // `/access` answers only about the CALLER: it runs the same gate and
+ // translates only its 403 into `{ owner: false }`, so an ordinary session is
+ // not a console error. Anything else propagates — a broken check is an
+ // error, not "not the owner".
  if (req.method === 'GET' && pathname === '/backend/tenants/access') {
   const userId = await requireUserId(req);
   const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
   if (blocked) return blocked;
-  const owner = await isSystemOwnerUser({ userId, db: query });
+  let owner = true;
+  try {
+   await assertSystemOwner({ userId, db: query });
+  } catch (error) {
+   if (error?.status !== 403) throw error;
+   owner = false;
+  }
   return json({ data: { owner }, error: null });
  }
  if (req.method === 'GET' && pathname === '/backend/tenants') {
