@@ -56,6 +56,11 @@ const {
  verifyOrbDelivery,
 } = require('./orbs.cjs');
 const {
+ THREAD_INBOX_DEFAULT_LIMIT,
+ buildThreadInboxSql,
+ toThreadInboxItem,
+} = require('./thread-inbox.cjs');
+const {
  LINK_PREVIEW_MAX_DESCRIPTION_CHARS,
  LINK_PREVIEW_MAX_PER_REQUEST,
  LINK_PREVIEW_MAX_SITE_CHARS,
@@ -11323,6 +11328,26 @@ function createApp() {
  // reasoning. Membership is enforced exactly as every sibling workspace route
  // does (enforceWorkspaceRole 'read'); getting this wrong leaks one tenant's
  // inbox into another's.
+ // The sidebar's Threads section: message threads this person follows, newest
+ // reply first, each carrying whether it has been read. See server/thread-inbox.cjs
+ // for what counts as a thread and what counts as following one.
+ app.get('/backend/workspaces/:workspaceId/threads', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const limit = Math.trunc(Number(req.query.limit)) || THREAD_INBOX_DEFAULT_LIMIT;
+   const rows = await getDb().unsafe(buildThreadInboxSql(limit), [workspaceId, String(req.userId)]);
+   const items = rows.map(toThreadInboxItem);
+   // Counted over the returned window, like the inbox badge: more unread than
+   // the cap is a "lots" signal, not a number anyone acts on precisely.
+   const unreadCount = items.reduce((n, item) => n + (item.unread ? 1 : 0), 0);
+   res.json({ data: { items, unreadCount }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.get('/backend/workspaces/:workspaceId/inbox', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.workspaceId || '').trim();
