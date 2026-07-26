@@ -18,6 +18,13 @@ import { matchSlashItems, slashInsertText, type SlashItem } from '../lib/slashCo
 // backend mention router (which parses @[a-z0-9_.-]+ from the text) still routes
 // them. Docs are returned for the caller to pass along as its docs payload.
 
+/** Everything `clear()` throws away — enough to put a draft back. */
+export interface ComposerDraft {
+  input: string;
+  mentionedAgents: WorkspaceAgent[];
+  linkedDocs: Document[];
+}
+
 export interface ComposerMentions {
   input: string;
   setInput: (v: string) => void;
@@ -26,6 +33,10 @@ export interface ComposerMentions {
   removeAgent: (id: string) => void;
   removeDoc: (id: string) => void;
   clear: () => void;
+  /** Capture the draft before an optimistic clear. */
+  snapshot: () => ComposerDraft;
+  /** Put a captured draft back after a send that never landed. */
+  restore: (draft: ComposerDraft) => void;
   picker: 'mention' | 'slash' | null;
   filteredAgents: WorkspaceAgent[];
   filteredDocs: Document[];
@@ -204,12 +215,25 @@ export function useComposerMentions(opts: {
     closePicker();
   }, [closePicker]);
 
+  const snapshot = useCallback((): ComposerDraft => ({
+    input,
+    mentionedAgents,
+    linkedDocs,
+  }), [input, mentionedAgents, linkedDocs]);
+
+  const restore = useCallback((draft: ComposerDraft) => {
+    setInput(draft.input);
+    setMentionedAgents(draft.mentionedAgents);
+    setLinkedDocs(draft.linkedDocs);
+  }, []);
+
   return {
     input, setInput,
     mentionedAgents, linkedDocs,
     removeAgent: id => setMentionedAgents(prev => prev.filter(a => a.id !== id)),
     removeDoc: id => setLinkedDocs(prev => prev.filter(d => d.id !== id)),
     clear,
+    snapshot, restore,
     picker, filteredAgents, filteredDocs, filteredSlash,
     onInputChange, selectAgent, selectDoc, selectSlash,
     handleNavKey, buildContent, closePicker,

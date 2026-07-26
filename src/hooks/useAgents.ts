@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
-import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
+import { cachedFetch, offlineInsertResult, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
+import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { WorkspaceAgent } from '../types';
+
+export interface CreateAgentResult {
+  agent: WorkspaceAgent | null;
+  failure: WriteFailure | null;
+}
 
 export interface CreateAgentInput {
   name: string;
@@ -90,9 +96,13 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
     },
   );
 
-  const createAgent = useCallback(async (input: CreateAgentInput) => {
-    if (!workspaceId) return null;
-    const data = await offlineInsert('workspace_agents', {
+  // Returns the failure alongside the row so the create form can stay open with
+  // the filled-in fields when the insert is rejected. `!workspaceId` is its own
+  // outcome: the workspace never loaded, so no request is even made — a case
+  // that previously looked identical to success from the form's side.
+  const createAgent = useCallback(async (input: CreateAgentInput): Promise<CreateAgentResult> => {
+    if (!workspaceId) return { agent: null, failure: WORKSPACE_UNAVAILABLE };
+    const { data, error } = await offlineInsertResult('workspace_agents', {
       workspace_id: workspaceId,
       created_by: userId ?? null,
       name: input.name,
@@ -115,9 +125,9 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
     if (data) {
       const agent = data as unknown as WorkspaceAgent;
       setAgents(prev => prev.some(a => a.id === agent.id) ? prev : [...prev, agent]);
-      return agent;
+      return { agent, failure: null };
     }
-    return null;
+    return { agent: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, [workspaceId, userId]);
 
   const updateAgent = useCallback(async (id: string, updates: Partial<WorkspaceAgent>) => {

@@ -74,11 +74,12 @@ import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settin
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
 import { channelMessages } from './components/chat/channelView';
-import { useChat } from './hooks/useChat';
+import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
@@ -563,6 +564,22 @@ Use this agensis iframe SDK contract:
 First ask one concise question if the applet idea is missing. If I provide a specific applet idea, build the first version directly.`;
 }
 
+// One place for "that write did not happen". Every create/send handler below
+// routes its failure through here so a rejected write can never again look like
+// a successful one — the reason the app read as a zombie was that these paths
+// all ended in a bare `return`.
+function reportWriteFailure(action: string, failure: WriteFailure | null) {
+  const notice = failure
+    ? writeFailureNotice(action, failure)
+    : writeFailureNotice(action, {
+      kind: 'unknown',
+      retryable: true,
+      reason: 'Something went wrong and nothing was saved.',
+      detail: null,
+    });
+  toast.error(notice.title, { description: notice.description });
+}
+
 export default function App() {
   return (
     <WindowManagerProvider>
@@ -744,6 +761,17 @@ function AppContent() {
     agentConnections,
     agents,
   });
+  // The Agents window only needs to know whether to close its form; the toast
+  // carries the reason.
+  const handleCreateAgent = useCallback(async (input: CreateAgentInput): Promise<boolean> => {
+    const { agent, failure } = await createAgent(input);
+    if (!agent) {
+      reportWriteFailure('create the agent', failure);
+      return false;
+    }
+    return true;
+  }, [createAgent]);
+
   const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents, activeWorkspaceId || null);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
@@ -996,29 +1024,35 @@ function AppContent() {
   }, [topWindowId]);
 
   const handleNewChat = useCallback(async () => {
-    const session = await createSession('auto', { canvas_id: activeLayerId });
-    if (session) {
-      openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      logEvent({
-        event_type: 'chat_created',
-        entity_type: 'chat',
-        entity_id: session.id,
-        title: `New chat: ${session.title || 'Untitled'}`,
-      });
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('create the channel', failure);
+      return;
     }
+    openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'chat_created',
+      entity_type: 'chat',
+      entity_id: session.id,
+      title: `New chat: ${session.title || 'Untitled'}`,
+    });
   }, [createSession, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
     const doc = await createDocument();
-    if (doc) {
-      openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      logEvent({
-        event_type: 'document_created',
-        entity_type: 'document',
-        entity_id: doc.id,
-        title: `New document: ${doc.title || 'Untitled'}`,
-      });
+    if (!doc) {
+      // createDocument has no error channel of its own; the honest thing to say
+      // is that it did not happen, not to silently do nothing.
+      reportWriteFailure('create the document', null);
+      return;
     }
+    openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'document_created',
+      entity_type: 'document',
+      entity_id: doc.id,
+      title: `New document: ${doc.title || 'Untitled'}`,
+    });
   }, [createDocument, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleOpenMemory = useCallback(() => {
@@ -1456,13 +1490,16 @@ function AppContent() {
       direct: true,
       added_at: new Date().toISOString(),
     };
-    const session = await createSession('auto', {
+    const { session, failure } = await createSession('auto', {
       title,
       folder: 'Direct messages',
       conversation_mode: 'auto',
       participants: [participant],
     });
-    if (!session) return;
+    if (!session) {
+      reportWriteFailure(`open a conversation with ${title}`, failure);
+      return;
+    }
     setActiveSession(session);
     openWindow('chat', { title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
     logEvent({
@@ -1540,12 +1577,18 @@ function AppContent() {
     broadcastToChannel?: boolean,
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel);
+    // The result travels back to whichever composer called this: `delivered:
+    // false` means the row was rolled back, so that composer must put the
+    // user's text back instead of leaving them with an empty box.
+    return sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleCreateCustomApplet = useCallback(async () => {
-    const session = await createSession('auto', { canvas_id: activeLayerId });
-    if (!session) return;
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('start the applet chat', failure);
+      return;
+    }
 
     const title = 'Create a canvas applet';
     await updateSession(session.id, { title });
@@ -1571,14 +1614,21 @@ function AppContent() {
     model: string,
     memFacts?: MemoryFact[],
     docs?: Document[]
-  ) => {
-    const session = await createSession('auto', { canvas_id: activeLayerId });
-    if (session) {
-      openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      setTimeout(() => {
-        wrappedSendMessage(content, model, memFacts, docs, null, session);
-      }, 100);
+  ): Promise<boolean> => {
+    // The home composer has no transcript to fall back on: if the channel is
+    // never created there is nowhere for the message to appear, which is why
+    // this used to swallow the user's text whole. Report false and the composer
+    // keeps the draft.
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('start the channel', failure);
+      return false;
     }
+    openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    setTimeout(() => {
+      wrappedSendMessage(content, model, memFacts, docs, null, session);
+    }, 100);
+    return true;
   }, [createSession, openWindow, wrappedSendMessage, activeLayerId, user?.id]);
 
   const handleCreateWorkspace = useCallback(() => {
@@ -1594,11 +1644,15 @@ function AppContent() {
     description: string;
     icon: string;
   }) => {
-    const ws = await createWorkspace(name.trim(), icon.trim() || '🗂️', description.trim());
-    if (ws) {
-      setActiveWorkspaceId(ws.id);
-      setCreateWorkspaceDialogOpen(false);
+    const { workspace, failure } = await createWorkspace(name.trim(), icon.trim() || '🗂️', description.trim());
+    if (!workspace) {
+      // Leave the dialog open with what was typed still in it. Closing it on a
+      // rejected insert is the version of this bug that loses the most work.
+      reportWriteFailure('create the workspace', failure);
+      return;
     }
+    setActiveWorkspaceId(workspace.id);
+    setCreateWorkspaceDialogOpen(false);
   }, [createWorkspace]);
 
   const handleCloseWindow = useCallback((winId: string) => {
@@ -1909,7 +1963,7 @@ function AppContent() {
                   contextCountsTitle={contextCountsTitle}
                   onSelectAgent={setSelectedAgent}
                   onAgentProfile={handleOpenAgentProfile}
-                  onCreateAgent={createAgent}
+                  onCreateAgent={handleCreateAgent}
                   onUpdateAgent={updateAgent}
                   onDeleteAgent={deleteAgent}
                   onDisconnectAgent={disconnectAgent}
@@ -2296,7 +2350,7 @@ function CanvasLayerScene({
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: CreateAgentInput) => void;
+  onCreateAgent: (input: CreateAgentInput) => Promise<boolean>;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
   onDisconnectAgent: (id: string) => Promise<unknown>;
@@ -2321,7 +2375,8 @@ function CanvasLayerScene({
   onSplitThread: (source: import('./types').ChatSession) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
-  onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  // false = no channel was created, so the composer must keep the draft.
+  onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => Promise<boolean>;
   onNewDocument: () => void;
   onOpenSchedules: () => void;
   onCloseWindow: (winId: string) => void;
@@ -2332,7 +2387,9 @@ function CanvasLayerScene({
   onUngroupTiledWindows: (groupId: string) => void;
   onFocusWindowGroup: (groupId: string, leadId: string) => void;
   onShareWindow: (title: string) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
+  // Resolves `{ delivered: false }` when the message was rejected and rolled
+  // back, so the composer that called it can restore the draft.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
   onOpenSessionById: (sessionId: string) => void;
   onDeleteDocument: (id: string) => void;
@@ -3020,7 +3077,9 @@ function InactiveChatWindow({
   systemCapabilities: SystemCapabilities | null;
   contextControls: React.ReactNode;
   onSetActiveSession: (session: ChatSession) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
+  // Resolves `{ delivered: false }` when the message was rejected and rolled
+  // back, so the composer that called it can restore the draft.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
   onOpenThread: (messageId: string) => void;
 }) {
   const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
@@ -3040,7 +3099,7 @@ function InactiveChatWindow({
   const handleSendMessage = useCallback(
     (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
       onSetActiveSession(session);
-      onSendMessage(content, model, mf, docs, null, session);
+      return onSendMessage(content, model, mf, docs, null, session);
     },
     [onSetActiveSession, onSendMessage, session],
   );

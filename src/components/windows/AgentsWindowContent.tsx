@@ -98,7 +98,10 @@ interface AgentsWindowContentProps {
     run_mode?: 'builtin' | 'daemon' | 'sandbox';
     sandbox_provider?: string | null;
     sandbox_config?: Record<string, unknown>;
-  }) => void;
+    // Resolves false when the agent was NOT created, so the form can stay put
+    // with the filled-in fields instead of returning to the list as if it had
+    // worked.
+  }) => Promise<boolean>;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
   onDisconnectAgent: (id: string) => Promise<unknown>;
@@ -191,6 +194,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
   const [newSandboxConfig, setNewSandboxConfig] = useState('{}');
+  const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -269,24 +273,37 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewModel('auto');
     setNewRunMode('builtin');
   };
-  const handleCreate = () => {
-    if (!newName.trim()) return;
-    onCreateAgent({
-      name: newName.trim(),
-      avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
-      openpet_avatar_id: newOpenPetAvatarId,
-      accent_color: validAgentAccentColor(newAccentColor),
-      handle: newHandle.trim() || agentHandle(newName),
-      description: newDescription.trim(),
-      system_prompt: newSystemPrompt.trim(),
-      soul: newSoul.trim(),
-      instructions: newInstructions.trim(),
-      tools: splitList(newTools),
-      skills: splitList(newSkills),
-      model: newModel,
-      run_mode: newRunMode,
-      ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
-    });
+  // Awaits the write before resetting the form and going back to the list.
+  // Previously this fired and forgot, so a rejected create — or one that never
+  // even left the browser because the workspace hadn't loaded — landed you back
+  // on "No agents yet" looking exactly like a success.
+  const handleCreate = async () => {
+    if (!newName.trim() || creating) return;
+    setCreating(true);
+    let created = false;
+    try {
+      created = await onCreateAgent({
+        name: newName.trim(),
+        avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
+        openpet_avatar_id: newOpenPetAvatarId,
+        accent_color: validAgentAccentColor(newAccentColor),
+        handle: newHandle.trim() || agentHandle(newName),
+        description: newDescription.trim(),
+        system_prompt: newSystemPrompt.trim(),
+        soul: newSoul.trim(),
+        instructions: newInstructions.trim(),
+        tools: splitList(newTools),
+        skills: splitList(newSkills),
+        model: newModel,
+        run_mode: newRunMode,
+        ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
+      });
+    } finally {
+      setCreating(false);
+    }
+    // Not created: keep the form and everything typed into it. The caller has
+    // already said why.
+    if (!created) return;
     resetNewAgentFields();
     setCreateStep(null);
   };
@@ -506,6 +523,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onSandboxConfigChange={setNewSandboxConfig}
                 onCancel={() => setCreateStep(null)}
                 onSubmit={handleCreate}
+                submitting={creating}
                 submitLabel="Create"
                 submitIcon={<Plus data-icon="inline-start" />}
               />
@@ -763,6 +781,7 @@ function AgentForm({
   onSandboxConfigChange,
   onCancel,
   onSubmit,
+  submitting = false,
   submitLabel,
   submitIcon,
 }: {
@@ -799,6 +818,8 @@ function AgentForm({
   onSandboxConfigChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  /** Write in flight — the submit button must not fire a second one. */
+  submitting?: boolean;
   submitLabel: string;
   submitIcon: React.ReactNode;
 }) {
@@ -1083,7 +1104,7 @@ function AgentForm({
           <X data-icon="inline-start" />
           Cancel
         </Button>
-        <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit}>
+        <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit || submitting}>
           {submitIcon}
           {submitLabel}
         </Button>

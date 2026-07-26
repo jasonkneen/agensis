@@ -74,13 +74,15 @@ import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatThreadPanelProps {
   parentMessage: ChatMessage;
   threadMessages: ChatMessage[];
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
-  onSendReply: (content: string, model: string, broadcastToChannel?: boolean) => void;
+  // May resolve `{ delivered: false }` — the reply was rejected and rolled back.
+  onSendReply: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -126,14 +128,24 @@ export function ChatThreadPanel({
 
   useComposerAutosize(inputRef, m.input);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (streaming) return;
     const content = m.buildContent();
     if (!content) return;
-    onSendReply(content, model, broadcastToChannel);
+    // Same contract as the channel composer: clear now, but keep the draft so a
+    // rejected reply can be handed back rather than lost.
+    const draft = m.snapshot();
+    const previousBroadcast = broadcastToChannel;
     m.clear();
     setBroadcastToChannel(false);
     inputRef.current?.focus();
+
+    const outcome = await onSendReply(content, model, previousBroadcast);
+    if (outcome && outcome.delivered === false) {
+      m.restore(draft);
+      setBroadcastToChannel(previousBroadcast);
+      inputRef.current?.focus();
+    }
   };
 
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {

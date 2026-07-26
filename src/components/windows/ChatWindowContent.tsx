@@ -170,6 +170,7 @@ import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModel
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -193,12 +194,14 @@ interface ChatWindowContentProps {
   onSelectAgent?: (agent: WorkspaceAgent | null) => void;
   canvasGroups?: CanvasGroup[];
   canvasObjects?: CanvasObject[];
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  // May resolve `{ delivered: false }` — the message was rejected and rolled
+  // back, so the composer restores the draft instead of eating it.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void | Promise<SendOutcome | void>;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
   // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
-  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void;
+  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   readOnly?: boolean;
   channelTitle?: string;
   workspaceId?: string | null;
@@ -468,7 +471,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }).join('\n');
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() || streaming) return;
     let content = input.trim();
     if (linkedFiles.length > 0) {
@@ -477,12 +480,25 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
-    onSendMessage(content, selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    // Stay optimistic — the message appears in the transcript immediately and
+    // the box clears — but keep the draft until the write is confirmed. A
+    // rejected send rolls its row back, and without this the user's text went
+    // with it.
+    const draft = { input, linkedDocs, linkedGroups, linkedFiles };
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
     setLinkedFiles([]);
     inputRef.current?.focus();
+
+    const outcome = await onSendMessage(content, selectedModel, memoryFacts, draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined);
+    if (outcome && outcome.delivered === false) {
+      setInput(draft.input);
+      setLinkedDocs(draft.linkedDocs);
+      setLinkedGroups(draft.linkedGroups);
+      setLinkedFiles(draft.linkedFiles);
+      inputRef.current?.focus();
+    }
   };
 
   // A huddle utterance takes exactly the composer's path: a normal message,

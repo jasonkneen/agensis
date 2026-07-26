@@ -20,7 +20,7 @@ import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiBaseUrl, apiUrl } from '@/lib/backendClient';
 import { AGENT_TEMPLATES, dedupeHandle, type AgentTemplate } from '@/lib/agentTemplates';
-import type { CreateAgentInput } from '@/hooks/useAgents';
+import type { CreateAgentInput, CreateAgentResult } from '@/hooks/useAgents';
 import type { AgentConnection, WorkspaceAgent } from '../../types';
 
 interface OnboardingTourProps {
@@ -33,7 +33,7 @@ interface OnboardingTourProps {
   agents: WorkspaceAgent[];
   /** Live daemon connections, used to show the connect step's success state. */
   connections: AgentConnection[];
-  createAgent: (input: CreateAgentInput) => Promise<WorkspaceAgent | null>;
+  createAgent: (input: CreateAgentInput) => Promise<CreateAgentResult>;
 }
 
 type StepId = 'welcome' | 'builtin' | 'connect' | 'invite' | 'done';
@@ -177,7 +177,7 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
     setAddError('');
     try {
       const handle = dedupeHandle(tpl.handle, agents.map(a => a.handle || ''));
-      const created = await createAgent({
+      const { agent: created, failure } = await createAgent({
         name: handle === tpl.handle ? tpl.name : `${tpl.name} ${handle.slice(tpl.handle.length + 1)}`,
         handle,
         avatar: tpl.avatar,
@@ -188,7 +188,12 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
         model: 'auto',
         run_mode: 'builtin',
       });
-      if (!created) throw new Error('no workspace');
+      // Say what actually went wrong rather than the same generic line for a
+      // rejected insert, an expired session and a workspace that never loaded.
+      if (!created) {
+        setAddError(`Could not add ${tpl.name}. ${failure?.reason ?? 'You can create it later from the Agents window.'}`);
+        return;
+      }
       setAddedPresetIds(prev => new Set(prev).add(tpl.id));
     } catch {
       setAddError(`Could not add ${tpl.name}. You can create it later from the Agents window.`);
@@ -225,7 +230,7 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
     try {
       const baseHandle = cliId === 'codex' ? 'codex-cli' : 'coder-cli';
       const handle = dedupeHandle(baseHandle, agents.map(a => a.handle || ''));
-      const agent = await createAgent({
+      const { agent, failure } = await createAgent({
         name: cliId === 'codex' ? 'Codex' : (CODER_TEMPLATE?.name || 'Coder'),
         handle,
         avatar: CODER_TEMPLATE?.avatar,
@@ -236,7 +241,7 @@ export function OnboardingTour({ onComplete, onInvite, workspaceId, agents, conn
         model: 'auto',
         run_mode: 'builtin',
       });
-      if (!agent) throw new Error('no workspace');
+      if (!agent) throw new Error(failure?.reason ?? 'The agent could not be created.');
       // The server flips run_mode to 'daemon' and rotates the connect token here.
       const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
         method: 'POST',
