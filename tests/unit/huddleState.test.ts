@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { foldHuddleState, huddleDuration, participantSummary } from '../../src/lib/huddleState';
+import { ENDED_NOTICE_MS, foldHuddleState, huddleDuration, isRecentlyEnded, participantSummary } from '../../src/lib/huddleState';
+import type { HuddleState } from '../../src/types';
 import type { Huddle, HuddleEvent } from '../../src/types';
 
 // The client-side fold is what the channel card renders from. It must agree with
@@ -152,5 +153,48 @@ describe('huddleDuration', () => {
 
   it('never goes negative on a clock skew', () => {
     expect(huddleDuration(base, Date.parse('2026-07-25T09:00:00.000Z'))).toBe('0:00');
+  });
+});
+
+// The "Huddle ended" notice used to be `state && !state.active`, which never
+// stops being true — a channel that once held a huddle kept a permanent row
+// announcing it was over. These pin the expiry.
+describe('isRecentlyEnded', () => {
+  const NOW = Date.parse('2026-07-25T12:00:00.000Z');
+  const ended = (endedAt: string | null): HuddleState => ({
+    id: 'h1',
+    workspaceId: 'ws1',
+    sessionId: 's1',
+    roomName: 'agensis-h1',
+    startedBy: 'user-a',
+    startedAt: '2026-07-25T10:00:00.000Z',
+    endedAt,
+    active: false,
+    participants: [],
+    participantCount: 0,
+    peakParticipants: 2,
+    totalParticipants: 2,
+  });
+
+  it('is false for a live huddle', () => {
+    expect(isRecentlyEnded({ ...ended(null), active: true }, NOW)).toBe(false);
+  });
+
+  it('is false when there is no state at all', () => {
+    expect(isRecentlyEnded(null, NOW)).toBe(false);
+    expect(isRecentlyEnded(undefined, NOW)).toBe(false);
+  });
+
+  it('is true just after it ended', () => {
+    expect(isRecentlyEnded(ended(new Date(NOW - 1000).toISOString()), NOW)).toBe(true);
+  });
+
+  it('expires once the notice window passes', () => {
+    expect(isRecentlyEnded(ended(new Date(NOW - ENDED_NOTICE_MS - 1).toISOString()), NOW)).toBe(false);
+  });
+
+  it('treats an undateable ended huddle as old news, not a permanent row', () => {
+    expect(isRecentlyEnded(ended(null), NOW)).toBe(false);
+    expect(isRecentlyEnded(ended('not-a-date'), NOW)).toBe(false);
   });
 });

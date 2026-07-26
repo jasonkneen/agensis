@@ -104,3 +104,23 @@ export function huddleDuration(state: HuddleState, nowMs: number): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
 }
+
+/** How long an ended huddle stays worth mentioning. */
+export const ENDED_NOTICE_MS = 5 * 60 * 1000;
+
+/**
+ * Should the strip still show "Huddle ended"?
+ *
+ * The old test was `state && !state.active`, which is true forever — a channel
+ * that once held a huddle kept a permanent row announcing that it was over.
+ * A huddle that ended last Tuesday is not news, so the notice expires.
+ *
+ * A missing/unparseable `endedAt` reads as NOT recent: an inactive huddle we
+ * cannot date is old news by default, never a row that can't be dismissed.
+ */
+export function isRecentlyEnded(state: HuddleState | null | undefined, nowMs: number): boolean {
+  if (!state || state.active) return false;
+  const ended = timeOf(state.endedAt);
+  if (!ended) return false;
+  return nowMs - ended < ENDED_NOTICE_MS;
+}

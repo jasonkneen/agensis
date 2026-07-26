@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Headphones, Mic, MicOff, Radio, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { useHuddle } from '@/hooks/useHuddle';
+import { useHuddleSession } from './HuddleSessionContext';
 import { useSpeechInput, useSpeechOutput } from '@/hooks/useHuddleVoice';
 import { echoGuardUntil, trailingCaption } from '@/lib/huddleVoice';
-import { huddleDuration, participantSummary } from '@/lib/huddleState';
+import { huddleDuration, isRecentlyEnded, participantSummary } from '@/lib/huddleState';
 import { matchLeadingAgentName, withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { HuddleBar, type HuddleLocalState } from './HuddleBar';
 import { HuddleAgentStrip } from './HuddleAgentStrip';
@@ -63,7 +62,9 @@ export function HuddleCard({
   agents = NO_AGENTS,
   className,
 }: HuddleCardProps) {
-  const { state, configured, busy, error, connection, startOrJoin, end, leave } = useHuddle(workspaceId, sessionId);
+  // Shared with the toolbar trigger via context, so both drive one hook.
+  const session = useHuddleSession();
+  const { state, error, connection } = session ?? {};
   const [local, setLocal] = useState<HuddleLocalState>(IDLE_LOCAL);
   const [outputMuted, setOutputMuted] = useState(false);
   // Which agent hears you. Pure UI state for THIS huddle: nothing is persisted,
@@ -142,14 +143,17 @@ export function HuddleCard({
     handleUtterance,
   );
 
-  if (!workspaceId || !sessionId) return null;
+  if (!workspaceId || !sessionId || !session) return null;
 
   const live = state?.active ? state : null;
-  const recentlyEnded = state && !state.active ? state : null;
+  const recentlyEnded = isRecentlyEnded(state, Date.now()) ? state : null;
 
-  // Nothing to show and nothing to offer: LiveKit is not configured on this
-  // deployment, so don't advertise a button that can only fail.
-  if (!live && !configured) return null;
+  // The strip carries what a toolbar button cannot: who is in the call, the
+  // agent switcher, the in-call controls and the live caption. With none of
+  // those present it was a full-width row showing the word "Huddle" and one
+  // button — so idle now renders nothing at all and the trigger lives in the
+  // channel toolbar instead.
+  if (!live && !connection && !recentlyEnded && !error) return null;
 
   return (
     <div
@@ -186,30 +190,20 @@ export function HuddleCard({
         />
       )}
 
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
-        {connection ? (
+      {/* Start/Join is the toolbar's job now. Only the in-call controls, which
+          have nowhere else to go, remain here. */}
+      {connection && (
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <HuddleBar
             connection={connection}
-            onLeave={leave}
-            onEnd={() => void end()}
+            onLeave={session.leave}
+            onEnd={() => void session.end()}
             onLocalChange={handleLocalChange}
             outputMuted={outputMuted}
             onToggleOutput={() => setOutputMuted(value => !value)}
           />
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant={live ? 'default' : 'ghost'}
-            className="h-7 gap-1 px-2 text-xs"
-            disabled={busy}
-            onClick={() => void startOrJoin()}
-          >
-            <Headphones className="size-3.5" />
-            {live ? 'Join' : 'Start huddle'}
-          </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Its own full-width row (basis-full) so a long sentence never squeezes
           the controls. Present only while connected, so the strip keeps its
