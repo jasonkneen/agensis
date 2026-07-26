@@ -1,5 +1,18 @@
 [
   {
+    "version": "invite-link-dismiss",
+    "date": "2026-07-26",
+    "title": "Tidy up your invite links",
+    "summary": "Finished invite links no longer pile up in the Users window. Clear away the ones that are done, and bring them back whenever you want — nothing is deleted.",
+    "highlights": [
+      "Dismiss a revoked, accepted or expired link to get it out of the list",
+      "\"Clear spent\" tidies them all away in one go",
+      "\"Show dismissed\" brings them back, and each one has a Restore button",
+      "A link that still works can't be hidden — revoke it first",
+      "Expired links now say so instead of sitting there marked pending"
+    ]
+  },
+  {
     "version": "huddle-voice",
     "date": "2026-07-25",
     "title": "Talk to your agents",
