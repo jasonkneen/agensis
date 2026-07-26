@@ -60,6 +60,15 @@ import {
   type ProjectFileSource,
 } from '../chat/ComposerAddContent';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
+import {
+  COMPOSER_SHELL_PADDING,
+  RAIL_ANIMATION_MS,
+  parseRailPreference,
+  railPreferenceKey,
+  resolveRailState,
+  toggledRailPreference,
+  type RailPreference,
+} from '@/lib/threadWidgetRail';
 import { HuddleCard } from '../huddle/HuddleCard';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
@@ -317,8 +326,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [slashStartPos, setSlashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
-  const [widgetsCollapsed, setWidgetsCollapsed] = useState(true);
-  const [widgetsTooNarrow, setWidgetsTooNarrow] = useState(false);
+  const [railPreference, setRailPreference] = useState<RailPreference>('auto');
+  const [railHasContent, setRailHasContent] = useState(false);
+  const [railSurfaceWidth, setRailSurfaceWidth] = useState<number | null>(null);
   const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
@@ -778,14 +788,44 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
-  // Floating thread widgets overlay the message list — messages stay full
-  // width, the cards just float over the empty right-hand space (they don't
-  // reserve a column). The overlay is click-through except for the cards.
+  // Floating thread widgets. The rail shows itself once the session's widgets
+  // have content and hides again on the toolbar toggle — see
+  // `src/lib/threadWidgetRail.ts` for the whole decision, including why the
+  // message column's width is identical whether the rail is open or shut.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
   // Voice huddle strip, between the header and the transcript. Bound to THIS
   // session so the call belongs to the conversation it was called from.
   const showHuddleCard = !readOnly && !!inferredSessionId && !!workspaceId;
-  const widgetsActive = showWidgetRail && !widgetsCollapsed && !widgetsTooNarrow;
+  const rail = useMemo(
+    () => resolveRailState({ hasContent: railHasContent, preference: railPreference, surfaceWidth: railSurfaceWidth }),
+    [railHasContent, railPreference, railSurfaceWidth],
+  );
+  const railOpen = showWidgetRail && rail.open;
+  // Space the chat body gives up so the rail can sit BESIDE the conversation.
+  // Zero unless there's room for it without narrowing the message column.
+  const railReserve = railOpen ? rail.reserve : 0;
+  // Only while floating on top does anything inside a message row need to dodge
+  // the cards — beside the conversation, the row never reaches them.
+  const railOverlaying = railOpen && rail.layout === 'overlay';
+  // Nothing to toggle until the session has widgets — but once the user has
+  // closed the rail by hand the control has to stay, or there's no way back.
+  const showWidgetRailToggle = showWidgetRail && (railHasContent || railPreference !== 'auto');
+  const toggleWidgetRail = useCallback(() => {
+    const next = toggledRailPreference(rail.open);
+    setRailPreference(next);
+    if (inferredSessionId) {
+      try { localStorage.setItem(railPreferenceKey(inferredSessionId), next); } catch { /* ignore quota */ }
+    }
+  }, [rail.open, inferredSessionId]);
+  // A choice made by hand is per session and sticky: reload it when the session
+  // changes, and drop the content flag so the new session's rail doesn't
+  // inherit the last one's answer before its own items have loaded.
+  useEffect(() => {
+    setRailHasContent(false);
+    if (!inferredSessionId) { setRailPreference('auto'); return; }
+    try { setRailPreference(parseRailPreference(localStorage.getItem(railPreferenceKey(inferredSessionId)))); }
+    catch { setRailPreference('auto'); }
+  }, [inferredSessionId]);
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
   const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
@@ -1426,6 +1466,28 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
+            {/* Thread widgets show themselves once they have content, so this is
+                only ever the "put it back" / "get it out of my way" control —
+                which is why it appears next to the "..." menu instead of inside
+                it, and why it isn't rendered at all for a session with no
+                widgets and no choice on record. */}
+            {showWidgetRailToggle && (
+              <Button
+                type="button"
+                variant={railOpen ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2"
+                disabled={rail.layout === 'hidden'}
+                aria-pressed={railOpen}
+                title={rail.layout === 'hidden'
+                  ? 'Widen the window to show thread widgets'
+                  : railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
+                aria-label={railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
+                onClick={toggleWidgetRail}
+              >
+                {railOpen ? <PanelRightClose /> : <PanelRightOpen />}
+              </Button>
+            )}
             {/* Overflow. Everything that isn't Messages / Files / Threads lives
                 here — this row previously carried nine labelled ghost buttons
                 inside a fixed h-11 strip with overflow-hidden, so on a narrow
@@ -1467,22 +1529,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                   <Eraser data-icon="inline-start" />
                   Clear this view
                 </DropdownMenuItem>
-                {showWidgetRail && (
-                  <DropdownMenuItem
-                    disabled={widgetsTooNarrow}
-                    onSelect={event => {
-                      event.preventDefault();
-                      setWidgetsCollapsed(v => !v);
-                    }}
-                  >
-                    {widgetsCollapsed ? <PanelRightOpen data-icon="inline-start" /> : <PanelRightClose data-icon="inline-start" />}
-                    {widgetsTooNarrow
-                      ? 'Widen the window to show widgets'
-                      : widgetsCollapsed
-                        ? 'Show thread widgets'
-                        : 'Hide thread widgets'}
-                  </DropdownMenuItem>
-                )}
                 {!isDirectMessage && contextControls && (
                   <>
                     <DropdownMenuSeparator />
@@ -1504,7 +1550,19 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         </HuddleSessionProvider>
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
-            <MessageScrollerViewport onScroll={handleScrollerScroll}>
+            {/* The rail's width comes out of the SURFACE, never out of the
+                message column: reserving it here shifts the centred column
+                left and leaves its rendered width identical to the closed
+                state (the reserve is only ever non-zero when the surface has
+                the room). Padding the scroll viewport rather than the rows is
+                the whole fix — `pr-[300px]` on each row used to take 220px
+                straight off the 800px column, which is why code blocks grew a
+                horizontal scrollbar and prose wrapped mid-window. */}
+            <MessageScrollerViewport
+              onScroll={handleScrollerScroll}
+              className="transition-[padding] ease-out motion-reduce:transition-none"
+              style={{ paddingRight: railReserve || undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+            >
               <MessageScrollerContent className={cn('min-h-full gap-0 py-2', CHAT_COLUMN_CLASS)}>
                 {clearedAt && hiddenCount > 0 && (
                   <button
@@ -1585,7 +1643,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           onAgentProfile={openAgentProfilePanel}
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
-                          widgetsActive={widgetsActive}
+                          widgetsOverlaying={railOverlaying}
                           currentUserId={currentUserId}
                           onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
                         />
@@ -1600,8 +1658,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
               <ThreadWidgetRail
                 workspaceId={workspaceId}
                 sessionId={inferredSessionId}
-                collapsed={widgetsCollapsed}
-                onTooNarrowChange={setWidgetsTooNarrow}
+                open={rail.open}
+                layout={rail.layout}
+                onSurfaceWidthChange={setRailSurfaceWidth}
+                onContentChange={setRailHasContent}
                 onJumpToMessage={handleJumpToMessage}
                 onBlockerAnswered={(item, response) => {
                   // Post the answered blocker back into the chat so it's tracked
@@ -1639,7 +1699,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </span>
               </div>
             )}
-            <div className={COMPOSER_SHELL_CLASS}>
+            {/* Match the message column's shift so the composer stays under the
+                conversation rather than under the rail. COMPOSER_SHELL_CLASS's
+                own `p-2` is 8px, so the reserve is added on top of it — that's
+                what keeps the two 800px columns on the same centre line. */}
+            <div
+              className={cn(COMPOSER_SHELL_CLASS, 'transition-[padding] ease-out motion-reduce:transition-none')}
+              style={{ paddingRight: railReserve ? railReserve + COMPOSER_SHELL_PADDING : undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+            >
               {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
                 <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
                   {linkedFiles.map(file => (
@@ -2227,7 +2294,7 @@ function ChatMessageBubble({
   onAgentProfile,
   subThreads,
   onOpenSubThread,
-  widgetsActive,
+  widgetsOverlaying,
   currentUserId,
   onToggleReaction,
 }: {
@@ -2251,7 +2318,7 @@ function ChatMessageBubble({
   onAgentProfile?: (agentIdOrHandle: string) => void;
   subThreads?: ChatSession[];
   onOpenSubThread?: (session: ChatSession) => void;
-  widgetsActive?: boolean;
+  widgetsOverlaying?: boolean;
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
 }) {
@@ -2281,7 +2348,7 @@ function ChatMessageBubble({
 
   return (
     <div
-      className={cn('chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 hover:bg-muted/40', widgetsActive ? 'pr-[300px]' : 'pr-20')}
+      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40"
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >
@@ -2422,7 +2489,7 @@ function ChatMessageBubble({
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)
           instead of scrolling off the top with the message header. */}
-      <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsActive ? 'right-[288px]' : 'right-3')}>
+      <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsOverlaying ? 'right-[288px]' : 'right-3')}>
         <div className="pointer-events-auto sticky top-2 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
           {onToggleReaction && (
             <Popover open={reactionPickerOpen} onOpenChange={setReactionPickerOpen}>

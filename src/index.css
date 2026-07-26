@@ -1865,6 +1865,31 @@
  box-shadow: var(--shadow-lg);
 }
 
+/* Too narrow to seat the rail beside the conversation (see
+   RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
+   squeezing the message column, the cards float ON TOP of it. Heavier
+   elevation is what tells the eye they're above the text, not in a column of
+   their own. */
+.thread-widget-overlay[data-rail-layout="overlay"] .thread-widget-card {
+ box-shadow: var(--shadow-xl);
+}
+
+/* ...and a soft wash behind them, fading in from the left. Without it the
+   cards slice sentences mid-word and the result reads as broken text rather
+   than as a panel sitting on top of it. Painted before the cards (they're
+   position:relative and later in the DOM), so only the gaps get washed. */
+.thread-widget-overlay[data-rail-layout="overlay"]::before {
+ content: '';
+ position: absolute;
+ inset: 0;
+ pointer-events: none;
+ background: linear-gradient(to right,
+   transparent,
+   color-mix(in srgb, var(--channel-surface, var(--card)) 88%, transparent) 28px);
+ backdrop-filter: blur(3px);
+ -webkit-backdrop-filter: blur(3px);
+}
+
 /* Neo/brutal: match the 2px ink border every other card surface gets
    ([data-slot="card"], line ~638). These cards aren't data-slot cards, so
    without this they stayed at Tailwind's 1px .border while the shadow already
