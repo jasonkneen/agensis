@@ -75,8 +75,13 @@ import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
-import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT, WORKSPACE_RAIL_WIDTH } from './lib/workspaceLayout';
-import { pickInitialWorkspaceId } from './lib/workspaceRail';
+import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import {
+  clampWorkspaceRailWidth,
+  pickInitialWorkspaceId,
+  readWorkspaceRailWidth,
+  WORKSPACE_RAIL_COLLAPSED_WIDTH,
+} from './lib/workspaceRail';
 import {
   buildDesktopOverlay,
   DESKTOP_TIER_EMPTY_MESSAGE,
@@ -134,6 +139,7 @@ const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowCont
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
 const ACTIVE_WORKSPACE_KEY = 'agensis_active_workspace';
+const WORKSPACE_RAIL_WIDTH_KEY = 'agensis_workspace_rail_width';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
@@ -610,7 +616,22 @@ function AppContent() {
     () => localStorage.getItem(ACTIVE_WORKSPACE_KEY) || '',
   );
   const [showTour, setShowTour] = useState(false);
+  // The workspace rail is resizable, and its width is the canvas viewport's
+  // leading inset (Sidebar's `leadingInset`), so App owns it rather than the
+  // rail — a width kept private to the rail would leave every floating window
+  // positioned against the old one. The rail commits once per drag, on release.
+  const [workspaceRailWidth, setWorkspaceRailWidth] = useState(
+    () => readWorkspaceRailWidth(localStorage.getItem(WORKSPACE_RAIL_WIDTH_KEY)),
+  );
+  const handleWorkspaceRailWidthChange = useCallback((next: number) => {
+    const clamped = clampWorkspaceRailWidth(next);
+    setWorkspaceRailWidth(clamped);
+    localStorage.setItem(WORKSPACE_RAIL_WIDTH_KEY, String(clamped));
+  }, []);
   const isMobile = useIsMobile();
+  // Phone: the rail rides inside the off-canvas drawer beside a full-width
+  // sidebar, so it stays the icon strip whatever width was saved on desktop.
+  const renderedRailWidth = isMobile ? WORKSPACE_RAIL_COLLAPSED_WIDTH : workspaceRailWidth;
   // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
   // instead of an inline rail, so the workspace canvas gets the full screen width.
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -1832,6 +1853,11 @@ function AppContent() {
             onSelectWorkspace={setActiveWorkspaceId}
             onCreateWorkspace={handleCreateWorkspace}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+            // Phone: the rail rides inside the off-canvas drawer beside a
+            // full sidebar, so it stays the icon strip and is not resizable.
+            width={renderedRailWidth}
+            onWidthChange={handleWorkspaceRailWidthChange}
+            resizable={!isMobile}
           />
           <Sidebar
             workspace={activeWorkspace}
@@ -1839,8 +1865,9 @@ function AppContent() {
             overlay={isMobile}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // The rail sits left of the sidebar, so the canvas viewport's left
-            // inset is rail + sidebar, not sidebar alone.
-            leadingInset={isMobile ? 0 : WORKSPACE_RAIL_WIDTH}
+            // inset is rail + sidebar, not sidebar alone. The rail is resizable,
+            // so this is its LIVE width, never the 52px collapsed constant.
+            leadingInset={isMobile ? 0 : renderedRailWidth}
             collapsed={isMobile ? false : sidebarCollapsed}
             onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
             onOpenCommandPalette={handleOpenCommandPalette}
