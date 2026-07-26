@@ -91,6 +91,7 @@ import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAcce
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import {
@@ -1713,19 +1714,38 @@ function AgentDetailPane({
           <AgentDetailTokenSection title="Tools" items={tools} empty="No tools configured" />
           <AgentDetailTokenSection title="Skills" items={skills} empty="No skills configured" />
 
+          {/* These three fields ARE markdown documents — soul especially, which
+              the daemon mirrors to disk as soul.md — and they were rendered as
+              raw pre-wrapped text, so headings, lists and emphasis showed as
+              literal #, - and **. Rendered through the app's own markdown
+              component (the one chat and the memory browser use, which builds
+              elements itself and never injects HTML — soul is agent-authored,
+              so that matters). Compact, because this is a narrow side pane and
+              not a message body. */}
           {agent.system_prompt && (
             <AgentDetailSection title="System prompt">
-              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.system_prompt}</p>
+              <div className="min-w-0 max-h-36 overflow-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.system_prompt} compact />
+              </div>
             </AgentDetailSection>
           )}
           {agent.instructions && (
             <AgentDetailSection title="Instructions">
-              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.instructions}</p>
+              <div className="min-w-0 max-h-36 overflow-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.instructions} compact />
+              </div>
             </AgentDetailSection>
           )}
           {agent.soul && (
             <AgentDetailSection title="Soul">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{agent.soul}</p>
+              {/* No height cap: a soul is the one field a human reads in full,
+                  and the pane already scrolls. min-w-0 + overflow-x matter
+                  because .chat-markdown is a GRID, whose children default to
+                  min-width:auto — a fenced code block would otherwise widen
+                  this fixed-width pane instead of scrolling inside it. */}
+              <div className="min-w-0 overflow-x-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.soul} compact />
+              </div>
             </AgentDetailSection>
           )}
 
