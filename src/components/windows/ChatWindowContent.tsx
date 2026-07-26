@@ -167,7 +167,9 @@ import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
-import { COMPOSER_ADDON_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
+import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -343,6 +345,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const folderInputRef = useRef<HTMLInputElement>(null);
   const sidePanelRef = useRef<HTMLElement | null>(null);
   const autoOpenedProfileForRef = useRef<string | null>(null);
+
+  useComposerAutosize(inputRef, input);
 
   const filteredDocs = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
@@ -1619,7 +1623,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </span>
               </div>
             )}
-            <div className="channel-composer border-t border-border p-2">
+            <div className={COMPOSER_SHELL_CLASS}>
               {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
                 <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
                   {linkedFiles.map(file => (
@@ -1793,8 +1797,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                     onKeyDown={handleKeyDown}
                     onPaste={handleComposerPaste}
                     placeholder={isDirectMessage
-                      ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
-                      : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
+                      ? directMessageComposerPlaceholder(directAgent?.name || channelTitle)
+                      : channelComposerPlaceholder(channelTitle)}
                     disabled={streaming}
                     rows={1}
                     className={COMPOSER_TEXTAREA_CLASS}
