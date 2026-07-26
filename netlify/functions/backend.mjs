@@ -105,9 +105,47 @@ const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json
 const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
 let database;
 
+// The whole architecture is TWO BACKENDS OVER ONE DATABASE (see AGENTS.md), so
+// which connection string wins here is load-bearing, not a detail.
+//
+// This used to read NETLIFY_DB_URL || NETLIFY_DATABASE_URL || DATABASE_URL, which
+// let a Netlify-provisioned database silently outrank the one an operator had
+// explicitly configured. In production it did exactly that, and the two backends
+// ended up on DIFFERENT databases:
+//
+//   - Google sign-in is the ONE route that must run on the Netlify origin (it
+//     needs the edge-injected identity context), so it created the account here,
+//     in the auto-provisioned database, and minted a token for it.
+//   - Every other call goes to the Fly backend, which uses the real shared
+//     database, could not find that user, and returned 401.
+//
+// The result was a user who signed in successfully and then got 401 on every
+// single request, forever. No OAuth account ever reached the real database.
+//
+// Explicit configuration therefore wins, and the auto-provisioned vars are only
+// a fallback for an environment where nobody set DATABASE_URL (matching how
+// server/index.cjs resolves AUTH_SECRET: env first, generated fallback second).
+export const DB_URL_VARS = ['DATABASE_URL', 'NETLIFY_DB_URL', 'NETLIFY_DATABASE_URL'];
+
+/** Exported so the precedence can be tested without a live database. */
+export function resolveDbUrl(env = process.env) {
+ for (const name of DB_URL_VARS) {
+  const value = String(env[name] || '').trim();
+  if (value) return { connectionString: value, source: name };
+ }
+ return { connectionString: '', source: null };
+}
+
 function dbPool() {
  if (!database) {
-  const connectionString = process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
+  const { connectionString, source } = resolveDbUrl();
+  // Loud, once, at cold start: a backend quietly talking to the wrong database
+  // is the most expensive failure this file can have, and it is invisible from
+  // the outside — every response looks healthy.
+  const shadowed = DB_URL_VARS.filter(name => name !== source && String(process.env[name] || '').trim());
+  if (source && shadowed.length > 0) {
+   console.warn(`[db] using ${source}; ignoring also-set ${shadowed.join(', ')}`);
+  }
   database = connectionString ? getDatabase({ connectionString }) : getDatabase();
  }
  return database.pool;
