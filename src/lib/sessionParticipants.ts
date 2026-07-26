@@ -77,3 +77,46 @@ export function dedupeSessionParticipants<T>(participants: readonly T[]): T[] {
   }
   return out;
 }
+
+/**
+ * Who to show as being in a channel.
+ *
+ * The stored roster decides MEMBERSHIP; presence only decorates it. This merged
+ * workspace presence in wholesale once, so every agent online anywhere in the
+ * workspace appeared in every channel — "4 in the room, no one there because
+ * they are not really there", while the huddle (which reads the stored roster)
+ * correctly said one. Worse, the add dialog then offered those agents as "Add",
+ * and adding them looked like it created duplicates.
+ *
+ * Agents join by being ADDED. Humans join by being HERE — a person with the
+ * channel open is in it, which is what presence means for people — so live
+ * humans are merged and live agents are not.
+ */
+export function buildChannelRoster<TStored extends { id: string }, TOut>({
+  stored,
+  present,
+  decorate,
+  limit = 6,
+}: {
+  stored: readonly TStored[];
+  present: readonly { id: string; kind?: string; name: string; status?: string | null; isCurrentUser?: boolean }[];
+  decorate: (participant: TStored) => TOut;
+  limit?: number;
+}): TOut[] {
+  const map = new Map<string, TOut>();
+  for (const participant of stored) map.set(participant.id, decorate(participant));
+  for (const person of present) {
+    if (person.kind === 'agent') continue;
+    const id = `user:${person.id}`;
+    map.set(id, {
+      id,
+      name: person.isCurrentUser ? 'You' : person.name,
+      kind: 'user',
+      status: person.status ?? null,
+      user_id: person.id,
+      agent_id: null,
+      connected: Boolean(person.status && person.status !== 'offline'),
+    } as unknown as TOut);
+  }
+  return Array.from(map.values()).slice(0, limit);
+}
