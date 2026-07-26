@@ -88,9 +88,20 @@ function makeDb({
   // Only the COUNT matters here: it is one half of "did this huddle leave a
   // trace worth marking in the channel".
   transcriptCounts = {},
+  // Liveness rows: { huddle_id, identity, connection_epoch, last_seen_at,
+  // heartbeat_at, reaped_at }. Modelled for real (not stubbed out) because the
+  // reaper now runs on EVERY huddle read — a fake that threw on its SQL would
+  // hide the reap behind the route's best-effort catch and every test in this
+  // file would pass while the feature did nothing.
+  presenceRows = [],
+  // Is an agent mid-turn? The reaper asks before ending an empty huddle.
+  agentBusy = false,
 } = {}) {
   const calls = [];
-  const state = { huddles: [...huddleRows], events: [...eventRows], messages: [], chatSessions: [] };
+  const state = {
+    huddles: [...huddleRows], events: [...eventRows], messages: [], chatSessions: [],
+    presence: presenceRows.map((row) => ({ connection_epoch: '', heartbeat_at: null, reaped_at: null, ...row })),
+  };
   let seq = state.events.length;
   const db = {
     calls,
@@ -203,6 +214,51 @@ function makeDb({
         if (!row) return [];
         row.ended_at = new Date().toISOString();
         return [row];
+      }
+      // --- liveness -------------------------------------------------------
+      if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at from huddle_presence')) {
+        return state.presence.filter((p) => p.huddle_id === params[0]);
+      }
+      if (n.startsWith('insert into huddle_presence')) {
+        const [huddleId, identity, epoch, beat] = params;
+        const now = new Date().toISOString();
+        const existing = state.presence.find((p) => p.huddle_id === huddleId && p.identity === identity);
+        if (existing) {
+          // RETURNING hands back the row AFTER the update, and the real
+          // statement never clears reaped_at — which is exactly how the
+          // heartbeat learns it was reaped while away.
+          existing.connection_epoch = epoch;
+          existing.last_seen_at = now;
+          if (beat) existing.heartbeat_at = now;
+          return [{ ...existing }];
+        }
+        const row = {
+          huddle_id: huddleId, identity, connection_epoch: epoch,
+          last_seen_at: now, heartbeat_at: beat ? now : null, reaped_at: null,
+        };
+        state.presence.push(row);
+        return [{ ...row }];
+      }
+      if (n.startsWith('update huddle_presence set reaped_at = now()')) {
+        const row = state.presence.find((p) => p.huddle_id === params[0] && p.identity === params[1]);
+        if (row) row.reaped_at = new Date().toISOString();
+        return [];
+      }
+      if (n.startsWith('update huddle_presence set reaped_at = null')) {
+        const row = state.presence.find((p) => p.huddle_id === params[0] && p.identity === params[1]);
+        if (row) row.reaped_at = null;
+        return [];
+      }
+      if (n.startsWith('delete from huddle_presence where huddle_id = $1 and identity = $2')) {
+        state.presence = state.presence.filter((p) => !(p.huddle_id === params[0] && p.identity === params[1]));
+        return [];
+      }
+      if (n.startsWith('delete from huddle_presence where huddle_id = $1')) {
+        state.presence = state.presence.filter((p) => p.huddle_id !== params[0]);
+        return [];
+      }
+      if (n.startsWith('select 1 from agent_jobs')) {
+        return agentBusy ? [{ ok: 1 }] : [];
       }
       // Nested workspaces: the inherited-role ancestor walk, reached whenever a
       // direct role does not carry the capability — the non-member and
@@ -1286,12 +1342,558 @@ test('a NON-MEMBER cannot report presence into someone else\'s huddle', async ()
   await withServer(app, async (baseUrl) => {
     const token = await __test.issueToken(STRANGER, '1');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    for (const door of ['confirm', 'leave']) {
+    for (const door of ['confirm', 'leave', 'heartbeat']) {
       const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/${door}`, {
         method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 1 }),
       });
       assert.equal(res.status, 403, door);
     }
     assert.equal(db.state.events.length, 0, 'nothing was recorded');
+    assert.equal(db.state.presence.length, 0, 'and no presence was claimed');
   });
+});
+
+// ---------------------------------------------------------------------------
+// 5. LIVENESS — the reaper
+// ---------------------------------------------------------------------------
+//
+// Self-reported presence has exactly one failure mode, and it is the mirror
+// image of the one it fixed: a browser that CRASHES, loses power or is
+// force-quit never posts its /leave, so it stays in the roster forever. The
+// huddle then shows people who are not there. The LiveKit webhook was the only
+// other witness, and the project's webhook has been DELETED — so presence has
+// to expire on its own.
+//
+// The whole decision is two pure functions over timestamps. That is not an
+// aesthetic choice: the property that matters most here — "a tab that is merely
+// BACKGROUNDED, and therefore throttled to about one timer wake per minute,
+// must not be kicked out of a call it is still in" — is a statement about a
+// gap, and a gap is not something you can assert about a WHERE clause.
+
+const MINUTE = 60_000;
+const ago = (ms) => new Date(Date.now() - ms).toISOString();
+
+const presenceRow = (identity, { heartbeatAgo = null, seenAgo = 0, epoch = '111', reapedAgo = null } = {}) => ({
+  huddle_id: HUDDLE_ID,
+  identity,
+  connection_epoch: epoch,
+  last_seen_at: ago(seenAgo),
+  heartbeat_at: heartbeatAgo === null ? null : ago(heartbeatAgo),
+  reaped_at: reapedAgo === null ? null : ago(reapedAgo),
+});
+
+const joinEvent = (identity, name, agoMs, seq) => ({
+  id: `e-${identity}-${seq}`, huddle_id: HUDDLE_ID, workspace_id: WS, session_id: SESSION,
+  kind: 'participant_joined', identity, display_name: name, event_id: `self:join:${identity}:111`,
+  seq, created_at: ago(agoMs),
+});
+
+// --- the pure decision ------------------------------------------------------
+
+test('a FRESH heartbeat survives, and a STALE one is reaped', () => {
+  const participants = [{ identity: 'user:a' }, { identity: 'user:b' }];
+  const nowMs = Date.now();
+  const stale = huddles.staleHuddleIdentities({
+    participants,
+    presence: [
+      { identity: 'user:a', heartbeat_at: new Date(nowMs - 10_000).toISOString() },
+      { identity: 'user:b', heartbeat_at: new Date(nowMs - 10 * MINUTE).toISOString() },
+    ],
+    nowMs,
+  });
+  assert.deepEqual(stale, ['user:b']);
+});
+
+test('a BACKGROUNDED tab is not reaped — the gap a throttled timer produces', () => {
+  // Chrome clamps a hidden page to roughly ONE timer wake per minute (and
+  // Safari/Firefox are comparable), so a participant who alt-tabs away beats at
+  // 60s instead of 30s. Reaping that person removes a live human from a call
+  // they are still talking in, which is a worse bug than the one being fixed.
+  const nowMs = Date.now();
+  const gapSurvives = (seconds, label) => {
+    const stale = huddles.staleHuddleIdentities({
+      participants: [{ identity: 'user:a' }],
+      presence: [{ identity: 'user:a', heartbeat_at: new Date(nowMs - seconds * 1000).toISOString() }],
+      nowMs,
+    });
+    assert.deepEqual(stale, [], label);
+  };
+  gapSurvives(30, 'a normal beat');
+  gapSurvives(60, 'one clamped background wake');
+  gapSurvives(120, 'TWO consecutive clamped wakes missed');
+  gapSurvives(149, 'right up to the threshold');
+
+  // And past it, they go.
+  assert.deepEqual(
+    huddles.staleHuddleIdentities({
+      participants: [{ identity: 'user:a' }],
+      presence: [{ identity: 'user:a', heartbeat_at: new Date(nowMs - 151_000).toISOString() }],
+      nowMs,
+    }),
+    ['user:a'],
+  );
+  // The threshold has to be at least twice the worst-case clamp or the test
+  // above is passing by luck.
+  assert.ok(huddles.HUDDLE_PRESENCE_STALE_MS >= 2 * MINUTE);
+  assert.ok(huddles.HUDDLE_HEARTBEAT_INTERVAL_MS * 4 <= huddles.HUDDLE_PRESENCE_STALE_MS,
+    'a foreground tab must get several attempts inside the window');
+});
+
+test('a participant this server never heard beat is NEVER reaped', () => {
+  const nowMs = Date.now();
+  // Two ways to be un-reapable, and both matter:
+  //   - no presence row at all: the identity came from LiveKit's webhook, and
+  //     the webhook is also what would report its leave.
+  //   - a row with no heartbeat: an OLDER FRONTEND, which confirms but does not
+  //     beat. Netlify and Fly deploy independently, so between the two deploys
+  //     every live participant looks exactly like this. Expiring them would
+  //     empty every huddle in the app.
+  assert.deepEqual(
+    huddles.staleHuddleIdentities({
+      participants: [{ identity: 'user:webhook' }, { identity: 'user:old' }],
+      presence: [{ identity: 'user:old', last_seen_at: new Date(nowMs - MINUTE).toISOString(), heartbeat_at: null }],
+      nowMs,
+    }),
+    [],
+  );
+});
+
+test('an EMPTY huddle ends — but not while anything is still happening in it', () => {
+  const nowMs = Date.now();
+  const base = { participantCount: 0, lastActivityAtMs: nowMs - 10 * MINUTE, nowMs };
+
+  assert.equal(huddles.shouldEndEmptyHuddle(base), true, 'nobody here, nothing happening');
+  assert.equal(
+    huddles.shouldEndEmptyHuddle({ ...base, participantCount: 1 }),
+    false,
+    'somebody is in it',
+  );
+  assert.equal(
+    huddles.shouldEndEmptyHuddle({ ...base, agentBusy: true }),
+    false,
+    'an agent mid-turn is still writing into this huddle',
+  );
+  assert.equal(
+    huddles.shouldEndEmptyHuddle({ ...base, lastActivityAtMs: nowMs - 20_000 }),
+    false,
+    'inside the grace: somebody may be reconnecting',
+  );
+  assert.equal(
+    huddles.shouldEndEmptyHuddle({ ...base, lastActivityAtMs: 0 }),
+    false,
+    'a huddle we cannot put a clock on is never guessed at',
+  );
+  // A brand-new huddle has a roster of nobody until the first confirm lands.
+  // Without the grace, creating one would end it on the very next read.
+  assert.equal(
+    huddles.shouldEndEmptyHuddle({ participantCount: 0, lastActivityAtMs: nowMs, nowMs }),
+    false,
+    'a huddle that started a moment ago must survive its own first read',
+  );
+});
+
+test('the activity clock reads the LATEST of start, events and presence', () => {
+  const started = '2026-07-26T10:00:00.000Z';
+  const huddle = { started_at: started };
+  assert.equal(huddles.huddleLastActivityAt(huddle, [], []), Date.parse(started));
+  assert.equal(
+    huddles.huddleLastActivityAt(huddle, [{ created_at: '2026-07-26T10:05:00.000Z' }], []),
+    Date.parse('2026-07-26T10:05:00.000Z'),
+  );
+  assert.equal(
+    huddles.huddleLastActivityAt(
+      huddle,
+      [{ created_at: '2026-07-26T10:05:00.000Z' }],
+      [{ last_seen_at: '2026-07-26T10:09:00.000Z', heartbeat_at: '2026-07-26T10:08:00.000Z' }],
+    ),
+    Date.parse('2026-07-26T10:09:00.000Z'),
+  );
+});
+
+// --- the reap, through the routes -------------------------------------------
+
+test('reading a huddle reaps the crashed browser and leaves the live one alone', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    eventRows: [joinEvent('user:a', 'Ada', 5 * MINUTE, 1), joinEvent('user:b', 'Sam', 5 * MINUTE, 2)],
+    // Ada's laptop was force-quit four minutes ago; Sam is still talking.
+    presenceRows: [
+      presenceRow('user:a', { heartbeatAgo: 4 * MINUTE, seenAgo: 4 * MINUTE }),
+      presenceRow('user:b', { heartbeatAgo: 5_000, seenAgo: 5_000, epoch: '222' }),
+    ],
+  });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+
+    // The roster the client is handed has already had the ghost removed —
+    // there is no window in which this route returns someone it knows is gone.
+    assert.deepEqual(body.data.state.participants.map((p) => p.identity), ['user:b']);
+    assert.equal(body.data.state.active, true, 'somebody is still in it');
+
+    const left = db.state.events.filter((e) => e.kind === 'participant_left');
+    assert.equal(left.length, 1);
+    assert.equal(left[0].identity, 'user:a');
+    assert.equal(left[0].display_name, 'Ada', 'the leave carries the name the join did');
+    // Namespaced and deterministic: a retry, or a second Fly machine reaping the
+    // same huddle at the same moment, collapses onto this one row.
+    assert.equal(left[0].event_id, 'reap:leave:user:a:111');
+    // And it can never collide with the browser's own leave for that connection.
+    assert.notEqual(left[0].event_id, 'self:leave:user:a:111');
+
+    // Live, so the card corrects itself without a refetch.
+    assert.ok(broadcasts.some((b) => b.table === 'huddle_events' && b.eventType === 'INSERT'));
+    // Marked, so the reaped browser's next heartbeat knows to re-announce.
+    assert.ok(db.state.presence.find((p) => p.identity === 'user:a').reaped_at);
+    assert.equal(db.state.presence.find((p) => p.identity === 'user:b').reaped_at, null);
+  });
+});
+
+test('a huddle whose every participant was reaped ENDS, and leaves its marker', async () => {
+  const rooms = [];
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(20 * MINUTE) })],
+    eventRows: [joinEvent('user:a', 'Ada', 19 * MINUTE, 1)],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db, { endRoom: async (name) => { rooms.push(name); return true; } });
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+
+    assert.equal(body.data.state.active, false, 'a room nobody is in must not stay live forever');
+    assert.equal(body.data.state.participantCount, 0);
+    assert.ok(db.state.huddles[0].ended_at);
+
+    // The same record every other way of ending leaves — one marker, in the
+    // CHANNEL, able to reopen the transcript.
+    assert.equal(db.state.messages.length, 1);
+    assert.equal(db.state.messages[0].session_id, SESSION);
+    assert.equal(db.state.messages[0].huddle_id, HUDDLE_ID);
+    assert.match(db.state.messages[0].content, /^You were in a huddle/);
+    // Stragglers are disconnected rather than left talking into a room the app
+    // considers closed.
+    assert.deepEqual(rooms, [ROOM]);
+    // Presence for an ended huddle is not kept: the table means "who is in a
+    // call right now"; who was ever in it is the event log's job.
+    assert.equal(db.state.presence.length, 0);
+    assert.ok(broadcasts.some((b) => b.table === 'huddles' && b.eventType === 'UPDATE'));
+
+    // Idempotent: a second read must not end it again or write a second marker.
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(db.state.messages.length, 1);
+  });
+});
+
+test('an empty huddle does NOT end while an agent is mid-turn', async () => {
+  // The reap has removed everybody, but an agent is still writing into the
+  // huddle's transcript. Ending the room here files the marker before the
+  // answer arrives, and the human comes back to a call that closed itself
+  // mid-sentence.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(20 * MINUTE) })],
+    eventRows: [joinEvent('user:a', 'Ada', 19 * MINUTE, 1)],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE })],
+    agentBusy: true,
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    const body = await res.json();
+    // The ghost still goes — that part is not in question.
+    assert.equal(body.data.state.participantCount, 0);
+    assert.equal(body.data.state.active, true, 'the huddle stays open for the agent');
+    assert.equal(db.state.huddles[0].ended_at, null);
+    assert.equal(db.state.messages.length, 0);
+  });
+});
+
+test('pressing Huddle on a channel full of crashed browsers opens a NEW one', async () => {
+  // The failure this prevents: the unique index allows ONE live huddle per
+  // channel, so a huddle nobody is in still holds the slot. Without the reap on
+  // this path the button would enrol you in the wake instead of starting a call.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(30 * MINUTE) })],
+    eventRows: [joinEvent('user:a', 'Ada', 29 * MINUTE, 1)],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 10 * MINUTE, seenAgo: 10 * MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+      method: 'POST', headers: auth,
+    });
+    assert.equal(res.status, 201, 'a new huddle, not a seat in the old one');
+    const body = await res.json();
+    assert.equal(body.data.created, true);
+    assert.notEqual(body.data.huddle.id, HUDDLE_ID);
+    assert.equal(body.data.state.participantCount, 0, 'and it starts empty, not haunted');
+    // The old one was closed rather than left holding the one-live-per-session
+    // slot — which is also what stops the insert above hitting the index.
+    assert.ok(db.state.huddles.find((h) => h.id === HUDDLE_ID).ended_at);
+    assert.equal(db.state.huddles.filter((h) => !h.ended_at).length, 1);
+    // The client is told how often to report, by the server, so the window and
+    // the threshold it is measured against can only change together.
+    assert.equal(body.data.heartbeatIntervalMs, huddles.HUDDLE_HEARTBEAT_INTERVAL_MS);
+  });
+});
+
+test('joining by id refuses a huddle whose occupants all crashed', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(30 * MINUTE) })],
+    eventRows: [joinEvent('user:a', 'Ada', 29 * MINUTE, 1)],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 10 * MINUTE, seenAgo: 10 * MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app, minted } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/join`, {
+      method: 'POST', headers: auth,
+    });
+    assert.equal(res.status, 409, 'truthful: that call is over');
+    assert.equal(minted.length, 0, 'and no credential for a dead room');
+  });
+});
+
+test('confirm clears ghosts but never ends the huddle — somebody is arriving', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(30 * MINUTE) })],
+    eventRows: [joinEvent('user:a', 'Ada', 29 * MINUTE, 1)],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 10 * MINUTE, seenAgo: 10 * MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const headers = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}`, 'Content-Type': 'application/json' };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 777 }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    // The ghost is gone and the arriving member is in — a roster of exactly the
+    // people who are actually there.
+    assert.deepEqual(body.data.state.participants.map((p) => p.identity), [`user:${MEMBER}`]);
+    assert.equal(db.state.huddles[0].ended_at, null, 'ending a huddle somebody is joining is absurd');
+
+    // Confirm seeds the liveness row but does NOT claim a heartbeat: nothing is
+    // reapable until the browser actually starts beating.
+    const row = db.state.presence.find((p) => p.identity === `user:${MEMBER}`);
+    assert.ok(row, 'the join is on a clock now');
+    assert.equal(row.heartbeat_at, null);
+    assert.equal(row.connection_epoch, '777');
+  });
+});
+
+// --- the heartbeat ----------------------------------------------------------
+
+test('a heartbeat refreshes THIS caller only, and is refused by an ended huddle', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const headers = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}`, 'Content-Type': 'application/json' };
+
+    const beat = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111, identity: 'user:someone-else' }),
+    });
+    assert.equal(beat.status, 200);
+    assert.deepEqual(await beat.json(), {
+      data: { ok: true, rejoined: false, heartbeatIntervalMs: huddles.HUDDLE_HEARTBEAT_INTERVAL_MS },
+      error: null,
+    });
+
+    assert.equal(db.state.presence.length, 1);
+    // The body named someone else. Identity comes from the verified session and
+    // nowhere else — a client may only ever speak about ITSELF.
+    assert.equal(db.state.presence[0].identity, `user:${MEMBER}`);
+    assert.ok(db.state.presence[0].heartbeat_at, 'beating is what opts you into being reaped');
+
+    // A beat is bookkeeping. It must not write an event or wake every client in
+    // the channel N times a minute.
+    assert.equal(db.state.events.length, 0);
+    assert.equal(broadcasts.length, 0);
+
+    // Repeats stay one row.
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(db.state.presence.length, 1);
+
+    db.state.huddles[0].ended_at = new Date().toISOString();
+    const dead = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    // The 409 is load-bearing: it is how a browser whose websocket died learns
+    // the call is over and stops beating at it.
+    assert.equal(dead.status, 409);
+  });
+});
+
+test('a browser that was reaped while away is put BACK on the roster by its next beat', async () => {
+  // The flaky-connection case. Under the threshold nothing happens at all; over
+  // it the participant is expired, and this is what stops them being live in the
+  // room and invisible on the card when they come back.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    eventRows: [joinEvent(`user:${MEMBER}`, 'Member', 10 * MINUTE, 1)],
+    presenceRows: [presenceRow(`user:${MEMBER}`, { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE, reapedAgo: MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const headers = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}`, 'Content-Type': 'application/json' };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).data.rejoined, true);
+
+    const joins = db.state.events.filter((e) => e.kind === 'participant_joined');
+    assert.equal(joins.length, 2, 'the original join, plus the re-announcement');
+    assert.match(joins[1].event_id, /^reap:rejoin:user:user-member:/);
+    assert.equal(db.state.presence[0].reaped_at, null, 'and the flag is cleared, so it happens once');
+
+    // A retry of the same beat must not announce a second time.
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(db.state.events.filter((e) => e.kind === 'participant_joined').length, 2);
+  });
+});
+
+// --- the webhook, if it is ever switched back on ----------------------------
+
+test('a LATE webhook event cannot resurrect a reaped participant or double-count a join', async () => {
+  // The webhook path is deliberately still here and still honoured. What must
+  // NOT happen is a participant_joined that LiveKit sent before the reap
+  // arriving after it and putting the ghost back: the fold sorts by the event's
+  // OWN timestamp, not by arrival order, so a join that happened before the
+  // leave stays before the leave no matter when it is delivered.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    eventRows: [joinEvent('user:a', 'Ada', 10 * MINUTE, 1), joinEvent('user:b', 'Sam', 10 * MINUTE, 2)],
+    presenceRows: [
+      presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE }),
+      presenceRow('user:b', { heartbeatAgo: 2_000, seenAgo: 2_000, epoch: '222' }),
+    ],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(db.state.events.filter((e) => e.kind === 'participant_left').length, 1);
+
+    // LiveKit finally delivers Ada's join, timestamped when it actually
+    // happened — five minutes before the reap.
+    const body = webhookBody({
+      event: 'participant_joined',
+      participant: { identity: 'user:a', name: 'Ada' },
+      id: 'lk-late-join',
+      createdAt: Math.floor((Date.now() - 5 * MINUTE) / 1000),
+    });
+    const hook = await fetch(`${baseUrl}/backend/livekit-webhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: signWebhook(body) },
+      body,
+    });
+    assert.equal(hook.status, 200);
+
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    const state = (await res.json()).data.state;
+    assert.deepEqual(state.participants.map((p) => p.identity), ['user:b'], 'no resurrection');
+    // everJoined is a set of identities, so a second join for Ada is not a
+    // second person — the marker's "2 people joined" stays true.
+    assert.equal(state.everJoinedCount, 2);
+    assert.equal(state.peakParticipants, 2);
+  });
+});
+
+test('a reaped participant who genuinely comes back through LiveKit is present again', () => {
+  // The mirror of the test above, and the reason the fix is "sort by timestamp"
+  // rather than "ignore late joins": a join that really did happen AFTER the
+  // reap is a real rejoin and must show.
+  const state = huddles.foldHuddleState(liveHuddleRow(), [
+    ev('participant_joined', 'user:a', '2026-07-26T10:00:00.000Z', { seq: 1 }),
+    ev('participant_left', 'user:a', '2026-07-26T10:05:00.000Z', { seq: 2, event_id: 'reap:leave:user:a:111' }),
+    ev('participant_joined', 'user:a', '2026-07-26T10:06:00.000Z', { seq: 3 }),
+  ]);
+  assert.deepEqual(state.participants.map((p) => p.identity), ['user:a']);
+  assert.equal(state.everJoinedCount, 1, 'one person, twice — not two people');
+});
+
+// --- schema -----------------------------------------------------------------
+
+test('huddle_presence is declared in all three schema places', () => {
+  const runtime = huddles.HUDDLES_SCHEMA_SQL;
+  const canonical = read('database/neon-schema.sql');
+  const named = fs.readdirSync(path.join(root, 'supabase/migrations')).filter((n) => n.endsWith('_huddle_presence.sql'));
+  assert.equal(named.length, 1, 'expected exactly one huddle-presence migration');
+  const migration = read(path.join('supabase/migrations', named[0]));
+
+  for (const [label, source] of [['runtime', runtime], ['neon-schema', canonical], ['migration', migration]]) {
+    assert.match(source, /CREATE TABLE IF NOT EXISTS huddle_presence \(/, label);
+    // CASCADE: liveness for a huddle that no longer exists is meaningless.
+    assert.match(source, /huddle_id uuid NOT NULL REFERENCES huddles\(id\) ON DELETE CASCADE/, label);
+    // One row per person per huddle — the whole point of not putting this in
+    // the append-only log.
+    assert.match(source, /PRIMARY KEY \(huddle_id, identity\)/, label);
+    assert.match(source, /last_seen_at timestamptz NOT NULL DEFAULT now\(\)/, label);
+    // NULLABLE, and the reaper keys on it alone: a client that confirms but
+    // never beats is an older frontend, and Netlify deploys separately from Fly.
+    assert.match(source, /heartbeat_at timestamptz(?!\s+NOT NULL)/, label);
+    assert.match(source, /reaped_at timestamptz(?!\s+NOT NULL)/, label);
+  }
+
+  // Some tables are FOUR-place: netlify/functions/backend.mjs carries its own
+  // bootstrap DDL. Huddles are not — they need the websocket fanout, so the
+  // Netlify mirror has no huddle routes and no huddle SQL, only a comment
+  // saying why. Pinned, because the day huddles do land there this is the place
+  // the presence table would be forgotten.
+  const netlify = read('netlify/functions/backend.mjs');
+  assert.equal(/huddle_presence/.test(netlify), false);
+  assert.equal(/(from|into|table)\s+huddles?\b/i.test(netlify), false,
+    'huddle SQL reached the Netlify mirror: huddle_presence needs its bootstrap DDL there too');
+});
+
+test('presence is server-owned: no client may read or write it through /backend/db', () => {
+  // huddles and huddle_events are readable (the card folds them). Presence is
+  // not: it is liveness bookkeeping, and a browser that could write it could
+  // keep a ghost alive forever — which is the exact bug being fixed.
+  assert.equal(core.ALLOWED_TABLES.has('huddle_presence'), false);
+  assert.equal(core.DB_TABLE_ACCESS.huddle_presence, undefined);
+});
+
+test('the liveness decision is a PURE function, not a WHERE clause', () => {
+  // A rule buried in SQL cannot be asserted against a backgrounded-tab-length
+  // gap, and that gap is the property most likely to be got wrong. If someone
+  // later moves the comparison into the query, these tests keep passing while
+  // the shipped behaviour drifts — so pin it.
+  const source = read('server/huddles.cjs');
+  assert.equal(typeof huddles.staleHuddleIdentities, 'function');
+  assert.equal(typeof huddles.shouldEndEmptyHuddle, 'function');
+  assert.equal(
+    /huddle_presence[\s\S]{0,300}now\(\)\s*-\s*interval/.test(source),
+    false,
+    'presence staleness must not be decided inside a query',
+  );
 });

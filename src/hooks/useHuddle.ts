@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { foldHuddleState } from '../lib/huddleState';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
@@ -14,8 +14,13 @@ export interface HuddleConnection {
   /**
    * When THIS browser joined. Voice output reads only messages written after
    * it, so joining a busy channel never reads the backlog aloud.
+   *
+   * Doubles as the connection epoch the server keys presence on: a retry is
+   * the same connection, a rejoin is a new one.
    */
   joinedAtMs: number;
+  /** How often to say "still here". Named by the SERVER — see useHuddleHeartbeat. */
+  heartbeatIntervalMs: number;
 }
 
 interface HuddlePayload {
@@ -26,6 +31,81 @@ interface HuddlePayload {
   url?: string;
   identity?: string;
   roomName?: string;
+  heartbeatIntervalMs?: number;
+}
+
+/**
+ * Fallback beat interval, used only if the server did not name one (an older
+ * backend). Must stay <= the server's staleness threshold with room for several
+ * misses; the server's own value always wins.
+ */
+export const DEFAULT_HUDDLE_HEARTBEAT_MS = 30_000;
+
+/**
+ * Say "still here" for as long as this browser holds a huddle connection.
+ *
+ * WHY THIS EXISTS: presence is self-reported, and a browser that crashes, loses
+ * power or is force-quit never posts its /leave — so it would stay in the
+ * roster forever. Presence therefore expires on the server unless it is
+ * refreshed, and this is the refresh.
+ *
+ * PRIMITIVE PROPS ONLY, on purpose. The huddle hook returns a fresh object
+ * every render; an effect that depended on it would clear and restart this
+ * interval before it ever fired, and fire an immediate beat on every render
+ * instead — the same feedback loop that once had HuddleBar reconnecting to
+ * LiveKit eighty times in a few seconds.
+ *
+ * A hidden tab is throttled to roughly one timer wake per minute, which the
+ * server's threshold is sized for; the visibilitychange beat is what makes
+ * coming BACK to the tab instant rather than waiting out a throttled interval.
+ */
+export function useHuddleHeartbeat(
+  workspaceId: string | null,
+  huddleId: string,
+  connectionEpoch: number,
+  intervalMs: number,
+  enabled: boolean,
+) {
+  // A 409 means the huddle is over. Stop beating into it — the roster update
+  // arrives over the websocket, but a browser whose socket died would otherwise
+  // beat at a dead huddle for as long as the tab stayed open.
+  const stoppedRef = useRef(false);
+
+  useEffect(() => {
+    stoppedRef.current = false;
+    if (!enabled || !workspaceId || !huddleId) return;
+    let cancelled = false;
+
+    const beat = async () => {
+      if (cancelled || stoppedRef.current) return;
+      const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}/heartbeat`;
+      try {
+        const response = await fetch(apiUrl(path), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({ connectionEpoch }),
+        });
+        if (response.status === 409) stoppedRef.current = true;
+      } catch {
+        // A missed beat is not an error: the whole design tolerates several,
+        // and the next one refreshes presence with no visible flicker.
+      }
+    };
+
+    // Immediately, so a browser that dies seconds after connecting is still on
+    // a clock — presence is not reapable until it has beaten at least once.
+    void beat();
+    const period = Math.max(5_000, intervalMs || DEFAULT_HUDDLE_HEARTBEAT_MS);
+    const timer = window.setInterval(() => { void beat(); }, period);
+    const onVisibility = () => { if (document.visibilityState === 'visible') void beat(); };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [workspaceId, huddleId, connectionEpoch, intervalMs, enabled]);
 }
 
 /**
@@ -222,6 +302,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
         roomName: data.roomName,
         huddleId: data.huddle.id,
         joinedAtMs: Date.now(),
+        heartbeatIntervalMs: data.heartbeatIntervalMs || DEFAULT_HUDDLE_HEARTBEAT_MS,
       };
       setConnection(next);
       return next;

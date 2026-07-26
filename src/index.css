@@ -926,7 +926,11 @@
  box-sizing: border-box;
  width: calc(100% - 5px) !important;
  max-width: calc(100% - 5px) !important;
- min-height: 2.55rem;
+ /* Reduced with the base row (2.55 -> 2.2rem). neo draws these as bordered
+    cards so it stays chunkier than the glass themes on purpose — but it has to
+    move too, or "reduce the spacing" would silently do nothing in the one
+    theme that needed it most. */
+ min-height: 2.2rem;
  border-width: 2px !important;
  border-color: var(--border) !important;
  background: var(--card) !important;
@@ -1394,7 +1398,7 @@
 }
 
 .sidebar-folder-trigger {
- min-height: 2rem;
+ min-height: 1.7rem;
 }
 
 /* A SECTION NAME IS A LABEL, NOT A ROW.
@@ -1404,7 +1408,7 @@
    reads as a heading, which is what stops a sidebar looking like one long
    undifferentiated list of buttons. */
 .sidebar-section-trigger {
- min-height: 1.5rem;
+ min-height: 1.35rem;
  font-size: 0.6875rem;
  /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
     heavier than the rows below it. The weight is what makes a small quiet
@@ -1518,7 +1522,10 @@
 /* (The neo softening of that guide line went with the line itself.) */
 
 .sidebar-action-row {
- min-height: 2.15rem;
+ /* 1.8rem, down from 2.15. These rows are most of the sidebar, so their height
+    IS the sidebar's vertical rhythm — trimming anything else first would have
+    moved almost nothing. ~29px still clears a comfortable pointer target. */
+ min-height: 1.8rem;
  gap: 0.6rem;
  justify-content: flex-start !important;
  padding-inline: 0.75rem;
@@ -1537,7 +1544,7 @@
 }
 
 .sidebar-item-row {
- min-height: 1.7rem;
+ min-height: 1.5rem;
  gap: 0.45rem;
  justify-content: flex-start !important;
  padding-inline: 0.45rem 0.55rem;
@@ -4038,14 +4045,17 @@ select {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-right: 6px !important;
- margin-bottom: 6px !important;
+ margin-bottom: 4px !important;
  border-width: 2px !important;
  border-style: solid !important;
  border-color: var(--border) !important;
  border-radius: 9px !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- min-height: 2.55rem;
+ /* 2rem, down from 2.55. neo keeps the card frame — that is the theme's
+    identity — but the thing inside it is now a small label, and 2.55rem was
+    sized for the row it used to be. */
+ min-height: 2rem;
  padding-inline: 0.3rem 0.2rem !important;
 }
 
@@ -4084,7 +4094,10 @@ select {
  border-color: var(--border) !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- min-height: 2.3rem !important;
+ /* Reduced with the base rows. Every theme that overrides a sidebar height
+    has to move, or the setting only appears to work on whichever theme the
+    person changing it happened to be using. */
+ min-height: 2rem !important;
  font-size: 0.82rem !important;
 }
 
@@ -4106,7 +4119,7 @@ select {
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
  border-radius: 10px !important;
- min-height: 2.4rem;
+ min-height: 2rem;
  color: var(--text-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
@@ -4176,7 +4189,7 @@ select {
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 var(--tw-control-bevel),
   var(--tw-control-shadow) !important;
- min-height: 2.15rem !important;
+ min-height: 1.9rem !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger {

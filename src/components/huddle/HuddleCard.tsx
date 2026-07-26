@@ -8,6 +8,7 @@ import { isEchoSuppressed, playbackEchoGuardUntil } from '@/lib/voiceStream';
 import { huddleDuration, isRecentlyEnded, participantSummary } from '@/lib/huddleState';
 import { huddleTranscriptTarget, shouldOpenHuddlePanel } from '@/lib/huddleTranscript';
 import { useHuddleSend } from '@/hooks/useHuddleTranscript';
+import { useHuddleHeartbeat } from '@/hooks/useHuddle';
 import { matchLeadingAgentName, withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { HuddleBar, type HuddleLocalState } from './HuddleBar';
 import { HuddleAgentStrip } from './HuddleAgentStrip';
@@ -128,6 +129,19 @@ export function HuddleCard({
     confirmedEpochRef.current = connection.joinedAtMs;
     void session?.confirmJoin(connection);
   }, [connection, local.connected, session]);
+
+  // …and keep saying it. The confirm above is a one-off claim, and a browser
+  // that crashes, sleeps or is force-quit never posts the matching /leave — so
+  // without a heartbeat that claim would stand forever and the roster would
+  // show someone who is not there. Presence expires on the server unless this
+  // keeps refreshing it.
+  useHuddleHeartbeat(
+    workspaceId,
+    connection?.huddleId || '',
+    connection?.joinedAtMs || 0,
+    connection?.heartbeatIntervalMs || 0,
+    !!connection && local.connected,
+  );
 
   // Joining a huddle opens the panel — that is where the conversation is now,
   // and a call whose transcript is behind a control you have to find is a call
