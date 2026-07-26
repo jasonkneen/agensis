@@ -1362,7 +1362,6 @@ function ActionTile({
 function SidebarSection({
  id,
  label,
- icon,
  count,
  actionLabel,
  onAction,
@@ -1373,7 +1372,13 @@ function SidebarSection({
 }: {
  id: string;
  label: string;
- icon: React.ReactNode;
+ /**
+  * Still accepted so every call site keeps compiling, but no longer rendered:
+  * a section is a label now, and the icon duplicated the word next to it.
+  * Left in the type deliberately rather than removed from ~8 call sites in
+  * one styling change — deleting it is a separate, mechanical commit.
+  */
+ icon?: React.ReactNode;
  count: number;
  actionLabel?: string;
  onAction?: () => void;
@@ -1385,18 +1390,22 @@ function SidebarSection({
  const hasAction = Boolean(actionLabel && onAction);
 
  return (
-  <Collapsible open={open} onOpenChange={onOpenChange} className="pt-2">
+  <Collapsible open={open} onOpenChange={onOpenChange} className="pt-3">
    <div className="sidebar-section-header">
     <CollapsibleTrigger asChild>
      <button
       type="button"
-      className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-0.5 text-left"
       aria-controls={`${id}-content`}
      >
-      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-      <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
-       {icon}
-      </span>
+      {/* A section name is a LABEL for what follows, not a row you act on —
+          so the chevron stays small and quiet, and the section icon is gone
+          entirely. The icon was doing the same job as the word beside it,
+          and at label size two glyphs competing for one meaning is noise.
+          Item icons still carry per-row identity; this level does not need
+          one. Kept as a button so the section still collapses by click and
+          by keyboard. */}
+      <ChevronRight className={`sidebar-section-chevron size-3 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
       {!hasAction && count > 0 && (
        <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
@@ -1421,7 +1430,11 @@ function SidebarSection({
     )}
     {headerActions}
    </div>
-   <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
+   {/* pl-1, not pl-6. The old indent aligned children under the header's
+       ICON; with the icon gone there is nothing to align to, and a deep
+       indent under a quiet label just wastes the width a sidebar has least
+       of. Items now sit near the panel edge with the label above them. */}
+   <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-0.5 pl-1">
     {children}
    </CollapsibleContent>
   </Collapsible>
