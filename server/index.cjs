@@ -5384,6 +5384,32 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
    notifyDbSubscribers('messages', 'UPDATE', messageRows);
    void logMessageActivity(messageRows);
    void mirrorAgentReplyToTaskComment(messageRows[0]);
+  } else if (jobMetadata.pendingPlaceholder) {
+   // The placeholder was reserved by a segment but never written, because it is
+   // created LAZILY by the first delta that has text for it (handleAgentJobDelta)
+   // — that is what keeps an empty "Thinking …" bubble out of the thread while
+   // the agent runs tools.
+   //
+   // If the turn ends before any such delta arrives, the UPDATE above matches
+   // nothing and the reply is silently DROPPED. That took the final block of a
+   // turn with it, and worse, swallowed the failure message on the error path:
+   // a crashed agent said nothing at all. Materialise the row instead.
+   const createdRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7)
+        on conflict (id) do nothing
+        returning *`,
+    [
+     responseMessageId, job.session_id, content,
+     jobMetadata.pendingPlaceholderParentId || workThreadParentId,
+     String(job.agent_id || ''), senderName, broadcastToChannel,
+    ],
+   );
+   if (createdRows.length > 0) {
+    notifyDbSubscribers('messages', 'INSERT', createdRows);
+    void logMessageActivity(createdRows);
+    void mirrorAgentReplyToTaskComment(createdRows[0]);
+   }
   }
  } else {
   // No placeholder was ever created (an 'external' agent queued with nobody
@@ -5970,6 +5996,27 @@ async function handleAgentJobSegment(ws, message) {
    // a thread the placeholder is itself a reply (the same reason a tool step
    // resolves the thread root from this column rather than assuming top level).
    threadParentId = finalizedRows[0].thread_parent_id || null;
+  } else if (metadata.pendingPlaceholder) {
+   // The previous segment reserved this id but deliberately left the row
+   // unwritten (see the lazy placeholder note below). If the agent produced a
+   // second text block without any delta in between, the UPDATE above matches
+   // nothing and the block is silently DROPPED — a turn of three blocks showed
+   // only the first. Write the row this segment was going to finalise.
+   const blockRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
+       on conflict (id) do nothing
+       returning *`,
+    [
+     responseMessageId, job.session_id, text,
+     metadata.pendingPlaceholderParentId || threadParentId,
+     String(job.agent_id || ''), senderName,
+    ],
+   );
+   if (blockRows.length > 0) {
+    notifyDbSubscribers('messages', 'INSERT', blockRows);
+    threadParentId = blockRows[0].thread_parent_id || null;
+   }
   }
  } else {
   const blockRows = await getDb().unsafe(
@@ -5985,9 +6032,20 @@ async function handleAgentJobSegment(ws, message) {
  // tool calls between two text blocks — a real turn produced three of them. The
  // id and parent are recorded on the job so the delta can materialise the row in
  // the right place when there is finally something to show.
- nextMetadata.pendingPlaceholderParentId = threadParentId;
+ //
+ // Written as a SECOND update rather than folded into the one above, because the
+ // parent is only known once the block's own row has been written and we can read
+ // it back. Build a fresh object rather than mutating `nextMetadata` — that one
+ // was already bound by the first statement, and mutating it after the fact is a
+ // trap waiting for anyone who later reads the bind back.
  await getDb().unsafe(
-  'update agent_jobs set metadata = $2::jsonb where id = $1 and status in (\'queued\', \'running\')',
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb STRING scalar, after which metadata->>'…' reads NULL for every key.
   [jobId, { ...nextMetadata, pendingPlaceholder: true, pendingPlaceholderParentId: threadParentId }],
  );
 }

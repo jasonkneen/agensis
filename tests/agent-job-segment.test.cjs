@@ -213,14 +213,20 @@ test('a valid segment finalises the placeholder and opens a new one', async () =
   assert.equal(finalised.sender_id, 'agent-1');
   assert.equal(finalised.sender_name, 'Coder');
 
+  // The replacement placeholder is NOT written here. Creating it eagerly left a
+  // visible "Thinking 29s" bubble parked in the thread for as long as the agent
+  // spent on tool calls between two text blocks — a real turn produced three of
+  // them. The id and parent are reserved on the job instead, and the row is
+  // materialised by whatever first has something to show for it.
   const fresh = [...db.store.values()].filter((row) => row.id !== 'msg-placeholder');
-  assert.equal(fresh.length, 1, 'exactly one replacement placeholder');
-  assert.match(fresh[0].content, /^Thinking \d/, 'the replacement is a normal "Thinking …" placeholder');
-  assert.equal(fresh[0].session_id, 'session-1');
-  assert.equal(fresh[0].thread_parent_id, null, 'same thread position as the message it succeeds');
+  assert.equal(fresh.length, 0, 'no empty placeholder row is parked in the thread');
 
-  // Subsequent deltas/segments/steps must flow into the NEW placeholder.
-  const jobUpdate = db.calls.find((c) => c.n.startsWith('update agent_jobs set updated_at'));
+  // Subsequent deltas/segments/steps must flow into the RESERVED placeholder.
+  // A segment writes metadata twice: once as the stale-job guard, then again to
+  // reserve the next placeholder once its thread parent is known. Assert the LAST.
+  const jobUpdates = db.calls.filter((c) => c.n.startsWith('update agent_jobs set updated_at'));
+  assert.equal(jobUpdates.length, 2, 'guard write, then the reserved placeholder');
+  const jobUpdate = jobUpdates[jobUpdates.length - 1];
   assert.ok(jobUpdate, 'the job metadata is refreshed');
   assert.match(jobUpdate.n, /metadata = \$2::jsonb/);
   assert.ok(!/set response/.test(jobUpdate.n), 'a segment does not rewrite the job response');
@@ -228,7 +234,10 @@ test('a valid segment finalises the placeholder and opens a new one', async () =
   assert.equal(typeof metadata, 'object', 'bound as an object — a stringified bind corrupts jsonb into a string scalar');
   assert.ok(!Array.isArray(metadata));
   assert.equal(metadata.mode, 'daemon', 'existing metadata keys are preserved');
-  assert.equal(metadata.responseMessageId, fresh[0].id, 'the job now points at the new placeholder');
+  assert.ok(metadata.responseMessageId, 'the job reserves an id for the next block');
+  assert.notEqual(metadata.responseMessageId, 'msg-placeholder', 'and it is a NEW id, not the one just finalised');
+  assert.equal(metadata.pendingPlaceholder, true, 'flagged so the row can be materialised on first content');
+  assert.equal(metadata.pendingPlaceholderParentId, null, 'same thread position as the message it succeeds');
   assert.equal(metadata.segmentCount, 1);
   assert.equal(metadata.lastSegmentText, 'Good — createSubThread is only used inside handleCreateSubThreadFromScene.');
   assert.equal(metadata.lastSegmentMessageId, 'msg-placeholder');
@@ -249,9 +258,18 @@ test('the new placeholder inherits the thread parent of the message it succeeds'
 
   await __test.handleAgentJobSegment(agentWs(), { jobId: 'job-1', text: 'first block', elapsedMs: 10 });
 
-  const fresh = [...db.store.values()].filter((row) => row.id !== 'msg-placeholder');
-  assert.equal(fresh.length, 1);
-  assert.equal(fresh[0].thread_parent_id, 'thread-root-1', 'the replacement sits exactly where the finalised message sat');
+  const jobUpdates = db.calls.filter((c) => c.n.startsWith('update agent_jobs set updated_at'));
+  assert.equal(
+    jobUpdates[jobUpdates.length - 1].params[1].pendingPlaceholderParentId,
+    'thread-root-1',
+    'the reserved placeholder sits exactly where the finalised message sat',
+  );
+
+  // And when it is finally materialised, it lands there rather than at the top level.
+  await __test.handleAgentJobSegment(agentWs(), { jobId: 'job-1', text: 'second block', elapsedMs: 20 });
+  const second = [...db.store.values()].find((row) => row.content === 'second block');
+  assert.ok(second, 'a second block is not swallowed just because its placeholder was never written');
+  assert.equal(second.thread_parent_id, 'thread-root-1');
 });
 
 test('an empty or whitespace segment is ignored and does not rotate', async () => {

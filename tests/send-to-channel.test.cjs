@@ -102,7 +102,10 @@ function installDb({ messages = [humanMessage()] } = {}) {
       }
 
       // --- message writes ----------------------------------------------------
-      if (n.startsWith('insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)')) {
+      // Two shapes share this prefix: the 8-column form, and the 9-column form
+      // that also carries broadcast_to_channel (used when a reserved placeholder is
+      // materialised at finalize time, which is the moment the flag matters).
+      if (n.startsWith('insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name')) {
         const row = {
           id: params[0],
           session_id: params[1],
@@ -122,6 +125,7 @@ function installDb({ messages = [humanMessage()] } = {}) {
           row.sender_id = params[3];
           row.sender_name = params[4];
         }
+        if (n.includes('broadcast_to_channel')) row.broadcast_to_channel = Boolean(params[6]);
         store.set(row.id, row);
         return [{ ...row }];
       }
@@ -452,10 +456,14 @@ test('segment rotation happens inside the work thread', async () => {
   assert.equal(block.thread_parent_id, 'msg-human');
   assert.equal(block.broadcast_to_channel, false, 'an intermediate block stays in the thread');
 
-  const fresh = db.store.get(job.metadata.responseMessageId);
-  assert.notEqual(fresh.id, firstPlaceholderId, 'a NEW placeholder took its place');
-  assert.match(String(fresh.content), /^Thinking \d/);
-  assert.equal(fresh.thread_parent_id, 'msg-human', 'the replacement sits where the message it succeeds sat');
+  // The replacement is RESERVED, not written: an eagerly-created placeholder sat
+  // in the thread as a visible "Thinking 29s" bubble for the whole time the agent
+  // spent on tools between two text blocks. The row is materialised by whatever
+  // first has content for it (a delta, the next segment, or the final result).
+  assert.notEqual(job.metadata.responseMessageId, firstPlaceholderId, 'a NEW id was reserved');
+  assert.equal(db.store.get(job.metadata.responseMessageId), undefined, 'no empty placeholder row is parked in the thread');
+  assert.equal(job.metadata.pendingPlaceholder, true);
+  assert.equal(job.metadata.pendingPlaceholderParentId, 'msg-human', 'reserved where the message it succeeds sat');
 
   assert.deepEqual(channelView(db), ['@coder what does channelView do?'], 'the channel is still quiet mid-turn');
 });
