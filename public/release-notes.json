@@ -1,5 +1,17 @@
 [
   {
+    "version": "channel-intent",
+    "date": "2026-07-26",
+    "title": "Edit a channel — and tell the agents how to behave in it",
+    "summary": "Channels now have a name you can change, a description, an icon you pick from a set, and an intent. The intent is how you want people to behave in that channel, written in your own words, and every agent reply in that channel is given it — so \"a fun place to share stuff that's not work related, joking is fine, clean language\" actually changes how the agents talk there. Tone becomes a property of the room: the same agent can be playful in one channel and terse in another. It sets their register and subject matter; it does not change what they are allowed to do.",
+    "highlights": [
+      "Edit channel, in the channel's ... menu: name, description, icon and intent",
+      "Sixteen icons to choose from; the one you pick shows in the channel header and the sidebar",
+      "The intent reaches every kind of agent — built-in, daemon, MCP and external",
+      "Saves only what you changed, so renaming a channel never rewrites its intent"
+    ]
+  },
+  {
     "version": "agents-split-view",
     "date": "2026-07-26",
     "title": "The Agents window opens details beside the grid, and can show the map underneath",

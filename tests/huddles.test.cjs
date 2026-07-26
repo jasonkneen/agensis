@@ -1202,7 +1202,10 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   const calls = source.match(/(?<!function )buildDaemonPrompt\(contextMessages[^)]*\)/g) || [];
   assert.equal(calls.length, 3, 'expected three buildDaemonPrompt call sites');
   for (const call of calls) {
-    assert.match(call, /voiceHuddle\)/, `call site does not pass voiceHuddle: ${call}`);
+    // Passed, not necessarily LAST: later per-turn notes (the channel intent)
+    // are appended after it, and pinning argument position would fail every
+    // time a new one lands while the property under test still held.
+    assert.match(call, /\bvoiceHuddle\b/, `call site does not pass voiceHuddle: ${call}`);
   }
   // The builtin lane, which never builds a daemon prompt.
   assert.match(source, /voiceHuddle && agentContext[\s\S]{0,200}<voice_huddle>/);
@@ -1219,7 +1222,7 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   );
   // Off unless asked for: a caller that forgets the argument must not opt every
   // agent into voice etiquette.
-  assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false\)/);
+  assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false[^)]*\)/);
 });
 
 // ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ async function configFor(relativePath) {
 // problem, not a style one. Add to this list when a new backend entry point
 // lands; do not remove an entry to make the test pass.
 const MUST_BE_LINTED = [
+  'shared/channelIntent.cjs',
   'shared/backend-core.cjs',
   // Owns the workspace-hierarchy rules the authorization path depends on:
   // which ancestors grant access, and whether a re-parent would create a cycle.
