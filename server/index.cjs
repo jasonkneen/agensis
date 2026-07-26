@@ -2676,6 +2676,9 @@ function agentRuntimePayload(agent) {
   name: agent.name,
   avatar: agent.avatar || 'AI',
   openpet_avatar_id: agent.openpet_avatar_id || '',
+  // Selected by every agents query but previously dropped here, so a reload
+  // blanked the accent until a realtime row happened to restore it.
+  accent_color: agent.accent_color || '',
   handle: agent.handle || slugHandle(agent.name),
   description: agent.description || '',
   system_prompt: agent.system_prompt || '',
@@ -5157,6 +5160,10 @@ const CARTESIA_API_BASE = 'https://api.cartesia.ai';
 // deliberate act, so it is a constant with an env escape hatch rather than
 // "whatever is current".
 const CARTESIA_VERSION = String(process.env.CARTESIA_VERSION || '2026-03-01');
+// Every outbound Cartesia call is bounded. Without this, a hung provider held
+// the panel's request open indefinitely — the catalogue fetch and the preview
+// render both run inside a user-facing HTTP request.
+const CARTESIA_TIMEOUT_MS = Number(process.env.CARTESIA_TIMEOUT_MS || 15_000);
 const CARTESIA_VOICES_TTL_MS = 10 * 60 * 1000;
 // `GET /voices` caps `limit` at 100 and pages by cursor. ~836 voices is nine
 // round trips, which is why the result is cached rather than fetched per panel
@@ -5169,11 +5176,34 @@ function cartesiaApiKey() {
 }
 
 function cartesiaHeaders() {
+ // X-API-Key, not Authorization: Bearer. The docs for this API version describe
+ // Bearer, but both forms were verified live against api.cartesia.ai on
+ // 2026-07-26 (200 on /voices and /tts/bytes with either header) — do not
+ // "fix" this to match the docs without re-running that check.
  return {
   'X-API-Key': cartesiaApiKey(),
   'Cartesia-Version': CARTESIA_VERSION,
   'Content-Type': 'application/json',
  };
+}
+
+/**
+ * fetch with the Cartesia timeout attached, and the resulting AbortError
+ * translated into something a client can be told. Every outbound Cartesia call
+ * in this file goes through here — a hung provider must become a 504 with a
+ * sentence, not a request that never returns.
+ */
+async function cartesiaFetch(url, init = {}) {
+ try {
+  return await fetch(url, { ...init, signal: AbortSignal.timeout(CARTESIA_TIMEOUT_MS) });
+ } catch (error) {
+  if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+   const timeout = new Error(`Cartesia did not respond within ${Math.round(CARTESIA_TIMEOUT_MS / 1000)}s`);
+   timeout.status = 504;
+   throw timeout;
+  }
+  throw error;
+ }
 }
 
 /** The fields the picker and the resolver need — not the whole voice object. */
@@ -5198,7 +5228,7 @@ async function fetchCartesiaVoices() {
   const url = new URL('/voices', CARTESIA_API_BASE);
   url.searchParams.set('limit', String(CARTESIA_VOICES_PAGE));
   if (cursor) url.searchParams.set('starting_after', cursor);
-  const response = await fetch(url, { headers: cartesiaHeaders() });
+  const response = await cartesiaFetch(url, { headers: cartesiaHeaders() });
   if (!response.ok) {
    const detail = await response.text().catch(() => '');
    const error = new Error(`Cartesia /voices failed (${response.status}) ${detail.slice(0, 200)}`);
@@ -5281,7 +5311,7 @@ async function cartesiaSpeak({ voiceId, speed = 1, emotion = 'neutral', transcri
   error.status = 400;
   throw error;
  }
- const response = await fetch(new URL('/tts/bytes', CARTESIA_API_BASE), {
+ const response = await cartesiaFetch(new URL('/tts/bytes', CARTESIA_API_BASE), {
   method: 'POST',
   headers: cartesiaHeaders(),
   body: JSON.stringify({
@@ -5291,6 +5321,9 @@ async function cartesiaSpeak({ voiceId, speed = 1, emotion = 'neutral', transcri
    // generation_config is the supported control surface on sonic-3 and newer.
    // The old top-level `speed: "slow"|"normal"|"fast"` is deprecated.
    generation_config: { speed, emotion },
+   // Verified live 2026-07-26: this exact shape returns 200 audio/mpeg (a real
+   // ID3-tagged MP3). The documented mp3 shape (bit_rate, no encoding, 44100)
+   // is ALSO accepted — Cartesia tolerates both; this one is what our tests pin.
    output_format: { container: 'mp3', encoding: 'mp3', sample_rate: 24000 },
   }),
  });
@@ -11813,6 +11846,7 @@ module.exports = {
   agentVoiceSettings,
   cartesiaEnglishVoiceIds,
   cartesiaSpeak,
+  fetchCartesiaVoices,
   publicCartesiaVoice,
   capabilityForDbOperation,
   canManageWorkspace,

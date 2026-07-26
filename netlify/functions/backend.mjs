@@ -765,23 +765,40 @@ function publicWorkspace(row) {
  };
 }
 
+// The serverless mirror of the Fly server's agentRuntimePayload. The KEY SET
+// must match it exactly — tests/agents-projection-parity.test.cjs diffs the two
+// — because any field present on one backend and absent on the other blanks in
+// the UI whenever a reload happens to be served by the other one. That is how
+// soul, accent_color and openpet_avatar_id each shipped broken here.
 function publicWorkspaceAgent(row) {
  if (!row) return row;
+ const permissionMode = normalizeAgentPermissionMode(row.permission_mode || row.permissionMode);
  return {
   id: row.id,
   workspace_id: row.workspace_id,
   name: row.name,
   avatar: row.avatar || 'AI',
+  openpet_avatar_id: row.openpet_avatar_id || '',
+  accent_color: row.accent_color || '',
   handle: row.handle || slugHandle(row.name),
   description: row.description || '',
   system_prompt: row.system_prompt || '',
+  soul: row.soul || '',
+  instructions: row.instructions || '',
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
   metadata: parseJsonObject(row.metadata),
   identity: parseJsonObject(row.identity),
-  model: row.model || 'auto',
-  run_mode: row.run_mode === 'daemon' ? 'daemon' : 'builtin',
-  permission_mode: normalizeAgentPermissionMode(row.permission_mode),
+  model: resolveAnthropicModel(row.model),
+  run_mode: row.run_mode === 'daemon' ? 'daemon'
+   : row.run_mode === 'sandbox' ? 'sandbox'
+    : 'builtin',
+  sandbox_provider: row.sandbox_provider || null,
+  sandbox_config: parseJsonObject(row.sandbox_config),
+  permissionMode,
+  permission_mode: permissionMode,
+  permissionFlags: agentPermissionFlags(permissionMode),
+  version: Number(row.version || 0),
   enabled: row.enabled !== false,
  };
 }
@@ -948,8 +965,11 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
  await ensureAgentRuntimeTables();
+ // Same column list as the Fly server's /agents route — the parity test
+ // extracts and diffs both, so a column added on one side fails until it is
+ // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, description, system_prompt, tools, skills, identity, metadata, model, handle, run_mode, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -1445,6 +1465,10 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_provider text;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;

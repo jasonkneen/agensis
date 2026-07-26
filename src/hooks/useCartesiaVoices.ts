@@ -32,7 +32,7 @@ let inflight: Promise<Cached> | null = null;
 
 async function loadVoices(): Promise<Cached> {
   const response = await fetch(apiUrl('/backend/tts/voices'), { headers: apiAuthHeaders() });
-  if (!response.ok) throw new Error(`Voices HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const payload = await response.json();
   return {
     voices: Array.isArray(payload?.data) ? payload.data : [],
