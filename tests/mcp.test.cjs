@@ -488,6 +488,44 @@ test('an invite client registers → auto-approved (autoApprove passed through)'
   assert.equal(calls[0].autoApprove, true);
 });
 
+test('a read-only invite cannot re-identity an EXISTING agent via register_agent', async () => {
+  // F-identity: `as` + `identity` against an already-approved agent is applied
+  // immediately — a write. An invite whose role cannot write must be refused
+  // BEFORE registerAgentRequest ever runs.
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({ db, deps: { registerAgentRequest: async (a) => { calls.push(a); return { status: 'approved', agentId: 'agent-1', handle: 'coder' }; } } });
+  const handler = createMcpHandler(deps);
+  for (const token of ['viewer-invite-token', 'commenter-invite-token']) {
+    const res = await call(handler, { token, body: rpc('tools/call', { name: 'register_agent', arguments: { as: 'coder', identity: { avatar: 'XX' } } }) });
+    assert.equal(res.body.result.isError, true, `${token} must be refused`);
+    assert.match(res.body.result.content[0].text, /read-only/i);
+  }
+  assert.equal(calls.length, 0, 'the declaration never reaches registerAgentRequest');
+});
+
+test('an invite with write capability still declares identity for an existing agent', async () => {
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({ db, deps: { registerAgentRequest: async (a) => { calls.push(a); return { status: 'approved', agentId: 'agent-1', handle: 'coder' }; } } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'editor-invite-token', body: rpc('tools/call', { name: 'register_agent', arguments: { as: 'coder', identity: { avatar: 'XX' } } }) });
+  assert.equal(res.body.result.isError ?? false, false);
+  assert.deepEqual(calls[0].identity, { avatar: 'XX' });
+});
+
+test('a read-only invite may still register a BRAND NEW agent with an identity', async () => {
+  // Creating a new agent overwrites nobody's choices — the identity is the
+  // creation default, and that flow is exactly what invite links exist for.
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({ db, deps: { registerAgentRequest: async (a) => { calls.push(a); return { registrationId: 'r', status: 'approved', handle: 'x' }; } } });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, { token: 'viewer-invite-token', body: rpc('tools/call', { name: 'register_agent', arguments: { name: 'X', identity: { avatar: 'XX' } } }) });
+  assert.equal(res.body.result.isError ?? false, false);
+  assert.deepEqual(calls[0].identity, { avatar: 'XX' });
+});
+
 test('register_agent needs at least one of as/name/handle', async () => {
   const db = makeDb();
   const { deps } = makeDeps({ db });

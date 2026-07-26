@@ -25,7 +25,8 @@ const path = require('node:path');
 const {
   applyIdentityDeclaration,
   markHumanIdentityWrite,
-  identityLockSql,
+  identityWriteSql,
+  synthesizeHumanIdentityInsert,
   normalizeIdentityDeclaration,
   normalizeVoicePreference,
   resolveAgentVoice,
@@ -225,9 +226,15 @@ test('a human edit to an identity column is marked', () => {
   assert.deepEqual(lockPatch, { name: true });
 });
 
-test('a human edit to the voice is marked', () => {
-  const { lockPatch } = markHumanIdentityWrite('workspace_agents', { identity: { voice: { locale: 'en-GB' } } });
+test('a human edit to the voice is marked, extracted and validated', () => {
+  const { values, voice, lockPatch } = markHumanIdentityWrite('workspace_agents', {
+    identity: { voice: { cartesia_voice_id: VOICE_A, speed: 1.2, emotion: 'calm' }, human_set: { avatar: true } },
+  });
   assert.deepEqual(lockPatch, { voice: true });
+  assert.deepEqual(voice, { cartesia_voice_id: VOICE_A, speed: 1.2, emotion: 'calm' });
+  // `identity` never reaches the SET list as the caller's object — the voice is
+  // grafted onto the STORED column in SQL, and the human_set echo is discarded.
+  assert.equal('identity' in values, false);
 });
 
 test('an edit that touches no identity field is not marked', () => {
@@ -239,13 +246,116 @@ test('only workspace_agents is marked', () => {
   assert.equal(markHumanIdentityWrite('tasks', { name: 'x' }).lockPatch, null);
 });
 
-test('the lock merge reads human_set from the STORED row, never the caller', () => {
-  // A client cannot forge a lock for a field it did not write, and a stale echo
-  // of `identity` cannot un-protect a previously chosen field.
-  const sql = identityLockSql('$1::jsonb', '$2::jsonb');
-  assert.match(sql, /coalesce\("identity"->'human_set'/);
-  assert.match(sql, /jsonb_set\(coalesce\(\$1::jsonb/);
-  assert.match(sql, /\|\| \$2::jsonb/);
+test('BLOCKER regression: a forged human_set is discarded, not written', () => {
+  // {"identity":{"human_set":{...}}} used to skip the voice-marking branch and
+  // be written VERBATIM — any workspace editor could lock (or pre-lock) every
+  // field. Now the identity key is dropped and nothing identity-shaped remains.
+  const { values, voice, lockPatch } = markHumanIdentityWrite('workspace_agents', {
+    identity: { human_set: { name: true, avatar: true, voice: true } },
+  });
+  assert.equal(lockPatch, null);
+  assert.equal(voice, undefined);
+  assert.equal('identity' in values, false);
+});
+
+test('BLOCKER regression: {"identity":{}} cannot erase the locks', () => {
+  // The same hole in the other direction: an empty identity object was written
+  // verbatim, wiping human_set (and the stored voice) in one request.
+  const { values, voice, lockPatch } = markHumanIdentityWrite('workspace_agents', { identity: {} });
+  assert.equal(lockPatch, null);
+  assert.equal(voice, undefined);
+  assert.equal('identity' in values, false);
+});
+
+test('clearing an identity field UNLOCKS it instead of pinning emptiness', () => {
+  // Locking a field at '' is worse than not locking it: the agent could never
+  // fill it again. An explicit clear reads as "go back to the default".
+  const { lockPatch } = markHumanIdentityWrite('workspace_agents', { avatar: '', description: 'Ships things' });
+  assert.deepEqual(lockPatch, { avatar: false, description: true });
+});
+
+test('clearing the voice unlocks it too', () => {
+  const { voice, lockPatch } = markHumanIdentityWrite('workspace_agents', { identity: { voice: {} } });
+  assert.deepEqual(voice, {});
+  assert.deepEqual(lockPatch, { voice: false });
+});
+
+test('the identity SET fragment builds on the STORED column, never the caller', () => {
+  // Without a voice: base is the stored column; human_set = stored ∪ patch.
+  const bare = identityWriteSql(null, '$1::jsonb');
+  assert.match(bare, /jsonb_set\(coalesce\("identity", '\{\}'::jsonb\), '\{human_set\}'/);
+  assert.match(bare, /coalesce\("identity"->'human_set', '\{\}'::jsonb\) \|\| \$1::jsonb/);
+
+  // With a voice: only the voice key is grafted in; human_set still comes from
+  // the stored row. There is no spelling in which the caller's human_set lands.
+  const withVoice = identityWriteSql('$1::jsonb', '$2::jsonb');
+  assert.match(withVoice, /'\{voice\}', \$1::jsonb/);
+  assert.match(withVoice, /coalesce\("identity"->'human_set', '\{\}'::jsonb\) \|\| \$2::jsonb/);
+  assert.equal(withVoice.includes('$1::jsonb->'), false);
+});
+
+// --- human INSERTS (agent creation) ------------------------------------------
+
+test('a human insert locks the fields actually chosen — and only those', () => {
+  const created = synthesizeHumanIdentityInsert('workspace_agents', {
+    workspace_id: 'w', name: 'Coder', avatar: 'CO', accent_color: '#00a95c',
+    description: '', soul: '', model: 'auto',
+  });
+  // Non-empty choices are protected from the agent's FIRST connect; empty
+  // fields stay open for the declaration to fill.
+  assert.deepEqual(created.identity, { human_set: { name: true, avatar: true, accent_color: true } });
+  assert.equal(created.model, 'auto', 'non-identity values pass through untouched');
+});
+
+test('a human insert discards a forged human_set and junk identity keys', () => {
+  const created = synthesizeHumanIdentityInsert('workspace_agents', {
+    name: 'Coder',
+    identity: { human_set: { soul: true }, voice: { cartesia_voice_id: VOICE_A }, junk: 1 },
+  });
+  assert.deepEqual(created.identity, {
+    voice: { cartesia_voice_id: VOICE_A },
+    human_set: { name: true, voice: true },
+  });
+});
+
+test('inserts into other tables are left alone', () => {
+  const row = { title: 'x', identity: { human_set: { name: true } } };
+  assert.equal(synthesizeHumanIdentityInsert('tasks', row), row);
+});
+
+// --- the guarantee, in one scenario ------------------------------------------
+
+test('declare → human edit → re-declare: the human edit survives the reconnect', () => {
+  // 1. The agent connects for the first time and declares who it is.
+  const first = applyIdentityDeclaration({
+    current: row({ avatar: '', identity: {} }),
+    declared: { avatar: 'CD', description: 'Ships backend changes', voice: { cartesia_voice_id: VOICE_A } },
+  });
+  let stored = row({
+    avatar: first.columns.avatar,
+    description: first.columns.description,
+    identity: first.identity,
+  });
+  assert.equal(stored.avatar, 'CD');
+
+  // 2. A human edits the avatar in the app. The generic update path marks the
+  //    write; the SQL merge unions the patch into the STORED human_set.
+  const { lockPatch } = markHumanIdentityWrite('workspace_agents', { avatar: 'JK' });
+  assert.deepEqual(lockPatch, { avatar: true });
+  stored = {
+    ...stored,
+    avatar: 'JK',
+    identity: { ...stored.identity, human_set: { ...(stored.identity.human_set || {}), ...lockPatch } },
+  };
+
+  // 3. The agent reconnects and re-declares everything, avatar included.
+  const second = applyIdentityDeclaration({
+    current: stored,
+    declared: { avatar: 'CD', description: 'Ships backend changes', voice: { cartesia_voice_id: VOICE_B } },
+  });
+  assert.equal('avatar' in second.columns, false, 'the human\'s avatar must survive the reconnect');
+  assert.deepEqual(second.identity.voice, { cartesia_voice_id: VOICE_B }, 'unlocked fields still follow the agent');
+  assert.deepEqual(second.identity.human_set, { avatar: true }, 'the lock rides along with the identity write');
 });
 
 // --- wiring -----------------------------------------------------------------
@@ -296,10 +406,11 @@ test('register_agent accepts an identity declaration', async () => {
   assert.match(src, /identity: \(args\?\.identity && typeof args\.identity === 'object'\)/);
 });
 
-test('both backends mark a human identity write', async () => {
+test('both backends mark a human identity write and synthesize insert locks', async () => {
   for (const file of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
     const src = await readFile(path.join(root, file), 'utf8');
     assert.match(src, /markHumanIdentityWrite\(table, safeValues\)/, `${file}: db/update must mark human identity writes`);
-    assert.match(src, /identityLockSql\('"identity"'/, `${file}: a column-only edit must still record the lock`);
+    assert.match(src, /identityWriteSql\(/, `${file}: identity writes must go through the stored-column SET fragment`);
+    assert.match(src, /synthesizeHumanIdentityInsert\(table, next\)/, `${file}: db/insert must synthesize creation-time locks`);
   }
 });

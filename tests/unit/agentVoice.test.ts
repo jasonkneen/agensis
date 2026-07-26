@@ -204,9 +204,31 @@ describe('assignAgentVoices', () => {
   });
 
   it('separates two agents whose derived defaults collide', () => {
-    // Forced: a one-voice catalogue makes every default collide, so the probe
-    // has to run. With only one voice there is nowhere to step to, which is the
-    // documented degenerate case — but the roster must still resolve.
+    // A REAL collision in a multi-voice catalogue: find a second id whose
+    // derived slot equals agent-a's, so the probe genuinely has to step one of
+    // them to a free voice. (The old fixture used a ONE-voice catalogue, which
+    // exercised the nowhere-to-step fallback and proved nothing about probing.)
+    const slot = (id: string) => voiceSeed(id) % ENGLISH.length;
+    const a = 'agent-a';
+    let b = '';
+    for (let i = 0; b === '' && i < 10_000; i += 1) {
+      const candidate = `agent-${i}`;
+      if (candidate !== a && slot(candidate) === slot(a)) b = candidate;
+    }
+    expect(b).not.toBe('');
+
+    const map = assignAgentVoices([agent(a), agent(b)], ENGLISH);
+    const voiceA = map.get(a)!.voiceId;
+    const voiceB = map.get(b)!.voiceId;
+    expect(voiceA).not.toBe(voiceB);
+    // One of them keeps the contested slot; the other stepped to a catalogue
+    // voice, not to nothing.
+    expect([voiceA, voiceB]).toContain(ENGLISH[slot(a)]);
+    expect(ENGLISH).toContain(voiceA);
+    expect(ENGLISH).toContain(voiceB);
+  });
+
+  it('degenerate one-voice catalogue still resolves everyone (nowhere to step)', () => {
     const single = [ENGLISH[0]];
     const map = assignAgentVoices([agent('agent-a'), agent('agent-b')], single);
     expect(map.size).toBe(2);

@@ -53,7 +53,9 @@ const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
 const {
  applyIdentityDeclaration,
  markHumanIdentityWrite,
- identityLockSql,
+ identityWriteSql,
+ synthesizeHumanIdentityInsert,
+ FIELD_LIMITS: IDENTITY_FIELD_LIMITS,
  normalizeIdentityDeclaration,
  normalizeVoicePreference,
  resolveAgentVoice,
@@ -5305,7 +5307,12 @@ async function cartesiaSpeak({ voiceId, speed = 1, emotion = 'neutral', transcri
 // with IDENTITY_COLUMNS in shared/agentIdentity.cjs — a field missing here reads
 // as empty, so the declaration always looks like a change and rewrites the row
 // on every reconnect.
-const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, enabled, version from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+
+// How many times a declaration re-reads and retries after losing a write race.
+// Losing three in a row means a human is actively editing the row this second;
+// give way — the next reconnect declares again anyway.
+const AGENT_IDENTITY_WRITE_ATTEMPTS = 3;
 
 /**
  * Apply an agent's self-declared identity to its row — THE one server-side path
@@ -5316,32 +5323,55 @@ const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, descriptio
  * Writes nothing when the declaration matches what is stored or is entirely
  * locked by a human's choices — an agent that reconnects on a loop must not
  * produce an UPDATE and a realtime fanout on every loop.
+ *
+ * CONCURRENCY: read → merge-in-JS → write races a human edit landing between
+ * the two. An unconditional UPDATE would rewrite the whole identity jsonb from
+ * the stale read — destroying the human's value AND the human_set flag that was
+ * just written to protect it. So the UPDATE is guarded on the `version` the
+ * merge was computed from (workspace_agents is a VERSIONED_TABLE — every writer
+ * bumps it), and a lost race re-reads and re-merges, so a field the human
+ * locked mid-race is honoured on the retry rather than clobbered.
  */
 async function applyAgentIdentity({ workspaceId, agentId, row, declared, isNew = false }) {
- const result = applyIdentityDeclaration({ current: row, declared, isNew });
- if (!result.changed) return null;
+ let current = row;
+ for (let attempt = 0; attempt < AGENT_IDENTITY_WRITE_ATTEMPTS; attempt += 1) {
+  if (!current) {
+   const fresh = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
+   current = fresh[0];
+   if (!current) return null;
+  }
+  const result = applyIdentityDeclaration({ current, declared, isNew });
+  if (!result.changed) return null;
 
- const params = [];
- const setParts = [];
- for (const [column, value] of Object.entries(result.columns)) {
-  setParts.push(`${quoteIdent(column)} = ${bindDbParam(params, 'workspace_agents', column, value)}`);
- }
- if (result.identity) {
-  setParts.push(`"identity" = ${bindDbParam(params, 'workspace_agents', 'identity', result.identity)}`);
- }
- // workspace_agents is a VERSIONED_TABLE; the generic write path bumps version
- // on every update and the offline-write reconciler relies on it moving.
- setParts.push('"version" = COALESCE("version", 0) + 1', 'updated_at = now()');
- params.push(agentId, workspaceId);
+  const params = [];
+  const setParts = [];
+  for (const [column, value] of Object.entries(result.columns)) {
+   setParts.push(`${quoteIdent(column)} = ${bindDbParam(params, 'workspace_agents', column, value)}`);
+  }
+  if (result.identity) {
+   setParts.push(`"identity" = ${bindDbParam(params, 'workspace_agents', 'identity', result.identity)}`);
+  }
+  // workspace_agents is a VERSIONED_TABLE; the generic write path bumps version
+  // on every update and the offline-write reconciler relies on it moving.
+  setParts.push('"version" = COALESCE("version", 0) + 1', 'updated_at = now()');
+  params.push(agentId, workspaceId, Number(current.version ?? 0));
 
- const rows = await getDb().unsafe(
-  `update workspace_agents set ${setParts.join(', ')}
-     where id = $${params.length - 1} and workspace_id = $${params.length}
-     returning *`,
-  params,
- );
- if (rows.length > 0) notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
- return rows[0] || null;
+  const rows = await getDb().unsafe(
+   `update workspace_agents set ${setParts.join(', ')}
+      where id = $${params.length - 2} and workspace_id = $${params.length - 1}
+        and COALESCE("version", 0) = $${params.length}
+      returning *`,
+   params,
+  );
+  if (rows.length > 0) {
+   notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+   return rows[0];
+  }
+  // Someone else wrote the row after our read. Drop the stale snapshot and
+  // recompute against what they actually wrote.
+  current = null;
+ }
+ return null;
 }
 
 async function registerAgentConnection(ws, message) {
@@ -6218,7 +6248,10 @@ async function registerAgentRequest({ workspaceId, asHandle = null, name = null,
   }
  }
  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
- const reqName = agent ? agent.name : (name || reqHandle);
+ // The bare `name` argument is the same field as identity.name and gets the
+ // same bound — otherwise this door would be the one way to smuggle an
+ // unbounded string into workspace_agents.name.
+ const reqName = agent ? agent.name : (String(name || reqHandle).trim().slice(0, IDENTITY_FIELD_LIMITS.name) || reqHandle);
  const rows = await getDb().unsafe(
   `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status, requested_identity)
      values ($1, $2, $3, $4, $5, $6, $7::jsonb) returning *`,
@@ -11147,6 +11180,11 @@ function createApp() {
      const normalized = normalizeTaskTitle(next.title);
      if (normalized.changed) next = { ...next, title: normalized.title };
     }
+    // Creation-time identity choices are HUMAN choices: synthesize the
+    // human_set locks server-side (discarding any client-supplied ones) so an
+    // agent's first connect cannot replace the avatar or profile the human
+    // just picked. Empty fields stay unlocked — locking '' pins emptiness.
+    next = synthesizeHumanIdentityInsert(table, next);
     return next;
    });
    if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
@@ -11216,33 +11254,30 @@ function createApp() {
    if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
    await enforceDbOperationAccess(req.userId, table, 'update', { filters, values });
    const safeValues = stripPrivilegedDbValues(table, values);
-   const keys = Object.keys(safeValues);
-   if (keys.length === 0 && !(VERSIONED_TABLES.has(table) && values.version == null)) {
-    return jsonError(res, 400, new Error('No updatable fields provided'));
-   }
 
    // A human editing an agent is the OTHER half of the identity precedence rule
    // (shared/agentIdentity.cjs): whatever they touch here is recorded in
    // identity.human_set so the agent's next self-declaration leaves it alone.
    // This route is the one chokepoint every human agent edit goes through, which
    // is why the marking lives here and not in whichever dialog made the edit.
-   const { lockPatch } = markHumanIdentityWrite(table, safeValues);
+   // The identity jsonb itself is NEVER written from the client's object — only
+   // a validated `voice` is grafted onto the STORED column in SQL — so a
+   // payload like {"identity":{"human_set":{...}}} (or {"identity":{}}) can
+   // neither forge a lock nor erase one.
+   const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
+   const keys = Object.keys(markedValues);
+   if (keys.length === 0 && !lockPatch && !(VERSIONED_TABLES.has(table) && values.version == null)) {
+    return jsonError(res, 400, new Error('No updatable fields provided'));
+   }
 
    const params = [];
-   const setParts = keys.map((column) => {
-    const bound = bindDbParam(params, table, column, safeValues[column]);
-    if (column === 'identity' && lockPatch) {
-     // Merge the locks INTO the stored ones rather than taking the caller's
-     // copy: a client cannot forge a lock for a field it did not write, and a
-     // stale echo of identity cannot un-protect a previously chosen field.
-     return `"identity" = ${identityLockSql(bound, bindDbParam(params, table, 'identity', lockPatch))}`;
-    }
-    return `${quoteIdent(column)} = ${bound}`;
-   });
-   if (lockPatch && !Object.prototype.hasOwnProperty.call(safeValues, 'identity')) {
-    // Renaming an agent must record the lock without clobbering its voice, so
-    // the base is the stored column, merged in SQL.
-    setParts.push(`"identity" = ${identityLockSql('"identity"', bindDbParam(params, table, 'identity', lockPatch))}`);
+   const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+   if (lockPatch) {
+    // Base is the stored column (a rename must not clobber the voice); locks
+    // merge INTO the stored ones, so a client cannot forge a lock for a field
+    // it did not write and a stale echo cannot un-protect a chosen field.
+    const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
+    setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
    }
    if (VERSIONED_TABLES.has(table) && values.version == null) {
     setParts.push('"version" = COALESCE("version", 0) + 1');
@@ -11877,6 +11912,7 @@ module.exports = {
   agentStepParts,
   handleAgentCapabilitiesSync,
   resolveWorkspaceAgentByHandle,
+  applyAgentIdentity,
   registerAgentRequest,
   finalizeRegistrationApproval,
   decideAgentRegistration,
