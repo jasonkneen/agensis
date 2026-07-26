@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, X } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent } from '../../lib/canvasApps';
+import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent, makeAppletState, makeDocAppletState } from '../../lib/canvasApps';
 import { apiAuthHeaders, backendClient } from '../../lib/backendClient';
 import { filterAppletTaskUpdates } from '../../lib/appletBridge';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
@@ -238,7 +238,17 @@ function AppletObject({
         return;
       }
       if (message.type === 'agensis:setState') {
-        onAppletStateChange?.(JSON.stringify({ appId, state: payload.state || {} }));
+        // BUGFIX: a doc-backed applet's obj.text_content carries { appId, docId, state }.
+        // Rebuilding it as { appId, state } here (dropping docId) made docBackedHtml's
+        // effect bail on the very next render, falling through to the "Empty applet"
+        // placeholder — i.e. every doc-backed applet blanked itself out the moment it
+        // called agensis:setState, which the SDK contract asks every applet to do.
+        // Preserve docId when present so the doc body stays the source of truth.
+        onAppletStateChange?.(
+          parsed.docId
+            ? makeDocAppletState(parsed.docId, appId, payload.state || {})
+            : makeAppletState(appId, payload.state || {})
+        );
         return;
       }
       if (message.type === 'agensis:createTask') {

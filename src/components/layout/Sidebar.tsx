@@ -7,6 +7,7 @@ import {
  Brain,
  ChevronRight,
  Clock,
+ Code2,
  Copy,
  CreditCard,
  FileText,
@@ -155,6 +156,7 @@ import { partitionSidebarSessions } from '../../lib/sidebarSessions';
 import { isHuddleSession } from '../../lib/huddleTranscript';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { APPLETS_FOLDER } from '../../lib/canvasApps';
 
 // Which agents the DM section lists, remembered per workspace alongside the
 // other view preferences (see src/lib/viewPreferences.ts).
@@ -218,6 +220,7 @@ interface SidebarProps {
  onCreateWorkspace: () => void;
  onDocumentOpen: (doc: Document) => void;
  onDocumentUpdate?: (id: string, updates: { title?: string; content?: string; folder?: string | null }) => void;
+ onAddToCanvasApplet?: (doc: Document) => void;
  onSessionOpen: (session: ChatSession) => void;
  onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
  onSessionArchive?: (id: string, archived?: boolean) => void;
@@ -273,6 +276,7 @@ export const Sidebar = React.memo(function Sidebar({
  onCreateWorkspace,
  onDocumentOpen,
  onDocumentUpdate,
+ onAddToCanvasApplet,
  onSessionOpen,
  onSessionUpdate,
  onSessionArchive,
@@ -739,6 +743,7 @@ export const Sidebar = React.memo(function Sidebar({
            doc={doc}
            onOpen={() => onDocumentOpen(doc)}
            onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
+           onAddToCanvas={onAddToCanvasApplet}
            presenceUsers={documentPresence[doc.id] || []}
           />
          ))
@@ -1796,19 +1801,25 @@ function DocumentRow({
  doc,
  onOpen,
  onMoveFolder,
+ onAddToCanvas,
  presenceUsers = [],
 }: {
  doc: Document;
  onOpen: () => void;
  onMoveFolder: (folder: string) => void;
+ onAddToCanvas?: (doc: Document) => void;
  presenceUsers?: ItemPresenceUser[];
 }) {
+ // Applet storage docs (folder === APPLETS_FOLDER) are source code, not prose —
+ // a distinct icon flags that up front, and "Add to canvas" gives them a
+ // one-click path onto the board without opening the doc first.
+ const isApplet = doc.folder === APPLETS_FOLDER;
  return (
   <ContextMenu>
    <ContextMenuTrigger asChild>
     <div className="min-w-0 w-full">
      <ItemRow
-      icon={<FileText />}
+      icon={isApplet ? <Code2 /> : <FileText />}
       label={doc.title}
       onClick={onOpen}
       kind="document"
@@ -1819,6 +1830,15 @@ function DocumentRow({
    <ContextMenuContent>
     <ContextMenuLabel>{doc.title}</ContextMenuLabel>
     <ContextMenuSeparator />
+    {isApplet && onAddToCanvas && (
+     <>
+      <ContextMenuItem onSelect={() => onAddToCanvas(doc)}>
+       <LayoutTemplate data-icon="inline-start" />
+       Add to canvas
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+     </>
+    )}
     <ContextMenuSub>
      <ContextMenuSubTrigger>
       <Folder data-icon="inline-start" />

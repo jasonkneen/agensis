@@ -1893,6 +1893,7 @@ function AppContent() {
             onCreateWorkspace={handleCreateWorkspace}
             onDocumentOpen={handleDocumentOpen}
             onDocumentUpdate={saveDocument}
+            onAddToCanvasApplet={handleCreateDocApp}
             onSessionOpen={handleSessionOpen}
             onSessionUpdate={updateSession}
             onSessionArchive={archiveSession}
@@ -2097,6 +2098,7 @@ function AppContent() {
                   onOpenSessionById={handleSessionOpenById}
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
+                  onAddToCanvasApplet={handleCreateDocApp}
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
                   onUpdateFact={updateFact}
@@ -2408,6 +2410,7 @@ function CanvasLayerScene({
   onOpenSessionById,
   onDeleteDocument,
   onAutoSaveDocument,
+  onAddToCanvasApplet,
   onToggleFavorite,
   onAddFact,
   onUpdateFact,
@@ -2502,6 +2505,7 @@ function CanvasLayerScene({
   onOpenSessionById: (sessionId: string) => void;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
+  onAddToCanvasApplet: (doc: Document) => void;
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
@@ -2746,6 +2750,7 @@ function CanvasLayerScene({
                 onCloseWindow={onCloseWindow}
                 onUpdateWindow={onUpdateWindow}
                 onRequestConfirm={onRequestConfirm}
+                onAddToCanvasApplet={onAddToCanvasApplet}
                 document={doc}
                 workspaceId={workspaceId}
                 userId={userId}
