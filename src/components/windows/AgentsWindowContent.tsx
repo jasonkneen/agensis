@@ -832,10 +832,15 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // scroll container — a short window scrolls the pair rather
                 // than crushing both into slivers.
                 return (
-                  <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
-                    {grid}
-                    <div className="mt-3 h-[26rem] overflow-hidden rounded-xl border border-border bg-card/40">
-                      {diagram}
+                  // The grid takes the height its cards need; the map takes
+                  // EVERYTHING left. A fixed map height left a dead band below
+                  // it in a tall window, which is the one thing a two-panel
+                  // view must not do. min-h keeps the map readable in a short
+                  // window, where the outer container scrolls instead.
+                  <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pt-1.5 pb-2">
+                    <div className="shrink-0">{grid}</div>
+                    <div className="mt-3 flex min-h-[18rem] flex-1 overflow-hidden rounded-xl border border-border bg-card/40">
+                      <div className="min-h-0 min-w-0 flex-1">{diagram}</div>
                     </div>
                   </div>
                 );
