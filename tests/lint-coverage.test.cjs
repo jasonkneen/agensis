@@ -39,6 +39,11 @@ const MUST_BE_LINTED = [
   // Silently rewrites user-authored task titles on every create — a correctness
   // problem, not a style one.
   'shared/taskTitle.cjs',
+  // Owns the ONLY check standing between a signed-in account and every other
+  // account's data (the owner-only Tenants surface). An unlinted typo here —
+  // a shadowed variable, an unused `env` argument silently ignored — is an
+  // authorization bug.
+  'shared/tenant-admin.cjs',
   // Decides whether an agent's self-declaration on reconnect may overwrite a
   // name, avatar or voice a person chose. Getting it wrong is silent data loss
   // that looks like the app forgetting, and it runs on every daemon restart.
