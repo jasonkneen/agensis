@@ -4384,8 +4384,17 @@ async function ensureMentionedParticipants(workspaceId, session, content) {
   const handles = parseAgentMentions(content);
   if (handles.length === 0) return 0;
   const existing = parseJsonArray(session.participants);
+  // Key on the agent's bare uuid whichever field carries it and whichever
+  // shape wrote it. Two writers produced `agent:<uuid>` and bare `<uuid>` rows
+  // for the SAME agent, and this set — keyed on agent_id alone — could not see
+  // one of them, so a mention re-appended an agent that was already present.
+  // continueConversation dispatches per agent row: the duplicate answered
+  // every turn twice, and a huddle read both replies aloud.
   const existingAgentIds = new Set(
-   existing.filter((p) => p && p.kind === 'agent' && p.agent_id).map((p) => String(p.agent_id)),
+   existing
+    .filter((p) => p && p.kind === 'agent')
+    .map((p) => String(p.agent_id || p.id || '').replace(/^agent:/, ''))
+    .filter(Boolean),
   );
   const agents = await getDb().unsafe(
    'select id, name, handle, enabled from workspace_agents where workspace_id = $1',

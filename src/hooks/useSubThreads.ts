@@ -128,8 +128,13 @@ export function useSubThreads(workspaceId: string | null) {
   ): Promise<ChatSession | null> => {
     if (!workspaceId) return null;
     const now = new Date().toISOString();
+    // Canonical id shape: `agent:<uuid>`, matching every other writer. This
+    // hook wrote the bare uuid, so the same agent added again through the
+    // people dialog landed as a SECOND row — and continueConversation
+    // dispatches per agent row, so the duplicate answered twice and a huddle
+    // read both replies aloud.
     const primaryParticipant = {
-      id: agentId || agentHandle,
+      id: agentId ? `agent:${agentId}` : `agent:${agentHandle}`,
       name: agentName,
       kind: 'agent',
       handle: agentHandle,
@@ -138,7 +143,7 @@ export function useSubThreads(workspaceId: string | null) {
       added_at: now,
     };
     const extraParticipants = (options?.additionalAgents || []).map(a => ({
-      id: a.id || a.handle,
+      id: a.id ? `agent:${a.id}` : `agent:${a.handle}`,
       name: a.name,
       kind: 'agent',
       handle: a.handle,
