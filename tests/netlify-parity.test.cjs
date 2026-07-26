@@ -340,6 +340,9 @@ test('H3: setting agent metadata/sandbox columns requires manage, not just write
       const ws = rowWorkspaces[m[1]]?.[params[0]];
       return ws ? [{ workspace_id: ws }] : [];
     }
+    // Nested workspaces: the inherited-role ancestor walk (see
+    // shared/workspace-tree.cjs). Flat fixtures — nothing above to inherit.
+    if (n.includes('with recursive chain as')) return [];
     throw new Error(`Unexpected SQL: ${sql}`);
   };
   const update = (userId, values) => core.enforceDbOperationAccess({

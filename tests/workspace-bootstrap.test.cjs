@@ -148,6 +148,9 @@ function makeDb({ roles = {}, owners = {}, authSecret = 'bootstrap-secret' } = {
           updated_at: new Date().toISOString(),
         }];
       }
+      // Nested workspaces: the inherited-role ancestor walk. Reached only on
+      // the non-member path, where it must find nothing and leave the 403.
+      if (n.includes('with recursive chain as')) return [];
       throw new Error(`Unexpected SQL in bootstrap test: ${sql}`);
     },
   };

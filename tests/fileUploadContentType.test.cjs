@@ -92,6 +92,9 @@ function makeDb({ owners = {}, roles = {}, authSecret = 'test-secret' } = {}) {
         return [{ token_version: '1' }];
       }
 
+      // Nested workspaces: the inherited-role ancestor walk, reached on denial.
+      if (normalized.includes('with recursive chain as')) return [];
+
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };

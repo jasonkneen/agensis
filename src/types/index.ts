@@ -20,6 +20,19 @@ export interface Workspace {
   * below a divider; also present on generic `select('*')` reads.
   */
  is_system?: boolean;
+ /**
+  * The group this workspace sits inside; `null` (or absent) means top level.
+  *
+  * Grouping is EMERGENT, not a new entity — a workspace with children renders
+  * as a group, one without renders as a leaf. Children inherit AGENTS and
+  * MEMBERS from their ancestors; CONTENT (channels, documents, tasks, memory)
+  * belongs to exactly one workspace and is never visible from a sibling or a
+  * parent.
+  *
+  * Foundation only: nothing creates a child yet, so this is `null` on every
+  * row today. Present in the `/backend/workspaces` projection on BOTH backends.
+  */
+ parent_id?: string | null;
  version?: number;
  created_at: string;
  updated_at: string;

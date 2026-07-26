@@ -44,8 +44,11 @@ const {
  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
  normalizeFeedbackSubmission,
  insertFeedbackReport,
+ assertWorkspaceRole: sharedAssertWorkspaceRole,
+ userCanAccessWorkspace: sharedUserCanAccessWorkspace,
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
+const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -322,17 +325,11 @@ async function authorizeUserOrFarmWorkspace(req, workspaceId, userCapability) {
  await enforceWorkspaceRole(req.userId, workspaceId, userCapability);
 }
 
-// True if the user owns the workspace or is a member of it.
+// True if the user owns the workspace, is a member of it, or holds either in an
+// ANCESTOR. Single-sourced from shared/backend-core.cjs so Fly and Netlify apply
+// the same inheritance rule — members flow DOWN the workspace tree, never up.
 async function userCanAccessWorkspace(userId, workspaceId) {
- if (!userId || !workspaceId) return false;
- const rows = await getDb().unsafe(
-  `select 1 from workspaces where id = $1 and user_id = $2
-     union all
-     select 1 from workspace_members where workspace_id = $1 and user_id = $2
-     limit 1`,
-  [workspaceId, userId],
- );
- return rows.length > 0;
+ return sharedUserCanAccessWorkspace(userId, workspaceId, sharedDbAdapter);
 }
 
 // Tables whose rows are scoped to a workspace and therefore subject to
@@ -447,24 +444,12 @@ function badRequest(message) {
  return err;
 }
 
+// Single-sourced from shared/backend-core.cjs (same error messages, same
+// capability model) so the nested-workspace inheritance rule cannot be right on
+// one backend and wrong on the other. A role held in an ANCESTOR grants the
+// capability here; a role held in a CHILD grants nothing upward.
 async function enforceWorkspaceRole(userId, workspaceId, mode) {
- const role = await getWorkspaceRole(userId, workspaceId);
- if (!role) throw forbidden('You do not have access to this workspace');
- if (!roleHasWorkspaceCapability(role, mode)) {
-  if (mode === 'manage') {
-   throw forbidden('You do not have permission to manage this workspace');
-  }
-  if (mode === 'write') {
-   throw forbidden('You do not have permission to change this workspace');
-  }
-  if (mode === 'comment') {
-   throw forbidden('You do not have permission to comment in this workspace');
-  }
-  if (mode === 'run_agents') {
-   throw forbidden('You do not have permission to run agents in this workspace');
-  }
-  throw forbidden('You do not have permission to access this workspace');
- }
+ return sharedAssertWorkspaceRole({ userId, workspaceId, capability: mode, db: sharedDbAdapter });
 }
 
 // Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
@@ -1127,6 +1112,92 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);
   `);
 
+ // --------------------------------------------------------------------------
+ // Groupable workspaces — workspaces.parent_id (foundation; no UI yet).
+ //
+ // A workspace is the Slack account; channels are the projects. Grouping is
+ // EMERGENT rather than a new tier: the same entity gains a nullable
+ // self-reference, so a workspace with children renders as a group and one
+ // without renders as a leaf. A parent may hold its own content as well as
+ // children — that is allowed, not a degenerate case.
+ //
+ // ON DELETE RESTRICT, deliberately. The three candidates:
+ //   CASCADE   — deleting the agency workspace silently destroys every client
+ //               workspace under it, and all their channels, tasks and memory.
+ //   SET NULL  — children survive but are silently PROMOTED to top level, and
+ //               because members inherit downward, everyone whose access came
+ //               only from the parent silently loses it. A workspace whose only
+ //               members were inherited would be left with nobody in it.
+ //   RESTRICT  — deleting a parent that still has children FAILS.
+ // RESTRICT is the only one that cannot lose or leak data behind the operator's
+ // back: re-parenting or deleting the children first is an explicit act. It
+ // costs nothing today (no user can create a child yet), and the shared gate
+ // turns the FK violation into a readable 409 rather than an opaque 500.
+ //
+ // Cycle prevention is BELT AND BRACES:
+ //   1. CHECK  — the 1-cycle (parent_id = id), declaratively.
+ //   2. TRIGGER — every longer cycle (A->B->A and deeper), at the DB, so it
+ //      holds for the daemon, the MCP server, migrations and psql alike.
+ //   3. shared/backend-core.cjs — the same rule at the API gate, with a 400 and
+ //      a message instead of a raised exception.
+ // The trigger is not redundant with (3): a cycle makes the `WITH RECURSIVE`
+ // ancestor walk in the AUTHORIZATION path spin to statement_timeout on every
+ // request touching that workspace, so one bad row is a denial of service. The
+ // readers are depth-capped too, but the row must never exist in the first place.
+ await db.unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS parent_id uuid;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_parent_id_fkey'
+      ) THEN
+        ALTER TABLE workspaces
+          ADD CONSTRAINT workspaces_parent_id_fkey
+          FOREIGN KEY (parent_id) REFERENCES workspaces(id) ON DELETE RESTRICT;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_parent_id_not_self'
+      ) THEN
+        ALTER TABLE workspaces
+          ADD CONSTRAINT workspaces_parent_id_not_self
+          CHECK (parent_id IS NULL OR parent_id <> id);
+      END IF;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS idx_workspaces_parent_id ON workspaces(parent_id);
+
+    CREATE OR REPLACE FUNCTION workspaces_reject_parent_cycle()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+      cursor_id uuid := NEW.parent_id;
+      steps int := 0;
+    BEGIN
+      WHILE cursor_id IS NOT NULL LOOP
+        IF cursor_id = NEW.id THEN
+          RAISE EXCEPTION 'workspace % cannot be its own ancestor', NEW.id
+            USING ERRCODE = 'check_violation';
+        END IF;
+        steps := steps + 1;
+        IF steps > ${WORKSPACE_MAX_DEPTH} THEN
+          RAISE EXCEPTION 'workspace nesting exceeds the maximum depth of ${WORKSPACE_MAX_DEPTH}'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT parent_id INTO cursor_id FROM workspaces WHERE id = cursor_id;
+      END LOOP;
+      RETURN NEW;
+    END $$;
+
+    DROP TRIGGER IF EXISTS trg_workspaces_reject_parent_cycle ON workspaces;
+    CREATE TRIGGER trg_workspaces_reject_parent_cycle
+      BEFORE INSERT OR UPDATE OF parent_id ON workspaces
+      FOR EACH ROW
+      WHEN (NEW.parent_id IS NOT NULL)
+      EXECUTE FUNCTION workspaces_reject_parent_cycle();
+  `);
+
  // Huddle tables live in server/huddles.cjs so the LiveKit surface stays in one
  // module, but the DDL runs HERE so the three-place rule holds and a fresh Fly
  // boot provisions them like everything else.
@@ -1768,6 +1839,12 @@ function publicWorkspace(row) {
   // identical initials rather than as an error.
   icon: row.icon || '',
   is_system: row.is_system === true,
+  // Groupable workspaces: null = top level, otherwise the group this workspace
+  // sits inside. No UI reads it yet — it is here so the client already receives
+  // the shape, because `icon` and `is_system` were BOTH missing from this
+  // projection while the columns existed, and the rail silently degraded
+  // instead of erroring.
+  parent_id: row.parent_id || null,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -8815,7 +8892,8 @@ function createApp() {
  app.get('/backend/workspaces', requireAuth, async (req, res) => {
   try {
    const rows = await getDb().unsafe(
-    `select w.id, w.name, w.description, w.icon, w.is_system, w.local_path, w.project_kind, w.git_root, w.git_remote,
+    `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
+                w.local_path, w.project_kind, w.git_root, w.git_remote,
                 w.created_at, w.updated_at,
                 case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
          from workspaces w

@@ -31,6 +31,11 @@ async function configFor(relativePath) {
 // lands; do not remove an entry to make the test pass.
 const MUST_BE_LINTED = [
   'shared/backend-core.cjs',
+  // Owns the workspace-hierarchy rules the authorization path depends on:
+  // which ancestors grant access, and whether a re-parent would create a cycle.
+  // A cycle here is a denial of service on every request touching that
+  // workspace, and a direction mistake leaks one tenant's data to another.
+  'shared/workspace-tree.cjs',
   // Silently rewrites user-authored task titles on every create — a correctness
   // problem, not a style one.
   'shared/taskTitle.cjs',
