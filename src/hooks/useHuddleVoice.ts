@@ -727,6 +727,12 @@ export function useCartesiaSpeechOutput(
     });
     speakerRef.current = speaker;
     setUnavailable('');
+    // Open the socket NOW, not on the first sentence. Cold, the first spoken word
+    // of a call cost 395-626ms of pure connect (token mint + websocket + first
+    // chunk, measured 2026-07-26); warm, the same sentence starts in 107-120ms.
+    // Nothing is queued yet, so a failure here is silent and the first real
+    // speak() reports it — see CartesiaSpeaker.prewarm.
+    void speaker.prewarm();
     // Captured now rather than read in the cleanup: these are the same Map
     // objects for the life of the hook, and reading `.current` at teardown is
     // what the lint rule (correctly) warns about.

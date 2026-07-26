@@ -117,6 +117,28 @@ describe('isSpeakableAgentMessage', () => {
     expect(isSpeakableAgentMessage(agentMessage({ content: 'Thinking 0s' }))).toBe(false);
     expect(isSpeakableAgentMessage(agentMessage({ content: 'Thinking 12s' }))).toBe(false);
     expect(isSpeakableAgentMessage(agentMessage({ content: 'thinking…' }))).toBe(false);
+    expect(isSpeakableAgentMessage(agentMessage({ content: 'reading the schema' }))).toBe(false);
+  });
+
+  // The fast first reply, which is the entire point of the voice note: the agent
+  // is told to say one short sentence before it does the work, so the listener
+  // hears something in a few hundred milliseconds instead of waiting out a
+  // paragraph. The natural forms of that sentence all OPEN WITH A VERB from the
+  // activity list — and were therefore classified as status placeholders and
+  // silently dropped. A finished sentence is prose; only an unterminated verb
+  // line is a status. See ACTIVITY_STATUS_RE.
+  it('speaks a short acknowledgement that opens with an activity verb', () => {
+    for (const content of [
+      'Checking the deploy now.',
+      'Running that now.',
+      'Reading the logs now.',
+      'Looking up the last commit.',
+      'Planning it out, one moment.',
+      'Writing the test first.',
+    ]) {
+      expect(isSpeakableAgentMessage(agentMessage({ content })), content).toBe(true);
+      expect(speechItemFor(agentMessage({ content }), JOINED)?.text, content).toBe(content);
+    }
   });
 
   it('never speaks a deleted message', () => {

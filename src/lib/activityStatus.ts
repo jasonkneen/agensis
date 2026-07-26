@@ -1,8 +1,12 @@
 /**
  * Shared "activity placeholder" detection: while an agent works, the daemon
  * posts (then updates in place) a message whose entire content is a bare
- * activity verb — "thinking…", "reading src/App.tsx", "searching" — before
- * the real reply streams in. Every surface that shows live agent status
+ * activity verb — "thinking…", "reading the schema", "searching" — before
+ * the real reply streams in. (A verb line carrying a PATH, like
+ * "reading src/App.tsx", has never matched: `/` is outside the character class
+ * below. Pinned in tests/unit/toolSteps.test.ts rather than changed, because
+ * widening the class means swallowing more prose.) Every surface that shows
+ * live agent status
  * (chat windows, sub-threads, the sidebar status feed) parses that same shape,
  * so the verb list and regex live here once instead of being copy-pasted.
  * Ordered longest-first so "looking up" matches before "looking".
@@ -16,8 +20,25 @@ export const ACTIVITY_VERBS = [
 
 export type ActivityVerb = (typeof ACTIVITY_VERBS)[number];
 
+// A status line is a bare verb and maybe a short detail: "thinking",
+// "Thinking 1m 4s", "reading src/App.tsx". It is NEVER a finished sentence —
+// which is why the trailing lookbehind is here and not a nicety.
+//
+// Without it these eighteen verbs swallow the fastest thing an agent can say. In
+// a live huddle the agent is told to open with one short acknowledgement so the
+// listener hears something within a few hundred milliseconds, and the natural
+// forms of that are "Checking the deploy now.", "Running that now.", "Looking up
+// the last commit." — all of which matched, so every one of them was classified
+// as a placeholder: never spoken aloud, and drawn in the chat as a "Checking…"
+// chip rather than as the message it was. The reply the whole latency budget was
+// built around was the one reply that could not get out.
+//
+// `…` stays allowed at the end, because that is exactly what a status line ends
+// with; `.`, `!` and `?` are prose. server/index.cjs learned this same lesson on
+// its own side — see PLACEHOLDER_CONTENT_RE, "deliberately narrower than a bare
+// ^Thinking" — and this is that fix applied to the eighteen-verb shape.
 export const ACTIVITY_STATUS_RE = new RegExp(
-  `^(${ACTIVITY_VERBS.join('|')})[\\s\\w.,…]*$`,
+  `^(${ACTIVITY_VERBS.join('|')})[\\s\\w.,…]*(?<![.!?])$`,
   'i',
 );
 
