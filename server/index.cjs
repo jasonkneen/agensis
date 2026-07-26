@@ -1328,7 +1328,7 @@ function createPostgresFarmIntegrationStore() {
           denied_at = case when $9::bigint is null then null else to_timestamp($9 / 1000.0) end,
           consumed_at = case when $10::bigint is null then null else to_timestamp($10 / 1000.0) end,
           updated_at = now() where id = $1 returning *`,
-    [id, next.status, next.workspaceId || null, next.approvedBy || null, next.deniedBy || null, JSON.stringify(next.scopes || []), next.integrationId || null, next.approvedAt || null, next.deniedAt || null, next.consumedAt || null],
+    [id, next.status, next.workspaceId || null, next.approvedBy || null, next.deniedBy || null, next.scopes || [], next.integrationId || null, next.approvedAt || null, next.deniedAt || null, next.consumedAt || null],
    );
    return farmDeviceRecord(rows[0]);
   },
@@ -1337,7 +1337,7 @@ function createPostgresFarmIntegrationStore() {
     `insert into farm_integrations
          (id, workspace_id, name, token_hash, scopes, approved_by, created_at, updated_at)
          values ($1, $2, $3, $4, $5::jsonb, $6, to_timestamp($7 / 1000.0), now()) returning *`,
-    [record.id, record.workspaceId, record.name, record.tokenHash, JSON.stringify(record.scopes), record.approvedBy || null, record.createdAt],
+    [record.id, record.workspaceId, record.name, record.tokenHash, record.scopes, record.approvedBy || null, record.createdAt],
    );
    return farmIntegrationRecord(rows[0]);
   },
@@ -1355,7 +1355,7 @@ function createPostgresFarmIntegrationStore() {
          select $2, $3, $4, $5, $6::jsonb, $7, to_timestamp($8 / 1000.0), now()
            from claimed
          returning *`,
-    [id, integration.id, integration.workspaceId, integration.name, integration.tokenHash, JSON.stringify(integration.scopes), integration.approvedBy || null, consumedAt],
+    [id, integration.id, integration.workspaceId, integration.name, integration.tokenHash, integration.scopes, integration.approvedBy || null, consumedAt],
    );
    return farmIntegrationRecord(rows[0]);
   },
@@ -1491,8 +1491,8 @@ function createPostgresFlowConnectionStore() {
      record.tokenHash,
      await encryptFlowSecret(record.signingSecret),
      record.webhookUrl || null,
-     JSON.stringify(record.events || []),
-     JSON.stringify(record.scopes || []),
+     record.events || [],
+     record.scopes || [],
      record.createdBy || null,
      record.createdAt,
     ],
@@ -5504,7 +5504,7 @@ async function registerAgentConnection(ws, message) {
   `insert into agent_connections (id, workspace_id, agent_id, name, handle, host, cwd, status, metadata, connected_at, last_seen_at, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, 'online', $8::jsonb, now(), now(), now())
      returning *`,
-  [connectionId, workspaceId, agentId, name, handle, host, cwd, JSON.stringify(metadata)],
+  [connectionId, workspaceId, agentId, name, handle, host, cwd, metadata],
  );
  const connection = publicAgentConnection(rows[0]);
  ws.agentConnectionId = connectionId;
@@ -5557,7 +5557,7 @@ async function updateAgentHeartbeat(ws, metadata = {}, hashes = {}) {
      set status = $2, metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb, last_seen_at = now(), updated_at = now()
      where id = $1
      returning *`,
-  [connectionId, metadata.busy ? 'busy' : 'online', JSON.stringify(metadata || {})],
+  [connectionId, metadata.busy ? 'busy' : 'online', metadata || {}],
  );
  notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
 
@@ -5896,7 +5896,7 @@ async function handleAgentCapabilitiesSync(ws, message) {
  const rows = await getDb().unsafe(
   `update agent_connections set capabilities = $2::jsonb, updated_at = now()
      where id = $1 returning *`,
-  [connectionId, JSON.stringify(capabilities)],
+  [connectionId, capabilities],
  );
  const liveConnection = connectedAgents.get(connectionId);
  if (liveConnection) liveConnection.capabilities = capabilities;
@@ -6082,7 +6082,7 @@ async function dispatchFarmAgentJob({ workspaceId, agentId, prompt, model = '', 
  const jobRows = await getDb().unsafe(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, prompt, status, started_at, metadata)
      values ($1, $2, $3, null, $4, 'running', now(), $5::jsonb) returning *`,
-  [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), JSON.stringify(metadata)],
+  [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), metadata],
  );
  const job = jobRows[0];
  notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
@@ -7648,7 +7648,7 @@ async function logMessageActivity(rows) {
          values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
          on conflict do nothing
          returning *`,
-    [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
+    [workspaceId, userId, message.id != null ? String(message.id) : null, title, metadata],
    );
    if (inserted.length > 0) {
     // table is 'activity_events' here, so this cannot re-trigger message logging.
@@ -7685,7 +7685,7 @@ async function logConnectionActivity(connection, eventType) {
    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
        values ($1, null, $2, 'agent', $3, $4, $5::jsonb, now())
        returning *`,
-   [workspaceId, eventType, connection.agent_id != null ? String(connection.agent_id) : null, title, JSON.stringify(metadata)],
+   [workspaceId, eventType, connection.agent_id != null ? String(connection.agent_id) : null, title, metadata],
   );
   if (inserted.length > 0) {
    notifyDbSubscribers('activity_events', 'INSERT', inserted);
@@ -7817,7 +7817,7 @@ async function enqueueFlowWebhookEvents(table, eventType, rows) {
          (connection_id, workspace_id, event_id, event_type, payload)
          values ($1, $2, $3, $4, $5::jsonb)
          on conflict (connection_id, event_id) do nothing`,
-    [connection.id, location.workspaceId, eventId, flowEventType, JSON.stringify(payload)],
+    [connection.id, location.workspaceId, eventId, flowEventType, payload],
    );
   }
  }
@@ -8699,7 +8699,7 @@ function createApp() {
     `insert into workspace_agents
          (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, enabled, connect_token_hash, metadata, created_by)
          values ($1, $2, $3, $4, '', $5, 'daemon', $6, true, $7, $8::jsonb, $9) returning *`,
-    [workspaceId, name, handle, String(req.body?.description || '').slice(0, 500), String(req.body?.model || 'auto').slice(0, 160), normalizeAgentPermissionMode(req.body?.permissionMode), hashAgentToken(token), JSON.stringify(metadata), req.farmIntegration.approvedBy || null],
+    [workspaceId, name, handle, String(req.body?.description || '').slice(0, 500), String(req.body?.model || 'auto').slice(0, 160), normalizeAgentPermissionMode(req.body?.permissionMode), hashAgentToken(token), metadata, req.farmIntegration.approvedBy || null],
    );
    const agent = rows[0];
    notifyDbSubscribers('workspace_agents', 'INSERT', rows.map(publicFarmEnrolledAgent));
@@ -9479,7 +9479,7 @@ function createApp() {
    const rows = await getDb().unsafe(
     `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
          values ($1, $2, $3, $4, $5, 'openai-chat', $6::jsonb, $7) returning *`,
-    [workspaceId, name, baseUrl, cipher, model, JSON.stringify(headers), req.userId || null],
+    [workspaceId, name, baseUrl, cipher, model, headers, req.userId || null],
    );
    notifyDbSubscribers('gateway_configs', 'INSERT', rows.map(publicGatewayConfig));
    res.status(201).json({ data: publicGatewayConfig(rows[0]), error: null });
@@ -9502,7 +9502,7 @@ function createApp() {
     push('base_url', await assertSafeOutboundUrl(String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500)));
    }
    if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
-   if (req.body?.headers !== undefined) { params.push(JSON.stringify(parseJsonObject(req.body.headers))); sets.push(`headers = $${params.length}::jsonb`); }
+   if (req.body?.headers !== undefined) { params.push(parseJsonObject(req.body.headers)); sets.push(`headers = $${params.length}::jsonb`); }
    // Only rotate the key when a non-empty api_key is provided; an omitted or empty
    // field leaves the stored cipher intact so a name/model edit never wipes it.
    if (req.body?.api_key || req.body?.apiKey) push('api_key_cipher', await encryptVaultSecret(String(req.body.api_key || req.body.apiKey)));
@@ -9769,7 +9769,7 @@ function createApp() {
            (workspace_id, agent_id, created_by, key_hash, name, surface, scope, domain, metadata)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
          returning *`,
-    [workspaceId, agentId, req.userId, hashAgentToken(key), name, surface, scope, domain, JSON.stringify(metadata)],
+    [workspaceId, agentId, req.userId, hashAgentToken(key), name, surface, scope, domain, metadata],
    );
    notifyDbSubscribers('cursorbuddy_connection_keys', 'INSERT', rows.map(publicCursorBuddyConnectionKey));
    res.json({
@@ -9886,7 +9886,7 @@ function createApp() {
              updated_at = now()
          where id = $1
          returning *`,
-    [record.id, agent.id, JSON.stringify(metadata)],
+    [record.id, agent.id, metadata],
    );
    notifyDbSubscribers('cursorbuddy_connection_keys', 'UPDATE', updateRows.map(publicCursorBuddyConnectionKey));
    res.json({
