@@ -23,6 +23,39 @@ const TOKEN_REFRESH_MARGIN_MS = 20_000;
 // Cartesia should answer in ~110ms. A sentence that has produced nothing after
 // this long is not coming, and must not hold the queue (or the echo guard).
 const CHUNK_TIMEOUT_MS = 8000;
+// After an unexpected close, re-open in the background rather than waiting for
+// the next reply to pay for a cold connect (see `prewarm`). Bounded, because a
+// service that is refusing connections must not be retried forever — three
+// attempts and the next speak() reconnects on demand and reports the failure.
+const REWARM_DELAY_MS = 1000;
+const MAX_CONSECUTIVE_REWARMS = 3;
+// A socket that stayed up this long was working; its close is an idle timeout,
+// not a rejection, so re-warming may start over. Below it, the close looks like
+// the service turning us away — and an open-then-immediately-close cycle is
+// exactly how a reconnect loop runs for the length of a call.
+const REWARM_HEALTHY_MS = 10_000;
+// Shortest gap between two pre-warms, across every speaker in the page.
+//
+// A speaker is created and destroyed each time output mute is toggled, and each
+// pre-warm spends one of the 20-per-minute token mints the backend allows a user
+// per workspace. Before pre-warming, a toggle with no reply in between cost
+// nothing; now it would cost a mint, so a jittery toggle (or a remount loop)
+// could exhaust the budget and the NEXT genuine reply would be refused a token.
+// One warm socket every couple of seconds is all the feature needs.
+const PREWARM_COOLDOWN_MS = 2500;
+let lastPrewarmAtMs = 0;
+
+/**
+ * Test seam: forget the shared pre-warm cooldown.
+ *
+ * The cooldown is deliberately module-wide (the mint budget it protects is
+ * per-user, not per-speaker), which makes it state that leaks between tests in
+ * one file — a second test's pre-warm gets skipped because the first one's ran in
+ * the same millisecond. Not used by application code.
+ */
+export function resetPrewarmCooldown(): void {
+  lastPrewarmAtMs = 0;
+}
 
 interface TtsCredentials {
   token: string;
@@ -90,11 +123,57 @@ export class CartesiaSpeaker {
   private chunkTimer: number | null = null;
   private connecting: Promise<void> | null = null;
   private stopped = false;
+  private rewarmTimer: number | null = null;
+  private rewarms = 0;
+  private openedAt = 0;
 
   constructor(
     private readonly workspaceId: string,
     private readonly events: SpeakerEvents,
   ) {}
+
+  /**
+   * Mint the token, open the socket and start the AudioContext BEFORE anything
+   * needs saying.
+   *
+   * This is the single biggest cost in time-to-first-spoken-word, and it used to
+   * be paid on the first sentence of every call. Measured against the live API
+   * on 2026-07-26, from a laptop: a cold first word cost 395-626ms
+   * (mint 132-336ms + socket 153-182ms + first chunk 107-112ms) where a warm one
+   * costs 107-120ms. In the app the mint is worse still — it goes through our
+   * own backend rather than straight to Cartesia. Called when the huddle opens,
+   * which is also a user gesture, so the AudioContext starts running rather than
+   * suspended.
+   *
+   * Failure is deliberately silent. Nothing has been asked for yet, so there is
+   * nothing to apologise for; the first real speak() reconnects and reports it
+   * with the sentence the user needs.
+   */
+  async prewarm(): Promise<void> {
+    if (this.stopped) return;
+    // Already warm: nothing to do, and no mint to spend.
+    if (this.socket?.readyState === WebSocket.OPEN) return;
+    const now = Date.now();
+    if (now - lastPrewarmAtMs < PREWARM_COOLDOWN_MS) return;
+    lastPrewarmAtMs = now;
+    await this.warm();
+  }
+
+  /**
+   * The connect itself, without the mount-churn cooldown.
+   *
+   * The cooldown on `prewarm` exists to stop a toggled mount from spending token
+   * mints; a socket that Cartesia has just closed is a different event with its
+   * own budget (MAX_CONSECUTIVE_REWARMS), so re-warming must not be silenced by a
+   * cooldown meant for something else.
+   */
+  private async warm(): Promise<void> {
+    try {
+      await this.ensureSocket();
+    } catch {
+      // Reported by the first speak() instead — see prewarm.
+    }
+  }
 
   /** Queue one already-chunked utterance. Playback starts as soon as audio arrives. */
   speak(text: string, speaker: string, voiceId: string) {
@@ -134,6 +213,7 @@ export class CartesiaSpeaker {
   /** Tear the whole thing down. Not reusable afterwards. */
   async close() {
     this.stopped = true;
+    this.clearRewarmTimer();
     this.stop();
     const socket = this.socket;
     this.socket = null;
@@ -231,7 +311,52 @@ export class CartesiaSpeaker {
       // (and latch the echo guard) forever. Release it and let the next speak()
       // reconnect.
       if (this.current) this.finishCurrent();
+      // Cartesia closes a socket that has been idle, and a huddle is mostly
+      // silence. Re-opening in the background is what keeps `prewarm`'s saving
+      // alive for the whole call instead of only its first sentence.
+      //
+      // Whether this close refunds the re-warm budget is the difference between
+      // a keepalive and a spin. A socket that was up for a while was working, so
+      // its close is an idle timeout and re-warming starts fresh. One that closed
+      // the moment it opened is the service refusing us, and refunding THAT would
+      // make the ceiling below unreachable — open, close, re-warm, forever.
+      if (this.openedAt && Date.now() - this.openedAt >= REWARM_HEALTHY_MS) this.rewarms = 0;
+      this.openedAt = 0;
+      this.scheduleRewarm();
     };
+    this.openedAt = Date.now();
+  }
+
+  /**
+   * Re-open the socket shortly after it closed on its own, so the next reply is
+   * still warm.
+   *
+   * Never while something is queued (pump() reconnects on demand and reports
+   * errors), and never more than MAX_CONSECUTIVE_REWARMS times without a
+   * successful connect in between — otherwise a service that is refusing us
+   * turns a silent call into an endless reconnect loop.
+   */
+  private scheduleRewarm() {
+    if (this.stopped || this.rewarmTimer !== null) return;
+    if (this.queue.length > 0 || this.current) return;
+    if (this.rewarms >= MAX_CONSECUTIVE_REWARMS) return;
+    this.rewarms += 1;
+    this.rewarmTimer = window.setTimeout(() => {
+      this.rewarmTimer = null;
+      // `socket` can hold a socket that never opened (connect assigns it before
+      // awaiting the handshake), so ask readyState rather than truthiness —
+      // otherwise one refused connect would disable re-warming for the call.
+      if (this.stopped || this.queue.length > 0 || this.current) return;
+      if (this.socket?.readyState === WebSocket.OPEN) return;
+      void this.warm();
+    }, REWARM_DELAY_MS);
+  }
+
+  private clearRewarmTimer() {
+    if (this.rewarmTimer !== null) {
+      window.clearTimeout(this.rewarmTimer);
+      this.rewarmTimer = null;
+    }
   }
 
   private async freshCredentials(): Promise<TtsCredentials> {

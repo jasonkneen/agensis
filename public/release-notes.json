@@ -67,6 +67,19 @@
       "A tip you dismiss does not come back, and the next tip for that surface takes its place",
       "Collapse the panel with the chevron to keep it to a single line",
       "What you have dismissed is remembered per workspace, so it never carries across accounts sharing a browser"
+]
+  },
+  {
+    "version": "huddle-voice-latency",
+    "date": "2026-07-26",
+    "title": "Huddles answer sooner",
+    "summary": "A voice call where the agent takes several seconds to start talking feels broken however good the answer is, so we went looking for where the time actually went. The connection to the voice service is now opened when you join the call instead of when the agent first speaks, which took roughly half a second off the very first thing you hear. Short acknowledgements like \"Checking the deploy now.\" are spoken again — they were being mistaken for the agent's own status line and silently dropped, so the quickest reply an agent could give was the one reply you never heard. And the moment an agent finishes a sentence, that sentence is sent to be read aloud rather than waiting for the next batch of text.",
+    "highlights": [
+      "The voice connection is opened on join, so the first sentence of a call starts about half a second sooner",
+      "Short acknowledgements that begin with a word like \"checking\", \"running\" or \"reading\" are spoken instead of dropped",
+      "A finished sentence is read aloud immediately instead of waiting up to a quarter-second for the next update",
+      "Agents in a call are asked for a short opening sentence, and not to write for the page while you are listening",
+      "Speech reaches the transcriber in half the time it used to"
     ]
   },
   {

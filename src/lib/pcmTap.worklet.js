@@ -10,10 +10,18 @@
 // every browser that can run a huddle already understands, and keep it free of
 // imports.
 
-// 1024 samples at 16kHz is 64ms — small enough that Deepgram Flux sees speech
-// promptly, large enough that we are not crossing the worklet boundary a
-// hundred times a second. Must match FRAMES_PER_POST in deepgramMic.ts.
-const FRAMES_PER_POST = 1024;
+// 512 samples at 16kHz is 32ms, and that number is a latency budget, not a
+// buffer size: a sample sits here until the block is full, so the LAST word of
+// an utterance waits up to one block before Deepgram has even seen it, and
+// end-of-turn cannot be declared until it has. This was 1024 (64ms); halving it
+// halves that wait, and 32ms sits inside Deepgram's recommended 20-50ms band
+// where 64ms did not. The cost is 31 port messages a second instead of 15, which
+// is nothing next to the audio itself.
+//
+// Do not raise it back without measuring: the whole end-of-turn stage costs
+// 86-110ms (measured against live Flux, 2026-07-26), so 32ms of local buffering
+// is a THIRD of it — the largest remaining slice of the fastest stage.
+const FRAMES_PER_POST = 512;
 
 class AgensisPcmTap extends AudioWorkletProcessor {
   constructor() {

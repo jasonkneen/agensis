@@ -61,8 +61,30 @@ const CARTESIA_TOKEN_TIMEOUT_MS = 10_000;
 const DEEPGRAM_MODEL = 'flux-general-en';
 const DEEPGRAM_LISTEN_URL = 'wss://api.deepgram.com/v2/listen';
 // Deepgram's defaults. eot_threshold 0.7 is their recommendation for a balanced
-// agent; lower is snappier and interrupts more.
+// agent; lower is nominally snappier and interrupts more.
+//
+// MEASURED, so nobody spends another evening on this: 0.7 is NOT costing us
+// anything. Against the live Flux API on 2026-07-26 — synthesised speech fed in
+// at wall-clock rate, timing the gap between the last speech sample and the
+// EndOfTurn frame the dispatch path acts on:
+//
+//   eot 0.7  ->  +97ms, +86ms        eot 0.6  ->  +87ms
+//   eot 0.5  ->  +86ms, +106ms       eot 0.4  ->  HTTP 400 (below the API's floor)
+//
+// Lowering the threshold moved end-of-turn by less than the run-to-run noise,
+// and EagerEndOfTurn (which we deliberately do not act on — see reduceTurn in
+// src/lib/voiceStream.ts) landed just 9ms ahead of the real one. There is no
+// latency left in this stage: at ~90ms it is already the fastest thing in the
+// pipeline. If a huddle feels slow, the time is in the model and in TTS connect
+// setup, not here.
 const DEEPGRAM_EOT_THRESHOLD = 0.7;
+// The API rejects a threshold outside this band with HTTP 400 (0.4 verified
+// 2026-07-26), and a rejected handshake is a dead microphone with a generic
+// "did not answer" message. Clamped rather than validated because the only
+// callers are ours: a bad constant should cost a slightly wrong threshold, never
+// a huddle with no transcription.
+const DEEPGRAM_EOT_MIN = 0.5;
+const DEEPGRAM_EOT_MAX = 0.9;
 const DEEPGRAM_EOT_TIMEOUT_MS = 5000;
 
 function readKey(env, name) {
@@ -161,10 +183,25 @@ function deepgramListenUrl({ sampleRate, model = DEEPGRAM_MODEL, eotThreshold = 
     model,
     encoding: 'linear16',
     sample_rate: String(clampSampleRate(sampleRate)),
-    eot_threshold: String(eotThreshold),
+    eot_threshold: String(clampEotThreshold(eotThreshold)),
     eot_timeout_ms: String(eotTimeoutMs),
   });
   return `${DEEPGRAM_LISTEN_URL}?${params.toString()}`;
+}
+
+/**
+ * An end-of-turn threshold the API will actually accept.
+ *
+ * Outside 0.5-0.9 Flux refuses the handshake with a 400, and the client's only
+ * clue is "The transcription service did not answer" — so a future "make it
+ * snappier" edit that reaches for 0.4 would present as a broken microphone with
+ * nothing pointing at the cause. A non-number falls back to the default rather
+ * than being interpolated into the URL.
+ */
+function clampEotThreshold(value, fallback = DEEPGRAM_EOT_THRESHOLD) {
+  const threshold = Number(value);
+  if (!Number.isFinite(threshold)) return fallback;
+  return Math.min(DEEPGRAM_EOT_MAX, Math.max(DEEPGRAM_EOT_MIN, threshold));
 }
 
 /**
@@ -259,6 +296,7 @@ module.exports = {
   scrubError,
   deepgramListenUrl,
   clampSampleRate,
+  clampEotThreshold,
   mintCartesiaToken,
   mintDeepgramToken,
   CARTESIA_MODEL,
@@ -268,4 +306,7 @@ module.exports = {
   CARTESIA_TOKEN_TTL_SECONDS,
   DEEPGRAM_MODEL,
   DEEPGRAM_LISTEN_URL,
+  DEEPGRAM_EOT_THRESHOLD,
+  DEEPGRAM_EOT_MIN,
+  DEEPGRAM_EOT_MAX,
 };

@@ -17,6 +17,7 @@ import {
   activityChipLabel,
   activityElapsed,
   activitySeenAtMs,
+  isActivityPlaceholderMessage,
   isLiveActivityPlaceholder,
   parseElapsedMs,
   thoughtChipLabel,
@@ -214,6 +215,47 @@ describe('isStaleStepGroup', () => {
       thinking('2m 0s', { created_at: new Date(now - 10 * TOOL_STEP_STALE_MS).toISOString() }),
     ];
     expect(isStaleStepGroup(steps, now)).toBe(false);
+  });
+});
+
+describe('what counts as a status line', () => {
+  it('recognises the shapes the daemon and server actually write', () => {
+    for (const content of ['Thinking 0s', 'Thinking 1m 4s', 'thinking', 'thinking…', 'planning', 'reading the schema']) {
+      expect(isActivityPlaceholderMessage({ sender_kind: 'agent', content }), content).toBe(true);
+    }
+  });
+
+  it('was never matching a status line that carries a PATH', () => {
+    // Pinned because the module's own doc comment offers "reading src/App.tsx" as
+    // the example shape and it has never matched: `/` is outside the character
+    // class. Recorded rather than fixed — widening the class is a step towards
+    // swallowing more prose, which is the failure being walked back here.
+    expect(isActivityPlaceholderMessage({ sender_kind: 'agent', content: 'reading src/App.tsx' })).toBe(false);
+  });
+
+  it('does not mistake a finished sentence for one, however it opens', () => {
+    // Eighteen verbs lead the activity list, and prose that opens with one is
+    // still prose. Before the trailing lookbehind in ACTIVITY_STATUS_RE these were
+    // drawn as "Checking…" chips instead of as messages — and in a huddle they
+    // were never spoken, which killed the fast acknowledgement the voice note
+    // exists to produce.
+    for (const content of [
+      'Checking the deploy now.',
+      'Running that now.',
+      'Reading the logs now.',
+      'Looking up the last commit.',
+      'Writing the test first.',
+      'Reviewing it, one moment.',
+    ]) {
+      expect(isActivityPlaceholderMessage({ sender_kind: 'agent', content }), content).toBe(false);
+    }
+  });
+
+  it('keeps the ellipsis a status line ends with', () => {
+    // `…` is what activityLine appends, so it must stay a status line; only `.`,
+    // `!` and `?` mean prose.
+    expect(isActivityPlaceholderMessage({ sender_kind: 'agent', content: 'reading the schema…' })).toBe(true);
+    expect(activityChipLabel('thinking')).toBe('Thinking…');
   });
 });
 

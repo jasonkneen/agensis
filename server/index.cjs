@@ -4325,7 +4325,25 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
 const VOICE_HUDDLE_NOTE = [
  'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
  'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
+ // These three constraints are not style, they are the latency mechanism, and
+ // each one names a specific thing that made the first word late:
+ //   - the reader speaks a sentence the instant its FULL STOP arrives and cannot
+ //     speak an unterminated fragment (src/lib/voiceStream.ts), so a first
+ //     "sentence" that runs on for a paragraph is a paragraph of silence;
+ //   - a preamble or a restatement of the question delays the first terminator
+ //     by exactly its own length;
+ //   - reasoning before writing anything is silence the listener cannot tell
+ //     from a broken call. Answering first costs nothing: the work still happens,
+ //     in the messages that follow.
+ 'Your FIRST sentence must be at most a dozen words and must END IN A FULL STOP. Do not open with a preamble, a restatement of the question, or a heading — the first full stop is the moment your voice is heard.',
+ 'Do not reason at length before that first sentence. Say it, then think, then keep talking as you learn things.',
+ 'It may say what you are ABOUT to do. It must never say you have already done it.',
  'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
+ // The base system prompt (and, for daemon agents, the daemon's own prompt
+ // suffix) both ask for markdown structure. Spoken, a heading has no full stop
+ // and a bullet has no verb, so that instruction has to be cancelled here or the
+ // two fight and the listener hears the loser.
+ 'Ignore any instruction to prefer markdown, headings, bullets or tables while this huddle is live. Structure is for reading; you are being listened to.',
  // Spoken aloud, tool narration is worse than useless: the human hears a
  // minute of "I am calling the create_thread_item MCP tool" and then learns
  // nothing was created. Announce the OUTCOME, never the mechanism, and never
@@ -5074,6 +5092,44 @@ async function resolveWorkThreadParent(sessionId) {
  return parentId ? { parentId, broadcast: true } : { parentId: null, broadcast: false };
 }
 
+// Something a listener hears as the end of a spoken sentence.
+//
+// DELIBERATELY looser than the client's own sentence splitter
+// (src/lib/voiceStream.ts, which rules out decimals and initials): this only
+// decides WHEN the row is written, never what is said, and the two live in
+// different languages so a shared regex would be a copy either way. Firing on a
+// boundary the client then declines costs one extra UPDATE; missing one it would
+// have accepted costs up to BUILTIN_FLUSH_INTERVAL_MS of silence in a live call.
+const SPEAKABLE_BOUNDARY_RE = /[.!?…](\s|$)|[:;]\s/;
+// Floor between streamed content writes. Each one broadcasts to every subscriber
+// of the session, so this is a real cost — it is a floor, not a schedule.
+const BUILTIN_FLUSH_INTERVAL_MS = 250;
+
+/**
+ * Is it time to write the streamed reply to the database?
+ *
+ * The throttle exists because every write fans out over realtime. But in a voice
+ * huddle the write carrying a finished sentence is the one that gets SPOKEN —
+ * the browser hands Cartesia each sentence the moment its terminator arrives —
+ * so making that particular write wait out the remainder of a 250ms window is
+ * up to 250ms of silence on the very first thing the agent says. A completed
+ * sentence therefore jumps the queue; everything else still waits its turn.
+ *
+ * Pure, and exported, because "when does the first sentence reach the listener"
+ * is exactly the kind of timing claim that should be a test rather than a
+ * paragraph.
+ */
+function streamFlushDue({ text, written, lastFlushAt, now, minIntervalMs = BUILTIN_FLUSH_INTERVAL_MS }) {
+ const full = String(text || '');
+ const done = String(written || '');
+ if (!full || full === done) return false;
+ if (now - lastFlushAt >= minIntervalMs) return true;
+ // A rewrite (not a prefix) is tested whole: there is no meaningful "new tail",
+ // and a rewritten block is not the streaming case this shortcut serves.
+ const tail = full.startsWith(done) ? full.slice(done.length) : full;
+ return SPEAKABLE_BOUNDARY_RE.test(tail);
+}
+
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
  if (!isAgentEnabled(agent)) return { ok: false, pending: false };
  const handle = slugHandle(agent.handle || agent.name);
@@ -5217,31 +5273,62 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   notifyDbSubscribers('messages', 'INSERT', placeholderRows);
   let writeChain = Promise.resolve();
   let writing = false;
+  // Declared out here with writeChain/writing because the catch below sets it:
+  // once the stream is over — successfully or not — the terminal write owns the
+  // row and no throttled partial may land behind it.
+  let finished = false;
   try {
    // Throttle + serialize DB writes: at most one update in flight at a time and
    // no more than ~4x/sec, always writing the LATEST accumulated text. Because
    // each delta carries the full text so far, awaiting the in-flight write (in
    // both the success and error paths) prevents a late partial from clobbering
    // the final content.
+   //
+   // TWO exceptions to the throttle, both for voice (see streamFlushDue):
+   //   - a write that completes a SENTENCE goes immediately, because that is the
+   //     write a huddle speaks;
+   //   - a write skipped because another was in flight is retried when that one
+   //     settles, instead of waiting for a delta that may never come — the last
+   //     sentence of a reply used to sit unwritten until the stream ended.
    let latest = '';
+   let written = '';
    let lastFlush = 0;
+   let flushQueued = false;
    const flush = () => {
-    if (writing) return;
-    const now = Date.now();
-    if (now - lastFlush < 250) return;
+    // Past the end of the stream the final write below is authoritative; a
+    // straggler here would overwrite it (and, on the error path, replace the
+    // error with a partial reply).
+    if (finished) return;
+    if (writing) { flushQueued = true; return; }
+    if (!streamFlushDue({ text: latest, written, lastFlushAt: lastFlush, now: Date.now() })) return;
     writing = true;
-    lastFlush = now;
-    writeChain = (async () => {
+    lastFlush = Date.now();
+    const target = latest;
+    const write = (async () => {
      try {
       const rows = await getDb().unsafe(
        `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-       [responseMessageId, latest || 'Thinking…', sessionId],
+       [responseMessageId, target || 'Thinking…', sessionId],
       );
+      // Only after the write landed: a failed one has not been written, and the
+      // next flush must still be allowed to try this text again.
+      written = target;
       if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
      } finally {
       writing = false;
+      if (flushQueued) {
+       flushQueued = false;
+       flush();
+      }
      }
     })();
+    // Absorbed here, not only at the awaits below: the finally above can replace
+    // `writeChain` with a fresh promise before this one settles, and a rejection
+    // nobody is holding becomes an unhandledRejection in a long-lived server. The
+    // awaits at the end of the turn are what order the writes; this only makes
+    // sure the error cannot escape. The terminal write is authoritative either way.
+    write.catch(() => { });
+    writeChain = write;
    };
    const responseText = await runAnthropicCompletionStreaming({
     model: resolveAnthropicModel(agent.model),
@@ -5252,6 +5339,8 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     agentContext,
     workspaceId,
    }, (partial) => { latest = partial; flush(); });
+   // The stream is over, so the writes below own the row from here.
+   finished = true;
    const updatedRows = await getDb().unsafe(
     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
     [jobRows[0].id, responseText],
@@ -5278,7 +5367,9 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    }
    return { ok: true, pending: false };
   } catch (error) {
-   // Let any in-flight partial write settle so it can't clobber the error text.
+   // Let any in-flight partial write settle so it can't clobber the error text —
+   // and stop any further one from being started behind it.
+   finished = true;
    await writeChain.catch(() => { });
    const errorText = error?.message || 'Built-in agent failed';
    const updatedRows = await getDb().unsafe(
@@ -8966,9 +9057,11 @@ function attachRealtime(server) {
 
   ws.on('message', async (raw, isBinary) => {
    // Binary frames are microphone audio for the Deepgram relay and nothing
-   // else. Checked FIRST: String()-ing a 1600-byte PCM buffer and handing it to
-   // JSON.parse is pure waste on a frame that arrives twenty times a second,
-   // and an authenticated socket is the only place audio may come from.
+   // else. Checked FIRST: String()-ing a PCM buffer and handing it to JSON.parse
+   // is pure waste on a frame that arrives ~31 times a second (512 samples at
+   // 16kHz — see FRAMES_PER_POST in src/lib/pcmTap.worklet.js, halved from 1024
+   // to halve how long the last word of an utterance waits before Deepgram sees
+   // it), and an authenticated socket is the only place audio may come from.
    // ws.userId is set only by finalizeAuthenticated, and only for a HUMAN
    // session token — a daemon's agent-token socket has none and can never open
    // a stream, let alone feed one.
@@ -13300,6 +13393,8 @@ module.exports = {
   buildWhereClause,
   buildDaemonPrompt,
   VOICE_HUDDLE_NOTE,
+  streamFlushDue,
+  BUILTIN_FLUSH_INTERVAL_MS,
   loadChannelIntentNote,
   agentVoiceSettings,
   cartesiaEnglishVoiceIds,
