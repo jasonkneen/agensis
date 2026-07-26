@@ -135,6 +135,19 @@ If your page is assembled from multiple source files, mark regions with
 `data-ve-file="path/relative/to/root.html"` — the nearest ancestor's value
 wins.
 
+## Try the demo
+
+A ready-made demo site lives in `examples/` (two pages, stylesheet included):
+
+```bash
+npm run demo
+# → http://localhost:4399
+```
+
+Edits made through the editor are written into `examples/*.html`, so you can
+inspect the byte-precise source patching afterwards (undo with Ctrl/Cmd+Z, or
+`git checkout -- examples/` to reset everything).
+
 ## Tests
 
 ```bash

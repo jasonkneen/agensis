@@ -8,7 +8,8 @@
     "visual-dev-editor": "bin/cli.cjs"
   },
   "scripts": {
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "demo": "node bin/cli.cjs examples --port 4399"
   },
   "dependencies": {
     "parse5": "^6.0.1"
