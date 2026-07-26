@@ -53,6 +53,48 @@ test('allows ordinary public addresses', () => {
   }
 });
 
+// The IPv6 tests above all matched because the address happened to be spelled the
+// way the string checks expected. Two spellings of the SAME blocked addresses did
+// not, and reached a fetch:
+//
+//   ::ffff:a9fe:a9fe  is 169.254.169.254 with the embedded v4 written in hex, so
+//                     the `^::ffff:(\d+\.\d+\.\d+\.\d+)$` match missed it and none
+//                     of the f-prefix tests applied.
+//   0:0:0:0:0:0:0:1   is loopback written out, and is not the string '::1'.
+//
+// Both are now judged on the NUMBERS. This matters more since the provider proxy
+// landed: a credentialed outbound call runs through the same guard, so a bypass
+// here is the workspace's provider key posted to whatever the address serves.
+test('a blocked IPv6 address is blocked in every spelling of it', () => {
+  const blocked = [
+    '::ffff:a9fe:a9fe',                    // 169.254.169.254, hex-embedded
+    '::ffff:7f00:1',                       // 127.0.0.1, hex-embedded
+    '::ffff:0a00:1',                       // 10.0.0.1, hex-embedded
+    '0:0:0:0:0:0:0:1',                     // loopback, fully written out
+    '0:0:0:0:0:0:0:0',                     // unspecified, fully written out
+    '0000:0000:0000:0000:0000:0000:0000:0001',
+    '::a9fe:a9fe',                         // v4-compatible (deprecated) metadata
+    'FE80::1',                             // link-local, uppercase
+    'fEc0:0:0:0:0:0:0:1',                  // unique-local, mixed case
+    '64:ff9b::a9fe:a9fe',                  // NAT64 — reaches v4 space
+    '2001:db8::1',                         // documentation range
+    'ff05:0:0:0:0:0:0:2',                  // multicast, written out
+  ];
+  for (const address of blocked) {
+    assert.equal(isBlockedAddress(address), true, `${address} should be blocked`);
+  }
+});
+
+test('ordinary public IPv6 still passes in expanded form', () => {
+  for (const address of [
+    '2606:4700:4700:0000:0000:0000:0000:1111',
+    '2606:4700:4700::1111',
+    '2a00:1450:4009:81f::200e',
+  ]) {
+    assert.equal(isBlockedAddress(address), false, `${address} should be allowed`);
+  }
+});
+
 test('172.16.0.0/12 boundaries are exact', () => {
   assert.equal(isBlockedAddress('172.15.255.255'), false, 'just below the range is public');
   assert.equal(isBlockedAddress('172.16.0.0'), true);

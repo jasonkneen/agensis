@@ -1,5 +1,20 @@
 [
   {
+    "version": "provider-credential-proxy",
+    "date": "2026-07-26",
+    "title": "Agents can use your provider keys without ever holding one",
+    "summary": "The Sandbox Agent could store a provider API key but had no way to actually use it, so it could not provision anything. It can now — and it still never sees the key. The agent names a provider skill and one of that skill's operations, agensis makes the call with your stored credential attached, and hands back only the response. The destination comes from the skill definition, never from the agent: there is deliberately no way for an agent to name a URL, a host or a header, so a credentialed call can only reach where the skill already points, and nothing that gets into an agent's context can redirect one somewhere else. Every call is written to the workspace activity log with the provider, the operation, the address and the result — never a request or response body.",
+    "highlights": [
+      "Ask the Sandbox Agent for a sandbox and it can now really provision one, through your stored Box key",
+      "The agent receives a capability, not a secret — it cannot read, print or forward a provider key",
+      "An agent cannot choose where a credentialed call goes; only the skill definition can",
+      "Credentialed calls do not follow redirects, so a key cannot be handed to a redirected host",
+      "Every provider call appears in Activity under Agents: who called what, and what came back",
+      "If a key is not set, the agent says exactly which one and where to set it, instead of failing at the provider",
+      "Anything a provider sends back stays fenced as data, with any key-shaped text stripped out of it"
+    ]
+  },
+  {
     "version": "sandbox-agent",
     "date": "2026-07-26",
     "title": "A Sandbox Agent you ask for a sandbox, in plain language",

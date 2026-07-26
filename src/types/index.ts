@@ -342,7 +342,12 @@ export type ActivityEventType =
  | 'canvas_updated'
  | 'message_sent'
  | 'agent_connected'
- | 'agent_disconnected';
+ | 'agent_disconnected'
+ // An agent made a credentialed call to a provider skill through the server (it
+ // never holds the credential itself). The audit trail for that: metadata carries
+ // the provider, the operation, the resolved URL and the HTTP status — never a
+ // request or response body, and never a header.
+ | 'provider_call';
 
 export interface ActivityEvent {
  id: string;

@@ -22,12 +22,20 @@ const {
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
+ PROVIDER_CALL_REDIRECT_NOTE,
  SANDBOX_VAULT_PREFIX,
+ applyProviderCredential,
+ describeProviderCall,
+ fenceProviderOutput,
  parseSandboxCredentialKey,
+ planProviderCall,
+ redactSandboxSecrets,
  renderSandboxSkillPrompt,
+ sanitizeSandboxMeta,
  sandboxCredentialKey,
  sandboxCredentialKeysForSkills,
  sandboxSkillsForAgent,
+ unknownProviderCallArgs,
 } = require('./sandbox-skills.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
 const { channelIntentNote } = require('../shared/channelIntent.cjs');
@@ -1834,6 +1842,12 @@ const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// A credentialed outbound call is not comparable to the DB reads the rest of the
+// MCP surface makes: it spends a provider's rate limit, it can provision billable
+// infrastructure, and a loop stuck on a 500 would hammer someone else's API with
+// our key attached. Keyed per-agent, and tighter than mcpRateLimiter on purpose —
+// the general MCP limiter still applies on top.
+const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // The voice preview spends real money per press, so it is capped harder than
 // anything else here. Twenty presses a minute is far more than auditioning
 // voices needs and far less than a stuck retry loop would cost.
@@ -4413,6 +4427,308 @@ async function loadSandboxSkillNote(workspaceId, agent) {
   sandboxCredentialKeysForSkills(resolved.skills),
  );
  return renderSandboxSkillPrompt({ ...resolved, configuredKeys });
+}
+
+// ===========================================================================
+// The credential-injecting provider proxy
+// ---------------------------------------------------------------------------
+// An agent never receives a secret; it receives a CAPABILITY. It names a
+// provider skill id and one of that skill's operations; this function resolves
+// the destination FROM THE SKILL DEFINITION, attaches the workspace's stored
+// credential, makes the call, and hands back the response fenced as untrusted
+// data. See the "THE PROVIDER CALL" section of server/sandbox-skills.cjs for the
+// threat model — in one line: a proxy that takes a URL from its caller is a
+// credential-exfiltration primitive, so this one cannot be given a URL.
+//
+// Every DECISION is in the pure module (planProviderCall / describeProviderCall /
+// applyProviderCredential / unknownProviderCallArgs) so it is provable in a unit
+// test. What lives here is only the I/O: the vault read, the DNS-and-fetch, the
+// capped response read, and the audit row.
+//
+// The SSRF check on the resolved URL is assertSafeOutboundUrl — the same guard
+// the gateway base_url path uses, deliberately not a second implementation.
+// ===========================================================================
+
+const PROVIDER_CALL_TIMEOUT_MS = 30_000;
+// A provider response is read into memory before it is fenced, so it needs a
+// ceiling well below "whatever the provider felt like sending". The fence
+// truncates to 4 KiB of TEXT for the prompt; this is the transport-level cap that
+// stops a hostile 1 GB body from being read at all.
+const PROVIDER_CALL_MAX_RESPONSE_BYTES = 256 * 1024;
+
+// Read a response body with a hard byte ceiling. `response.text()` has none, and
+// a provider (or something impersonating one) that streams forever would hold the
+// request open until the timeout while growing the heap.
+async function readCappedResponseText(response, maxBytes) {
+ if (!response.body || typeof response.body.getReader !== 'function') {
+  const whole = await response.text().catch(() => '');
+  return { text: whole.slice(0, maxBytes), truncated: whole.length > maxBytes };
+ }
+ const reader = response.body.getReader();
+ const chunks = [];
+ let size = 0;
+ let truncated = false;
+ for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  if (!value) continue;
+  const remaining = maxBytes - size;
+  if (value.length >= remaining) {
+   chunks.push(value.subarray(0, Math.max(0, remaining)));
+   truncated = true;
+   await reader.cancel().catch(() => { });
+   break;
+  }
+  chunks.push(value);
+  size += value.length;
+ }
+ return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8'), truncated };
+}
+
+// Logs one activity_events row per credentialed outbound call, so a workspace
+// owner can read what was called on an agent's behalf.
+//
+// activity_events rather than a new table: it is already workspace-scoped, already
+// in the backendClient allowlists at select:'read', already fanned out over
+// realtime, and already the surface the owner reads. A dedicated table would be a
+// four-place schema change to reproduce all of that.
+//
+// WHAT IS RECORDED: the operation, the provider, the resolved URL, the HTTP
+// status, and how long it took. WHAT IS NOT: the request body, the response body,
+// and any header — the metadata blob is built from describeProviderCall, which
+// has no field that could carry a credential, and the whole title goes through
+// redactSandboxSecrets with the live secret as a known value as a last net.
+async function logProviderCallActivity({ workspaceId, agent, plan, status, outcome, detail = '', durationMs = 0, knownSecrets = [] }) {
+ try {
+  if (!workspaceId || !plan) return;
+  const described = describeProviderCall(plan);
+  const handle = slugHandle(agent?.handle || agent?.name || 'agent');
+  const statusText = status == null ? outcome : String(status);
+  const title = redactSandboxSecrets(
+   `@${handle} called ${described.provider} ${described.operation} (${statusText})`,
+   knownSecrets,
+  ).slice(0, 120);
+  const metadata = {
+   ...described,
+   agent_id: agent?.id ? String(agent.id) : '',
+   agent_handle: handle,
+   status: status == null ? null : Number(status),
+   outcome,
+   detail: redactSandboxSecrets(String(detail || ''), knownSecrets).slice(0, 300),
+   duration_ms: Math.max(0, Math.round(durationMs)),
+  };
+  const inserted = await getDb().unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, null, 'provider_call', 'agent', $2, $3, $4::jsonb, now())
+      returning *`,
+   [workspaceId, agent?.id != null ? String(agent.id) : null, title, metadata],
+  );
+  if (inserted.length > 0) notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  // An audit write must never turn a successful provisioning call into a failure
+  // the agent reports to the requester. It is logged loudly instead.
+  console.error('logProviderCallActivity failed', error);
+ }
+}
+
+// Logs the one refusal worth its own audit row: an agent that tried to name the
+// destination of a credentialed call. A well-behaved agent never sends a `url` or
+// a `headers` argument, so this is not noise — it is the signature of the threat
+// this whole design exists to refuse, and an owner should be able to see that it
+// happened and which agent did it. Ordinary validation errors (a typo'd operation,
+// a missing path parameter) are NOT logged: they are frequent, harmless, and would
+// bury this.
+//
+// The rejected VALUES are deliberately not recorded. A value here is an
+// attacker-chosen URL, and an activity_events row is fanned out over realtime to
+// every subscribed browser in the workspace.
+async function logProviderCallRefusal({ workspaceId, agent, keys = [] }) {
+ try {
+  if (!workspaceId || keys.length === 0) return;
+  const handle = slugHandle(agent?.handle || agent?.name || 'agent');
+  const named = keys.map((key) => sanitizeSandboxMeta(key, 40)).filter(Boolean).slice(0, 8);
+  const inserted = await getDb().unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, null, 'provider_call', 'agent', $2, $3, $4::jsonb, now())
+      returning *`,
+   [
+    workspaceId,
+    agent?.id != null ? String(agent.id) : null,
+    `@${handle} provider call refused: supplied ${named.join(', ')}`.slice(0, 120),
+    {
+     agent_id: agent?.id ? String(agent.id) : '',
+     agent_handle: handle,
+     outcome: 'refused_arguments',
+     status: null,
+     rejected_arguments: named,
+     detail: 'An agent may not name a URL, host or header on a credentialed call.',
+    },
+   ],
+  );
+  if (inserted.length > 0) notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  console.error('logProviderCallRefusal failed', error);
+ }
+}
+
+/**
+ * Make one credentialed call on an agent's behalf.
+ *
+ * `workspaceId` and `agentId` come from the caller's TOKEN, never from its
+ * arguments — that is what makes a cross-workspace read impossible rather than
+ * merely checked. The agent row is re-read here (bound on BOTH ids) instead of
+ * trusted from the token payload, because the token's cached `agent` payload
+ * deliberately omits nothing but is also a snapshot, and the skill layer is the
+ * authorization decision.
+ *
+ * Returns a plain object. It never throws for a caller error, and it never
+ * returns a header, a credential, or anything derived from one.
+ */
+async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
+ const refuse = (error) => ({ ok: false, error: String(error) });
+
+ // 1. Resolve the agent and its OWN skill layer. A provider skill the agent does
+ //    not carry is not callable by it, so one agent can never spend another
+ //    agent's provider credential. Both ids are BOUND, so a foreign workspace does
+ //    not return a row to check — it returns no row.
+ const rows = await getDb().unsafe(
+  'select id, workspace_id, name, handle, skills, metadata, enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+  [String(agentId || ''), String(workspaceId || '')],
+ );
+ const agent = rows[0];
+ if (!agent || !isAgentEnabled(agent)) return refuse('Agent not found in this workspace.');
+
+ // 2. The caller may name FOUR things. Anything else — url, base_url, host,
+ //    headers, authorization — is refused BY NAME rather than trimmed, and it is
+ //    AUDITED: a well-behaved agent never sends one, so an attempt is the single
+ //    highest-signal event an owner could read here. Only the key NAMES are
+ //    recorded — the value would be the attacker's URL, and this row fans out over
+ //    realtime to every subscribed browser.
+ const unknown = unknownProviderCallArgs(args);
+ if (unknown.length > 0) {
+  await logProviderCallRefusal({ workspaceId, agent, keys: unknown });
+  return refuse(`call_provider does not accept: ${unknown.join(', ')}. The destination and the credential come from the skill definition — you name an operation, not a URL. Allowed arguments: skill_id, operation, path_params, body.`);
+ }
+
+ const skillId = String(args.skill_id || '').trim().toLowerCase();
+ if (!skillId) return refuse('skill_id is required.');
+
+ const resolved = sandboxSkillsForAgent(agent);
+ const skill = resolved.providers.find((candidate) => candidate.id === skillId);
+ if (!skill) {
+  const available = resolved.providers.map((p) => `\`${p.id}\``);
+  return refuse(available.length > 0
+   ? `You do not carry a provider skill \`${skillId}\`. Yours are: ${available.join(', ')}.`
+   : 'You carry no provider skills, so there is nothing to call. Ask an operator to add one.');
+ }
+
+ // 3. Plan the call. Pure: this is where the URL is built from the definition.
+ const planned = planProviderCall({
+  skill,
+  operation: args.operation,
+  pathParams: args.path_params,
+  body: args.body,
+ });
+ if (!planned.ok) return refuse(planned.error);
+ const plan = planned.plan;
+
+ // 4. The credential. Read by the key the DEFINITION names, from the workspace the
+ //    TOKEN names. Not configured is the honest, actionable answer — and the one
+ //    the skill prompt already told the agent to expect.
+ let secret = '';
+ if (plan.credentialKey) {
+  secret = await getWorkspaceSecretValue(workspaceId, plan.credentialKey).catch(() => '');
+  if (!secret) {
+   return {
+    ok: false,
+    credential_configured: false,
+    call: describeProviderCall(plan),
+    error: `The \`${plan.provider}\` credential is not configured, so this call cannot be made. An operator sets it in Settings as the workspace vault key \`${plan.credentialKey}\`${plan.credentialEnv ? ` (its value is the ${plan.credentialEnv})` : ''}. Report this and stop; do not retry.`,
+   };
+  }
+ }
+ const knownSecrets = secret ? [secret] : [];
+
+ // 5. SSRF, on the RESOLVED url, with DNS resolution. isSafeProviderBaseUrl
+ //    already vetted the definition's host by NAME; only this can see a public
+ //    name whose A record is 169.254.169.254.
+ try {
+  await assertSafeOutboundUrl(plan.url, 'the provider URL');
+ } catch (error) {
+  const detail = String(error?.message || 'is not a safe outbound target');
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'blocked', detail, knownSecrets });
+  return { ok: false, call: describeProviderCall(plan), error: `Refused before calling: ${detail}. This is a problem with the provider skill definition, not with your request.` };
+ }
+
+ // 6. The call. `redirect: 'manual'` is load-bearing, not tidiness: following a
+ //    redirect re-sends the Authorization header to whatever host the redirect
+ //    names, and no per-hop validation can prevent that (a public host redirecting
+ //    to another public host passes every check). A 3xx is reported as a status.
+ const startedAt = Date.now();
+ let response;
+ try {
+  response = await fetch(plan.url, {
+   method: plan.method,
+   headers: applyProviderCredential(plan, secret),
+   body: plan.bodyText || undefined,
+   redirect: 'manual',
+   signal: AbortSignal.timeout(PROVIDER_CALL_TIMEOUT_MS),
+  });
+ } catch (error) {
+  const durationMs = Date.now() - startedAt;
+  // A transport error message can quote the URL; it should never be able to quote
+  // the header, but redact against the live secret anyway — the cost of being
+  // wrong here is the credential in a channel.
+  const detail = redactSandboxSecrets(String(error?.message || 'request failed'), knownSecrets).slice(0, 300);
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'error', detail, durationMs, knownSecrets });
+  return { ok: false, call: describeProviderCall(plan), error: `The provider could not be reached: ${detail}` };
+ }
+
+ const status = response.status;
+ const durationMs = Date.now() - startedAt;
+ const redirected = status >= 300 && status < 400;
+ let bodyText = '';
+ let truncated = false;
+ if (!redirected) {
+  const read = await readCappedResponseText(response, PROVIDER_CALL_MAX_RESPONSE_BYTES)
+   .catch(() => ({ text: '', truncated: false }));
+  bodyText = read.text;
+  truncated = read.truncated;
+ }
+
+ // 7. Everything the provider said is UNTRUSTED and arrives fenced, exactly as an
+ //    orb payload does — a box name, a cloned repo's README echoed into a build
+ //    log, or an error string are all attacker-influenced text. `knownSecrets`
+ //    means a provider echoing the Authorization header it received cannot put the
+ //    key back into the agent's context.
+ const fenced = fenceProviderOutput({
+  provider: plan.provider,
+  operation: plan.operation,
+  status,
+  body: redirected ? PROVIDER_CALL_REDIRECT_NOTE : bodyText,
+  knownSecrets,
+ });
+
+ await logProviderCallActivity({
+  workspaceId,
+  agent,
+  plan,
+  status,
+  outcome: redirected ? 'redirect_refused' : (response.ok ? 'ok' : 'provider_error'),
+  detail: truncated ? `response truncated at ${PROVIDER_CALL_MAX_RESPONSE_BYTES} bytes` : '',
+  durationMs,
+  knownSecrets,
+ });
+
+ return {
+  ok: Boolean(response.ok) && !redirected,
+  status,
+  call: describeProviderCall(plan),
+  // The ONLY provider-derived text that leaves this function, and it is fenced.
+  response: fenced.content,
+  truncated,
+  ...(redirected ? { redirect_refused: true } : {}),
+ };
 }
 
 function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false, intentNote = '', sandboxSkillNote = '') {
@@ -8840,6 +9156,25 @@ function ipv4ToInt(address) {
  return address.split('.').reduce((acc, octet) => ((acc << 8) + Number(octet)) >>> 0, 0);
 }
 
+// Expand an IPv6 literal into its eight 16-bit groups, or null if it will not
+// parse. `net.isIPv6` has already vetted the syntax, so this only has to fill in
+// the `::` elision — which is the whole point: the string tests below used to be
+// applied to the TEXT of an address, and text has more than one spelling.
+function ipv6Groups(address) {
+ const lower = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
+ if (!net.isIPv6(lower) || lower.includes('.')) return null;
+ const halves = lower.split('::');
+ if (halves.length > 2) return null;
+ const head = halves[0] ? halves[0].split(':') : [];
+ const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+ const parts = halves.length === 2
+  ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail]
+  : head;
+ if (parts.length !== 8) return null;
+ const groups = parts.map((part) => Number.parseInt(part || '0', 16));
+ return groups.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff) ? null : groups;
+}
+
 function isBlockedAddress(address) {
  if (net.isIPv4(address)) {
   const value = ipv4ToInt(address);
@@ -8849,14 +9184,28 @@ function isBlockedAddress(address) {
   });
  }
  if (!net.isIPv6(address)) return true; // unparseable — refuse rather than guess
- const lower = address.toLowerCase();
+ const lower = address.toLowerCase().replace(/^\[|\]$/g, '');
  // IPv4-mapped (::ffff:a.b.c.d) must be judged on the embedded v4 address.
  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
  if (mapped) return isBlockedAddress(mapped[1]);
- if (lower === '::' || lower === '::1') return true;
- if (/^f[cd]/.test(lower)) return true;                 // fc00::/7 unique-local
- if (/^fe[89ab]/.test(lower)) return true;              // fe80::/10 link-local
- if (lower.startsWith('ff')) return true;               // ff00::/8 multicast
+ // Everything below used to be a prefix test on the TEXT, which let two spellings
+ // of a blocked address through: `::ffff:a9fe:a9fe` is 169.254.169.254 in hex form
+ // and matched none of the string tests, and `0:0:0:0:0:0:0:1` is loopback spelled
+ // out and is not the string '::1'. Both reached a fetch. Compare the NUMBERS.
+ const groups = ipv6Groups(lower);
+ if (!groups) return true;                                       // fail closed
+ if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+  return isBlockedAddress(`${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`);
+ }
+ // ::/96 — unspecified, loopback, and the deprecated v4-compatible range. None of
+ // them is ever a legitimate outbound destination.
+ if (groups.slice(0, 6).every((g) => g === 0)) return true;
+ if ((groups[0] & 0xfe00) === 0xfc00) return true;               // fc00::/7  unique-local
+ if ((groups[0] & 0xffc0) === 0xfe80) return true;               // fe80::/10 link-local
+ if ((groups[0] & 0xffc0) === 0xfec0) return true;               // fec0::/10 deprecated site-local
+ if ((groups[0] & 0xff00) === 0xff00) return true;               // ff00::/8  multicast
+ if (groups[0] === 0x0064 && groups[1] === 0xff9b) return true;   // 64:ff9b::/96 NAT64 — reaches v4 space
+ if (groups[0] === 0x2001 && groups[1] === 0x0db8) return true;   // 2001:db8::/32 documentation
  return false;
 }
 
@@ -11241,6 +11590,10 @@ function createApp() {
   getAgentConnectionCommand: buildAgentConnectionCommand,
   enforceWorkspaceRole,
   roleHasWorkspaceCapability,
+  // The credential-injecting provider proxy. Passed in (rather than reached for)
+  // so mcp.cjs stays unit-testable with a mocked fetch and no live provider.
+  callProviderOperation,
+  providerCallRateLimiter,
   rateLimiter: mcpRateLimiter,
   rateLimitBlocked,
   runtimeSchemaReady,
@@ -12931,6 +13284,11 @@ module.exports = {
   appendWorkspaceAccessClause,
   assertSafeOutboundUrl,
   isBlockedAddress,
+  // The credential-injecting provider proxy, exercised against a fake DB and a
+  // stubbed fetch in tests/provider-proxy.test.cjs.
+  callProviderOperation,
+  readCappedResponseText,
+  providerCallRateLimiter,
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,

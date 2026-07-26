@@ -18,18 +18,24 @@ import { AGENT_TEMPLATES } from '../../src/lib/agentTemplates';
 
 const {
   BUNDLED_SANDBOX_SKILLS,
+  PROVIDER_CALL_ARG_KEYS,
+  PROVIDER_CALL_MAX_BODY_CHARS,
   SANDBOX_BOX_SKILL_ID,
   SANDBOX_DETAIL_FIELDS,
   SANDBOX_MAX_PROVIDER_OUTPUT_CHARS,
   SANDBOX_OVERALL_SKILL_ID,
   SANDBOX_VAULT_PREFIX,
+  applyProviderCredential,
+  describeProviderCall,
   fenceProviderOutput,
   formatSandboxDetails,
   isSafeProviderBaseUrl,
   isSandboxAgent,
   missingSandboxDetailFields,
   normalizeSandboxSkill,
+  parseCredentialHeader,
   parseSandboxCredentialKey,
+  planProviderCall,
   redactSandboxSecrets,
   renderSandboxDetailsTemplate,
   renderSandboxSkillPrompt,
@@ -38,6 +44,7 @@ const {
   sandboxCredentialKeysForSkills,
   sandboxSkillPromptForAgent,
   sandboxSkillsForAgent,
+  unknownProviderCallArgs,
 } = sandboxSkills;
 
 const validProvider = {
@@ -482,6 +489,316 @@ describe('the sandbox details contract', () => {
   });
 });
 
+// ===========================================================================
+// The provider call: an agent receives a CAPABILITY, never a secret.
+//
+// This block IS the security boundary. Everything asserted here is the reason
+// the tool has the shape it has, so if one of these fails the feature is not
+// "slightly off" — it is a credential-exfiltration primitive. Read the "THE
+// PROVIDER CALL" section of server/sandbox-skills.cjs alongside it.
+// ===========================================================================
+
+describe('planProviderCall — the destination comes from the definition', () => {
+  const box = resolveSandboxSkills({ skillIds: [SANDBOX_BOX_SKILL_ID] }).providers[0];
+
+  it('resolves a URL by joining the definition\'s baseUrl to the named operation\'s path', () => {
+    const { ok, plan } = planProviderCall({ skill: box, operation: 'create', body: { image: 'node:22' } });
+    expect(ok).toBe(true);
+    expect(plan.url).toBe('https://ascii.dev/api/box/v1/boxes');
+    expect(plan.method).toBe('POST');
+    expect(plan.bodyText).toBe('{"image":"node:22"}');
+    // The credential is NAMED here, never carried.
+    expect(plan.credentialKey).toBe('sandbox:box:api_key');
+    expect(plan).not.toHaveProperty('credential');
+  });
+
+  it('fills a path placeholder from path_params and nothing else', () => {
+    const { plan } = planProviderCall({ skill: box, operation: 'stop', pathParams: { id: 'box_abc-123' } });
+    expect(plan.url).toBe('https://ascii.dev/api/box/v1/boxes/box_abc-123/stop');
+  });
+
+  // The whole design in one test: two skills, the same operation name, and the
+  // host each call reaches is decided by the SKILL, never by the caller. There is
+  // no argument that could make the first one reach the second one's host.
+  it('the same operation on two skills reaches each skill\'s own host', () => {
+    const evil = normalizeSandboxSkill({
+      ...validProvider,
+      baseUrl: 'https://attacker.example/api',
+      endpoints: [{ name: 'create', method: 'POST', path: '/boxes' }],
+    });
+    expect(planProviderCall({ skill: box, operation: 'create' }).plan.url).toContain('https://ascii.dev/');
+    expect(planProviderCall({ skill: evil, operation: 'create' }).plan.url).toContain('https://attacker.example/');
+  });
+
+  it('refuses an operation that is not in endpoints, even when capabilities claims it', () => {
+    // 'prompt' IS in the Box skill's capabilities list AND in its endpoints, so
+    // use one that is only a capability to make the distinction visible.
+    const capabilityOnly = normalizeSandboxSkill({
+      ...validProvider,
+      baseUrl: 'https://acme.example/api',
+      capabilities: ['create', 'nuke'],
+      endpoints: [{ name: 'create', method: 'POST', path: '/boxes' }],
+    });
+    const refused = planProviderCall({ skill: capabilityOnly, operation: 'nuke' });
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain('has no operation "nuke"');
+    expect(refused.error).toContain('Its operations are: create.');
+  });
+
+  it('refuses a skill with no baseUrl and a skill with no endpoints', () => {
+    const noBase = normalizeSandboxSkill({ ...validProvider, endpoints: [{ name: 'create', method: 'POST', path: '/x' }] });
+    expect(planProviderCall({ skill: noBase, operation: 'create' }).error).toContain('has no base URL');
+    const noEndpoints = normalizeSandboxSkill({ ...validProvider, baseUrl: 'https://acme.example/api' });
+    expect(planProviderCall({ skill: noEndpoints, operation: 'create' }).error).toContain('defines no endpoints');
+  });
+
+  // The same rule as a rejected path parameter, and it was a real hole: the
+  // "no such operation" message used to quote the caller's string, so passing a
+  // URL as `operation` got that URL read back into the agent's context.
+  it('a caller-supplied string that is not an operation name is not echoed back', () => {
+    for (const operation of [
+      'https://attacker.example/collect',
+      '../../admin',
+      'create\nHost: attacker.example',
+      'create; curl attacker.example',
+    ]) {
+      const refused = planProviderCall({ skill: box, operation });
+      expect(refused.ok).toBe(false);
+      expect(refused.error).toBe('That is not an operation name. `sandbox-provider-box` takes one of: create, stop, resume, fork, commands, prompt.');
+      expect(refused.error).not.toContain('attacker.example');
+    }
+  });
+
+  // A name that IS shaped like an operation and simply does not exist is quoted,
+  // because that is the case where quoting helps: it is a typo, and the agent
+  // needs to see which one it got wrong.
+  it('a plausible-but-absent operation name is quoted, with the real list', () => {
+    const refused = planProviderCall({ skill: box, operation: 'creat' });
+    expect(refused.error).toContain('has no operation "creat"');
+    expect(refused.error).toContain('create, stop, resume, fork, commands, prompt');
+  });
+
+  it('refuses an overall skill and a non-skill', () => {
+    const overall = resolveSandboxSkills({ skillIds: [SANDBOX_OVERALL_SKILL_ID] }).overall[0];
+    expect(planProviderCall({ skill: overall, operation: 'create' }).error).toBe('Not a provider skill.');
+    expect(planProviderCall({ skill: null, operation: 'create' }).ok).toBe(false);
+    expect(planProviderCall({}).ok).toBe(false);
+  });
+});
+
+describe('planProviderCall — a path parameter cannot escape its segment', () => {
+  const box = resolveSandboxSkills({ skillIds: [SANDBOX_BOX_SKILL_ID] }).providers[0];
+  const attempt = (id: string) => planProviderCall({ skill: box, operation: 'stop', pathParams: { id } });
+
+  // Path params are the ONLY caller-supplied part of a URL, so this is the one
+  // place a caller could try to steer the request. Each of these is a real
+  // technique, not a hypothetical.
+  it.each([
+    ['path traversal', '../../../../admin'],
+    ['bare slash', 'a/b'],
+    ['a whole URL', 'https://attacker.example/collect'],
+    ['a protocol-relative host', '//attacker.example'],
+    ['percent-encoded slash', 'a%2Fb'],
+    ['userinfo before a host', 'x@attacker.example'],
+    ['a query string', 'box_1?to=attacker.example'],
+    ['a fragment', 'box_1#x'],
+    ['a colon (scheme or port)', 'box:1'],
+    ['a newline (header injection shape)', 'box_1\nHost: attacker.example'],
+    ['a null byte', 'box_1 '],
+    ['an empty value', ''],
+  ])('refuses %s', (_label, id) => {
+    const refused = attempt(id);
+    expect(refused.ok).toBe(false);
+    // The offending value is NOT echoed back: it may be an injection payload, and
+    // quoting it puts it in the agent's context for the next turn to reuse.
+    expect(refused.error).not.toContain('attacker.example');
+  });
+
+  it('accepts an ordinary provider id', () => {
+    expect(attempt('box_9fA-2.v1').ok).toBe(true);
+  });
+
+  it('requires every placeholder and refuses one the operation has no place for', () => {
+    expect(planProviderCall({ skill: box, operation: 'stop' }).error).toContain('path_params.id is required');
+    const extra = planProviderCall({ skill: box, operation: 'stop', pathParams: { id: 'box_1', host: 'attacker.example' } });
+    expect(extra.ok).toBe(false);
+    expect(extra.error).toContain('has no place for path_params host');
+  });
+
+  it('refuses a definition whose placeholder cannot be resolved', () => {
+    const broken = normalizeSandboxSkill({
+      ...validProvider,
+      baseUrl: 'https://acme.example/api',
+      // `{9id}` does not match the placeholder charset, so it survives
+      // substitution as a literal brace — fail closed rather than call a URL with
+      // a `{` in it.
+      endpoints: [{ name: 'stop', method: 'POST', path: '/boxes/{9id}/stop' }],
+    });
+    expect(planProviderCall({ skill: broken, operation: 'stop' }).error).toContain('cannot be resolved');
+  });
+});
+
+describe('unknownProviderCallArgs — an agent-supplied destination is refused by name', () => {
+  it('allows exactly four keys', () => {
+    expect(PROVIDER_CALL_ARG_KEYS).toEqual(['skill_id', 'operation', 'path_params', 'body']);
+    expect(unknownProviderCallArgs({ skill_id: 'a', operation: 'b', path_params: {}, body: {} })).toEqual([]);
+  });
+
+  // The naive proxy this design exists to refuse: "the caller supplies a URL and
+  // headers, the server attaches the credential". Every one of these keys is the
+  // exfiltration attempt, and each is REFUSED rather than ignored — a caller
+  // reaching for a destination is a fact the owner should see in the refusal.
+  it.each([
+    'url', 'base_url', 'baseUrl', 'host', 'hostname', 'origin', 'endpoint',
+    'headers', 'header', 'authorization', 'Authorization', 'credential',
+    'api_key', 'token', 'secret', 'method', 'query', 'redirect',
+  ])('refuses a `%s` argument', (key) => {
+    expect(unknownProviderCallArgs({ skill_id: 'sandbox-provider-box', operation: 'create', [key]: 'x' })).toEqual([key]);
+  });
+
+  it('names every offending key so the refusal can quote them', () => {
+    expect(unknownProviderCallArgs({ url: 'https://attacker.example', headers: {} })).toEqual(['url', 'headers']);
+  });
+
+  it('treats a non-object as having no arguments rather than throwing', () => {
+    expect(unknownProviderCallArgs(null)).toEqual([]);
+    expect(unknownProviderCallArgs('url')).toEqual([]);
+    expect(unknownProviderCallArgs([1, 2])).toEqual([]);
+  });
+});
+
+describe('planProviderCall — body handling', () => {
+  const box = resolveSandboxSkills({ skillIds: [SANDBOX_BOX_SKILL_ID] }).providers[0];
+
+  it('refuses a body on an operation whose method takes none', () => {
+    const getter = normalizeSandboxSkill({
+      ...validProvider,
+      baseUrl: 'https://acme.example/api',
+      endpoints: [{ name: 'list', method: 'GET', path: '/boxes' }],
+    });
+    expect(planProviderCall({ skill: getter, operation: 'list', body: { x: 1 } }).error).toContain('takes no body');
+    expect(planProviderCall({ skill: getter, operation: 'list' }).ok).toBe(true);
+  });
+
+  it('refuses a non-object body and one over the cap', () => {
+    expect(planProviderCall({ skill: box, operation: 'create', body: 'raw' }).error).toContain('must be a JSON object');
+    expect(planProviderCall({ skill: box, operation: 'create', body: [1] }).error).toContain('must be a JSON object');
+    const huge = { blob: 'x'.repeat(PROVIDER_CALL_MAX_BODY_CHARS + 100) };
+    expect(planProviderCall({ skill: box, operation: 'create', body: huge }).error).toContain('exceeds');
+  });
+
+  it('an absent body is not an empty body', () => {
+    expect(planProviderCall({ skill: box, operation: 'create' }).plan.bodyText).toBe('');
+    expect(planProviderCall({ skill: box, operation: 'create', body: {} }).plan.bodyText).toBe('{}');
+  });
+});
+
+describe('parseCredentialHeader — the definition says where a secret goes', () => {
+  it('splits the default spec', () => {
+    expect(parseCredentialHeader('Authorization: Bearer <value>')).toEqual({ name: 'Authorization', prefix: 'Bearer ', suffix: '' });
+    expect(parseCredentialHeader('X-Api-Key: <value>')).toEqual({ name: 'X-Api-Key', prefix: '', suffix: '' });
+    expect(parseCredentialHeader('X-Token: t=<value>;v=1')).toEqual({ name: 'X-Token', prefix: 't=', suffix: ';v=1' });
+  });
+
+  it('defaults to bearer auth when a definition names no header', () => {
+    expect(parseCredentialHeader('')).toEqual({ name: 'Authorization', prefix: 'Bearer ', suffix: '' });
+    expect(parseCredentialHeader(undefined)).toEqual({ name: 'Authorization', prefix: 'Bearer ', suffix: '' });
+  });
+
+  // Fail closed. A spec with no <value> would otherwise produce a header that
+  // looks authenticated and carries nothing, reaching the provider as an
+  // anonymous call and reading back as a provider fault.
+  it('refuses a spec with no placeholder, or more than one', () => {
+    expect(parseCredentialHeader('Authorization: Bearer')).toBeNull();
+    expect(parseCredentialHeader('Authorization: <value> <value>')).toBeNull();
+    expect(parseCredentialHeader('no-colon')).toBeNull();
+    expect(parseCredentialHeader(': <value>')).toBeNull();
+  });
+
+  // A definition may be agent-authored. `Host` would re-target the request past
+  // every URL check we made; the rest are ours or the transport's.
+  it.each(['Host', 'host', 'Content-Length', 'Transfer-Encoding', 'Connection', 'Cookie', 'Content-Type', 'User-Agent'])(
+    'refuses `%s` as a credential header name',
+    (name) => {
+      expect(parseCredentialHeader(`${name}: <value>`)).toBeNull();
+    },
+  );
+
+  it('refuses a malformed header name', () => {
+    expect(parseCredentialHeader('X Api Key: <value>')).toBeNull();
+    expect(parseCredentialHeader('X-Api-Key\r\nHost: attacker.example: <value>')).toBeNull();
+    expect(parseCredentialHeader('9-Leading: <value>')).toBeNull();
+  });
+});
+
+describe('the credential never appears in any output', () => {
+  const box = resolveSandboxSkills({ skillIds: [SANDBOX_BOX_SKILL_ID] }).providers[0];
+  const SECRET = 'box_live_51H8sVerySecretKeyMaterial';
+
+  it('applyProviderCredential is the only thing that holds it, and puts it only in the header', () => {
+    const { plan } = planProviderCall({ skill: box, operation: 'create', body: { image: 'node:22' } });
+    const headers = applyProviderCredential(plan, SECRET);
+    expect(headers.Authorization).toBe(`Bearer ${SECRET}`);
+    expect(headers['content-type']).toBe('application/json');
+    // Nothing else in the request carries it.
+    expect(JSON.stringify(plan)).not.toContain(SECRET);
+    expect(plan.bodyText).not.toContain(SECRET);
+  });
+
+  it('omits the content-type header when there is no body', () => {
+    const { plan } = planProviderCall({ skill: box, operation: 'stop', pathParams: { id: 'box_1' } });
+    expect(applyProviderCredential(plan, SECRET)['content-type']).toBeUndefined();
+  });
+
+  // describeProviderCall is the ONLY shape allowed out of a call — into the tool
+  // result and into the audit row. It has no field that could hold a credential,
+  // which is a stronger claim than "it is redacted": a filter can be wrong, an
+  // absent field cannot.
+  it('describeProviderCall has no field that could carry a secret', () => {
+    const { plan } = planProviderCall({ skill: box, operation: 'create', body: { image: 'node:22' } });
+    const described = describeProviderCall(plan);
+    expect(Object.keys(described).sort()).toEqual(['method', 'operation', 'provider', 'skill_id', 'url']);
+    const serialized = JSON.stringify(described);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain('Bearer');
+    expect(serialized).not.toContain('sandbox:box:api_key');
+    // Even given a plan that (wrongly) had a secret bolted onto it, the described
+    // shape cannot pass it through — it copies named fields, it does not spread.
+    expect(JSON.stringify(describeProviderCall({ ...plan, secret: SECRET }))).not.toContain(SECRET);
+  });
+
+  it('describeProviderCall tolerates a missing plan instead of throwing mid-error-path', () => {
+    expect(describeProviderCall(null)).toEqual({});
+    expect(describeProviderCall(undefined)).toEqual({});
+  });
+
+  // The realistic leak: a provider echoes back the Authorization header it
+  // received, inside a 401 body, and the agent quotes it into a channel.
+  it('a provider echoing the credential back is redacted before the agent sees it', () => {
+    const echoed = `{"error":"invalid_token","received":"Bearer ${SECRET}"}`;
+    const { content } = fenceProviderOutput({
+      provider: 'box',
+      operation: 'create',
+      status: 401,
+      body: echoed,
+      knownSecrets: [SECRET],
+    });
+    expect(content).not.toContain(SECRET);
+    expect(content).toContain('[redacted]');
+    expect(content).toContain('status: 401');
+  });
+
+  it('redaction survives the secret arriving inside a larger token', () => {
+    const { content } = fenceProviderOutput({
+      provider: 'box',
+      operation: 'exec',
+      body: `export TOKEN=${SECRET}\ncurl -H "Authorization: Bearer ${SECRET}" ...`,
+      knownSecrets: [SECRET],
+    });
+    expect(content).not.toContain(SECRET);
+  });
+});
+
 describe('renderSandboxSkillPrompt', () => {
   const { skills } = resolveSandboxSkills({ skillIds: [SANDBOX_OVERALL_SKILL_ID, SANDBOX_BOX_SKILL_ID] });
   const boxKey = `${SANDBOX_VAULT_PREFIX}box:api_key`;
@@ -504,12 +821,46 @@ describe('renderSandboxSkillPrompt', () => {
   it('tells the agent whether the credential is configured, and only ever the key name', () => {
     const configured = renderSandboxSkillPrompt({ skills, configuredKeys: [boxKey] });
     expect(configured).toContain(`Credential: CONFIGURED in the workspace vault (\`${boxKey}\`)`);
-    expect(configured).toContain('Never print its value.');
+    // Not "never print its value" — the agent has no value. The prompt says so,
+    // so it does not invent a placeholder or tell a requester it is withholding a
+    // key it never had.
+    expect(configured).toContain('You do not have its value.');
+    expect(configured).toContain('agensis attaches it on your behalf');
 
     const missing = renderSandboxSkillPrompt({ skills, configuredKeys: [] });
     expect(missing).toContain(`Credential: NOT CONFIGURED in the workspace vault (\`${boxKey}\`)`);
-    expect(missing).toContain('you CANNOT provision with this provider');
+    expect(missing).toContain('You CANNOT provision with this provider');
     expect(missing).toContain('BOX_API_KEY');
+  });
+
+  // The prompt is the ONLY place the agent learns how to spend a credential, so
+  // it has to name the tool and it has to say what the tool refuses. An agent
+  // told "send Authorization: Bearer <BOX_API_KEY>" — which is what this prompt
+  // said before the proxy existed — is an agent that cannot provision anything.
+  it('teaches the capability, not a secret: names call_provider and its four arguments', () => {
+    const prompt = renderSandboxSkillPrompt({ skills, configuredKeys: [boxKey] });
+    expect(prompt).toContain('You hold a capability, not a secret');
+    expect(prompt).toContain('call_provider {');
+    expect(prompt).toContain('there is no url, host, header or credential argument');
+    expect(prompt).toContain('recorded in the workspace activity log');
+    // The daemon only injects the agensis MCP server when it runs `--lean`, so a
+    // daemon agent can genuinely find itself without the tool. It must report THAT
+    // rather than fall back to curl — which has no credential, would fail, and
+    // would send the operator looking at the provider instead of the runtime.
+    expect(prompt).toContain('If `call_provider` is not among your available tools');
+    expect(prompt).toContain('Do NOT fall back to curl');
+    // Operations are rendered as the names the agent passes as `operation`, with
+    // their path parameters spelled out — it cannot supply a path, only fill one.
+    expect(prompt).toContain('Operations (name one as `operation`)');
+    expect(prompt).toContain('`create` (`POST /boxes`)');
+    expect(prompt).toContain('`stop` (`POST /boxes/{id}/stop`) — needs `path_params: { id: "…" }`');
+  });
+
+  it('the bundled Box skill no longer tells the agent to send a credential itself', () => {
+    const prompt = renderSandboxSkillPrompt({ skills, configuredKeys: [boxKey] });
+    expect(prompt).not.toContain('Authorization: Bearer <BOX_API_KEY>');
+    expect(prompt).toContain('never send an Authorization header yourself and you never see the key');
+    expect(prompt).toContain('Reach Box through `call_provider`');
   });
 
   it('reports skill ids that have no definition instead of silently dropping them', () => {

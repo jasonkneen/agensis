@@ -179,6 +179,131 @@ test('the configured-keys lookup binds no array and reads no plaintext', () => {
   assert.ok(!fn.includes('decryptVaultSecret'));
 });
 
+// --- 4. The provider proxy is wired, and cannot be given a destination -------
+//
+// Behaviour is in tests/provider-proxy.test.cjs (wired, mocked fetch) and
+// tests/unit/sandboxSkills.test.ts (the pure boundary). These are the
+// source-scan assertions those two cannot make: that the ONE place a credential
+// enters a request is the one place, and that no second SSRF predicate appeared.
+
+const MCP = read('server/mcp.cjs');
+const SKILLS = read('server/sandbox-skills.cjs');
+
+test('the MCP tool exists, is agent-only, and declares no destination argument', () => {
+  assert.match(MCP, /name: 'call_provider'/);
+  const start = MCP.indexOf("name: 'call_provider'");
+  const end = MCP.indexOf('--- register as an agent', start);
+  assert.ok(start > 0 && end > start, 'could not locate the call_provider tool');
+  const block = MCP.slice(start, end);
+
+  // Agent-only. An invite bearer is a transient 14-day join secret; a
+  // workspace/user token has no agent and so no skill layer to authorize against.
+  assert.match(block, /kinds: \['agent'\]/);
+
+  // The schema must not offer a destination. This is documentation (the dispatcher
+  // never validates arguments against inputSchema) but a schema that advertised a
+  // `url` would have an agent trying to use one every turn.
+  const schemaStart = block.indexOf('inputSchema');
+  const schemaEnd = block.indexOf('async run(', schemaStart);
+  const schema = block.slice(schemaStart, schemaEnd);
+  for (const forbidden of ['url', 'base_url', 'host', 'headers', 'header', 'method', 'credential', 'token']) {
+    assert.ok(
+      !new RegExp(`\\b${forbidden}: \\{`).test(schema),
+      `call_provider's inputSchema must not declare a \`${forbidden}\` property`,
+    );
+  }
+  assert.match(schema, /additionalProperties: false/);
+});
+
+test('the tool delegates the destination decision — it never builds a URL or fetches', () => {
+  const start = MCP.indexOf("name: 'call_provider'");
+  const end = MCP.indexOf('--- register as an agent', start);
+  const block = MCP.slice(start, end);
+  // mcp.cjs is the caller-facing layer. If it ever grows a fetch or a `new URL`,
+  // the destination decision has left the pure, tested module.
+  assert.ok(!block.includes('fetch('), 'the MCP tool must not make the outbound call itself');
+  assert.ok(!block.includes('new URL('), 'the MCP tool must not construct a destination');
+  assert.match(block, /deps\.callProviderOperation\(\{\s*\n\s*workspaceId: identity\.workspaceId,\s*\n\s*agentId: identity\.agentId,/,
+    'the workspace and agent must come from the TOKEN, never from args');
+});
+
+test('the proxy is passed into the MCP handler, so the tool is reachable', () => {
+  const start = SERVER.indexOf('const mcpHandler = createMcpHandler({');
+  const end = SERVER.indexOf('});', start);
+  const deps = SERVER.slice(start, end);
+  assert.match(deps, /\bcallProviderOperation,/);
+  assert.match(deps, /\bproviderCallRateLimiter,/);
+});
+
+test('exactly one place puts a credential into a request', () => {
+  // applyProviderCredential is that place, by name, so a reader can find it. If a
+  // second site starts assembling an Authorization value, this fails.
+  const injectors = (SERVER.match(/applyProviderCredential\(/g) || []);
+  assert.equal(injectors.length, 1, 'server/index.cjs must inject a credential in exactly one place');
+  assert.match(SERVER, /headers: applyProviderCredential\(plan, secret\)/);
+
+  // And nothing on the provider path hand-rolls one.
+  const start = SERVER.indexOf('async function callProviderOperation');
+  const end = SERVER.indexOf('function buildDaemonPrompt', start);
+  assert.ok(start > 0 && end > start, 'could not locate callProviderOperation');
+  const fn = SERVER.slice(start, end);
+  assert.ok(!/Bearer \$\{/.test(fn), 'no hand-assembled Authorization value on the provider path');
+  assert.ok(!/Authorization['"]?\s*:/.test(fn), 'the provider path must not name an Authorization header itself');
+});
+
+test('the provider call refuses redirects and reuses the existing SSRF guard', () => {
+  const start = SERVER.indexOf('async function callProviderOperation');
+  const end = SERVER.indexOf('function buildDaemonPrompt', start);
+  const fn = SERVER.slice(start, end);
+
+  // Following a redirect re-sends the credential to whatever host the redirect
+  // names, and no per-hop re-validation can prevent that.
+  assert.match(fn, /redirect: 'manual'/);
+  assert.ok(!fn.includes("redirect: 'follow'"));
+  assert.ok(!/location/i.test(fn), 'a redirect target must never be read or reported');
+
+  // The resolved-address SSRF check is the SAME function the gateway base_url path
+  // uses. A second implementation is a second thing to get wrong, and this repo
+  // has already had one SSRF finding from an unvalidated base URL.
+  assert.match(fn, /await assertSafeOutboundUrl\(plan\.url, 'the provider URL'\)/);
+  assert.ok(!/isBlockedAddress\(/.test(fn), 'do not re-derive the address predicate here');
+  assert.ok(!SKILLS.includes('dns'), 'the pure skill module must not resolve anything');
+  const predicates = (SERVER.match(/function isBlockedAddress\(/g) || []);
+  assert.equal(predicates.length, 1, 'there must be exactly one blocked-address predicate');
+});
+
+test('the audit row carries no payload and binds jsonb as an object', () => {
+  const start = SERVER.indexOf('async function logProviderCallActivity');
+  const end = SERVER.indexOf('// Logs the one refusal worth its own audit row', start);
+  assert.ok(start > 0 && end > start, 'could not locate logProviderCallActivity');
+  const fn = SERVER.slice(start, end);
+
+  assert.match(fn, /insert into activity_events[\s\S]*?'provider_call'/);
+  // Built from describeProviderCall, which has no field that could hold a secret,
+  // plus a redaction pass over the free-text parts as a last net.
+  assert.match(fn, /const described = describeProviderCall\(plan\)/);
+  assert.match(fn, /redactSandboxSecrets\(/);
+  assert.ok(!fn.includes('bodyText'), 'the request body must not reach the audit row');
+  assert.ok(!fn.includes('fenced'), 'the response body must not reach the audit row');
+  assert.ok(!fn.includes('credentialKey'), 'not even the vault key name belongs in the log');
+  // porsager turns a stringified bind on `$n::jsonb` into a jsonb STRING SCALAR.
+  assert.ok(!/JSON\.stringify\(metadata\)/.test(fn));
+  assert.match(fn, /\$4::jsonb[\s\S]*\[workspaceId,[^\]]*metadata\]/);
+});
+
+test('the bundled Box skill no longer instructs the agent to send a credential', () => {
+  const { BUNDLED_SANDBOX_SKILLS, SANDBOX_BOX_SKILL_ID } = require('../server/sandbox-skills.cjs');
+  const box = BUNDLED_SANDBOX_SKILLS.find((s) => s.id === SANDBOX_BOX_SKILL_ID);
+  // The definition shipped in 18a10aa told the agent to send
+  // `Authorization: Bearer <BOX_API_KEY>` — an instruction it could not carry out,
+  // which is why the Sandbox Agent honestly reported it could not provision.
+  assert.ok(!box.instructions.includes('Authorization: Bearer <BOX_API_KEY>'));
+  assert.match(box.instructions, /call_provider/);
+  assert.match(box.instructions, /you never see the key/);
+  // Its operations are what the agent now names, so they must still be there.
+  assert.deepEqual(box.endpoints.map((e) => e.name), ['create', 'stop', 'resume', 'fork', 'commands', 'prompt']);
+});
+
 // --- The template ----------------------------------------------------------
 
 test('the Sandbox Agent template is a daemon agent carrying both bundled skills', () => {

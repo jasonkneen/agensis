@@ -78,7 +78,42 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   returns one, not even masked, and the per-turn path only reads whether the
   cipher column is non-empty. A requester asks through the normal doors —
   `@sandbox spin up a node sandbox` in a channel, or the existing `dispatch_agent`
-  MCP tool; there is no sandbox-specific tool.
+  MCP tool.
+- **Credential proxy (`call_provider`)** — how a provider credential is *used*.
+  **An agent never receives a secret; it receives a capability.** It names a
+  provider skill id + an operation name; the server resolves `baseUrl` + the
+  endpoint's path from the **skill definition**, attaches the vault credential,
+  fetches, and returns the response fenced as untrusted data. The rules that make
+  this a security feature rather than an exfiltration primitive, all enforced in
+  code and asserted in tests:
+  - **A caller may name FOUR things**: `skill_id`, `operation`, `path_params`,
+    `body`. `unknownProviderCallArgs` REFUSES anything else by name — a `url`,
+    `host`, `headers` or `authorization` argument is a rejection, not a dropped
+    key. `additionalProperties: false` on the tool schema is documentation only:
+    the MCP dispatcher never validates arguments against `inputSchema`.
+  - **Path params are the only caller input in the URL**, restricted to
+    `[A-Za-z0-9._-]` so a value cannot leave its segment. The resolved URL is
+    re-checked against the base origin and re-run through `isSafeProviderBaseUrl`.
+    An `operation` that fails its own charset check is never echoed back either.
+  - **Redirects are refused, not re-validated** (`redirect: 'manual'`, `Location`
+    never read): a public host redirecting to another public host passes every
+    per-hop check and gets the Authorization header.
+  - **SSRF on the resolved URL is `assertSafeOutboundUrl`** — the same guard the
+    gateway `base_url` path uses, deliberately not a second implementation.
+    `isBlockedAddress` now compares IPv6 numerically (`::ffff:a9fe:a9fe` and
+    `0:0:0:0:0:0:0:1` used to pass its string tests and reach a fetch).
+  - **`describeProviderCall` is the only shape allowed out** of a call, into both
+    the tool result and the audit row. It has no field that could hold a secret —
+    absent, not redacted. `applyProviderCredential` is the single place a secret
+    enters a request, and a wiring test asserts there is exactly one.
+  - **Audit** → an `activity_events` row per call (`event_type='provider_call'`,
+    family `agents` in the Activity window): provider, operation, method, resolved
+    URL, status, duration. Never a body, a header, or the vault key name.
+  - **RBAC**: `kinds: ['agent']` only, and the skill must be one the *calling
+    agent* carries. Workspace/agent ids come from the token; an invite bearer (a
+    transient join secret) cannot spend a provider key. Per-agent
+    `providerCallRateLimiter` at 20/min on top of `mcpRateLimiter`.
+  No schema change — `activity_events` already existed in all three places.
 - **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
   stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
   returned to the client — only `has_key`). Managed in Settings → AI. Selecting a
