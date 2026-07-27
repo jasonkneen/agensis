@@ -219,7 +219,7 @@ test('the Netlify backend carries the SAME reserved-handle guard', () => {
 
   // Both backends must mint handles through the shared slugger, or a handle
   // created on one is not the string an @mention of it produces on the other.
-  const fly = fs.readFileSync(path.resolve(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const fly = require('./helpers/fly-lane.cjs').flyLaneSource();
   for (const [name, source] of [['netlify', netlify], ['fly', fly]]) {
     assert.match(source, /function slugHandle\(value\) \{\s*return slugMentionHandle\(value\);/, `${name} delegates slugHandle`);
   }
@@ -374,7 +374,7 @@ test("a LEGACY folder-DM with no direct-flagged participant also still answers",
 test('the dispatch route projects `folder`, without which the legacy-DM check reads undefined', () => {
   // The blank-column trap, asserted directly: an explicit column list that omits
   // a column a decision reads does not error, it just takes the other branch.
-  const fly = fs.readFileSync(path.resolve(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const fly = require('./helpers/fly-lane.cjs').flyLaneSource();
   assert.match(
     fly,
     /select id, workspace_id, participants, conversation_mode, folder from chat_sessions where id = \$1 limit 1/,
