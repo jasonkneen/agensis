@@ -1,5 +1,20 @@
 [
   {
+    "version": "attachment-thumbnails",
+    "date": "2026-07-27",
+    "title": "Pictures in a message are thumbnails now — click one to see it properly",
+    "summary": "An image attached to a message took most of a chat window, so two of them in a row pushed the conversation off screen. An image now sits in the message as a small thumbnail, no taller than 120 pixels, and clicking it opens the picture full size over the app. Several pictures in one message sit side by side and wrap onto the next line instead of stacking down the page.",
+    "highlights": [
+      "An attached image renders as a thumbnail capped at 120 pixels tall, keeping its shape",
+      "A small image is left at its own size rather than blown up",
+      "Click a thumbnail to open the picture full size; Escape or Close puts you back where you were",
+      "Download the file from the preview, without leaving the conversation",
+      "Several images in one message sit side by side and wrap",
+      "The space for a picture is reserved before it arrives, so the conversation no longer jumps as images load",
+      "A file that has since been deleted still says so, at both sizes"
+    ]
+  },
+  {
     "version": "reaction-events",
     "date": "2026-07-27",
     "title": "Reactions can now trigger an integration",

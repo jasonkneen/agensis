@@ -185,6 +185,97 @@ export function attachmentContentPath(id: string): string {
   return `/backend/files/${encodeURIComponent(id)}/content`;
 }
 
+// ---------------------------------------------------------------------------
+// Thumbnail sizing.
+//
+// An attachment in a transcript is a REFERENCE to a file, not the file itself.
+// Rendering it big enough to read turns one message into a page: a 2560x1440
+// screenshot at the old 256px bound is taller than the composer, so two of them
+// in a row push the conversation off screen in a floating window.
+//
+// So the transcript gets a thumbnail and the modal gets the picture. The bound
+// is HEIGHT-first (120px): chat scrolls vertically, so height is the axis that
+// costs a reader, and a 120px-tall thumbnail is still large enough to recognise
+// a screenshot from. Width is capped too (240px) so a panorama cannot occupy a
+// whole row on its own.
+//
+// The box is computed from the image's INTRINSIC dimensions rather than left to
+// `max-height` on the <img>, because the button needs a size before the bytes
+// arrive — an <img> that grows from nothing to 120px when the blob resolves
+// reflows every message below it, and each message row carries
+// `content-visibility: auto` with a remembered intrinsic size, which reflows
+// worst of all. Reserving the box up front means loading changes the picture,
+// not the layout.
+// ---------------------------------------------------------------------------
+
+/** Widest a thumbnail may render, in CSS pixels. */
+export const ATTACHMENT_THUMB_MAX_WIDTH = 240;
+
+/** Tallest a thumbnail may render, in CSS pixels. This is the bound that matters. */
+export const ATTACHMENT_THUMB_MAX_HEIGHT = 120;
+
+/**
+ * The box reserved before the bytes arrive, and whenever an image reports no
+ * usable intrinsic size. 4:3 at the full height bound — the shape a screenshot
+ * is most likely to land near, so the common case barely moves on load.
+ */
+export const ATTACHMENT_THUMB_PLACEHOLDER: Readonly<{ width: number; height: number }> = Object.freeze({
+  width: 160,
+  height: ATTACHMENT_THUMB_MAX_HEIGHT,
+});
+
+/**
+ * Fit an image's intrinsic dimensions inside the thumbnail bound, preserving
+ * aspect ratio.
+ *
+ * Never UPSCALES: a 32x32 icon rendered 120px tall is a blurry lie about what
+ * somebody uploaded, and stretching it wastes the row it sits in. Anything that
+ * is not a pair of positive finite numbers (an image that failed to decode, a
+ * jsdom <img> with no layout, a hostile `0`) falls back to the placeholder box
+ * rather than producing a zero-sized or NaN-sized control.
+ */
+export function attachmentThumbnailBox(
+  naturalWidth: unknown,
+  naturalHeight: unknown,
+): { width: number; height: number } {
+  const width = typeof naturalWidth === 'number' ? naturalWidth : Number(naturalWidth);
+  const height = typeof naturalHeight === 'number' ? naturalHeight : Number(naturalHeight);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { ...ATTACHMENT_THUMB_PLACEHOLDER };
+  }
+  const scale = Math.min(
+    ATTACHMENT_THUMB_MAX_WIDTH / width,
+    ATTACHMENT_THUMB_MAX_HEIGHT / height,
+    1,
+  );
+  return {
+    // A sub-pixel result still has to be a clickable control, so both axes
+    // floor at 1 rather than rounding to 0.
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+/**
+ * What an image attachment can show right now. ONE decision shared by the
+ * thumbnail and the modal, so the two can never disagree about whether the file
+ * is there — the modal showing a broken image over a thumbnail that already
+ * said "File unavailable" is exactly the split this prevents.
+ */
+export type AttachmentPreviewState = 'ready' | 'loading' | 'unavailable';
+
+export function attachmentPreviewState(status: {
+  src?: string | null;
+  loading?: boolean;
+  error?: boolean;
+}): AttachmentPreviewState {
+  // Error wins over a stale src: the hook clears the object URL before it
+  // refetches, but a caller that held on to one must still show the failure.
+  if (status?.error) return 'unavailable';
+  if (status?.src) return 'ready';
+  return 'loading';
+}
+
 // buildFileContext (components/chat/ComposerAddContent.tsx) folds a
 // "[Linked files]" block into the message CONTENT so the agent reading the turn
 // knows a file came with it. That block stays — it is the agent's only view of
