@@ -1,7 +1,7 @@
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, X } from 'lucide-react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -760,7 +760,6 @@ function AppContent() {
   // boolean, so switching account re-asks instead of carrying the previous
   // answer over.
   const { isOwner: isSystemOwner } = useTenantAccess(user?.id ?? null);
-  const [tenantsOpen, setTenantsOpen] = useState(false);
 
   // Rename. Both return false on a rejected write so the inline editor stays
   // open and says so, rather than closing over a change that never landed.
@@ -1037,14 +1036,15 @@ function AppContent() {
   // window, which is `focusedDockWindow` above — the top non-minimized window
   // ON THE ACTIVE PROJECT, focus being encoded as zIndex. A window parked on
   // another project is not on screen and must not claim the panel; nothing open
-  // means the canvas itself. Tenants is an overlay rather than a window, so it
-  // is passed separately and outranks whatever is behind it.
+  // means the canvas itself. Tenants used to be an overlay passed separately;
+  // it is a window now, so it resolves through focusedWindowType like the rest
+  // and needs no special case.
   const tipSurface = useMemo(() => tipSurfaceFor({
-    overlay: tenantsOpen ? 'tenants' : null,
+    overlay: null,
     focusedWindowType: focusedDockWindow?.type ?? null,
     isDirectMessage: focusedDockWindow?.type === 'chat'
       && sessions.find(item => item.id === focusedDockWindow.sessionId)?.folder === DIRECT_MESSAGES_FOLDER,
-  }), [tenantsOpen, focusedDockWindow, sessions]);
+  }), [focusedDockWindow, sessions]);
   // macOS-style dock bounce: a chat window's icon bounces once when its agent
   // starts working (idle → busy). Derived purely from the realtime connection
   // status already in scope — no extra subscriptions.
@@ -1181,6 +1181,21 @@ function AppContent() {
       title: `New document: ${doc.title || 'Untitled'}`,
     });
   }, [createDocument, openWindow, activeLayerId, user?.id, logEvent]);
+
+  // Tenants is a WINDOW, not a full-screen overlay. It used to render as
+  // `absolute inset-0` at modal z-index over the whole workspace, so opening it
+  // took the entire surface and nothing else could be reached — unlike every
+  // other view, which the window manager owns. Same open-or-focus shape as the
+  // rest, so it minimises to the dock, tiles, and closes like anything else.
+  const handleOpenTenants = useCallback(() => {
+    const existing = windows.find(w => w.type === 'tenants');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('tenants', { title: 'Tenants', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenMemory = useCallback(() => {
     const existing = windows.find(w => w.type === 'memory');
@@ -1964,7 +1979,7 @@ function AppContent() {
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={setActiveWorkspaceId}
             onRenameWorkspace={handleRenameWorkspace}
-            onOpenTenants={isSystemOwner ? () => setTenantsOpen(true) : undefined}
+            onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             onCreateWorkspace={handleCreateWorkspace}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // Phone: the rail rides inside the off-canvas drawer beside a
@@ -2254,22 +2269,6 @@ function AppContent() {
                 onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
               />
 
-              {tenantsOpen && (
-                <div
-                  className="absolute inset-0 flex flex-col bg-background"
-                  style={{ zIndex: 'var(--z-modal)' }}
-                  role="dialog"
-                  aria-label="Tenants"
-                >
-                  <header className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
-                    <h2 className="text-sm font-semibold">Tenants</h2>
-                    <Button type="button" variant="ghost" size="icon-sm" onClick={() => setTenantsOpen(false)} aria-label="Close tenants">
-                      <X className="size-4" />
-                    </Button>
-                  </header>
-                  <div className="min-h-0 flex-1"><TenantsWindowContent /></div>
-                </div>
-              )}
 
               {showCanvasGrid && (
                 <WorkspaceDesktopOverlay
@@ -3066,6 +3065,35 @@ function CanvasLayerScene({
                   workspaceId={workspaceId}
                   currentUserId={userId}
                 />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'tenants') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Building2 size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <TenantsWindowContent />
               </Suspense>
             </FloatingWindowShell>
           );
