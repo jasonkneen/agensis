@@ -4034,6 +4034,27 @@ function taskStatusOnDispatch(current) {
 // genuinely new (unrelated) messages stay on the main timeline. Callers that omit
 // `autoThread` (sub-thread sessions, MCP, legacy clients) keep flat replies.
 // Returns null when there's nothing to thread under.
+/**
+ * Resolve a requested thread parent to one that can actually be written.
+ *
+ * Returns the id only if that message EXISTS and belongs to this session;
+ * otherwise null, which threads the reply flat. Fails open on a query error for
+ * the same reason: losing the thread nesting is a cosmetic loss, losing the
+ * agent's reply is not.
+ */
+async function verifyThreadParent(threadParentId, sessionId) {
+ if (!threadParentId || !sessionId) return null;
+ try {
+  const rows = await getDb().unsafe(
+   'select id from messages where id = $1 and session_id = $2 limit 1',
+   [String(threadParentId), String(sessionId)],
+  );
+  return rows.length > 0 ? String(threadParentId) : null;
+ } catch {
+  return null;
+ }
+}
+
 function resolveDispatchThreadParent({ threadParentId, autoThread, messageId } = {}) {
  if (threadParentId) return threadParentId;
  if (autoThread && messageId) return String(messageId);
@@ -13029,7 +13050,16 @@ function createApp() {
    // Option A auto-threading: thread the agent's reply under the human's main-box
    // message when the UI asks for it (see resolveDispatchThreadParent). Follow-ups
    // already carry threadParentId; sub-thread/MCP/legacy callers stay flat.
-   const effectiveThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
+   const requestedThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
+   // VERIFY THE PARENT EXISTS before threading under it. messageId arrives from
+   // the client and was previously trusted straight into a foreign key, so an
+   // optimistic id — or one whose own insert failed — made EVERY agent reply in
+   // the job die on messages_thread_parent_id_fkey. The turn is not the place to
+   // discover that: a reply that cannot be threaded should land flat, not vanish.
+   //
+   // Scoped to this session as well as existence, so a caller cannot thread a
+   // reply under a message in a conversation they are not in.
+   const effectiveThreadParentId = await verifyThreadParent(requestedThreadParentId, sessionId);
    // Fire and forget: the conversation advances in the background as each agent
    // message lands and is streamed to clients over realtime. Holding the POST
    // open for the whole multi-turn chain would block the user's UI.
