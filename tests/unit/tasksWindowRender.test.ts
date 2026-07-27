@@ -314,7 +314,11 @@ describe('hide done', () => {
     // Now something asks to jump to the done task — that IS worth overriding for.
     render(MOSTLY_DONE, [], { focusTaskId: 'fin' });
     expect(container.textContent).toContain('Finished task');
-    expect(hideDoneButton().textContent).toBe('Hide done');
+    // ...but the override is TRANSIENT. This used to assert 'Hide done', i.e.
+    // that the widening had written the user's preference off — which is the
+    // bug: follow one link to a done task and "Hide done" was cleared forever.
+    // The task is reachable AND the choice survives.
+    expect(hideDoneButton().textContent).toBe('Show done');
   });
 
   it('consumes the focus request in a view with no task rows to scroll to', () => {
