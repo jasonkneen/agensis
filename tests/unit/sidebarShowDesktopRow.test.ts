@@ -74,13 +74,13 @@ afterEach(() => {
   container.remove();
 });
 
-describe('Show desktop row', () => {
+describe('Desktop row', () => {
   it('sits directly under Inbox in the expanded sidebar', () => {
     mount({ onShowDesktop: () => {} });
     const order = rows().map(labelOf);
     const inbox = order.findIndex(label => label === 'Inbox');
     expect(inbox).toBeGreaterThanOrEqual(0);
-    expect(order[inbox + 1]).toBe('Show desktop');
+    expect(order[inbox + 1]).toBe('Desktop');
   });
 
   it('sits directly under Inbox in the collapsed rail too', () => {
@@ -88,12 +88,12 @@ describe('Show desktop row', () => {
     const order = rows().map(labelOf);
     const inbox = order.findIndex(label => label === 'Inbox');
     expect(inbox).toBeGreaterThanOrEqual(0);
-    expect(order[inbox + 1]).toBe('Show desktop');
+    expect(order[inbox + 1]).toBe('Desktop');
   });
 
   it('is a keyboard-reachable button, not a div', () => {
     mount({ onShowDesktop: () => {} });
-    const row = findRow('Show desktop');
+    const row = findRow('Desktop');
     expect(row?.tagName).toBe('BUTTON');
     expect(row?.getAttribute('type')).toBe('button');
     // No tabindex="-1" and not disabled: it is in the natural tab order.
@@ -103,14 +103,14 @@ describe('Show desktop row', () => {
 
   it('reports its toggle state with aria-pressed', () => {
     mount({ onShowDesktop: () => {} });
-    expect(findRow('Show desktop')?.getAttribute('aria-pressed')).toBe('false');
+    expect(findRow('Desktop')?.getAttribute('aria-pressed')).toBe('false');
 
     act(() => root.unmount());
     mount({ onShowDesktop: () => {}, showingDesktop: true });
-    expect(findRow('Show desktop')?.getAttribute('aria-pressed')).toBe('true');
+    expect(findRow('Desktop')?.getAttribute('aria-pressed')).toBe('true');
     // And is visually marked with the same data-active hook every other
     // highlighted sidebar row uses, so themes need no new selector.
-    expect(findRow('Show desktop')?.getAttribute('data-active')).toBe('true');
+    expect(findRow('Desktop')?.getAttribute('data-active')).toBe('true');
   });
 
   it('leaves plain launchers without an aria-pressed state', () => {
@@ -122,13 +122,13 @@ describe('Show desktop row', () => {
     let presses = 0;
     mount({ onShowDesktop: () => { presses += 1; } });
     act(() => {
-      findRow('Show desktop')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      findRow('Desktop')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(presses).toBe(1);
   });
 
   it('is absent when the app does not pass a handler', () => {
     mount();
-    expect(findRow('Show desktop')).toBeUndefined();
+    expect(findRow('Desktop')).toBeUndefined();
   });
 });
