@@ -2815,7 +2815,7 @@ function ChatMessageBubble({
                 type="button"
                 onClick={() => onToggleReaction?.(emoji)}
                 className={cn(
-                  'control-outer-ring inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
+                  'chat-reaction-chip control-outer-ring inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
                   users.includes(uid)
                     ? 'border-primary/40 bg-primary/10 text-foreground'
                     : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',

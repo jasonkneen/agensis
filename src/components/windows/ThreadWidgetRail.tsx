@@ -467,7 +467,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
   };
 
   return (
-    <li className="group/row flex flex-col gap-0.5 rounded-md px-1 py-1 hover:bg-muted/50">
+    <li className="thread-widget-item-row group/row flex flex-col gap-0.5 rounded-md px-1 py-1 hover:bg-muted/50">
       <div className="flex items-start gap-1.5">
         {isBlocker ? (
           <Hand className={cn('mt-0.5 size-3 shrink-0', isAnswered ? 'text-muted-foreground' : 'text-amber-500')} />

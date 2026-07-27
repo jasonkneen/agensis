@@ -2154,6 +2154,25 @@
  border-bottom-color: var(--neo-edge);
 }
 
+/* Individual todo/plan/blocker rows inside the rail — the outer card frame
+   above tells you where the widget starts, but in neo every row-like element
+   elsewhere gets its own edge too (sidebar cards, avatars), so a plain
+   unbordered row here read as an inconsistency rather than "quiet by design". */
+:root[data-ui-theme="neo"] .thread-widget-item-row {
+ border: 1.5px solid var(--neo-edge);
+ border-radius: 8px;
+ background: var(--card);
+ margin-bottom: 3px;
+}
+
+:root[data-ui-theme="neo"] .thread-widget-item-row:hover {
+ background: var(--secondary) !important;
+}
+
+:root[data-ui-theme="neo"] .thread-widget-item-row:last-child {
+ margin-bottom: 0;
+}
+
 /* Too narrow to seat the rail beside the conversation (see
    RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
    squeezing the message column, the widgets float ON TOP of it. The wash below
@@ -2502,10 +2521,27 @@
  box-shadow: var(--neo-shadow-md) !important;
 }
 
+/* Every message avatar gets the same edge in neo — not just agents'. The
+   accent-coloured rule below (agent messages) is more specific and still
+   wins on colour, but without this base rule a person's own avatar sat
+   thin and borderless next to agents' bordered ones in the same thread. */
+:root[data-ui-theme="neo"] .chat-message-avatar {
+ border-width: 2px;
+ border-color: var(--border);
+ box-shadow: var(--neo-shadow-xs);
+}
+
 :root[data-ui-theme="neo"] .chat-message-row[data-agent-message="true"] .chat-message-avatar,
 :root[data-ui-theme="neo"] .chat-thread-message[data-agent-message="true"]>div:first-child {
  border-width: 2px;
  border-color: var(--border);
+ box-shadow: var(--neo-shadow-xs);
+}
+
+/* Reaction pills — same 1px border in every other theme, but neo's chip
+   language elsewhere (tool-step chips, sidebar chips) is a hard 2px edge. */
+:root[data-ui-theme="neo"] .chat-reaction-chip {
+ border-width: 2px !important;
  box-shadow: var(--neo-shadow-xs);
 }
 
