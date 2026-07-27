@@ -1203,7 +1203,11 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
         <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
       ) : (
         <div className="space-y-3 overflow-hidden">
+          {/* Placeholder token, never the live one — see ConnectMcpDialog. */}
           <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+          <p className="pl-[7.5rem] text-xs text-muted-foreground">
+            Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token below.
+          </p>
           <ConnectionRow label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
           <ConnectionRow label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
           <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
