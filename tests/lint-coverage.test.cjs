@@ -59,6 +59,10 @@ const MUST_BE_LINTED = [
   // agents nobody addressed or lets an agent capture the mention meant for
   // everyone.
   'shared/channelMentions.cjs',
+  // Decides what a reaction event carries out of the workspace, and which
+  // Flows connections are entitled to receive it. Both backends call it, so an
+  // unlinted mistake here is a delivery to the wrong tenant on both lanes.
+  'shared/reaction-events.cjs',
   'server/index.cjs',
   'server/mcp.cjs',
   'server/skills.cjs',

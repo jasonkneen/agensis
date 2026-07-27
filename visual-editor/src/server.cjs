@@ -11,12 +11,16 @@
  * Routes:
  *   GET  /__visual-editor/client.js  — the browser editor bundle
  *   POST /__visual-editor/edit       — apply one edit op to an HTML source file
+ *   GET  /__visual-editor/palette    — what the host project is made of
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const parse5 = require('parse5');
+const { discover } = require('./discover.cjs');
+const { applyJsxEdit } = require('./jsxOps.cjs');
+const jsxLocator = require('./locators/jsx.cjs');
 
 const CLIENT_JS_PATH = path.join(__dirname, 'client.js');
 const ATTR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9\-_:.]*$/;
@@ -33,7 +37,84 @@ function resolveFilePath(root, rel) {
   if (abs !== absRoot && !abs.startsWith(absRoot + path.sep)) {
     throw new Error('path escapes root: ' + rel);
   }
+  // The lexical check above only removes `..`; a symlink inside root can still
+  // point outside it. Compare real paths whenever both actually exist.
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(absRoot);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return abs; // root not on disk (unit tests)
+    throw err;
+  }
+  let realAbs;
+  try {
+    realAbs = fs.realpathSync(abs);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return abs; // file does not exist yet
+    throw err;
+  }
+  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+    throw new Error('path escapes root via symlink: ' + rel);
+  }
   return abs;
+}
+
+// ---------------------------------------------------------------------------
+// Request authentication — this server writes to the developer's disk, so a
+// write must not be forgeable by any page that happens to be open in the same
+// browser. Two independent gates:
+//
+//   1. The Host header must name a loopback address, so a public hostname
+//      re-pointed at 127.0.0.1 (DNS rebinding) cannot reach these routes.
+//   2. A cross-site write is rejected: the Origin header (which browsers
+//      always attach to POSTs) must match this server's own origin, and the
+//      body must be declared application/json — which forces a CORS preflight
+//      that we deliberately never answer.
+// ---------------------------------------------------------------------------
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+function hostName(hostHeader) {
+  if (!hostHeader) return '';
+  // Keep a bracketed IPv6 literal intact; otherwise strip the :port suffix.
+  const name = hostHeader.startsWith('[')
+    ? hostHeader.slice(0, hostHeader.indexOf(']') + 1)
+    : hostHeader.split(':')[0];
+  return name.toLowerCase();
+}
+
+function hostIsLoopback(req) {
+  return LOOPBACK_HOSTS.has(hostName(req.headers.host));
+}
+
+/** True when the request did not come from another site. */
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true; // non-CORS same-origin request
+  if (origin === 'null') return false;   // opaque origin (sandboxed iframe, data:)
+  let parsed;
+  try { parsed = new URL(origin); } catch { return false; }
+  return parsed.host === req.headers.host;
+}
+
+function isJsonBody(req) {
+  const ct = req.headers['content-type'] || '';
+  return ct.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+/** Gate for read-only routes: no body, so no content-type to require. */
+function rejectReadReason(req) {
+  if (!hostIsLoopback(req)) return 'this editor only accepts loopback requests';
+  if (!sameOrigin(req)) return 'cross-origin requests are not accepted';
+  return null;
+}
+
+/** Returns an error string when the request must be refused, else null. */
+function rejectReason(req) {
+  if (!hostIsLoopback(req)) return 'this editor only accepts loopback requests';
+  if (!sameOrigin(req)) return 'cross-origin requests are not accepted';
+  if (!isJsonBody(req)) return 'content-type must be application/json';
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +228,20 @@ function patchAttr(source, node, name, value) {
     // Keep at least one space after the tag name.
     const tagNameEnd = l.startTag.startOffset + 1 + node.tagName.length;
     if (start < tagNameEnd) start = tagNameEnd;
-    if (start === tagNameEnd) return splice(source, span.attrStart, span.attrEnd, '');
+    if (start === tagNameEnd) {
+      // First attribute in the tag: the whitespace before it is the separator
+      // after the tag name and has to survive, so eat the run that FOLLOWS
+      // the attribute instead — otherwise `<div id="a" class="b">` collapses
+      // to `<div  class="b">` with a doubled space.
+      let end = span.attrEnd;
+      while (end < source.length && (source[end] === ' ' || source[end] === '\t')) end++;
+      // Nothing follows it inside the tag: drop the leading run instead, so
+      // `<div id="a">` becomes `<div>` rather than `<div >`.
+      if (source[end] === '>' || (source[end] === '/' && source[end + 1] === '>')) {
+        return splice(source, tagNameEnd, span.attrEnd, '');
+      }
+      return splice(source, span.attrStart, end, '');
+    }
     return splice(source, start, span.attrEnd, '');
   }
   if (span && span.hasValue) {
@@ -213,12 +307,23 @@ function escapeText(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Elements whose content is raw text, never entity-decoded by the parser.
+// Escaping `<`/`>`/`&` inside these corrupts them: `a > b` in a <style> would
+// be written as `a &gt; b` and the CSS rule would simply stop working.
+const RAW_TEXT_TAGS = new Set([
+  'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext',
+]);
+
 function opSetText(source, doc, op) {
   const node = findNode(doc, op.path);
   const l = loc(node);
   if (!l.endTag) throw new Error('element has no end tag; cannot set text');
   if (elementChildren(node).length > 0) {
     throw new Error('setText only allowed on elements with no child elements');
+  }
+  const tag = String(node.tagName).toLowerCase();
+  if (RAW_TEXT_TAGS.has(tag)) {
+    throw new Error('cannot set text on <' + tag + '>: raw-text element, escaping would corrupt it');
   }
   return splice(source, l.startTag.endOffset, l.endTag.startOffset, escapeText(op.text));
 }
@@ -343,36 +448,140 @@ function opMoveTo(source, doc, op) {
     throw new Error('index ' + op.index + ' out of range (parent has ' + kids.length + ' element children)');
   }
 
-  let out = cut.source;
-  if (op.index < kids.length) {
+  return placeInside(cut.source, parent, op.index, cut.text);
+}
+
+/**
+ * Splice `text` in as child `index` of `parent`, matching the surrounding
+ * indentation. Shared by moveTo and insert so both land identically — the
+ * indentation rules here are the fiddly part and only want testing once.
+ *
+ * `parent` must come from a parse of the SAME string being spliced, since it
+ * is used for source offsets.
+ */
+/**
+ * Re-indent a multi-line snippet for its new depth.
+ *
+ * A template lifted from elsewhere in the page carries that spot's
+ * indentation on every line but the first (the first is placed by the caller).
+ * Without this, inserting a card three levels deep writes its children at the
+ * old depth and the file reads as garbage even though it parses.
+ */
+function reindent(text, indent) {
+  const lines = text.split('\n');
+  if (lines.length === 1) return text;
+  let common = null;
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const lead = /^[ \t]*/.exec(lines[i])[0];
+    if (common === null || lead.length < common.length) common = lead;
+  }
+  if (common === null) return text;
+  const rest = lines.slice(1).map((l) => (l.trim() ? indent + l.slice(common.length) : l));
+  return [lines[0]].concat(rest).join('\n');
+}
+
+function placeInside(source, parent, index, text) {
+  const pl = loc(parent);
+  if (!pl.endTag) throw new Error('target parent cannot contain children');
+  const kids = elementChildren(parent);
+  if (index > kids.length) {
+    throw new Error('index ' + index + ' out of range (parent has ' + kids.length + ' element children)');
+  }
+  if (index < kids.length) {
     // Insert before reference child R, on its own line at R's indent,
     // leaving R (including its leading indent) byte-unchanged.
-    const R = kids[op.index];
-    const rl = loc(R);
-    const line = lineIndentBefore(out, rl.startOffset);
-    out = line
-      ? splice(out, rl.startOffset, rl.startOffset, cut.text + '\n' + line.indent)
-      : splice(out, rl.startOffset, rl.startOffset, cut.text);
-  } else {
-    // Append as last child, before the parent's endTag.
-    const endTagStart = pl.endTag.startOffset;
-    const line = lineIndentBefore(out, endTagStart);
-    if (line) {
-      const parentIndent = line.indent;
-      let childIndent = parentIndent + '  ';
-      if (kids.length) {
-        const lastLine = lineIndentBefore(out, loc(kids[kids.length - 1]).startOffset);
-        if (lastLine) childIndent = lastLine.indent;
-      }
-      // Insert right after the newline that starts the endTag's line:
-      // <childIndent><elementText>\n then the existing <parentIndent></tag>.
-      out = splice(out, line.pos, line.pos, childIndent + cut.text + '\n');
-    } else {
-      // One-liner parent: keep it a one-liner.
-      out = splice(out, endTagStart, endTagStart, cut.text);
-    }
+    const rl = loc(kids[index]);
+    const line = lineIndentBefore(source, rl.startOffset);
+    return line
+      ? splice(source, rl.startOffset, rl.startOffset, reindent(text, line.indent) + '\n' + line.indent)
+      : splice(source, rl.startOffset, rl.startOffset, text);
   }
-  return out;
+  // Append as last child, before the parent's endTag.
+  const endTagStart = pl.endTag.startOffset;
+  const line = lineIndentBefore(source, endTagStart);
+  if (!line) {
+    // One-liner parent: keep it a one-liner.
+    return splice(source, endTagStart, endTagStart, text);
+  }
+  let childIndent = line.indent + '  ';
+  if (kids.length) {
+    const lastLine = lineIndentBefore(source, loc(kids[kids.length - 1]).startOffset);
+    if (lastLine) childIndent = lastLine.indent;
+  }
+  // Insert right after the newline that starts the endTag's line:
+  // <childIndent><text>\n then the existing <parentIndent></tag>.
+  return splice(source, line.pos, line.pos, childIndent + reindent(text, childIndent) + '\n');
+}
+
+/**
+ * insert op — add NEW markup as child `index` of `parentPath`.
+ *
+ * This is what makes the editor able to create, not just rearrange. The markup
+ * is validated to be exactly one well-formed element before anything is
+ * written; combined with the element-count guard in applyEdit, a malformed
+ * snippet can never leave a half-open tag in the file.
+ */
+function opInsert(source, doc, op) {
+  if (!Array.isArray(op.parentPath)) throw new Error('missing parentPath');
+  if (typeof op.index !== 'number' || op.index < 0) throw new Error('invalid index');
+  if (typeof op.html !== 'string' || !op.html.trim()) throw new Error('insert requires html');
+
+  const text = op.html.trim();
+  const frag = parse5.parseFragment(text);
+  const roots = elementChildren(frag);
+  if (roots.length !== 1) {
+    throw new Error('insert requires exactly one root element (got ' + roots.length + ')');
+  }
+  // parseFragment is lenient: "<li>x</li_WRONG>" or "<li>x</div>" parses fine
+  // because an unmatched end tag is simply discarded, and the element count is
+  // unchanged either way. Compare which tags the caller CLOSED against which
+  // ones parse5 understood to be closed — that is the mismatch that would
+  // splice an unbalanced tag into the file.
+  if (closingTags(text) !== closingTags(parse5.serialize(frag))) {
+    throw new Error('insert markup is not well formed (unbalanced tags)');
+  }
+
+  const parent = findNode(doc, op.parentPath);
+  return placeInside(source, parent, op.index, text);
+}
+
+/** Sorted, lowercased list of the tags a snippet closes. */
+function closingTags(html) {
+  return (String(html).match(/<\/\s*[a-zA-Z][\w:-]*/g) || [])
+    .map((t) => t.replace(/<\/\s*/, '').toLowerCase())
+    .sort()
+    .join(',');
+}
+
+/** Element count of a snippet, used to predict the insert's structural delta. */
+function snippetElementCount(html) {
+  return countElements(parse5.parseFragment(String(html).trim()));
+}
+
+/** Total number of elements in a subtree, excluding the node itself. */
+function countElements(node) {
+  let n = 0;
+  for (const kid of elementChildren(node)) n += 1 + countElements(kid);
+  return n;
+}
+
+/**
+ * Pick the patcher for a file. Each language answers the same question — which
+ * byte range does this edit replace — so the splice model is shared; only the
+ * way a target is located differs.
+ */
+function patchSource(file, source, op) {
+  if (/\.[jt]sx$/.test(file)) {
+    if (!jsxLocator.isAvailable()) {
+      throw new Error(
+        'editing ' + path.basename(file) + ' needs @babel/parser — ' +
+        'install it in this project (npm i -D @babel/parser)'
+      );
+    }
+    return applyJsxEdit(source, op);
+  }
+  return applyEdit(source, op);
 }
 
 /**
@@ -381,6 +590,18 @@ function opMoveTo(source, doc, op) {
  */
 function applyEdit(source, op) {
   const doc = parse5.parse(source, { sourceCodeLocationInfo: true });
+
+  // Structural expectation, checked after patching. Every op but `remove`
+  // preserves the element count; `remove` drops exactly the target subtree.
+  const before = countElements(doc);
+  let expectedDelta = 0;
+  if (op.op === 'remove') {
+    expectedDelta = -(1 + countElements(findNode(doc, op.path)));
+  } else if (op.op === 'insert') {
+    // countElements() on a fragment already counts the root element.
+    expectedDelta = snippetElementCount(op.html);
+  }
+
   let out;
   switch (op.op) {
     case 'setText': out = opSetText(source, doc, op); break;
@@ -389,10 +610,21 @@ function applyEdit(source, op) {
     case 'move': out = opMove(source, doc, op); break;
     case 'moveTo': out = opMoveTo(source, doc, op); break;
     case 'remove': out = opRemove(source, doc, op); break;
+    case 'insert': out = opInsert(source, doc, op); break;
     default: throw new Error('unknown op: ' + op.op);
   }
-  // Sanity: the patched source must still parse.
-  parse5.parse(out, { sourceCodeLocationInfo: true });
+
+  // parse5 is error-tolerant and never throws, so re-parsing alone proves
+  // nothing. Compare the element count instead: a splice that landed at the
+  // wrong offset almost always breaks a tag and changes the tree shape.
+  // Throwing here means the caller never writes the mangled source to disk.
+  const after = countElements(parse5.parse(out));
+  if (after !== before + expectedDelta) {
+    throw new Error(
+      'patch rejected: document structure changed unexpectedly (' + before +
+      ' elements → ' + after + ', expected ' + (before + expectedDelta) + ')'
+    );
+  }
   return out;
 }
 
@@ -450,8 +682,21 @@ function createUndoTracker(cap) {
 function createEditorMiddleware({ root }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
   const undo = createUndoTracker(50);
+  // Short-lived, not permanent: `npx shadcn add button` mid-session must show
+  // up. A scan is ~40ms on a large project, so a few seconds of staleness is
+  // the right trade against a palette that silently never updates.
+  let paletteCache = null;
+  let paletteCachedAt = 0;
+  const PALETTE_TTL_MS = 5000;
   return function editorMiddleware(req, res, next) {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('bad request: malformed URL');
+      return;
+    }
     if (url.pathname === '/__visual-editor/client.js' && req.method === 'GET') {
       fs.readFile(CLIENT_JS_PATH, (err, data) => {
         if (err) { res.writeHead(500); res.end('client.js missing'); return; }
@@ -463,14 +708,33 @@ function createEditorMiddleware({ root }) {
       });
       return;
     }
+    if (url.pathname === '/__visual-editor/palette' && req.method === 'GET') {
+      const refusedRead = rejectReadReason(req);
+      if (refusedRead) { sendJson(res, 403, { ok: false, error: refusedRead }); return; }
+      try {
+        // ?fresh=1 forces a rescan regardless of the TTL.
+        const stale = Date.now() - paletteCachedAt > PALETTE_TTL_MS;
+        if (!paletteCache || stale || url.searchParams.get('fresh')) {
+          paletteCache = discover(root);
+          paletteCachedAt = Date.now();
+        }
+        sendJson(res, 200, { ok: true, ...paletteCache });
+      } catch (err) {
+        // Discovery is a convenience; never let it take the editor down.
+        sendJson(res, 200, { ok: false, error: String((err && err.message) || err) });
+      }
+      return;
+    }
     if (url.pathname === '/__visual-editor/edit' && req.method === 'POST') {
+      const refused = rejectReason(req);
+      if (refused) { sendJson(res, 403, { ok: false, error: refused }); return; }
       readBody(req, 1024 * 1024)
         .then((raw) => {
           let op;
           try { op = JSON.parse(raw); } catch { throw new Error('invalid JSON body'); }
           const file = resolveFilePath(root, op.file);
           const source = fs.readFileSync(file, 'utf8');
-          const patched = applyEdit(source, op);
+          const patched = patchSource(file, source, op);
           undo.push(file, source); // only reached when applyEdit succeeded
           fs.writeFileSync(file, patched, 'utf8');
           sendJson(res, 200, { ok: true });
@@ -479,6 +743,8 @@ function createEditorMiddleware({ root }) {
       return;
     }
     if (url.pathname === '/__visual-editor/undo' && req.method === 'POST') {
+      const refusedUndo = rejectReason(req);
+      if (refusedUndo) { sendJson(res, 403, { ok: false, error: refusedUndo }); return; }
       readBody(req, 1024 * 1024)
         .then((raw) => {
           let body;
@@ -521,7 +787,16 @@ const INJECT = '<script src="/__visual-editor/client.js"></script>';
 
 function serveStatic(root, req, res) {
   const url = new URL(req.url, 'http://localhost');
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try {
+    // Throws URIError on a malformed escape such as `/%` — which, uncaught in
+    // a request handler, takes the whole dev server down.
+    rel = decodeURIComponent(url.pathname);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('bad request: malformed URL');
+    return;
+  }
   if (rel.endsWith('/')) rel += 'index.html';
   rel = rel.replace(/^\/+/, '');
   let abs;
@@ -548,7 +823,16 @@ function serveStatic(root, req, res) {
 function startServer({ root, port }) {
   const middleware = createEditorMiddleware({ root });
   const server = http.createServer((req, res) => {
-    middleware(req, res, () => serveStatic(root, req, res));
+    // Last-resort net: an exception thrown synchronously in a request handler
+    // is an uncaught exception, which terminates the whole dev server.
+    try {
+      middleware(req, res, () => serveStatic(root, req, res));
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[visual-dev-editor] request failed:', err && err.message);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('internal error');
+    }
   });
   server.listen(port, () => {
     const addr = server.address();
@@ -561,6 +845,7 @@ function startServer({ root, port }) {
 
 module.exports = {
   createEditorMiddleware,
+  patchSource,
   startServer,
   applyEdit,
   resolveFilePath,

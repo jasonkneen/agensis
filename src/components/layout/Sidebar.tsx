@@ -3,6 +3,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import {
  Archive,
+ AtSign,
  Bot,
  Users,
  Brain,
@@ -160,7 +161,7 @@ import { isHuddleSession } from '../../lib/huddleTranscript';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { cn } from '../../lib/utils';
 import { useThreadInbox } from '../../hooks/useThreadInbox';
-import { threadReplyLabel, threadRowTitle } from '../../lib/threadInbox';
+import { threadReplyLabel, threadRowSource, threadRowTitle } from '../../lib/threadInbox';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
 
@@ -719,10 +720,7 @@ export const Sidebar = React.memo(function Sidebar({
           key={thread.parentId}
           type="button"
           data-thread-unread={thread.unread ? 'true' : undefined}
-          className={cn(
-           'flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring',
-           thread.unread && 'font-medium',
-          )}
+          className="sidebar-thread-row flex w-full min-w-0 items-start gap-1.5 rounded-md px-2 py-1 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => {
            // Read on OPEN, not on render: a thread scrolling past in the
            // sidebar has not been read by anyone.
@@ -730,19 +728,33 @@ export const Sidebar = React.memo(function Sidebar({
            if (thread.sessionId) onOpenThread?.(thread.sessionId, thread.parentId);
           }}
          >
-          <span className="flex min-w-0 items-center gap-1.5">
-           {/* The unread dot carries the state on its own, so the row does
-               not depend on weight alone — weight is easy to miss against a
-               wallpaper. */}
-           {thread.unread && (
-            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-primary" />
-           )}
-           <span className={cn('min-w-0 flex-1 truncate text-sm', !thread.unread && 'text-muted-foreground')}>
-            {threadRowTitle(thread)}
-           </span>
+          {/* A LEADING ICON THAT SAYS SOMETHING. Every other list in this
+              sidebar leads with one, and without it Threads is a wall of
+              undifferentiated text. It is the thread's SOURCE — a hash for a
+              thread in a channel, an at-sign for one in a DM — because that is
+              the fact that separates two rows whose titles read alike. */}
+          <span className="sidebar-item-icon mt-0.5 flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+           {threadRowSource(thread) === 'dm' ? <AtSign /> : <Hash />}
           </span>
-          <span className="truncate pl-0 text-xs text-muted-foreground">
-           {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+           <span className="flex min-w-0 items-center gap-1.5">
+            {/* The unread dot carries the state on its own, so the row does
+                not depend on weight alone — weight is easy to miss against a
+                wallpaper. */}
+            {thread.unread && (
+             <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-primary" />
+            )}
+            {/* font-medium on EVERY row, not only unread ones. A title is a
+                title; read rows still recede, but through colour, which is what
+                the muted token is for. Weight-as-state left read rows rendering
+                as thin grey text over a wallpaper and barely legible. */}
+            <span className={cn('min-w-0 flex-1 truncate text-sm font-medium', !thread.unread && 'text-muted-foreground')}>
+             {threadRowTitle(thread)}
+            </span>
+           </span>
+           <span className="truncate pl-0 text-xs text-muted-foreground">
+            {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+           </span>
           </span>
          </button>
         ))
@@ -1327,9 +1339,14 @@ function DirectAgentRow({
      <span className={`absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background ${statusColor}`} />
     </span>
     <span className="min-w-0 flex-1">
-     <span className="block truncate text-sm font-medium leading-tight text-foreground">{agent.name}</span>
-     <span className="block truncate text-xs leading-tight text-muted-foreground">
-      {handle ? `@${handle}` : 'agent'}
+     {/* ONE line: name and handle side by side, not stacked. Two block spans
+         made every DM row double height, and the name wrapped the moment it
+         was long — which is most of them. */}
+     <span className="flex min-w-0 items-baseline gap-1.5">
+      <span className="truncate text-sm font-medium leading-tight text-foreground">{agent.name}</span>
+      <span className="shrink-0 truncate text-xs leading-tight text-muted-foreground">
+       {handle ? `@${handle}` : 'agent'}
+      </span>
      </span>
     </span>
    </button>
@@ -1496,7 +1513,7 @@ function SidebarSection({
  const hasAction = Boolean(actionLabel && onAction);
 
  return (
-  <Collapsible open={open} onOpenChange={onOpenChange} className="pt-3">
+  <Collapsible open={open} onOpenChange={onOpenChange} className="sidebar-section">
    <div className="sidebar-section-header">
     <CollapsibleTrigger asChild>
      <button
@@ -1567,7 +1584,12 @@ function SidebarFolderGroup({
    <CollapsibleTrigger asChild>
     <button
      type="button"
-     className="sidebar-folder-trigger flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+     // text-sm, not text-xs. A folder is one of the things IN the workspace, the
+     // same as the documents inside it and the same as Inbox/Tasks/Skills — it is
+     // not a label for a group the way a section heading is. text-xs put it at
+     // exactly the section-heading size (11.25px against the items' 13.125px at a
+     // 15px UI font), so "Applets" read as a heading for its own contents.
+     className="sidebar-folder-trigger flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
      aria-controls={`${id}-content`}
     >
      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />

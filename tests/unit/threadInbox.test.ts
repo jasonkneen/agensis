@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  sortThreadInbox, threadInboxBadgeCount, threadReplyLabel, threadRowTitle,
+  sortThreadInbox, threadInboxBadgeCount, threadReplyLabel, threadRowSource, threadRowTitle,
   type ThreadInboxItem,
 } from '../../src/lib/threadInbox';
 
@@ -22,11 +22,47 @@ describe('threadRowTitle', () => {
     expect(threadRowTitle(item({ parentPreview: 'ok\n\n  updated ' }))).toBe('ok updated');
   });
 
-  it('falls back to the session when the parent has NO text', () => {
+  it('falls back to the LATEST REPLY when the parent has no text', () => {
     // Real case: an attachment, an image, or a tool step. A blank row is one
-    // nobody can click with confidence.
-    expect(threadRowTitle(item({ parentPreview: '   ', sessionTitle: 'Coder' }))).toBe('Thread in Coder');
-    expect(threadRowTitle(item({ parentPreview: '', sessionTitle: '' }))).toBe('Thread');
+    // nobody can click with confidence — and the reply is what the thread is
+    // actually about, so it names the row better than the session does.
+    expect(threadRowTitle(item({ parentPreview: '   ', lastReplyPreview: 'moved it to staging' })))
+      .toBe('moved it to staging');
+  });
+
+  it('treats an ATTACHMENT MANIFEST as no text at all', () => {
+    // buildFileContext writes uploads into the message as "[Linked files]" plus
+    // one line per file, and that text stays in the message for the agent to
+    // read. Four uploads in a row produced four sidebar rows all reading
+    // "[Linked files] - Screenshot 2026-07-27 at …", every one truncated to the
+    // same thing. A list whose rows cannot be told apart is not a list.
+    const preview = '[Linked files]\n- Screenshot 2026-07-27 at 10.14.22.png (upload): /tmp/a.png';
+    expect(threadRowTitle(item({ parentPreview: preview, lastReplyPreview: 'looks right now' })))
+      .toBe('looks right now');
+    expect(threadRowTitle(item({ parentPreview: '[Image] cat.png', lastReplyPreview: 'ship it' }))).toBe('ship it');
+  });
+
+  it('keeps real text that merely CONTAINS a bracket', () => {
+    // The rule is anchored at the start on a known set of markers, so a message
+    // that happens to mention one is still a title.
+    expect(threadRowTitle(item({ parentPreview: 'see [Linked files] above' }))).toBe('see [Linked files] above');
+  });
+
+  it('falls back to the session only when there is no reply text either', () => {
+    expect(threadRowTitle(item({ parentPreview: '', lastReplyPreview: '', sessionTitle: 'Coder' })))
+      .toBe('Thread in Coder');
+    expect(threadRowTitle(item({ parentPreview: '', lastReplyPreview: '', sessionTitle: '' }))).toBe('Thread');
+  });
+});
+
+describe('threadRowSource', () => {
+  it('separates a thread in a DM from a thread in a channel', () => {
+    // The sidebar row's leading icon comes from this, so it has to be the one
+    // fact that distinguishes two rows whose titles read alike.
+    expect(threadRowSource(item({ sessionFolder: 'Direct messages' }))).toBe('dm');
+    expect(threadRowSource(item({ sessionFolder: 'direct messages ' }))).toBe('dm');
+    expect(threadRowSource(item({ sessionFolder: 'General' }))).toBe('channel');
+    expect(threadRowSource(item({ sessionFolder: '' }))).toBe('channel');
   });
 });
 

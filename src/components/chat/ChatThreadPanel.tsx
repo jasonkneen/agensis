@@ -310,7 +310,7 @@ function ThreadBubble({
 
   return (
     <div
-      className={`chat-thread-message flex min-w-0 gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 ${isParent ? 'opacity-80' : ''}`}
+      className={`chat-thread-message flex min-w-0 gap-2 rounded-md px-2 py-1.5 ${isParent ? 'opacity-80' : ''}`}
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >

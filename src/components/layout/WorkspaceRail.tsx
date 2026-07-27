@@ -415,7 +415,12 @@ function WorkspaceRow({
       <span
         aria-hidden="true"
         className={cn(
-          'flex size-9 shrink-0 items-center justify-center border border-transparent text-[13px] font-semibold tracking-tight text-white transition-all duration-150',
+          // The edge colour is NOT set here — see .workspace-tile-swatch in
+          // src/index.css. It has to run the opposite way to the mode (darker in
+          // light, lighter in dark) and stay visible against an arbitrary
+          // identity fill, which is a relationship to a theme token, not a
+          // literal. The transparent border stays so gaining one costs no shift.
+          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[13px] font-semibold tracking-tight text-white transition-all duration-150',
           tile.active
             ? 'rounded-[7px] shadow-sm'
             : 'rounded-[11px] opacity-60 group-hover:rounded-[7px] group-hover:opacity-100',

@@ -20,6 +20,12 @@ const {
  normalizeFlowWebhookUrl,
  signFlowWebhook,
 } = require('./flow-integration.cjs');
+// Reactions are written through the generic /backend/db/update route as a whole
+// jsonb map, so their flow events come from diffing that map — see the module
+// header. Shared with netlify/functions/backend.mjs; the two lanes differ only
+// in the `encodeJsonb` bind (porsager wants the object, @netlify/database the
+// string).
+const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  PROVIDER_CALL_REDIRECT_NOTE,
@@ -4028,6 +4034,27 @@ function taskStatusOnDispatch(current) {
 // genuinely new (unrelated) messages stay on the main timeline. Callers that omit
 // `autoThread` (sub-thread sessions, MCP, legacy clients) keep flat replies.
 // Returns null when there's nothing to thread under.
+/**
+ * Resolve a requested thread parent to one that can actually be written.
+ *
+ * Returns the id only if that message EXISTS and belongs to this session;
+ * otherwise null, which threads the reply flat. Fails open on a query error for
+ * the same reason: losing the thread nesting is a cosmetic loss, losing the
+ * agent's reply is not.
+ */
+async function verifyThreadParent(threadParentId, sessionId) {
+ if (!threadParentId || !sessionId) return null;
+ try {
+  const rows = await getDb().unsafe(
+   'select id from messages where id = $1 and session_id = $2 limit 1',
+   [String(threadParentId), String(sessionId)],
+  );
+  return rows.length > 0 ? String(threadParentId) : null;
+ } catch {
+  return null;
+ }
+}
+
 function resolveDispatchThreadParent({ threadParentId, autoThread, messageId } = {}) {
  if (threadParentId) return threadParentId;
  if (autoThread && messageId) return String(messageId);
@@ -8468,13 +8495,25 @@ async function handleAgentJobStep(ws, message) {
  // Missing responseMessageId means the reply bubble is unknown; post the step at
  // the top level rather than dropping it.
  const responseMessageId = metadata.responseMessageId || null;
- let threadParentId = responseMessageId;
+ // responseMessageId comes from JOB METADATA, i.e. from the daemon, i.e. from a
+ // client. The lookup below asked whether that row has a PARENT, and answered
+ // "no parent" identically whether the row has none or the row does not exist —
+ // so a stale or optimistic id fell through and was written straight into
+ // thread_parent_id, which is a foreign key. Every tool step in the job then
+ // died on messages_thread_parent_id_fkey.
+ //
+ // Now existence and parentage are one question: no row means no parent id at
+ // all, and the step posts at the top level. A step that cannot be nested is
+ // still worth showing; a step that cannot be WRITTEN is lost.
+ let threadParentId = null;
  if (responseMessageId) {
   const parentRows = await getDb().unsafe(
    'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
    [responseMessageId, job.session_id],
   );
-  if (parentRows[0] && parentRows[0].thread_parent_id) threadParentId = parentRows[0].thread_parent_id;
+  if (parentRows[0]) {
+   threadParentId = parentRows[0].thread_parent_id || responseMessageId;
+  }
  }
  // A tool step is the agent demonstrably doing work, so — unlike a content-free
  // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
@@ -8582,7 +8621,14 @@ async function handleAgentJobSegment(ws, message) {
  // its final answer is broadcast, so falling back to metadata.threadParentId (null
  // for a channel turn) would drop every intermediate block into the channel. The
  // row-derived parent below still wins whenever a placeholder exists.
- let threadParentId = metadata.workThreadParentId || metadata.threadParentId || null;
+ // Same disease as the tool-step path: these ids come from job metadata, i.e.
+ // from the daemon. Verified against a real row in THIS session before any of
+ // them reaches the foreign key; an unknown id posts flat rather than killing
+ // the write.
+ let threadParentId = await verifyThreadParent(
+  metadata.workThreadParentId || metadata.threadParentId || null,
+  job.session_id,
+ );
  if (responseMessageId) {
   const finalizedRows = await getDb().unsafe(
    `update messages
@@ -13023,7 +13069,16 @@ function createApp() {
    // Option A auto-threading: thread the agent's reply under the human's main-box
    // message when the UI asks for it (see resolveDispatchThreadParent). Follow-ups
    // already carry threadParentId; sub-thread/MCP/legacy callers stay flat.
-   const effectiveThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
+   const requestedThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
+   // VERIFY THE PARENT EXISTS before threading under it. messageId arrives from
+   // the client and was previously trusted straight into a foreign key, so an
+   // optimistic id — or one whose own insert failed — made EVERY agent reply in
+   // the job die on messages_thread_parent_id_fkey. The turn is not the place to
+   // discover that: a reply that cannot be threaded should land flat, not vanish.
+   //
+   // Scoped to this session as well as existence, so a caller cannot thread a
+   // reply under a message in a conversation they are not in.
+   const effectiveThreadParentId = await verifyThreadParent(requestedThreadParentId, sessionId);
    // Fire and forget: the conversation advances in the background as each agent
    // message lands and is streamed to clients over realtime. Holding the POST
    // open for the whole multi-turn chain would block the user's UI.
@@ -13935,7 +13990,13 @@ function createApp() {
      autoApprove: Boolean(rows[0].mcp_auto_approve),
      endpoint: mcpEndpoint(baseUrl),
      config: configBlock(baseUrl, token),
-     claudeMcpAdd: claudeMcpAddCommand(baseUrl, token),
+     // PLACEHOLDER, not the live token. This one-liner is displayed in full and
+     // has a copy button, so embedding the real bearer token put it on the
+     // clipboard as plain text — and it has already been pasted into a
+     // transcript that way. The endpoint and the token are separate fields
+     // right beside it (the token masked, copied deliberately), so nothing is
+     // lost by making the convenience string non-secret.
+     claudeMcpAdd: claudeMcpAddCommand(baseUrl),
     },
     error: null,
    });
@@ -14162,6 +14223,23 @@ function createApp() {
     ).catch(() => []);
    }
 
+   // Same shape, same reason as the assignee read above: a reaction event is the
+   // DIFFERENCE between the stored map and the one being written, and the write
+   // replaces the whole column, so the before-image has to be read first. Only
+   // for the writes that actually touch `reactions` — an ordinary message edit
+   // must not pay for a second query. `.catch(() => [])` because a reaction that
+   // saves without an event is a missing signal; a reaction that fails to save
+   // because the event machinery could not read is a lost user action.
+   let priorReactionRows = [];
+   if (table === 'messages' && Object.prototype.hasOwnProperty.call(safeValues, 'reactions')) {
+    const priorWhere = buildWhereClause(filters, []);
+    priorReactionRows = await getDb().unsafe(
+     `select id, session_id, reactions, sender_kind, sender_id, sender_name, thread_parent_id, created_at
+        from ${tableSql}${priorWhere.clause}`,
+     priorWhere.params,
+    ).catch(() => []);
+   }
+
    const where = buildWhereClause(filters, params);
    const result = await getDb().unsafe(
     `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
@@ -14169,6 +14247,25 @@ function createApp() {
    );
 
    notifyDbSubscribers(table, 'UPDATE', result);
+
+   // Fire-and-forget, AFTER the row is written and broadcast: an integration
+   // that cannot be told about a reaction must never cost somebody the
+   // reaction. Fails open, exactly like the enqueue inside notifyDbSubscribers.
+   if (priorReactionRows.length > 0) {
+    void emitReactionFlowEventsForUpdate({
+     db: (sql, sqlParams) => getDb().unsafe(sql, sqlParams),
+     // porsager: bind the OBJECT. A JSON.stringify here becomes a jsonb string
+     // scalar (tests/jsonb-bind-hygiene.test.cjs).
+     encodeJsonb: (payload) => payload,
+     priorRows: priorReactionRows,
+     updatedRows: result,
+     nextReactions: safeValues.reactions,
+     actorUserId: req.userId,
+     onWarn: (message) => console.warn('[flows] reaction events:', message),
+    }).catch((error) => {
+     console.error('[flows] failed to queue reaction event:', error.message || error);
+    });
+   }
 
    // Assigning a task to an agent runs it — the same flow a task-comment @mention
    // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed

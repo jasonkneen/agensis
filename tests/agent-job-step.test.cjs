@@ -55,6 +55,14 @@ function installDb({ job = JOB } = {}) {
         return [job];
       }
       if (n.startsWith('update agent_jobs set updated_at')) return [{ id: params[0] }];
+      // The reply bubble the step threads under. The mock previously answered
+      // NOTHING here, so the code fell through to the unverified id and the
+      // test passed because of the bug it was meant to catch — a responseMessageId
+      // with no row is exactly what killed every step on
+      // messages_thread_parent_id_fkey in production.
+      if (n.startsWith('select thread_parent_id from messages')) {
+        return params[0] === 'msg-placeholder' ? [{ thread_parent_id: null }] : [];
+      }
       if (n.startsWith('insert into messages')) {
         return [{
           id: 'msg-step-1',

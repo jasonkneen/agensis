@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   booleanPreference,
   oneOf,
+  pixelPreference,
   readPreference,
   setOf,
   viewPreferenceKey,
@@ -146,6 +147,36 @@ describe('booleanPreference', () => {
       expect(readPreference(key, booleanPreference, false, fakeStorage({ [key]: raw }))).toBe(false);
       expect(readPreference(key, booleanPreference, true, fakeStorage({ [key]: raw }))).toBe(true);
     }
+  });
+});
+
+describe('pixelPreference', () => {
+  const key = 'agensis.agents.split:ws-1';
+  const px = pixelPreference(4000);
+
+  it('round-trips a dragged size as a whole number of pixels', () => {
+    const storage = fakeStorage();
+    writePreference(key, px, 312, storage);
+    expect(storage.map.get(key)).toBe('312');
+    expect(readPreference(key, px, 0, storage)).toBe(312);
+    // Sub-pixel drag distances are stored rounded, not as '312.4000001'.
+    writePreference(key, px, 312.4, storage);
+    expect(storage.map.get(key)).toBe('312');
+  });
+
+  it('treats anything that is not a measurement as no choice at all', () => {
+    // 0 in particular: it is the "never dragged" fallback, so it must read back
+    // as absent rather than as a pane with zero height.
+    for (const raw of ['0', '-1', '', '   ', 'NaN', 'Infinity', '240px', '{"h":240}', '[240]', 'null']) {
+      expect(readPreference(key, px, 0, fakeStorage({ [key]: raw }))).toBe(0);
+      expect(readPreference(key, px, 200, fakeStorage({ [key]: raw }))).toBe(200);
+    }
+  });
+
+  it('rejects a value past the sanity ceiling, which can only be corruption', () => {
+    expect(readPreference(key, px, 0, fakeStorage({ [key]: '4000' }))).toBe(4000);
+    expect(readPreference(key, px, 0, fakeStorage({ [key]: '4001' }))).toBe(0);
+    expect(readPreference(key, px, 0, fakeStorage({ [key]: '99999999' }))).toBe(0);
   });
 });
 

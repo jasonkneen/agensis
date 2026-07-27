@@ -11,8 +11,11 @@ import {
   drillInto,
   drillOut,
   driftAngle,
+  meshContentExtent,
+  meshViewBox,
   motionConfig,
   previewChildren,
+  providerRingRadius,
   satelliteFan,
   shortestAngleDelta,
   spokeControl,
@@ -48,8 +51,6 @@ const REDUCED =
 // Instrument-label typeface: matches the app's mono usage, falls back cleanly.
 const MONO = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
 
-const VIEW_W = 1000;
-const VIEW_H = 840;
 /** How long a departed node lingers while it fades and retreats. */
 const EXIT_MS = 420;
 const FLOW_PERIOD_SEC = 1.7;
@@ -109,6 +110,40 @@ export function AgentNetworkDiagram({
   );
   const view = useMemo(() => buildMeshView(source, path), [source, path]);
   const { layout } = view;
+
+  // ---- fit the drawing to the pane it was given -----------------------------
+  // The svg's viewBox follows the host's aspect ratio so the graph FILLS the
+  // box instead of being letterboxed inside a fixed 1000x840 frame — in the
+  // split view the pane is wide and short, and the fixed frame left most of it
+  // empty. Measured, not guessed: the pane is a user-resizable floating window
+  // and its own divider moves. One state write per resize, never per frame.
+  const [pane, setPane] = useState({ width: 0, height: 0 });
+  const paneObserverRef = useRef<ResizeObserver | null>(null);
+  const attachPane = useCallback((node: HTMLDivElement | null) => {
+    paneObserverRef.current?.disconnect();
+    paneObserverRef.current = null;
+    if (!node) return;
+    const measure = () => setPane(current => {
+      const width = node.clientWidth;
+      const height = node.clientHeight;
+      return current.width === width && current.height === height ? current : { width, height };
+    });
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    paneObserverRef.current = observer;
+  }, []);
+  useEffect(() => () => paneObserverRef.current?.disconnect(), []);
+
+  const extent = useMemo(
+    () => meshContentExtent(layout, view.providers.length),
+    [layout, view.providers.length],
+  );
+  const box = useMemo(
+    () => meshViewBox(layout, extent, pane.width, pane.height),
+    [layout, extent, pane.width, pane.height],
+  );
 
   // A row can disappear under you (task deleted, session archived). buildMeshView
   // trims the path to the deepest prefix that still resolves; mirror that back
@@ -395,8 +430,8 @@ export function AgentNetworkDiagram({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="size-full" role="img"
+      <div ref={attachPane} className="min-h-0 flex-1 overflow-hidden">
+        <svg viewBox={`${box.x} ${box.y} ${box.width} ${box.height}`} className="size-full" role="img"
           aria-label={`Agent network, ${view.breadcrumb.map(c => c.label).join(' / ')}`}>
           <defs>
             <radialGradient id="hub-glow" cx="50%" cy="50%" r="50%">
@@ -416,7 +451,7 @@ export function AgentNetworkDiagram({
           <circle cx={layout.cx} cy={layout.cy} r={layout.ring} fill="none" stroke="var(--border)"
             strokeOpacity={0.6} strokeWidth={1} />
           {view.providers.length > 0 && (
-            <circle cx={layout.cx} cy={layout.cy} r={Math.min(layout.ring + 128, 352)} fill="none"
+            <circle cx={layout.cx} cy={layout.cy} r={providerRingRadius(layout)} fill="none"
               stroke="var(--border)" strokeOpacity={0.35} strokeWidth={1} strokeDasharray="2 7" />
           )}
 
@@ -500,23 +535,27 @@ export function AgentNetworkDiagram({
         </svg>
       </div>
 
-      {/* Legend: live STATUS + CONNECTION kind (level 1 only, where endpoints show). */}
-      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1.5 border-t border-border px-3 py-2 text-[10px]"
+      {/* Legend: live STATUS + CONNECTION kind (level 1 only, where endpoints
+          show). A KEY, not a section — it gets the height of its text and no
+          more. It stays always-visible because the colours it decodes are the
+          only thing carrying status and link type on the nodes themselves; an
+          unexplained colour code costs more than 22px. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-0.5 border-t border-border px-3 py-1 text-[10px] leading-[14px]"
         style={{ fontFamily: MONO }}>
-        <span className="mr-0.5 tracking-widest text-muted-foreground/60">STATUS</span>
+        <span className="tracking-widest text-muted-foreground/60">STATUS</span>
         {(Object.keys(STATUS_META) as NodeStatus[]).map(s => (
-          <span key={s} className="inline-flex items-center gap-1.5 tracking-wide text-muted-foreground">
-            <span className="size-2 rounded-full" style={{ backgroundColor: STATUS_META[s].color }} />
+          <span key={s} className="inline-flex items-center gap-1 tracking-wide text-muted-foreground">
+            <span className="size-1.5 rounded-full" style={{ backgroundColor: STATUS_META[s].color }} />
             {STATUS_META[s].label.toUpperCase()}
           </span>
         ))}
         {view.providers.length > 0 && (
           <>
-            <span className="mx-1 h-3 w-px bg-border" />
-            <span className="mr-0.5 tracking-widest text-muted-foreground/60">LINK</span>
+            <span className="h-2.5 w-px bg-border" />
+            <span className="tracking-widest text-muted-foreground/60">LINK</span>
             {(Object.keys(KIND_META) as ConnKind[]).map(k => (
-              <span key={k} className="inline-flex items-center gap-1.5 tracking-wide text-muted-foreground">
-                <span className="size-2 rounded-[2px]" style={{ backgroundColor: KIND_META[k].color }} />
+              <span key={k} className="inline-flex items-center gap-1 tracking-wide text-muted-foreground">
+                <span className="size-1.5 rounded-[2px]" style={{ backgroundColor: KIND_META[k].color }} />
                 {KIND_META[k].label.toUpperCase()}
               </span>
             ))}

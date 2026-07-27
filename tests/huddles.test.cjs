@@ -1183,7 +1183,18 @@ test('the temporary @livekit/components-react type shim is deleted once the pack
   // permanently mask the actual API surface — every LiveKit type error would
   // silently disappear. This test is the tripwire.
   const shim = path.join(root, 'src/types/livekit-components-react.d.ts');
-  const installed = fs.existsSync(path.join(root, 'node_modules/@livekit/components-react'));
+  // Ask the resolver, not the filesystem. A git worktree's own node_modules
+  // holds only vite caches — real dependencies resolve upward from the parent
+  // checkout — so a `<root>/node_modules/...` path check reads "not installed"
+  // in every worktree and demands a shim that has correctly been deleted.
+  let installed = true;
+  try {
+    // The entry point, not `/package.json` — the package's `exports` map does
+    // not expose the manifest, so asking for it throws even when installed.
+    require.resolve('@livekit/components-react');
+  } catch {
+    installed = false;
+  }
   if (!installed) {
     assert.ok(fs.existsSync(shim), 'the shim is required while the package is not installed');
     return;

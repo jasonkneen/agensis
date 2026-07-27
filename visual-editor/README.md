@@ -49,6 +49,53 @@ With your own dev server, just make sure the client script is served at
 Tear the editor down at any time with `window.__visualEditor.disable()` or the
 × button in the toolbar.
 
+## React / JSX / TSX
+
+Add the Vite plugin and the editor edits your components in place, not just
+static HTML:
+
+```js
+// vite.config.js
+import react from '@vitejs/plugin-react'
+import { createRequire } from 'module'
+const { visualEditor } = createRequire(import.meta.url)('visual-dev-editor/vite')
+
+export default { plugins: [react(), visualEditor()] }
+```
+
+That does three dev-only things: stamps JSX with source locations, mounts the
+edit routes on Vite's middleware, and injects the client. A production build is
+untouched.
+
+**Why a stamp.** For HTML the DOM and the file are the same tree, so element
+indices address a node exactly. For JSX they are not: `{items.map(...)}` makes
+N DOM nodes from one source node, a file holds several components, and a
+conditional hides which branch ran. A positional path would be a guess, and a
+wrong guess corrupts your file. The plugin adds `data-ve-loc="file:line:col"`
+to each intrinsic element, so the DOM can name the exact source node behind it.
+Line numbers are preserved (the source is spliced, never reprinted) and no
+stamp ever reaches disk — edits are computed against the original file.
+
+**What it refuses, and why that is the point.** The editor will not guess about
+code it cannot safely rewrite. Each refusal names its reason in the Inspector:
+
+| Situation | Behaviour |
+|---|---|
+| `<div className="p-4">` | fully editable |
+| `<Card title="x" />` | props editable — it edits the usage, not the component |
+| `{items.map(i => <li/>)}` | **read-only.** Every row shares one stamp, which is how the editor knows. Editing one would rewrite the template behind all of them |
+| `className={cn(a, b)}` | **refused.** The value is an expression; splicing a string over it would delete code |
+| `style={{...}}` | **refused**, with a pointer to className |
+
+**Placing a component brings its import.** Pick `Badge` from the palette and
+the editor writes `<Badge />` *and* `import { Badge } from "@/components/ui/badge"`
+— joining an existing import from the same module, or adding a line, or doing
+nothing if the name is already in scope. The import path comes from the
+project's own `components.json` aliases, resolved through tsconfig paths.
+
+`@babel/parser` is an **optional** dependency. Without it, HTML editing works
+exactly as before and JSX files simply report that they need it.
+
 ## What you can edit
 
 - **Navigator (left panel)** — searchable element tree. Rows carry a per-type
@@ -85,9 +132,16 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
 - **Breadcrumbs** — a strip along the bottom of the canvas shows the ancestor
   chain of the selection; click to select, hover to highlight.
 - **Toolbar** — Select-mode toggle (also the `V` key), Move up / Move
-  down, Delete, Undo, dock toggle (pushes the page aside via root margins
-  instead of overlapping it — fixed-position page elements may not shift),
-  animated save status, close.
+  down, Delete, Undo, live-layout-preview toggle (see Drag-and-drop), dock
+  toggle (pushes the page aside via root margins instead of overlapping it —
+  fixed-position page elements may not shift), animated save status, close.
+- **Resizable panels** — drag the inner edge of either panel to resize it;
+  double-click that edge to snap it back to its default width. Widths are
+  clamped (190–720px, and always leaving at least 220px of page between the
+  two) and remembered across reloads. The breadcrumb strip, the overlay
+  clipping and the docked page margins all follow automatically, because the
+  widths live in two CSS custom properties (`--leftw` / `--rightw`) that
+  everything else is expressed in terms of.
 - **Selecting** — the editor starts in select mode and stays in it: clicking
   anything on the page selects it, and the page itself is inert (links,
   buttons and inputs don't respond to clicks or focus). Click a tree row or
@@ -96,13 +150,50 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
   selection, Delete/Backspace removes the selected element (no confirm —
   undo covers it). Toggle the mode off (`V`, the Select button, or Esc with
   nothing selected) to browse the page normally again — or just **hold
-  Space** to momentarily invert the mode: hold to test the live page while
-  editing (or to edit while browsing), release and you're back.
-- **Drag-and-drop** — with an element selected, press on it and drag (4px
-  threshold): a semi-transparent ghost of the element follows the pointer and
+  `Alt`/`⌥`** to momentarily invert the mode: hold to test the live page
+  while editing (or to edit while browsing), release and you're back. It's a
+  bare modifier on purpose — it types nothing and scrolls nothing, so the
+  page keeps every key it needs. (The key is the `MODE_KEY` constant at the
+  top of `client.js`.) Leaving select mode also takes every editor overlay
+  back off the page: the selection box, its label and the margin/padding
+  rings all disappear, and stay gone until select mode returns. The
+  selection itself survives — the Navigator, Inspector and breadcrumbs keep
+  showing it, and hovering a tree row still highlights it on the page.
+- **Drag-and-drop** — with an element selected, press on it and drag (12px
+  threshold from the page, 4px from a tree row, where a press can only mean
+  "drag"; a drop is only offered once the pointer leaves the dragged element,
+  so a click with a shaky hand never moves anything): a semi-transparent
+  ghost of the element follows the pointer and
   a live insertion marker shows where it would land (2px line for
   before/after, outline box for dropping into an empty container, red when the
-  target is structurally invalid). Escape cancels. Validity follows a
+  target is structurally invalid). Escape cancels.
+
+  With **live layout preview** on (the toolbar toggle, on by default), the
+  page additionally reflows around the drop as you drag: the dragged element
+  is hidden and a box of its exact size is placed at the target, so the gap
+  where it came from closes, everything downstream shifts, and the target
+  container grows — you see the actual result before committing to it. The
+  stand-in carries `data-ve-editor-el`, so `isOurs()` filters it out of
+  `pageChildren()` and therefore out of every element path and index: the
+  preview is invisible to the source-of-truth walk and cannot affect the op
+  that gets written. Out-of-flow elements (`position: absolute`/`fixed`) skip
+  the preview and use the plain marker, since hiding one frees no space and a
+  stand-in would invent space that never existed. Dropping an element back
+  where it started is detected and writes nothing.
+
+  A live preview feeds back into itself — moving the stand-in reflows the
+  page, which changes what sits under a stationary pointer, which re-targets
+  the stand-in. Four things keep it steady, all tunable at the top of the drag
+  section in `client.js`: the element is lifted out **once** at drag start
+  into its own slot (so the page never lurches), the stand-in is hit-testable
+  and pointing at it means "no change", target re-evaluation is gated on
+  `CANDIDATE_STEP` (5px) of real pointer travel and coalesced to one update
+  per animation frame, and a committed slot is held until the pointer travels
+  `RELOCATE_MIN` (18px) — distance is immune to the feedback loop, because our
+  own reflow never moves the pointer. `SWAP_MARGIN` (6px) adds hysteresis on
+  each target's midline. Measured on the demo page: zero relocations across 30
+  frames of a jittering held pointer, and zero target changes closer together
+  than 12px of travel across a full-page sweep. Validity follows a
   simplified HTML content model (`canContain`): void/embedded elements accept
   nothing, phrasing parents reject block children, `li` only into list
   parents, table parts only into their table contexts, `option`/`optgroup`
