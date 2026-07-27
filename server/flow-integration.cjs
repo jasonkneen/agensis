@@ -3,6 +3,11 @@
 const crypto = require('node:crypto');
 const net = require('node:net');
 
+// Reaction events are named where they are produced (shared/reaction-events.cjs)
+// because both backends emit them and only this one is a server/ file. Listed
+// here so a connection can subscribe to them like any other event.
+const { REACTION_FLOW_EVENTS } = require('../shared/reaction-events.cjs');
+
 const FLOW_EVENTS = Object.freeze([
   'message.created',
   'message.updated',
@@ -14,6 +19,7 @@ const FLOW_EVENTS = Object.freeze([
   'member.updated',
   'agent.created',
   'agent.updated',
+  ...REACTION_FLOW_EVENTS,
 ]);
 
 const CHANNEL_SCOPES = Object.freeze([
