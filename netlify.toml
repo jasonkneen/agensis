@@ -38,6 +38,22 @@
   to = "/index.html"
   status = 200
 
+# Short aliases for the legal pages. The pages themselves are real static files
+# at /legal/privacy.html and /legal/terms.html (that is what the footer links to,
+# and what a build check can assert exists); these two rules only make the bare
+# /privacy and /terms readable, which is what people type and what a lawyer will
+# quote. They MUST stay above the catch-all below, which is matched in order and
+# would otherwise turn them into 404s.
+[[redirects]]
+  from = "/privacy"
+  to = "/legal/privacy.html"
+  status = 200
+
+[[redirects]]
+  from = "/terms"
+  to = "/legal/terms.html"
+  status = 200
+
 # Anything else that isn't a real static file is a genuine 404 — never the
 # 200 app shell. (The old catch-all made every unknown path a soft-404:
 # /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)
