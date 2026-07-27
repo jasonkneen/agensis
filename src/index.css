@@ -942,10 +942,13 @@
     move too, or "reduce the spacing" would silently do nothing in the one
     theme that needed it most. */
  min-height: 2.2rem;
+ /* Unselected rows are plain list text, not cards — the hard border + offset
+    shadow is reserved for the active row below. Keep border-width so nothing
+    shifts by 2px when a row becomes selected. */
  border-width: 2px !important;
- border-color: var(--border) !important;
- background: var(--card) !important;
- box-shadow: 3px 3px 0 var(--neo-shadow-ink) !important;
+ border-color: transparent !important;
+ background: transparent !important;
+ box-shadow: none !important;
  border-radius: 10px !important;
  margin-right: 5px;
  margin-bottom: 6px;
@@ -957,8 +960,13 @@
 }
 
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"] {
- background: var(--secondary) !important;
+ border-color: var(--border) !important;
+ background: var(--card) !important;
  color: var(--text-primary) !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"]:hover {
+ background: var(--secondary) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-search {
@@ -4105,8 +4113,14 @@ select {
  margin-bottom: 6px !important;
 }
 
-:root[data-ui-theme="neo"] .sidebar-action-row,
 :root[data-ui-theme="neo"] .sidebar-search {
+ box-shadow: var(--neo-shadow-sm) !important;
+}
+
+/* Selected nav row only — unselected rows stay flat (see the base
+   .sidebar-action-row rule above), so the card shadow reads as "selected"
+   instead of decorating every row in the list. */
+:root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"] {
  box-shadow: var(--neo-shadow-sm) !important;
 }
 
