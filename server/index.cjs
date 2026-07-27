@@ -10851,6 +10851,44 @@ function publicLinkPreview(row) {
  };
 }
 
+/**
+ * The injection contract for every extracted route module.
+ *
+ * `server/index.cjs` is being reduced by moving self-contained surfaces into
+ * their own `mountXRoutes(app, deps)` modules — the pattern huddles.cjs and
+ * voice.cjs already use. Ranked by call count inside this file, a dozen helpers
+ * carry nearly all of the cross-cutting traffic (getDb 333, jsonError 306,
+ * notifyDbSubscribers 121, enforceWorkspaceRole 77, …) and everything else is
+ * local to its own block. That short list IS the contract, so it lives in one
+ * place instead of being re-typed per mount call.
+ *
+ * INJECT `getDb`, THE FUNCTION — never `db`, the value. `setTestDb()` reassigns
+ * the module-level `db` binding, so a module that captured the value at require
+ * time would hold a stale handle and silently talk to the wrong database. Every
+ * consumer must call `getDb()` per request, which is what these callers do.
+ *
+ * Modules destructure what they need, so passing keys a module ignores is free;
+ * spread extras alongside it (`{ ...coreDeps(), webhookRateLimiter }`) rather
+ * than growing this object with one-module dependencies.
+ */
+function coreDeps() {
+ return {
+  // Database handle + SQL error mapping
+  getDb,
+  // Responses
+  jsonError, forbidden, badRequest,
+  // Auth + RBAC. These stay single-sourced here and in shared/backend-core.cjs;
+  // an extracted module must never reimplement one.
+  requireAuth, requireUserOrFarm, enforceWorkspaceRole, enforceDbOperationAccess,
+  // Realtime fanout
+  notifyDbSubscribers, sendWs,
+  // Rate limiting (the limiter instances themselves stay per-module)
+  rateLimitBlocked, dbRateLimitBlocked, clientIpFromReq,
+  // Common value coercion
+  parseJsonObject, parseJsonArray, slugHandle, textFromValue, isAgentEnabled,
+ };
+}
+
 function createApp() {
  const app = express();
  app.use(cors());
@@ -12025,17 +12063,12 @@ function createApp() {
 
  // Voice huddles (LiveKit). Fly-only, like gateways: it needs the websocket fanout,
  // so the Netlify mirror deliberately has no huddle routes.
- mountHuddleRoutes(app, {
-  getDb, requireAuth, enforceWorkspaceRole, jsonError, notifyDbSubscribers,
-  rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
- });
+ mountHuddleRoutes(app, { ...coreDeps(), webhookRateLimiter });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
  // mirrored on Netlify; the Deepgram audio relay is not a route at all — it
  // rides the realtime websocket, which only exists here. See server/voice.cjs.
- mountVoiceRoutes(app, {
-  requireAuth, enforceWorkspaceRole, jsonError, rateLimitBlocked, voiceTokenRateLimiter,
- });
+ mountVoiceRoutes(app, { ...coreDeps(), voiceTokenRateLimiter });
 
  // Per-workspace usage/storage stats in one round-trip. Read-role only. Bytes
  // come from stored upload sizes (uploaded_files.size) plus agent memory file
