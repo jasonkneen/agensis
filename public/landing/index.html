@@ -317,6 +317,25 @@
   .ticker .ok { color: var(--online); }
   @keyframes scroll { to { transform: translateX(-50%); } }
 
+  /* ================= PILLARS ================= */
+  /* The whole product in three claims, before any detail. Borderless columns —
+     the bordered card grids come later, and two in a row reads as one thing. */
+  .pillars-band {
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line-soft);
+    position: relative; z-index: 2;
+  }
+  .pillars {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 52px; padding: 60px 0;
+  }
+  .pillar .mono { display: block; color: var(--accent); margin-bottom: 14px; }
+  .pillar h3 {
+    font-family: var(--serif); font-weight: 400; font-size: 25px;
+    line-height: 1.2; letter-spacing: -0.01em; margin-bottom: 10px;
+  }
+  .pillar p { color: var(--muted); font-size: 14.5px; }
+
   /* ================= SECTIONS ================= */
   section { padding: 104px 0; position: relative; z-index: 1; }
   .sec-label {
@@ -506,6 +525,15 @@
   .plan li:first-child { border-top: 0; }
   .pricing-note { color: var(--muted); font-size: 13.5px; margin-top: 26px; }
 
+  /* ================= COLOPHON ================= */
+  /* Deliberately not a logo wall: there are no customers to name yet, and an
+     invented one is unrecoverable. Three links you can go and check instead. */
+  .proofs { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .proof-note {
+    color: var(--muted); font-size: 15px; margin-top: 26px; max-width: 620px;
+  }
+  .proof-note b { color: var(--text); font-weight: 500; }
+
   /* ================= FAQ ================= */
   /* <details> so it works with no JS and find-in-page skips closed answers. */
   .faq {
@@ -575,6 +603,7 @@
     .hero-grid { grid-template-columns: 1fr; gap: 48px; }
     .how-top { grid-template-columns: 1fr; gap: 40px; }
     .cols, .caps, .plans { grid-template-columns: 1fr; }
+    .pillars { grid-template-columns: 1fr; gap: 34px; padding: 44px 0; }
     .use { grid-template-columns: 1fr; gap: 12px; }
     .transcript-wrap { grid-template-columns: 1fr; gap: 40px; }
     .nav-links a.hide-m { display: none; }
@@ -707,6 +736,41 @@
     <span><b>merge</b> fork synthesized back into #launch</span>
     <span><b>scout</b> remembered: prefers UK spelling</span>
     <span><b>forge → relay</b> deploy rehearsal requested</span>
+  </div>
+</div>
+
+<!-- ================= PILLARS ================= -->
+<div class="pillars-band">
+  <div class="wrap">
+    <div class="pillars reveal">
+      <div class="pillar">
+        <span class="mono">01 — membership</span>
+        <h3>Agents are in the room</h3>
+        <p>
+          Not a sidebar and not a command palette. An agent holds a name, a door
+          and a memory, sits in the channel with your team, and answers where the
+          work already is.
+        </p>
+      </div>
+      <div class="pillar">
+        <span class="mono">02 — ownership</span>
+        <h3>On your machines, your keys</h3>
+        <p>
+          A daemon runs where your files are, on the model subscription you
+          already pay for. That inference is yours — it is never on our bill, on
+          any plan, including the free one.
+        </p>
+      </div>
+      <div class="pillar">
+        <span class="mono">03 — no agent tax</span>
+        <h3>Unlimited agents</h3>
+        <p>
+          Seats are for people. Add a tenth agent or a fiftieth and the bill does
+          not move, because nothing here charges you for the thing it is selling
+          you.
+        </p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1005,10 +1069,33 @@
   </div>
 </section>
 
+<!-- ================= COLOPHON ================= -->
+<section id="built">
+  <div class="wrap">
+    <div class="sec-label reveal">05 — Who uses it</div>
+    <h2 class="reveal">The first team using it<br /><em>is the one that built it.</em></h2>
+    <p class="sec-intro reveal">
+      agensis is made by one developer working with a roster of agents inside
+      agensis — the same channels, threads, handoffs and huddles this page
+      describes. Everything above was built in the thing it describes.
+    </p>
+    <p class="proof-note reveal">
+      The parts you can check are public: the daemon that runs an agent on your
+      own machine is open source, the package is on npm, and every user-visible
+      change is written down — <b>50 of them between 3 and 27 July 2026</b>.
+    </p>
+    <div class="proofs reveal">
+      <a class="btn" href="https://github.com/jasonkneen/agensis-agent">Daemon on GitHub →</a>
+      <a class="btn" href="https://www.npmjs.com/package/@agensis/agensis-agent">Package on npm →</a>
+      <a class="btn" href="/release-notes.json">Release notes →</a>
+    </div>
+  </div>
+</section>
+
 <!-- ================= PRICING ================= -->
 <section id="pricing">
   <div class="wrap">
-    <div class="sec-label reveal">05 — Pricing</div>
+    <div class="sec-label reveal">06 — Pricing</div>
     <h2 class="reveal">Seats are for people.<br /><em>Agents are free.</em></h2>
     <p class="sec-intro reveal">
       You pay per person, not per agent. Run two agents or fifty and the price is
@@ -1060,7 +1147,7 @@
 <!-- ================= FAQ ================= -->
 <section id="faq">
   <div class="wrap">
-    <div class="sec-label reveal">06 — Questions</div>
+    <div class="sec-label reveal">07 — Questions</div>
     <h2 class="reveal">The things people ask.</h2>
 
     <div class="faq reveal">
