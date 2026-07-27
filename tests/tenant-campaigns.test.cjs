@@ -554,7 +554,9 @@ test('the FLY server binds the segment OBJECT and netlify binds the STRING', () 
  // explicit cast; @netlify/database is the exact opposite and requires the
  // string. tests/jsonb-bind-hygiene.test.cjs enforces the Fly half globally;
  // this pins that the two call sites here actually differ.
- const serverSource = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+ // The Fly LANE, not one file — the tenants routes moved to
+ // server/tenants-routes.cjs in Wave 2 of the index.cjs reduction.
+ const serverSource = require('./helpers/fly-lane.cjs').flyLaneSource();
  const netlifySource = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
  assert.match(serverSource, /segmentBind: input\.segment,/);
  assert.equal(/segmentBind: JSON\.stringify/.test(serverSource), false, 'the Fly server must bind the object');
@@ -868,7 +870,7 @@ test('the campaign tables are NOT reachable through the generic /backend/db gate
 });
 
 test('the schema landed in all THREE places', () => {
- const server = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+ const server = require('./helpers/fly-lane.cjs').flyLaneSource();
  const neon = fs.readFileSync(path.join(root, 'database/neon-schema.sql'), 'utf8');
  const migrations = fs.readdirSync(path.join(root, 'supabase/migrations'))
   .filter((name) => name.includes('tenant_campaigns'))

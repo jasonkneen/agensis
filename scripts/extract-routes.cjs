@@ -104,6 +104,15 @@ function localNames(block) {
   ]) {
     let m;
     while ((m = re.exec(block))) {
+      // A capture holding a quote or a nested `(` is not a parameter list.
+      //
+      // `\(([^)]*)\)\s*=>` happily matches from the OPEN PAREN OF app.get, so
+      //     app.get('/backend/x', requireAuth, async (req, res) => {
+      // captured "'/backend/x', requireAuth, async (req" and marked requireAuth
+      // as a local. Every route module then analysed as not needing requireAuth
+      // — used 9 times in the tenants block and reported nowhere. Silent, and
+      // only caught because the count looked too small to be true.
+      if (/['"(]/.test(m[1])) continue;
       m[1].split(',').forEach((raw) => {
         const name = raw.split(':').pop().replace(/[=.].*$/, '').trim();
         if (/^[A-Za-z_]\w*$/.test(name)) local.add(name);
