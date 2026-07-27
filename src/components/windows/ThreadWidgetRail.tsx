@@ -270,8 +270,12 @@ export function ThreadWidgetRail({
             </div>
           )}
 
+          {/* gap-4, not gap-2: the widgets no longer wear card frames, so the
+              whitespace between two sections is now the only thing separating
+              them from the outside — it has to be bigger than the gap between a
+              heading and its own items. */}
           <div className={cn(
-            'grid min-h-0 max-h-full grid-cols-2 content-start gap-2 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:clamp(116px,26vh,180px)]',
+            'grid min-h-0 max-h-full grid-cols-2 content-start gap-x-3 gap-y-4 overflow-y-auto overflow-x-visible px-3 -mx-3 pb-3 -mb-3 [grid-auto-flow:dense] [grid-auto-rows:clamp(116px,26vh,180px)]',
             shown ? 'pointer-events-auto' : 'pointer-events-none',
           )}>
             {widgets.map((w, index) => (
@@ -346,18 +350,26 @@ function WidgetCard({
   const openCount = items.filter(i => i.status === 'open').length;
 
   return (
+    // NO FRAME. These were bordered, filled, rounded cards with a shadow; the
+    // owner wanted the boxed treatment gone so the widgets read as sections of
+    // the rail rather than three floating panels. What keeps them apart now is
+    // the heading, a hairline under it, and the grid's gap-y-4 — see the CSS
+    // side of this in src/index.css (.thread-widget-card's shadows and the neo
+    // 2px border are both gone; the overlay wash is now opaque, since the cards
+    // no longer carry a background of their own over the message text).
     <div
       className={cn(
-        'thread-widget thread-widget-card group/card pointer-events-auto relative flex flex-col overflow-hidden rounded-lg border border-border bg-card transition-shadow',
+        'thread-widget thread-widget-card group/card pointer-events-auto relative flex flex-col overflow-hidden',
         layout.w === 2 ? 'col-span-2' : 'col-span-1',
         layout.h === 2 ? 'row-span-2' : 'row-span-1',
-        isDragTarget && 'ring-2 ring-primary/60',
+        isDragTarget && 'rounded-md ring-2 ring-primary/60',
       )}
       onDragOver={e => { e.preventDefault(); onDragOver(); }}
     >
-      {/* header — whole row is the drag handle, no divider, no grip clutter */}
+      {/* header — whole row is the drag handle, and the hairline under it is
+          what a card border used to do: say where this widget starts. */}
       <div
-        className="flex shrink-0 cursor-grab items-center gap-1.5 px-3 pt-2.5 pb-1 active:cursor-grabbing"
+        className="flex shrink-0 cursor-grab items-center gap-1.5 border-b border-border/60 px-1 pt-0.5 pb-1.5 active:cursor-grabbing"
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
@@ -392,8 +404,10 @@ function WidgetCard({
         </button>
       </div>
 
-      {/* body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
+      {/* body — px-0 now the frame is gone, so an item's text lines up with the
+          heading above it instead of being inset from a border that isn't
+          there. The rows keep their own px-1 for the hover wash. */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-1 pt-1">
         {loading && items.length === 0 ? (
           <p className="px-1 py-2 text-[11px] text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (

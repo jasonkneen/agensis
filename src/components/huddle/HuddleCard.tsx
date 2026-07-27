@@ -5,7 +5,7 @@ import { useHuddleSession } from './HuddleSessionContext';
 import { useSpeechInput, useSpeechOutput, useVoiceEngines } from '@/hooks/useHuddleVoice';
 import { echoGuardUntil, trailingCaption } from '@/lib/huddleVoice';
 import { isEchoSuppressed, playbackEchoGuardUntil } from '@/lib/voiceStream';
-import { huddleDuration, isRecentlyEnded, participantSummary } from '@/lib/huddleState';
+import { huddleDuration, participantSummary } from '@/lib/huddleState';
 import { huddleTranscriptTarget, shouldOpenHuddlePanel } from '@/lib/huddleTranscript';
 import { useHuddleSend } from '@/hooks/useHuddleTranscript';
 import { useHuddleHeartbeat } from '@/hooks/useHuddle';
@@ -245,14 +245,21 @@ export function HuddleCard({
   if (!workspaceId || !sessionId || !session) return null;
 
   const live = state?.active ? state : null;
-  const recentlyEnded = isRecentlyEnded(state, Date.now()) ? state : null;
 
   // The strip carries what a toolbar button cannot: who is in the call, the
   // agent switcher, the in-call controls and the live caption. With none of
   // those present it was a full-width row showing the word "Huddle" and one
   // button — so idle now renders nothing at all and the trigger lives in the
   // channel toolbar instead.
-  if (!live && !connection && !recentlyEnded && !error) return null;
+  //
+  // AN ENDED HUDDLE IS NOT ONE OF THOSE CASES. The strip used to linger for
+  // five minutes after a call saying "Huddle ended · 21:29:37 · nobody joined",
+  // which is a second obituary: the huddle already leaves a marker row in the
+  // conversation (HuddleMarkerRow / HuddleMarkerGroupRow), and that row is the
+  // record. Nothing is deleted by this — the notice was derived at render time
+  // from `huddles.ended_at`, never stored — the strip simply goes away with the
+  // call, and the marker in the transcript is what remains.
+  if (!live && !connection && !error) return null;
 
   return (
     <div
@@ -269,11 +276,10 @@ export function HuddleCard({
         ) : (
           <Headphones className="size-3.5 text-muted-foreground" aria-hidden />
         )}
-        {live ? 'Huddle' : recentlyEnded ? 'Huddle ended' : 'Huddle'}
+        Huddle
       </span>
 
       {live && <HuddleLiveDetail state={live} localConnected={local.connected} />}
-      {!live && recentlyEnded && <EndedDetail state={recentlyEnded} />}
 
       {/* The conversation is in the panel, not below this strip. Without a way
           back to it, closing the panel mid-call would strand the transcript
@@ -476,18 +482,6 @@ function HuddleLiveDetail({ state, localConnected }: { state: HuddleState; local
           ? (localConnected ? "you're in — waiting for others" : 'waiting for the first person to connect')
           : `${state.participantCount} in the huddle · ${roster}`}
       </span>
-    </span>
-  );
-}
-
-function EndedDetail({ state }: { state: HuddleState }) {
-  // Truthful counts only, all derived from the event log: zero people are in an
-  // ended huddle, and "how many were here" is peak/ever, not a floored 1.
-  const joined = state.everJoinedCount;
-  return (
-    <span className="min-w-0 truncate text-muted-foreground">
-      {huddleDuration(state, Date.now())}
-      {joined > 0 ? ` · ${joined} ${joined === 1 ? 'person' : 'people'} joined` : ' · nobody joined'}
     </span>
   );
 }
