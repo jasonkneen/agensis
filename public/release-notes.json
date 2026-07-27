@@ -1,5 +1,18 @@
 [
   {
+    "version": "whats-new-gallery",
+    "date": "2026-07-27",
+    "title": "What's new, with demos you can watch",
+    "summary": "The updates dialog now opens with a slider of short animated demos — each one shows a feature working, next to a sentence explaining it. Underneath, the newest release is spelled out in bullets, and every earlier release is folded into a single 'Earlier updates' section instead of a long column of collapsed rows.",
+    "highlights": [
+      "A gallery of animated demos at the top, one per feature worth knowing",
+      "The latest release stays open, with its changes as bullet points",
+      "Everything older collapses into one expander, set tighter for scanning",
+      "The demos are drawn from your theme, so they match whichever one you use",
+      "They hold still if you have reduced motion turned on"
+    ]
+  },
+  {
     "version": "show-desktop",
     "date": "2026-07-27",
     "title": "Show desktop — clear the panels away and get them back",
@@ -11,7 +24,7 @@
       "Panels you minimised yourself stay down; the button only restores its own",
       "Open something new while the desktop is clear and the next press puts it away too, rather than dropping it",
       "Each desktop has its own — clearing one leaves the other's panels where they were"
-]
+    ]
   },
   {
     "version": "skills-chips",
@@ -24,7 +37,7 @@
       "Enter adds the best match, backspace on an empty field removes the last chip, Escape closes the list",
       "A brand-new skill name is still accepted exactly as typed",
       "The same skill cannot be added twice, whatever case you type it in"
-]
+    ]
   },
   {
     "version": "one-daemon-per-agent",
@@ -36,7 +49,7 @@
       "Starting a daemon for an agent that is already connected hands over cleanly, rather than leaving an idle duplicate",
       "The replaced daemon says why it stopped, so it is not debugged as a dropped network",
       "Coming back from sleep or a flaky connection still reconnects immediately"
-]
+    ]
   },
   {
     "version": "skill-content",
@@ -50,20 +63,20 @@
       "Skills agensis ships still get a row even when no agent carries them yet",
       "A skill with no text says which kind of nothing it is, so you know whether there is anything to do",
       "Skill text is read-only reference material — never treated as instructions, by an agent or the browser"
-]
+    ]
   },
   {
     "version": "threads-unread",
     "date": "2026-07-26",
     "title": "Threads shows what you still need to read",
-    "summary": "The Threads section in the sidebar now lists the message threads you are part of, with the ones nobody has read yet at the top and a dot beside them. It counts what needs attention rather than how many threads exist, so the number reaches zero when you are caught up. A thread appears once a person has taken a turn in it \u2014 either you started it or you replied \u2014 and agent replies are what make it unread, which is the case you actually need told about. Opening one takes you to the reply and marks it read; threads that are purely machine-to-machine never appear at all.",
+    "summary": "The Threads section in the sidebar now lists the message threads you are part of, with the ones nobody has read yet at the top and a dot beside them. It counts what needs attention rather than how many threads exist, so the number reaches zero when you are caught up. A thread appears once a person has taken a turn in it — either you started it or you replied — and agent replies are what make it unread, which is the case you actually need told about. Opening one takes you to the reply and marks it read; threads that are purely machine-to-machine never appear at all.",
     "highlights": [
       "Unread threads sort to the top, so a reply from this morning is not buried under this afternoon",
-      "The badge counts unread threads, not all of them \u2014 it reaches zero",
+      "The badge counts unread threads, not all of them — it reaches zero",
       "Opening a thread jumps to the reply and marks that thread read, not the whole channel",
       "Voice-call transcripts are excluded; the call already has its own row in the channel",
       "Read state is shared with the inbox, so the two can never disagree about what you have seen"
-]
+    ]
   },
   {
     "version": "builtin-agent-tools",
@@ -84,16 +97,16 @@
     "version": "workspace-vault",
     "date": "2026-07-26",
     "title": "One vault for every key your workspace uses",
-    "summary": "Settings has a Vault tab, and it now shows every credential the workspace holds instead of only the loose ones you typed in yourself. Provider keys and orb signing secrets used to be stored in the same vault but hidden from the list, which meant a key like Box's could not be entered anywhere \u2014 there was nothing on screen to type it into. Each entry now appears grouped under the thing it belongs to: Box's API key under Box, an orb's signing secret under that orb's name. Everything is write-only. You can set a value, replace it, or delete it, and after that agensis will only ever tell you that it is set and when \u2014 no masked preview, no reveal button, because the server no longer reads a stored value back for any screen. Agents take their provider keys from the vault, so setting Box's key here is what makes the Sandbox Agent able to provision; if a key is missing, the agent now names the vault entry to add rather than an environment variable on a machine you may not have.",
+    "summary": "Settings has a Vault tab, and it now shows every credential the workspace holds instead of only the loose ones you typed in yourself. Provider keys and orb signing secrets used to be stored in the same vault but hidden from the list, which meant a key like Box's could not be entered anywhere — there was nothing on screen to type it into. Each entry now appears grouped under the thing it belongs to: Box's API key under Box, an orb's signing secret under that orb's name. Everything is write-only. You can set a value, replace it, or delete it, and after that agensis will only ever tell you that it is set and when — no masked preview, no reveal button, because the server no longer reads a stored value back for any screen. Agents take their provider keys from the vault, so setting Box's key here is what makes the Sandbox Agent able to provision; if a key is missing, the agent now names the vault entry to add rather than an environment variable on a machine you may not have.",
     "highlights": [
       "Settings -> Vault lists every credential the workspace has, grouped by the provider or orb that owns it",
-      "Provider credentials can be entered for the first time \u2014 including the Box key the Sandbox Agent needs",
+      "Provider credentials can be entered for the first time — including the Box key the Sandbox Agent needs",
       "Write-only throughout: set, replace or delete, and nothing is ever shown back, not even masked",
       "Every value is encrypted at rest, and any older entry stored before that is re-encrypted automatically",
-      "Owner and admin only, per workspace \u2014 a member of one workspace can never reach another's keys",
+      "Owner and admin only, per workspace — a member of one workspace can never reach another's keys",
       "An orb's signing secret is visible in the list but still rotated from that orb's own panel",
       "When a key is missing, an agent tells you which vault entry to add and stops instead of failing at the provider"
-]
+    ]
   },
   {
     "version": "huddle-presence-reaper",
@@ -113,10 +126,10 @@
     "version": "provider-credential-proxy",
     "date": "2026-07-26",
     "title": "Agents can use your provider keys without ever holding one",
-    "summary": "The Sandbox Agent could store a provider API key but had no way to actually use it, so it could not provision anything. It can now \u2014 and it still never sees the key. The agent names a provider skill and one of that skill's operations, agensis makes the call with your stored credential attached, and hands back only the response. The destination comes from the skill definition, never from the agent: there is deliberately no way for an agent to name a URL, a host or a header, so a credentialed call can only reach where the skill already points, and nothing that gets into an agent's context can redirect one somewhere else. Every call is written to the workspace activity log with the provider, the operation, the address and the result \u2014 never a request or response body.",
+    "summary": "The Sandbox Agent could store a provider API key but had no way to actually use it, so it could not provision anything. It can now — and it still never sees the key. The agent names a provider skill and one of that skill's operations, agensis makes the call with your stored credential attached, and hands back only the response. The destination comes from the skill definition, never from the agent: there is deliberately no way for an agent to name a URL, a host or a header, so a credentialed call can only reach where the skill already points, and nothing that gets into an agent's context can redirect one somewhere else. Every call is written to the workspace activity log with the provider, the operation, the address and the result — never a request or response body.",
     "highlights": [
       "Ask the Sandbox Agent for a sandbox and it can now really provision one, through your stored Box key",
-      "The agent receives a capability, not a secret \u2014 it cannot read, print or forward a provider key",
+      "The agent receives a capability, not a secret — it cannot read, print or forward a provider key",
       "An agent cannot choose where a credentialed call goes; only the skill definition can",
       "Credentialed calls do not follow redirects, so a key cannot be handed to a redirected host",
       "Every provider call appears in Activity under Agents: who called what, and what came back",
@@ -128,12 +141,12 @@
     "version": "reply-cadence",
     "date": "2026-07-26",
     "title": "Social channels answer at a human pace",
-    "summary": "Post something casual in a channel with four agents and, until now, four replies landed in the same second. In a work channel that reads as being on the ball; in a room for anything-but-work it reads as machinery. Edit a channel and there is now a third reply timing \u2014 \"Someone may answer, in their own time\" \u2014 which paces that room: the first reply arrives a few seconds later rather than instantly, any others follow seconds apart instead of together, and at most two agents answer a message that named nobody. Nobody is silenced by it. Naming someone still reaches them immediately, at any timing, so the agents that stayed quiet are one @mention away. If a channel's intent already describes a non-work room, the editor notices and offers to pace it \u2014 it never does so on its own.",
+    "summary": "Post something casual in a channel with four agents and, until now, four replies landed in the same second. In a work channel that reads as being on the ball; in a room for anything-but-work it reads as machinery. Edit a channel and there is now a third reply timing — \"Someone may answer, in their own time\" — which paces that room: the first reply arrives a few seconds later rather than instantly, any others follow seconds apart instead of together, and at most two agents answer a message that named nobody. Nobody is silenced by it. Naming someone still reaches them immediately, at any timing, so the agents that stayed quiet are one @mention away. If a channel's intent already describes a non-work room, the editor notices and offers to pace it — it never does so on its own.",
     "highlights": [
       "A third reply timing in Edit channel, alongside \"straight away\" and \"nobody has to answer\"",
       "The first reply settles for a few seconds; later ones spread out, widening as they go",
       "A message that named nobody draws a couple of answers rather than one per agent",
-      "Naming someone is never paced and never capped \u2014 being asked directly always gets an answer",
+      "Naming someone is never paced and never capped — being asked directly always gets an answer",
       "The editor suggests it when your channel intent sounds social, and does nothing until you agree",
       "Work channels, direct messages and live huddles are untouched and just as immediate as before"
     ]
@@ -142,11 +155,11 @@
     "version": "sandbox-agent",
     "date": "2026-07-26",
     "title": "A Sandbox Agent you ask for a sandbox, in plain language",
-    "summary": "There is a new agent template whose whole job is provisioning disposable cloud sandboxes. You (or another agent) ask it in chat \u2014 \"spin me up a node sandbox\" \u2014 and it picks a provider, creates one, and replies with the details: which provider, the sandbox id, its status and runtime, exactly how to connect to it, and exactly how to stop it. Providers are its skills rather than something built into agensis: it ships knowing how to drive Box, and a new provider can be added by writing a skill definition for it, with no update to the app. Provider API keys are stored write-only \u2014 once saved, nothing can read one back out, and the agent is told only whether a key is configured, never its value.",
+    "summary": "There is a new agent template whose whole job is provisioning disposable cloud sandboxes. You (or another agent) ask it in chat — \"spin me up a node sandbox\" — and it picks a provider, creates one, and replies with the details: which provider, the sandbox id, its status and runtime, exactly how to connect to it, and exactly how to stop it. Providers are its skills rather than something built into agensis: it ships knowing how to drive Box, and a new provider can be added by writing a skill definition for it, with no update to the app. Provider API keys are stored write-only — once saved, nothing can read one back out, and the agent is told only whether a key is configured, never its value.",
     "highlights": [
-      "New Sandbox Agent template in the agent gallery \u2014 pick it, review the form, create it like any other agent",
+      "New Sandbox Agent template in the agent gallery — pick it, review the form, create it like any other agent",
       "It always tells you how to stop the sandbox, because an unstopped one keeps billing",
-      "It says what it cannot do \u2014 no provider for what you asked, or a missing key \u2014 instead of inventing a connection string",
+      "It says what it cannot do — no provider for what you asked, or a missing key — instead of inventing a connection string",
       "Box supported out of the box; adding another provider means authoring a skill, not waiting for a release",
       "Provider keys are write-only and never reach your browser; the panel shows \"configured\" and nothing more",
       "Anything a provider's API sends back is treated as data, not as instructions to the agent"
@@ -156,26 +169,26 @@
     "version": "link-previews",
     "date": "2026-07-26",
     "title": "Links in messages unfurl into a preview card",
-    "summary": "Paste a link into a channel or a DM and it now shows a card underneath the message with the page's title, description, site name and image, instead of sitting there as a bare URL. The page is fetched once by the server and remembered for a week, so it happens the same way for everybody and your browser never contacts the linked site \u2014 reading a card does not tell that site who you are or that you saw it. Every site is read the same way, through the standard tags pages already publish about themselves; there is nothing special-cased. When a page publishes nothing to show, or cannot be reached, the card says exactly that in one quiet line rather than leaving something half-drawn.",
+    "summary": "Paste a link into a channel or a DM and it now shows a card underneath the message with the page's title, description, site name and image, instead of sitting there as a bare URL. The page is fetched once by the server and remembered for a week, so it happens the same way for everybody and your browser never contacts the linked site — reading a card does not tell that site who you are or that you saw it. Every site is read the same way, through the standard tags pages already publish about themselves; there is nothing special-cased. When a page publishes nothing to show, or cannot be reached, the card says exactly that in one quiet line rather than leaving something half-drawn.",
     "highlights": [
       "Up to two cards per message, with the title, description, site and image",
       "The link is fetched by the server, never by your browser, so no site learns your address from a card",
       "Images come through agensis rather than straight from the other site, for the same reason",
       "\"No preview available\" and \"preview unavailable\" are stated plainly instead of looking broken",
-      "Links inside code blocks are left alone \u2014 those are being shown, not shared"
+      "Links inside code blocks are left alone — those are being shown, not shared"
     ]
   },
   {
     "version": "channel-mention",
     "date": "2026-07-26",
-    "title": "@channel asks everyone \u2014 and a channel can be set so nobody has to answer",
-    "summary": "Typing @channel in a channel asks every agent in it, instead of naming them one by one. They answer in turn rather than all at once, and the composer tells you who will reply and how many replies that means before you send. Separately, each channel now chooses what happens when you post without naming anyone: either an agent may chime in straight away (what channels have always done, and still the default), or nobody has to answer \u2014 the message just sits there until you ask someone, and they can pick it up whenever. Naming someone always reaches them, either way.",
+    "title": "@channel asks everyone — and a channel can be set so nobody has to answer",
+    "summary": "Typing @channel in a channel asks every agent in it, instead of naming them one by one. They answer in turn rather than all at once, and the composer tells you who will reply and how many replies that means before you send. Separately, each channel now chooses what happens when you post without naming anyone: either an agent may chime in straight away (what channels have always done, and still the default), or nobody has to answer — the message just sits there until you ask someone, and they can pick it up whenever. Naming someone always reaches them, either way.",
     "highlights": [
-      "@channel in the composer's @ menu, next to the agent handles \u2014 it asks everyone who is actually in the channel, not everyone who happens to be online",
+      "@channel in the composer's @ menu, next to the agent handles — it asks everyone who is actually in the channel, not everyone who happens to be online",
       "Replies come one after another, so asking six agents is six replies in sequence rather than six at once",
       "Before you send, the composer names who @channel will reach and how many replies to expect",
       "Edit channel now has \"When you post without naming anyone\": someone may answer straight away, or nobody has to",
-      "In the second setting your message is still posted and read \u2014 any agent can be pulled in later with an @mention",
+      "In the second setting your message is still posted and read — any agent can be pulled in later with an @mention",
       "@channel is reserved, so no agent can take the name and answer in place of everyone",
       "Direct messages are unchanged: the agent you are talking to still answers a plain message"
     ]
@@ -184,7 +197,7 @@
     "version": "page-tips",
     "date": "2026-07-26",
     "title": "The Get started panel becomes a tip about whatever you are looking at",
-    "summary": "The checklist in the bottom-left corner used to disappear for good once your setup was done, leaving an empty space. Now it keeps working: when there is no setup left, the same panel shows one short piece of advice about the window you are currently in \u2014 open Agents and it talks about how agents run, open a channel and it talks about channels, open the Inbox and it explains what the Inbox actually collects. Unfinished setup still comes first, so nothing covers a step you have not done yet. Closing a tip with the X retires it for good and shows you the next one.",
+    "summary": "The checklist in the bottom-left corner used to disappear for good once your setup was done, leaving an empty space. Now it keeps working: when there is no setup left, the same panel shows one short piece of advice about the window you are currently in — open Agents and it talks about how agents run, open a channel and it talks about channels, open the Inbox and it explains what the Inbox actually collects. Unfinished setup still comes first, so nothing covers a step you have not done yet. Closing a tip with the X retires it for good and shows you the next one.",
     "highlights": [
       "Advice follows the focused window: the canvas, channels, DMs, documents, Agents, Inbox, Tasks, Activity, Memory, Skills, Users, Schedules and Tenants each have their own",
       "The Get started checklist still wins whenever any of its steps are outstanding",
@@ -197,7 +210,7 @@
     "version": "huddle-voice-latency",
     "date": "2026-07-26",
     "title": "Huddles answer sooner",
-    "summary": "A voice call where the agent takes several seconds to start talking feels broken however good the answer is, so we went looking for where the time actually went. The connection to the voice service is now opened when you join the call instead of when the agent first speaks, which took roughly half a second off the very first thing you hear. Short acknowledgements like \"Checking the deploy now.\" are spoken again \u2014 they were being mistaken for the agent's own status line and silently dropped, so the quickest reply an agent could give was the one reply you never heard. And the moment an agent finishes a sentence, that sentence is sent to be read aloud rather than waiting for the next batch of text.",
+    "summary": "A voice call where the agent takes several seconds to start talking feels broken however good the answer is, so we went looking for where the time actually went. The connection to the voice service is now opened when you join the call instead of when the agent first speaks, which took roughly half a second off the very first thing you hear. Short acknowledgements like \"Checking the deploy now.\" are spoken again — they were being mistaken for the agent's own status line and silently dropped, so the quickest reply an agent could give was the one reply you never heard. And the moment an agent finishes a sentence, that sentence is sent to be read aloud rather than waiting for the next batch of text.",
     "highlights": [
       "The voice connection is opened on join, so the first sentence of a call starts about half a second sooner",
       "Short acknowledgements that begin with a word like \"checking\", \"running\" or \"reading\" are spoken instead of dropped",
@@ -209,12 +222,12 @@
   {
     "version": "channel-intent",
     "date": "2026-07-26",
-    "title": "Edit a channel \u2014 and tell the agents how to behave in it",
-    "summary": "Channels now have a name you can change, a description, an icon you pick from a set, and an intent. The intent is how you want people to behave in that channel, written in your own words, and every agent reply in that channel is given it \u2014 so \"a fun place to share stuff that's not work related, joking is fine, clean language\" actually changes how the agents talk there. Tone becomes a property of the room: the same agent can be playful in one channel and terse in another. It sets their register and subject matter; it does not change what they are allowed to do.",
+    "title": "Edit a channel — and tell the agents how to behave in it",
+    "summary": "Channels now have a name you can change, a description, an icon you pick from a set, and an intent. The intent is how you want people to behave in that channel, written in your own words, and every agent reply in that channel is given it — so \"a fun place to share stuff that's not work related, joking is fine, clean language\" actually changes how the agents talk there. Tone becomes a property of the room: the same agent can be playful in one channel and terse in another. It sets their register and subject matter; it does not change what they are allowed to do.",
     "highlights": [
       "Edit channel, in the channel's ... menu: name, description, icon and intent",
       "Sixteen icons to choose from; the one you pick shows in the channel header and the sidebar",
-      "The intent reaches every kind of agent \u2014 built-in, daemon, MCP and external",
+      "The intent reaches every kind of agent — built-in, daemon, MCP and external",
       "Saves only what you changed, so renaming a channel never rewrites its intent"
     ]
   },
@@ -222,13 +235,13 @@
     "version": "agents-split-view",
     "date": "2026-07-26",
     "title": "The Agents window opens details beside the grid, and can show the map underneath",
-    "summary": "Clicking an agent no longer replaces the whole window with its details \u2014 the roster stays on the left and the details open in a pane beside it, so you can move between agents without losing your place. The view toggle also gains a third option that shows the card grid with the network map right underneath, and the two stay in sync: selecting an agent in either one highlights it in the other.",
+    "summary": "Clicking an agent no longer replaces the whole window with its details — the roster stays on the left and the details open in a pane beside it, so you can move between agents without losing your place. The view toggle also gains a third option that shows the card grid with the network map right underneath, and the two stay in sync: selecting an agent in either one highlights it in the other.",
     "highlights": [
       "Agent details open beside the grid or map instead of replacing them; click the card again or the close button to put them away",
       "A new Both view stacks the card grid above the live network map",
       "One selection everywhere: pick an agent on a card or on a map node, and it is highlighted in both and opened on the right",
       "In a narrow window the details still take the full width, with a back arrow to return to the roster",
-      "Your chosen view \u2014 grid, map, or both \u2014 is remembered per workspace"
+      "Your chosen view — grid, map, or both — is remembered per workspace"
     ]
   },
   {
@@ -237,7 +250,7 @@
     "title": "Webhooks that actually wake your agent, and can prove who sent them",
     "summary": "An agent webhook now behaves like a real event listener. Point GitHub or Stripe at it, paste in the signing secret, and deliveries are verified before anything runs, de-duplicated so a provider retry cannot run your agent twice, and answered immediately instead of holding the connection open for the whole reply. Give the webhook a standing instruction and the event payload is passed alongside it as clearly-marked untrusted data, rather than being handed to your agent as if you had typed it.",
     "highlights": [
-      "Signature verification for GitHub and Stripe, plus a signed generic mode for anything else \u2014 a delivery that does not verify is refused, never run \"just in case\"",
+      "Signature verification for GitHub and Stripe, plus a signed generic mode for anything else — a delivery that does not verify is refused, never run \"just in case\"",
       "Retries are recognised and ignored: the same delivery arriving twice runs your agent once",
       "Webhooks now genuinely wake the agent in its own runtime with its own tools, instead of a one-shot reply with none of them",
       "Choose whether each event opens a new conversation or is appended to one ongoing thread",
@@ -250,11 +263,11 @@
     "version": "tenants-admin",
     "date": "2026-07-26",
     "title": "A Tenants view for whoever runs the deployment",
-    "summary": "If you self-host Agensis, there is now a Tenants window listing every account on your deployment and the workspaces each one owns or belongs to. It is visible only to the deployment owner \u2014 the account whose email is named in the server's AGENSIS_SYSTEM_OWNER_EMAIL setting \u2014 and it is read-only. Most people will never see it, and nothing changes for them.",
+    "summary": "If you self-host Agensis, there is now a Tenants window listing every account on your deployment and the workspaces each one owns or belongs to. It is visible only to the deployment owner — the account whose email is named in the server's AGENSIS_SYSTEM_OWNER_EMAIL setting — and it is read-only. Most people will never see it, and nothing changes for them.",
     "highlights": [
       "Every registered account, oldest first, with its workspace and membership counts",
       "Open an account to see the workspaces it owns and the ones it was invited into",
-      "Owner-only, enforced on the server for every request \u2014 hiding the button is not the protection",
+      "Owner-only, enforced on the server for every request — hiding the button is not the protection",
       "Read-only on purpose: nothing on this screen can change or delete anyone's data",
       "The owner's email address can no longer be claimed by someone else signing up with it first"
     ]
@@ -263,12 +276,12 @@
     "version": "agent-voices",
     "date": "2026-07-26",
     "title": "Every agent gets its own voice",
-    "summary": "In a huddle with four agents, all four used to be read aloud in the same voice \u2014 you could not tell who was talking. Every agent now has a voice of its own, chosen in the Agents window or declared by the agent itself when it connects.",
+    "summary": "In a huddle with four agents, all four used to be read aloud in the same voice — you could not tell who was talking. Every agent now has a voice of its own, chosen in the Agents window or declared by the agent itself when it connects.",
     "highlights": [
       "Search hundreds of voices, set the delivery and speed, and press Preview to actually hear it before you commit",
-      "Agents you never configure still sound different from each other \u2014 each one is given its own voice automatically",
+      "Agents you never configure still sound different from each other — each one is given its own voice automatically",
       "An agent sounds the same for everyone on your team, on any machine and in any browser",
-      "Agents can declare their own avatar, profile, persona and voice when they connect \u2014 a brand new agent can also choose its name",
+      "Agents can declare their own avatar, profile, persona and voice when they connect — a brand new agent can also choose its name",
       "Anything you change yourself is kept: an agent reconnecting will never overwrite a name, avatar or voice you picked"
     ]
   },
@@ -276,34 +289,34 @@
     "version": "huddle-voice-pipeline",
     "date": "2026-07-26",
     "title": "Huddles get a real voice",
-    "summary": "Agents in a huddle used to speak with whatever voice your browser happened to have, and the microphone guessed at when you had finished a sentence \u2014 often cutting you off mid-thought. Both halves are now proper streaming services: agents sound the same on every machine, and replies start playing about a tenth of a second after the first sentence is written.",
+    "summary": "Agents in a huddle used to speak with whatever voice your browser happened to have, and the microphone guessed at when you had finished a sentence — often cutting you off mid-thought. Both halves are now proper streaming services: agents sound the same on every machine, and replies start playing about a tenth of a second after the first sentence is written.",
     "highlights": [
       "Agents speak with a consistent voice wherever you open Agensis, instead of a different one on every computer",
       "Replies are read aloud sentence by sentence as they are written, rather than waiting for the whole paragraph",
       "The microphone now waits for you to actually finish a sentence before sending it, instead of guessing from a pause",
       "What you said appears live in the caption row while you are still saying it",
-      "If a voice service is unavailable the huddle falls back to your browser's own speech and tells you which one is missing \u2014 it never just goes quiet"
+      "If a voice service is unavailable the huddle falls back to your browser's own speech and tells you which one is missing — it never just goes quiet"
     ]
   },
   {
     "version": "workspaces-and-desktops",
     "date": "2026-07-26",
     "title": "Workspaces and desktops, told apart at last",
-    "summary": "A workspace is a project \u2014 its own agents, its own setup. A desktop is one arrangement of windows and wallpaper inside it. Both used to be called \"workspace\", and the full-screen switcher showed you desktops under the heading \"All workspaces\". It now shows your workspaces along the top and the desktops of whichever one you pick below them.",
+    "summary": "A workspace is a project — its own agents, its own setup. A desktop is one arrangement of windows and wallpaper inside it. Both used to be called \"workspace\", and the full-screen switcher showed you desktops under the heading \"All workspaces\". It now shows your workspaces along the top and the desktops of whichever one you pick below them.",
     "highlights": [
       "Pick a workspace at the top; its desktops appear underneath, always under that workspace's name",
-      "Your channels, DMs, documents, tasks and agents belong to the workspace \u2014 they are on every desktop of it now, instead of vanishing when you switched desktop",
-      "\"New workspace\" makes a project; \"New desktop\" makes an arrangement of windows \u2014 no more guessing which",
+      "Your channels, DMs, documents, tasks and agents belong to the workspace — they are on every desktop of it now, instead of vanishing when you switched desktop",
+      "\"New workspace\" makes a project; \"New desktop\" makes an arrangement of windows — no more guessing which",
       "The first desktop in a workspace is called \"Main\"; extra ones are \"Desktop 2\", \"Desktop 3\"",
       "The sidebar's layers button now says \"Switch desktop\", since the left rail is what switches workspaces",
-      "Nothing was renamed for you \u2014 desktops you have already named keep their names"
+      "Nothing was renamed for you — desktops you have already named keep their names"
     ]
   },
   {
     "version": "filters-persist",
     "date": "2026-07-26",
     "title": "Your filters stay put",
-    "summary": "Windows now open the way you left them. Hide done tasks once and they stay hidden \u2014 no more re-hiding them every time you open Tasks.",
+    "summary": "Windows now open the way you left them. Hide done tasks once and they stay hidden — no more re-hiding them every time you open Tasks.",
     "highlights": [
       "Tasks remembers Hide done, All/Mine/Others, and whether you were on List, Board or Timeline",
       "Inbox remembers Unread-only; Activity remembers which tab you were on",
@@ -318,7 +331,7 @@
     "title": "Switch workspaces from the left rail",
     "summary": "There's now a strip of workspace icons down the far left. Click one to switch. Until today there was no ordinary way to move between your workspaces at all.",
     "highlights": [
-      "One tile per workspace \u2014 its icon, or its initials if it hasn't got one",
+      "One tile per workspace — its icon, or its initials if it hasn't got one",
       "Hover a tile to see the full name; the current workspace is marked",
       "The workspace you were last in is the one that opens next time",
       "\"+\" at the bottom creates a new workspace",
@@ -345,7 +358,7 @@
     "highlights": [
       "Your workspace, account and current page are filled in for you",
       "\"Select element\" lets you click the thing that's wrong, like browser devtools",
-      "Recent console output and errors can be attached \u2014 review them first, or switch them off",
+      "Recent console output and errors can be attached — review them first, or switch them off",
       "Tokens, keys and passwords are stripped out before anything is sent",
       "Nothing you send is visible to your workspace"
     ]
@@ -354,12 +367,12 @@
     "version": "invite-link-dismiss",
     "date": "2026-07-26",
     "title": "Tidy up your invite links",
-    "summary": "Finished invite links no longer pile up in the Users window. Clear away the ones that are done, and bring them back whenever you want \u2014 nothing is deleted.",
+    "summary": "Finished invite links no longer pile up in the Users window. Clear away the ones that are done, and bring them back whenever you want — nothing is deleted.",
     "highlights": [
       "Dismiss a revoked, accepted or expired link to get it out of the list",
       "\"Clear spent\" tidies them all away in one go",
       "\"Show dismissed\" brings them back, and each one has a Restore button",
-      "A link that still works can't be hidden \u2014 revoke it first",
+      "A link that still works can't be hidden — revoke it first",
       "Expired links now say so instead of sitting there marked pending"
     ]
   },
@@ -367,24 +380,24 @@
     "version": "huddle-voice",
     "date": "2026-07-25",
     "title": "Talk to your agents",
-    "summary": "Start a huddle in a DM or channel and just speak \u2014 your words become a message, the agent answers, and the reply is read back to you.",
+    "summary": "Start a huddle in a DM or channel and just speak — your words become a message, the agent answers, and the reply is read back to you.",
     "highlights": [
-      "Speak instead of typing \u2014 your words appear live, then send",
+      "Speak instead of typing — your words appear live, then send",
       "The agent replies out loud, starting as soon as it has its first sentence",
       "Mute your mic or silence the reply mid-sentence",
-      "Uses your browser\u2019s built-in voices \u2014 nothing to install, no account"
+      "Uses your browser’s built-in voices — nothing to install, no account"
     ]
   },
   {
     "version": "huddles",
     "date": "2026-07-25",
-    "title": "Huddles \u2014 talk in a channel",
+    "title": "Huddles — talk in a channel",
     "summary": "Start a voice huddle from any channel and anyone in the workspace can join, with a live card showing who is in.",
     "highlights": [
       "Start a huddle from a channel and it opens a room instantly",
       "The card shows who has joined, live",
       "Mute and leave from the in-call bar",
-      "Voice runs on LiveKit \u2014 nothing to install"
+      "Voice runs on LiveKit — nothing to install"
     ]
   },
   {
@@ -393,19 +406,19 @@
     "title": "Agents work in a thread and send you the answer",
     "summary": "An agent no longer does its thinking in the middle of your channel. It works in a thread on your message, and only its finished answer is sent to the channel.",
     "highlights": [
-      "Your channel stays readable \u2014 your message, then the answer, nothing in between",
+      "Your channel stays readable — your message, then the answer, nothing in between",
       "While an agent works you see a reply count on your message; open the thread to watch it",
-      "An answer sent to the channel is tagged \u201cfrom a thread\u201d and links back to the working conversation",
-      "You get the same switch: tick \u201cSend to channel\u201d in a thread reply to share it with everyone"
+      "An answer sent to the channel is tagged “from a thread” and links back to the working conversation",
+      "You get the same switch: tick “Send to channel” in a thread reply to share it with everyone"
     ]
   },
   {
     "version": "inbox",
     "date": "2026-07-25",
-    "title": "Inbox \u2014 one place for things that need you",
+    "title": "Inbox — one place for things that need you",
     "summary": "A triage view that collects everything waiting on a human: agents that are blocked, comments, mentions, failed agent runs and workspace activity.",
     "highlights": [
-      "Blockers first \u2014 when an agent hits a decision it cannot make, it lands here",
+      "Blockers first — when an agent hits a decision it cannot make, it lands here",
       "Comments on documents, tasks and agent memory in one list",
       "Mentions of you, and agent runs that failed",
       "Filter by category, and read state follows you across devices"
@@ -415,22 +428,22 @@
     "version": "live-agent-steps",
     "date": "2026-07-25",
     "title": "See what an agent is actually doing",
-    "summary": "Agents now post a message for each step they take instead of one silent placeholder, so you can follow the work as it happens \u2014 and jump in mid-task.",
+    "summary": "Agents now post a message for each step they take instead of one silent placeholder, so you can follow the work as it happens — and jump in mid-task.",
     "highlights": [
       "Each file read, search or command an agent runs appears as its own message",
       "Steps thread under the agent's reply, so a long task stays readable",
-      "You can see progress instead of a \u201cThinking\u2026\u201d spinner with nothing behind it",
-      "The 3D agent map has been removed \u2014 the 2D network view is now the only one"
+      "You can see progress instead of a “Thinking…” spinner with nothing behind it",
+      "The 3D agent map has been removed — the 2D network view is now the only one"
     ]
   },
   {
     "version": "2026.07.25",
     "date": "2026-07-25",
     "title": "Stability: the app, your agents, and stuck chats",
-    "summary": "A round of fixes to things that were quietly broken \u2014 a blank app page, a dead Disconnect button, chats that hung on \u201cThinking\u2026\u201d forever, and workspaces that failed to open.",
+    "summary": "A round of fixes to things that were quietly broken — a blank app page, a dead Disconnect button, chats that hung on “Thinking…” forever, and workspaces that failed to open.",
     "highlights": [
       "Opening agensis.io/app/ no longer shows a blank page",
-      "Chats no longer hang on \u201cThinking\u2026\u201d \u2014 a stalled agent now times out and tells you",
+      "Chats no longer hang on “Thinking…” — a stalled agent now times out and tells you",
       "Fixed workspaces failing to load with a server error",
       "The agent Disconnect button works again",
       "Canvases you create are now visible to your teammates, not just you",
@@ -442,10 +455,10 @@
     "version": "agents-card-redesign",
     "date": "2026-07-25",
     "title": "Redesigned agent cards",
-    "summary": "The agents grid has cleaner cards with a centred avatar, presence dot and model, plus an inline \u201cNew agent\u201d tile.",
+    "summary": "The agents grid has cleaner cards with a centred avatar, presence dot and model, plus an inline “New agent” tile.",
     "highlights": [
       "Centred avatar with a presence dot on the corner",
-      "\u201c+ New agent\u201d now sits inline at the end of the grid",
+      "“+ New agent” now sits inline at the end of the grid",
       "Full detail (description, mode, connections, webhooks) is one click away in the detail panel"
     ]
   },
@@ -464,11 +477,11 @@
     "version": "network-3d",
     "date": "2026-07-19",
     "title": "3D agent network view",
-    "summary": "The agents window now has a 2D / 3D toggle \u2014 see your agents and their providers as a rotating 3D map.",
+    "summary": "The agents window now has a 2D / 3D toggle — see your agents and their providers as a rotating 3D map.",
     "highlights": [
       "Switch between the flat diagram and an interactive 3D scene",
       "Drag to orbit; it auto-rotates and respects reduced-motion",
-      "Both views share the same hub \u2192 agents \u2192 providers layout"
+      "Both views share the same hub → agents → providers layout"
     ]
   },
   {
@@ -485,12 +498,12 @@
   {
     "version": "2026.07.04",
     "date": "2026-07-04",
-    "title": "\u201cWhat\u2019s new\u201d update notifications",
-    "summary": "agensis now tells you when a new version is ready, shows you what changed in plain English, and reloads cleanly \u2014 no more stale tabs.",
+    "title": "“What’s new” update notifications",
+    "summary": "agensis now tells you when a new version is ready, shows you what changed in plain English, and reloads cleanly — no more stale tabs.",
     "highlights": [
       "A friendly pop-up appears the moment a new version publishes",
-      "Click \u201cWhat\u2019s new\u201d to see a short, jargon-free summary of the changes",
-      "\u201cReload now\u201d fully refreshes the app so you\u2019re never stuck on an old copy",
+      "Click “What’s new” to see a short, jargon-free summary of the changes",
+      "“Reload now” fully refreshes the app so you’re never stuck on an old copy",
       "Reopening the installed app checks for updates automatically"
     ]
   },
@@ -507,11 +520,11 @@
   {
     "version": "slash-commands",
     "date": "2026-07-03",
-    "title": "Type \u201c/\u201d for commands and skills",
-    "summary": "A quick command menu opens when you type \u201c/\u201d in the message box \u2014 run built-in actions or hand a skill to an agent.",
+    "title": "Type “/” for commands and skills",
+    "summary": "A quick command menu opens when you type “/” in the message box — run built-in actions or hand a skill to an agent.",
     "highlights": [
       "Built-in actions like clearing or splitting a chat run instantly",
-      "Your workspace\u2019s skills and commands show up with fuzzy search",
+      "Your workspace’s skills and commands show up with fuzzy search",
       "Related commands are grouped under the skill they belong to"
     ]
   }
