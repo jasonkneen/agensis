@@ -22,6 +22,9 @@
   var API = '/__visual-editor/edit';
   var MAX_DEPTH = 25;
   var MAX_CHILDREN = 30;
+  // Held to momentarily invert select mode (see onModeKeyDown).
+  var MODE_KEY = 'Alt';           // Option on macOS
+  var MODE_KEY_LABEL = 'Alt/⌥';
 
   // -------------------------------------------------------------------------
   // Small DOM helper
@@ -68,6 +71,7 @@
     undo: 'M3.5 6.5h6a3.5 3.5 0 1 1 0 7H6M3.5 6.5l3-3M3.5 6.5l3 3',
     x: 'M4 4l8 8M12 4l-8 8',
     dock: 'M2.5 3.5h11v9h-11zM10.5 3.5v9',
+    live: 'M2.5 2.5h11v3h-11zM2.5 10.5h11v3h-11zM5.8 8h4.4M8 5.8v4.4',
     jStart: 'M3 3v10M5.5 5h2.5v6H5.5zM9.5 5H12v6H9.5z',
     jCenter: 'M5 5h2.5v6H5zM8.8 5h2.5v6H8.8z',
     jBetween: 'M2.5 3v10M13.5 3v10M4.5 5H7v6H4.5zM9.3 5h2.5v6H9.3z',
@@ -83,6 +87,21 @@
     row: 'M2 8h10M9 5l3 3-3 3',
     col: 'M8 2v10M5 9l3 3 3-3',
   };
+
+  /** Give a non-<button> control real button semantics: reachable by Tab and
+   * activated by Enter/Space, not mouse-only. */
+  function pressable(el, onActivate) {
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.addEventListener('click', onActivate);
+    el.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      onActivate(ev);
+    });
+    return el;
+  }
 
   function svgIcon(name, cls) {
     var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -124,7 +143,11 @@
   function isOurs(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el === host || host.contains(el)) return true;
-    if (el.hasAttribute('data-ve-editor-el')) return true; // drag ghost
+    // The drag ghost AND its cloned contents — closest(), not hasAttribute(),
+    // or the clone's descendants count as page elements and inflate the
+    // Navigator's element tally for the duration of every drag.
+    if (el.closest && el.closest('[data-ve-editor-el]')) return true;
+    if (!el.closest && el.hasAttribute('data-ve-editor-el')) return true;
     // The serve-time injected client script exists in the DOM but not in the
     // source file — never count it in element paths.
     if (el.tagName === 'SCRIPT' && /\/__visual-editor\/client\.js$/.test(el.src || '')) return true;
@@ -192,7 +215,34 @@
   host.setAttribute('data-ve-ignore', '');
   var shadow = host.attachShadow({ mode: 'open' });
 
-  var LEFT_W = 264, RIGHT_W = 320, BAR_H = 46, CRUMB_H = 28;
+  var DEFAULT_LEFT_W = 264, DEFAULT_RIGHT_W = 320, BAR_H = 46, CRUMB_H = 28;
+  // Panel resize limits. CANVAS_MIN keeps a usable strip of page between them
+  // no matter how wide the user drags either side.
+  var PANEL_MIN = 190, PANEL_MAX = 720, CANVAS_MIN = 220;
+
+  // -------------------------------------------------------------------------
+  // Persisted preferences (panel widths + live layout preview)
+  // -------------------------------------------------------------------------
+  var PREFS_KEY = 'visual-dev-editor:prefs';
+  var prefs = { leftW: DEFAULT_LEFT_W, rightW: DEFAULT_RIGHT_W, livePreview: true };
+  try {
+    var savedPrefs = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+    if (typeof savedPrefs.leftW === 'number') prefs.leftW = savedPrefs.leftW;
+    if (typeof savedPrefs.rightW === 'number') prefs.rightW = savedPrefs.rightW;
+    if (typeof savedPrefs.livePreview === 'boolean') prefs.livePreview = savedPrefs.livePreview;
+  } catch (e) { /* private mode / blocked storage — defaults are fine */ }
+  function savePrefs() {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* ignore */ }
+  }
+
+  function clampLeftW(w) {
+    var room = window.innerWidth - prefs.rightW - CANVAS_MIN;
+    return Math.round(Math.max(PANEL_MIN, Math.min(w, Math.min(PANEL_MAX, Math.max(PANEL_MIN, room)))));
+  }
+  function clampRightW(w) {
+    var room = window.innerWidth - prefs.leftW - CANVAS_MIN;
+    return Math.round(Math.max(PANEL_MIN, Math.min(w, Math.min(PANEL_MAX, Math.max(PANEL_MIN, room)))));
+  }
 
   shadow.appendChild(h('style', {
     text: [
@@ -204,6 +254,7 @@
       '  --tx: #e8e6e1; --tx2: #8b909c; --tx3: #565d6b;',
       '  --blue: #4f9cf9; --mint: #55e6a5; --amber: #f2b94b; --red: #ff6b6b; --purple: #b48ef7;',
       '  --ring: 0 0 0 2px rgba(79,156,249,.28);',
+      '  --leftw: ' + DEFAULT_LEFT_W + 'px; --rightw: ' + DEFAULT_RIGHT_W + 'px;',
       '}',
       '.ve { position: fixed; z-index: 2147483000; background: var(--bg); color: var(--tx);',
       '  -webkit-backdrop-filter: blur(14px) saturate(1.15); backdrop-filter: blur(14px) saturate(1.15);',
@@ -214,11 +265,13 @@
       '.ve ::-webkit-scrollbar-thumb { background: #232a36; border-radius: 4px; }',
       '.ve ::-webkit-scrollbar-thumb:hover { background: #2e3745; }',
       '.ic { width: 12px; height: 12px; flex: none; display: block; }',
+      '[role=button]:focus-visible, button:focus-visible, .tab:focus-visible {',
+      '  outline: 2px solid var(--blue); outline-offset: 1px; border-radius: 4px; }',
       '',
       '/* ---- panel chrome ---- */',
-      '#left { left: 0; top: 0; bottom: ' + BAR_H + 'px; width: ' + LEFT_W + 'px;',
+      '#left { left: 0; top: 0; bottom: ' + BAR_H + 'px; width: var(--leftw);',
       '  border-right-width: 1px; display: flex; flex-direction: column; }',
-      '#right { right: 0; top: 0; bottom: ' + BAR_H + 'px; width: ' + RIGHT_W + 'px;',
+      '#right { right: 0; top: 0; bottom: ' + BAR_H + 'px; width: var(--rightw);',
       '  border-left-width: 1px; display: flex; flex-direction: column; }',
       '.phead { flex: none; display: flex; align-items: center; gap: 6px; height: 34px;',
       '  padding: 0 10px; border-bottom: 1px solid var(--line); }',
@@ -226,6 +279,13 @@
       '#treecount { font-size: 9px; color: var(--tx3); background: var(--bg3); border-radius: 7px;',
       '  padding: 1px 6px; line-height: 13px; }',
       '.pgrow { flex: 1; }',
+      '/* panel resize grips */',
+      '.pgrip { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 3; }',
+      '.pgrip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;',
+      '  background: transparent; transition: background .12s; }',
+      '.pgrip:hover::after, .pgrip.on::after { background: var(--blue); box-shadow: 0 0 6px rgba(79,156,249,.7); }',
+      '#left .pgrip { right: -3px; }',
+      '#right .pgrip { left: -3px; }',
       '.ibtn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;',
       '  background: transparent; color: var(--tx2); border: 1px solid transparent; border-radius: 5px; cursor: pointer; }',
       '.ibtn:hover { background: var(--bg3); color: var(--tx); border-color: var(--line2); }',
@@ -396,7 +456,7 @@
       '  padding: 1px 5px; font: 10px ui-monospace, monospace; color: var(--tx2); }',
       '',
       '/* ---- breadcrumbs ---- */',
-      '#crumbs { left: ' + LEFT_W + 'px; right: ' + RIGHT_W + 'px; bottom: ' + BAR_H + 'px; height: ' + CRUMB_H + 'px;',
+      '#crumbs { left: var(--leftw); right: var(--rightw); bottom: ' + BAR_H + 'px; height: ' + CRUMB_H + 'px;',
       '  display: none; align-items: center; gap: 2px; padding: 0 10px; overflow-x: auto; overflow-y: hidden;',
       '  border-top-width: 1px; scrollbar-width: none; }',
       '#crumbs::-webkit-scrollbar { display: none; }',
@@ -461,6 +521,8 @@
   var expandAllBtn = h('button', { class: 'ibtn', title: 'Expand all' }, [svgIcon('unfold')]);
   var collapseAllBtn = h('button', { class: 'ibtn', title: 'Collapse all' }, [svgIcon('fold')]);
   var treeCount = h('span', { id: 'treecount' });
+  var leftGrip = h('div', { class: 'pgrip', title: 'Drag to resize — double-click to reset' });
+  var rightGrip = h('div', { class: 'pgrip', title: 'Drag to resize — double-click to reset' });
   var leftPanel = h('div', { class: 've', id: 'left' }, [
     h('div', { class: 'phead' }, [
       h('span', { class: 'ptitle', text: 'NAVIGATOR' }),
@@ -470,6 +532,7 @@
     ]),
     searchWrap,
     treeBox,
+    leftGrip,
   ]);
 
   // Right — Inspector
@@ -480,6 +543,7 @@
   var tabsRow = h('div', { id: 'tabs' }, [designTabBtn, elementTabBtn]);
   var propsBox = h('div', { class: 'pbody', id: 'props' });
   var rightPanel = h('div', { class: 've', id: 'right' }, [
+    rightGrip,
     h('div', { class: 'phead' }, [elTag, h('span', { class: 'pgrow' }), fileChip]),
     tabsRow,
     propsBox,
@@ -489,17 +553,21 @@
   var crumbsBar = h('div', { class: 've', id: 'crumbs' });
   var statusTx = h('span', { id: 'statustx', text: 'idle' });
   var statusEl = h('span', { id: 'status' }, [h('span', { class: 'dotp' }), statusTx]);
-  var selectBtn = h('button', { title: 'Pick an element on the page (V)' }, [svgIcon('crosshair'), 'Select']);
+  var selectBtn = h('button', { title: 'Toggle select mode (V) — off lets the page respond to clicks. Hold ' + MODE_KEY_LABEL + ' to momentarily invert.' }, [svgIcon('crosshair'), 'Select']);
   var upBtn = h('button', { title: 'Move before previous sibling' }, [svgIcon('arrowUp')]);
   var downBtn = h('button', { title: 'Move after next sibling' }, [svgIcon('arrowDown')]);
   var delBtn = h('button', { title: 'Delete element (⌫)' }, [svgIcon('trash')]);
   var undoBtn = h('button', { title: 'Undo (⌘Z)' }, [svgIcon('undo'), 'Undo']);
+  var liveBtn = h('button', {
+    title: 'Live layout preview: while dragging, reflow the page around where the element would land',
+  }, [svgIcon('live')]);
   var dockBtn = h('button', { title: 'Dock: push the page aside instead of overlapping it' }, [svgIcon('dock')]);
   var closeBtn = h('button', { title: 'Close editor' }, [svgIcon('x')]);
   var bar = h('div', { class: 've', id: 'bar' }, [
     h('div', { class: 'group' }, [selectBtn]),
     h('div', { class: 'group' }, [upBtn, downBtn, delBtn]),
     h('div', { class: 'group' }, [undoBtn]),
+    liveBtn,
     dockBtn,
     statusEl,
     closeBtn,
@@ -525,7 +593,8 @@
   // -------------------------------------------------------------------------
   var state = {
     selected: null,       // currently selected page element
-    selectMode: false,
+    selectMode: false,    // persistent toggle (toolbar button / V)
+    modeKeyHeld: false,   // MODE_KEY held → momentarily inverts selectMode
     open: new WeakMap(),  // element → explicit expanded/collapsed (default: depth < 2)
     childLimit: new WeakMap(), // element → raised child render cap
     filter: '',
@@ -568,33 +637,41 @@
     rebuildTree(); rebuildProps(); rebuildCrumbs(); refreshOverlays();
   }
 
+  // Edits are serialized. Two in-flight requests can complete out of order,
+  // which would push onto this stack in a different order than the server
+  // pushed onto its per-file stack — and a later undo would then revert one
+  // edit in the DOM while the server restored a different one.
+  var editChain = Promise.resolve();
+
   function sendEdit(op, dom) {
     setStatus('saving…', 'saving');
     state.dirty = true;
-    fetch(API, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(op),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (res) {
-        state.dirty = false;
-        if (res && res.ok) {
-          if (dom) {
-            undoStack.push({ file: op.file, undo: dom.undo, redo: dom.redo });
-            if (undoStack.length > 50) undoStack.shift();
-          }
-          setStatus('saved', 'ok');
-        } else {
-          if (dom) { dom.undo(); refreshAll(); }
-          setStatus('error: ' + ((res && res.error) || 'unknown'), 'err');
-        }
+    editChain = editChain.then(function () {
+      return fetch(API, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(op),
       })
-      .catch(function (err) {
-        state.dirty = false;
-        if (dom) { dom.undo(); refreshAll(); }
-        setStatus('error: ' + err.message, 'err');
-      });
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          state.dirty = false;
+          if (res && res.ok) {
+            if (dom) {
+              undoStack.push({ file: op.file, undo: dom.undo, redo: dom.redo });
+              if (undoStack.length > 50) undoStack.shift();
+            }
+            setStatus('saved', 'ok');
+          } else {
+            if (dom) { dom.undo(); refreshAll(); }
+            setStatus('error: ' + ((res && res.error) || 'unknown'), 'err');
+          }
+        })
+        .catch(function (err) {
+          state.dirty = false;
+          if (dom) { dom.undo(); refreshAll(); }
+          setStatus('error: ' + err.message, 'err');
+        });
+    });
   }
 
   function doUndo() {
@@ -603,28 +680,32 @@
     top.undo();
     refreshAll();
     setStatus('saving…', 'saving');
-    fetch('/__visual-editor/undo', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ file: top.file }),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (res) {
-        if (res && res.ok) {
-          setStatus('undone', 'ok');
-        } else {
-          // Server has no matching entry — re-apply the DOM so it stays
-          // consistent with the untouched file.
+    // Same queue as sendEdit: an undo must not overtake an edit that is still
+    // in flight, or it would pop a server stack entry that isn't there yet.
+    editChain = editChain.then(function () {
+      return fetch('/__visual-editor/undo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ file: top.file }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res && res.ok) {
+            setStatus('undone', 'ok');
+          } else {
+            // Server has no matching entry — re-apply the DOM so it stays
+            // consistent with the untouched file.
+            top.redo();
+            refreshAll();
+            setStatus('error: ' + ((res && res.error) || 'undo failed'), 'err');
+          }
+        })
+        .catch(function (err) {
           top.redo();
           refreshAll();
-          setStatus('error: ' + ((res && res.error) || 'undo failed'), 'err');
-        }
-      })
-      .catch(function (err) {
-        top.redo();
-        refreshAll();
-        setStatus('error: ' + err.message, 'err');
-      });
+          setStatus('error: ' + err.message, 'err');
+        });
+    });
   }
 
   /** attrInverse captures the pre-edit state of one attribute. */
@@ -776,28 +857,89 @@
 
   function placeBox(ov, left, top, width, height) {
     ov.style.display = 'block';
+    ov.style.clipPath = '';
     ov.style.left = left + 'px';
     ov.style.top = top + 'px';
     ov.style.width = Math.max(0, width) + 'px';
     ov.style.height = Math.max(0, height) + 'px';
   }
 
+  /** Height of the editor chrome along the bottom edge. The breadcrumb strip
+   * only exists while something is selected (#crumbs is display:none without
+   * .show), so reserving its height unconditionally would clip 28px of live
+   * canvas for nothing. */
+  function bottomChromeH() {
+    return BAR_H + (state.selected ? CRUMB_H : 0);
+  }
+
+  /** The visible canvas strip between the panels. When docked the page is
+   * pushed aside so overlays never overlap the panels — no clip needed. */
+  function canvasBounds() {
+    if (state.docked) return null;
+    return {
+      left: prefs.leftW,
+      top: 0,
+      right: window.innerWidth - prefs.rightW,
+      bottom: window.innerHeight - bottomChromeH(),
+    };
+  }
+
+  /** placeBox clipped to the canvas strip — overlays must never paint across
+   * the side panels / bottom bars. The box keeps its TRUE geometry and is
+   * clipped visually: these overlays draw their margin/padding rings as CSS
+   * borders, so shrinking the box would slide those bands inward and report
+   * margins at the panel edge instead of at the element's edge. Returns false
+   * (and hides the overlay) when nothing of the box is visible. */
+  function placeBoxClipped(ov, left, top, width, height) {
+    var b = canvasBounds();
+    if (!b) { placeBox(ov, left, top, width, height); return true; }
+    var w = Math.max(0, width), hgt = Math.max(0, height);
+    var x1 = Math.max(left, b.left), y1 = Math.max(top, b.top);
+    var x2 = Math.min(left + w, b.right), y2 = Math.min(top + hgt, b.bottom);
+    if (x2 <= x1 || y2 <= y1) { ov.style.display = 'none'; return false; }
+    placeBox(ov, left, top, w, hgt);
+    ov.style.clipPath = 'inset(' +
+      (y1 - top) + 'px ' + (left + w - x2) + 'px ' + (top + hgt - y2) + 'px ' + (x1 - left) + 'px)';
+    return true;
+  }
+
   function placeLabel(labelOv, rect, text) {
     labelOv.style.display = 'block';
     labelOv.textContent = text;
     // Keep the label inside the canvas strip between the two panels.
-    var minX = LEFT_W + 6, maxX = window.innerWidth - RIGHT_W - 140;
+    var minX = prefs.leftW + 6, maxX = window.innerWidth - prefs.rightW - 140;
     labelOv.style.left = Math.min(Math.max(rect.left, minX), Math.max(minX, maxX)) + 'px';
     var top = rect.top - 22;
-    labelOv.style.top = (top < 2 ? rect.bottom + 4 : top) + 'px';
+    if (top < 2) top = rect.bottom + 4;
+    // …and above the breadcrumb/tool bars.
+    var maxY = window.innerHeight - bottomChromeH() - 20;
+    if (top > maxY) top = Math.max(2, maxY);
+    labelOv.style.top = top + 'px';
   }
 
   function hideSelOverlays() {
     [ovSel, ovLabel, ovMargin, ovPadding].forEach(function (o) { o.style.display = 'none'; });
   }
 
+  /** Take everything the editor paints on top of the page back off it. Drag
+   * markers survive an in-flight drag — that drag is still happening. */
+  function clearCanvasOverlays() {
+    hideSelOverlays();
+    hoverClear();
+    if (!drag) {
+      ovLine.style.display = 'none';
+      ovInside.style.display = 'none';
+      ovDropLabel.style.display = 'none';
+    }
+  }
+
   function refreshOverlays() {
     var el = state.selected;
+    // Out of select mode the canvas belongs to the page: the selection still
+    // exists (panels, breadcrumbs, keyboard nav all keep working) but nothing
+    // is painted over the page. Without this the next scroll or style commit
+    // would put the selection box straight back.
+    if (!selMode()) { hideSelOverlays(); updateDims(); return; }
     if (!el || !el.getBoundingClientRect || !el.isConnected) { hideSelOverlays(); return; }
     var r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) { hideSelOverlays(); return; }
@@ -806,15 +948,22 @@
     var pt = pxNum(cs.paddingTop), pr = pxNum(cs.paddingRight), pb = pxNum(cs.paddingBottom), pl = pxNum(cs.paddingLeft);
     var bt = pxNum(cs.borderTopWidth), br = pxNum(cs.borderRightWidth), bb = pxNum(cs.borderBottomWidth), bl = pxNum(cs.borderLeftWidth);
 
-    placeBox(ovSel, r.left, r.top, r.width, r.height);
+    if (!placeBoxClipped(ovSel, r.left, r.top, r.width, r.height)) {
+      // Fully behind the panels — keep the margin/padding rings hidden too.
+      ovMargin.style.display = 'none';
+      ovPadding.style.display = 'none';
+      placeLabel(ovLabel, r, elLabel(el, true));
+      updateDims();
+      return;
+    }
     // Margin ring: a border-drawn frame around the margin box.
     if (mt || mr || mb || ml) {
-      placeBox(ovMargin, r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb);
+      placeBoxClipped(ovMargin, r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb);
       ovMargin.style.borderWidth = mt + 'px ' + mr + 'px ' + mb + 'px ' + ml + 'px';
     } else ovMargin.style.display = 'none';
     // Padding ring: drawn inside the border box.
     if (pt || pr || pb || pl) {
-      placeBox(ovPadding, r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
+      placeBoxClipped(ovPadding, r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
       ovPadding.style.borderWidth = pt + 'px ' + pr + 'px ' + pb + 'px ' + pl + 'px';
     } else ovPadding.style.display = 'none';
     placeLabel(ovLabel, r, elLabel(el, true));
@@ -825,7 +974,10 @@
     if (!el || isOurs(el) || !el.getBoundingClientRect) { hoverClear(); return; }
     var r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) { hoverClear(); return; }
-    placeBox(ovHover, r.left, r.top, r.width, r.height);
+    if (!placeBoxClipped(ovHover, r.left, r.top, r.width, r.height)) {
+      ovHoverLabel.style.display = 'none';
+      return;
+    }
     placeLabel(ovHoverLabel, r, elLabel(el, true));
   }
   function hoverClear() { ovHover.style.display = 'none'; ovHoverLabel.style.display = 'none'; }
@@ -924,7 +1076,7 @@
     var inlineHidden = inlineVal(el, 'display') === 'none';
     if (hidden && inlineHidden) {
       var eyeBtn = h('span', { class: 'rbtn on', title: 'Show (removes inline display: none)' }, [svgIcon('eyeoff')]);
-      eyeBtn.addEventListener('click', function (ev) {
+      pressable(eyeBtn, function (ev) {
         ev.stopPropagation();
         commitStyle(el, 'display', null, el.getAttribute('style'));
         rebuildTree();
@@ -933,7 +1085,7 @@
       row.appendChild(eyeBtn);
     } else if (!hidden) {
       var hideBtn = h('span', { class: 'rbtn', title: 'Hide (inline display: none)' }, [svgIcon('eye')]);
-      hideBtn.addEventListener('click', function (ev) {
+      pressable(hideBtn, function (ev) {
         ev.stopPropagation();
         commitStyle(el, 'display', 'none', el.getAttribute('style'));
         rebuildTree();
@@ -1034,7 +1186,7 @@
       rebuildTree(); searchIn.blur();
     }
   });
-  searchClear.addEventListener('click', function () {
+  pressable(searchClear, function () {
     searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has'); rebuildTree();
   });
 
@@ -1044,9 +1196,8 @@
   function rebuildCrumbs() {
     crumbsBar.textContent = '';
     var el = state.selected;
-    if (!el || !el.isConnected) { crumbsBar.className = 've'; crumbsBar.id = 'crumbs'; return; }
+    if (!el || !el.isConnected) { crumbsBar.className = 've'; return; }
     crumbsBar.className = 've show';
-    crumbsBar.id = 'crumbs';
     var chain = [];
     for (var n = el; n && n !== document.documentElement; n = n.parentElement) chain.unshift(n);
     chain.forEach(function (node, i) {
@@ -1067,6 +1218,11 @@
   // Inspector — shared control builders
   // -------------------------------------------------------------------------
   var PROP_NAME_RE = /^[a-zA-Z-][a-zA-Z0-9-]*$/;
+  // Mirrors ATTR_NAME_RE in server.cjs — reject locally so the user gets the
+  // message immediately instead of an applied-then-rolled-back round trip.
+  var ATTR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9\-_:.]*$/;
+  // Mirrors RAW_TEXT_TAGS in server.cjs. (strSet is a hoisted declaration.)
+  var RAW_TEXT_TAGS = strSet('script style textarea title xmp iframe noembed noframes plaintext');
   var dimsEl = null; // live W×H readout in the header
 
   function updateDims() {
@@ -1174,7 +1330,7 @@
 
   function resetBtn(el, prop, after) {
     var b = h('span', { class: 'reset', title: 'Remove inline ' + prop }, [svgIcon('x')]);
-    b.addEventListener('click', function () {
+    pressable(b, function () {
       commitStyle(el, prop, null, el.getAttribute('style'));
       if (after) after(); else rebuildProps();
     });
@@ -1671,7 +1827,7 @@
         chips.textContent = '';
         classList().forEach(function (cls) {
           var rm = h('span', { class: 'rm', title: 'Remove .' + cls }, [svgIcon('x')]);
-          rm.addEventListener('click', function () {
+          pressable(rm, function () {
             commitClasses(classList().filter(function (c) { return c !== cls; }));
           });
           chips.appendChild(h('span', { class: 'chip' }, [cls, rm]));
@@ -1693,7 +1849,11 @@
       body.appendChild(addIn);
     }));
 
-    if (pageChildren(el).length === 0) {
+    // Raw-text elements (<style>, <script>, <textarea>, <title>) are never
+    // entity-decoded, so writing escaped text into them corrupts their
+    // contents — `a > b` would land as `a &gt; b`. The server refuses these;
+    // don't offer the editor in the first place.
+    if (pageChildren(el).length === 0 && !RAW_TEXT_TAGS[el.tagName.toLowerCase()]) {
       box.appendChild(section('Text', function (body) {
         var ta = h('textarea', { text: el.textContent, spellcheck: 'false' });
         function autosize() {
@@ -1749,12 +1909,25 @@
     var nameIn = h('input', { value: name, placeholder: 'name', spellcheck: 'false' });
     var valIn = h('input', { value: value, placeholder: 'value', spellcheck: 'false' });
     nameIn.style.flex = '0 0 40%';
+    // The name this row currently owns on the element. Renaming has to drop
+    // the old attribute, or the element keeps both the old and the new one.
+    var owned = name || '';
     function commit() {
       var n = nameIn.value.trim();
       if (!n) return;
+      if (!ATTR_NAME_RE.test(n)) { setStatus('invalid attribute name: ' + n, 'err'); return; }
+      if (owned && owned !== n) {
+        var prev = owned;
+        var prevInv = attrInverse(el, prev);
+        var prevRedo = function () { el.removeAttribute(prev); };
+        prevRedo();
+        if (fileFor(el)) sendEdit(opFor(el, { op: 'setAttr', name: prev, value: null }),
+          { undo: prevInv.undo, redo: prevRedo });
+      }
       var inv = attrInverse(el, n);
       var redo = function () { el.setAttribute(n, valIn.value); };
       redo();
+      owned = n;
       if (fileFor(el)) sendEdit(opFor(el, { op: 'setAttr', name: n, value: valIn.value }),
         { undo: inv.undo, redo: redo });
     }
@@ -1762,8 +1935,9 @@
     nameIn.addEventListener('change', commit);
     var rm = h('span', { class: 'reset', title: 'Remove attribute' }, [svgIcon('x')]);
     rm.style.display = 'inline-flex';
-    rm.addEventListener('click', function () {
-      var n = nameIn.value.trim();
+    pressable(rm, function () {
+      // Remove what the element actually carries, not a half-typed rename.
+      var n = owned || nameIn.value.trim();
       if (n) {
         var inv = attrInverse(el, n);
         var redo = function () { el.removeAttribute(n); };
@@ -1780,13 +1954,28 @@
     var propIn = h('input', { value: prop, placeholder: 'property', spellcheck: 'false' });
     var valIn = h('input', { value: value, placeholder: 'value', spellcheck: 'false' });
     propIn.style.flex = '0 0 40%';
+    var owned = prop || ''; // the declaration this row currently owns
     function commit() {
       var p = propIn.value.trim();
       if (!PROP_NAME_RE.test(p)) { setStatus('error: bad property name', 'err'); return; }
+      var v = valIn.value.trim();
+      // Same draft guard the Design tab applies: setProperty silently drops an
+      // invalid value, so without this the DOM shows nothing while the source
+      // file gets the broken declaration written into it.
+      if (!cssValueOk(p, v)) { setStatus('invalid ' + p + ': ' + v, 'err'); return; }
+      if (owned && owned !== p) {
+        var prev = owned;
+        var prevInv = attrInverse(el, 'style');
+        var prevRedo = function () { el.style.removeProperty(prev); };
+        prevRedo();
+        if (fileFor(el)) sendEdit(opFor(el, { op: 'setStyle', property: prev, value: null }),
+          { undo: prevInv.undo, redo: prevRedo });
+      }
       var inv = attrInverse(el, 'style'); // declaration-level undo = restore whole attr
-      var redo = function () { el.style.setProperty(p, valIn.value); };
+      var redo = function () { el.style.setProperty(p, v); };
       redo();
-      if (fileFor(el)) sendEdit(opFor(el, { op: 'setStyle', property: p, value: valIn.value }),
+      owned = p;
+      if (fileFor(el)) sendEdit(opFor(el, { op: 'setStyle', property: p, value: v }),
         { undo: inv.undo, redo: redo });
       refreshOverlays();
     }
@@ -1794,8 +1983,8 @@
     propIn.addEventListener('change', commit);
     var rm = h('span', { class: 'reset', title: 'Remove property' }, [svgIcon('x')]);
     rm.style.display = 'inline-flex';
-    rm.addEventListener('click', function () {
-      var p = propIn.value.trim();
+    pressable(rm, function () {
+      var p = owned || propIn.value.trim();
       if (p && PROP_NAME_RE.test(p)) {
         var inv = attrInverse(el, 'style');
         var redo = function () { el.style.removeProperty(p); };
@@ -1824,7 +2013,7 @@
         svgIcon('crosshair'),
         h('div', {}, [
           'Nothing selected.', h('br'),
-          'Use ', h('kbd', { text: 'Select' }), ', double-click the page,', h('br'),
+          'Click anything on the page,', h('br'),
           'or pick from the Navigator.',
         ]),
       ]));
@@ -1900,24 +2089,64 @@
       ev.stopPropagation();
       return;
     }
-    if (!state.selectMode) return;
+    if (!selMode()) return;
     if (isOurs(ev.target)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    setSelectMode(false);
+    // Select mode stays on: keep clicking to select other elements.
     select(ev.target);
   }
   function onDblClick(ev) {
-    if (isOurs(ev.target) || state.selectMode) return;
+    if (isOurs(ev.target) || selMode()) return;
     ev.preventDefault();
     ev.stopPropagation();
     select(ev.target);
   }
-  function setSelectMode(on) {
-    state.selectMode = on;
+  /** Effective mode: the persistent toggle, inverted while MODE_KEY is held. */
+  function selMode() { return state.selectMode !== state.modeKeyHeld; }
+
+  function refreshModeUI() {
+    var on = selMode();
     selectBtn.className = on ? 'on' : '';
     document.documentElement.style.cursor = on ? 'crosshair' : '';
-    if (!on) hoverClear();
+    // Handing the page back means tidying up after ourselves: every overlay
+    // the editor put on the canvas comes off. Going the other way repaints
+    // them for the current selection.
+    if (on) refreshOverlays();
+    else clearCanvasOverlays();
+  }
+
+  function setSelectMode(on) {
+    state.selectMode = on;
+    refreshModeUI();
+  }
+
+  // Momentary mode invert: hold to browse the page while editing, or hold to
+  // edit while browsing. Release returns to the toggled mode.
+  //
+  // This has to be a key the page itself has no use for. Space was wrong: it
+  // scrolls, so holding it to "test the live page" fought the page, and a
+  // plain Space tap while browsing went to the editor instead of scrolling.
+  // A bare modifier types nothing, scrolls nothing, and is the usual
+  // "temporarily switch tool" idiom in design tools. Change it here.
+  function onModeKeyDown(ev) {
+    if (ev.key !== MODE_KEY || ev.repeat || typingTarget() || editorFocused()) return;
+    state.modeKeyHeld = true;
+    // Stops a lone Alt press from focusing the browser menu bar on Windows.
+    // Alt+<key> combinations are unaffected — those arrive as their own events.
+    ev.preventDefault();
+    refreshModeUI();
+  }
+  function onModeKeyUp(ev) {
+    if (ev.key !== MODE_KEY || !state.modeKeyHeld) return;
+    state.modeKeyHeld = false;
+    refreshModeUI();
+  }
+  // Losing focus mid-hold (alt-tab, devtools, …) must not stick the invert.
+  function onWindowBlur() {
+    if (!state.modeKeyHeld) return;
+    state.modeKeyHeld = false;
+    refreshModeUI();
   }
 
   // -------------------------------------------------------------------------
@@ -1964,13 +2193,63 @@
   }
   delBtn.addEventListener('click', deleteSelected);
 
+  // -------------------------------------------------------------------------
+  // Resizable panels — widths live in CSS custom properties on the host, so
+  // the panels, the breadcrumb strip and (when docked) the page margins all
+  // follow one number each.
+  // -------------------------------------------------------------------------
+  function applyPanelWidths() {
+    host.style.setProperty('--leftw', prefs.leftW + 'px');
+    host.style.setProperty('--rightw', prefs.rightW + 'px');
+    if (state.docked) setDocked(true); // re-push the page to the new widths
+    refreshOverlays();
+  }
+
+  function wireGrip(grip, side) {
+    grip.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      grip.classList.add('on');
+      var startX = ev.clientX;
+      var startW = side === 'left' ? prefs.leftW : prefs.rightW;
+      // The page must not text-select while the pointer is being dragged.
+      setNoSelect(true);
+      function onMove(e) {
+        var dx = e.clientX - startX;
+        if (side === 'left') prefs.leftW = clampLeftW(startW + dx);
+        else prefs.rightW = clampRightW(startW - dx);
+        applyPanelWidths();
+      }
+      function onUp() {
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+        grip.classList.remove('on');
+        setNoSelect(false);
+        savePrefs();
+      }
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+    });
+    grip.addEventListener('dblclick', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (side === 'left') prefs.leftW = clampLeftW(DEFAULT_LEFT_W);
+      else prefs.rightW = clampRightW(DEFAULT_RIGHT_W);
+      applyPanelWidths();
+      savePrefs();
+    });
+  }
+  wireGrip(leftGrip, 'left');
+  wireGrip(rightGrip, 'right');
+
   function setDocked(on) {
     state.docked = on;
     dockBtn.className = on ? 'on' : '';
     var s = document.documentElement.style;
     if (on) {
-      s.setProperty('margin-left', LEFT_W + 'px', 'important');
-      s.setProperty('margin-right', RIGHT_W + 'px', 'important');
+      s.setProperty('margin-left', prefs.leftW + 'px', 'important');
+      s.setProperty('margin-right', prefs.rightW + 'px', 'important');
       s.setProperty('margin-bottom', (BAR_H + CRUMB_H) + 'px', 'important');
     } else {
       s.removeProperty('margin-left');
@@ -1980,6 +2259,15 @@
     refreshOverlays();
   }
   dockBtn.addEventListener('click', function () { setDocked(!state.docked); });
+
+  function setLivePreview(on) {
+    prefs.livePreview = !!on;
+    liveBtn.className = prefs.livePreview ? 'on' : '';
+    // Turning it off mid-drag must put the page back immediately.
+    if (!prefs.livePreview) endLayoutPreview();
+    savePrefs();
+  }
+  liveBtn.addEventListener('click', function () { setLivePreview(!prefs.livePreview); });
 
   closeBtn.addEventListener('click', function () { api.disable(); });
   undoBtn.addEventListener('click', function () { doUndo(); });
@@ -1994,17 +2282,26 @@
       ae.tagName === 'SELECT' || ae.isContentEditable) ? ae : null;
   }
 
+  /** Keyboard focus is on one of the editor's own controls. Page-level
+   * shortcuts (Backspace-deletes-element, MODE_KEY-inverts-mode) must not fire
+   * while the user is driving the panels with the keyboard. */
+  function editorFocused() {
+    return document.activeElement === host && !!host.shadowRoot.activeElement;
+  }
+
   function onNavKey(ev) {
     if (drag) return;
-    if (typingTarget()) return;
+    if (typingTarget() || editorFocused()) return;
     var el = state.selected;
     if (ev.key === 'Escape') {
-      if (state.selectMode) { setSelectMode(false); ev.preventDefault(); return; }
+      // Select mode is sticky: Esc clears the filter, then the selection,
+      // and only drops into browse mode when there is nothing left to clear.
       if (state.filter) {
         searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has');
         rebuildTree(); ev.preventDefault(); return;
       }
-      if (el) { deselect(); ev.preventDefault(); }
+      if (el) { deselect(); ev.preventDefault(); return; }
+      if (selMode()) { setSelectMode(false); ev.preventDefault(); }
       return;
     }
     if ((ev.key === 'v' || ev.key === 'V') && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
@@ -2026,13 +2323,13 @@
     } else if (ev.key === 'ArrowDown' && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
       ev.preventDefault();
       if (idx !== -1 && idx < order.length - 1) select(order[idx + 1]);
-    } else if (ev.key === 'ArrowRight') {
+    } else if (ev.key === 'ArrowRight' && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       var kids = pageChildren(el);
       if (!kids.length) return;
       if (!treeRows.get(kids[0])) { state.open.set(el, true); rebuildTree(); }
       else select(kids[0]);
-    } else if (ev.key === 'ArrowLeft') {
+    } else if (ev.key === 'ArrowLeft' && !ev.metaKey && !ev.altKey) {
       ev.preventDefault();
       var kids2 = pageChildren(el);
       if (kids2.length && treeRows.get(kids2[0])) {
@@ -2088,7 +2385,22 @@
   }
 
   // -- Drag state ---------------------------------------------------------------
+  // A press on a tree row can only mean "drag", so it arms quickly. A press on
+  // the page is usually a click — in select mode it IS the select gesture — so
+  // it demands enough travel to be unambiguous. Ordinary trackpad jitter must
+  // never reach the threshold: a drop rewrites the source file.
   var DRAG_THRESHOLD = 4;
+  var PAGE_DRAG_THRESHOLD = 12;
+  // Re-evaluate the drop target only after the pointer has genuinely travelled
+  // this far, and at most once per frame. Our own reflow moves the page under
+  // a stationary pointer; without this gate that counts as "the pointer is
+  // somewhere new" and the preview chases itself.
+  var CANDIDATE_STEP = 5;
+  var SWAP_MARGIN = 6;
+  // Pointer travel required before a committed drop slot may change.
+  var RELOCATE_MIN = 18;
+  var previewRaf = 0;
+  function dragThreshold() { return drag && drag.fromTree ? DRAG_THRESHOLD : PAGE_DRAG_THRESHOLD; }
   var drag = null;          // { el, startX, startY, lastX, lastY, active, candidate }
   var dragScrollTimer = null;
   var suppressClick = false;
@@ -2129,21 +2441,173 @@
     if (ghost) { ghost.remove(); ghost = null; }
   }
 
+  // -- Live layout preview ------------------------------------------------------
+  // Instead of only drawing a line where the element *would* land, put a real
+  // box of the element's exact size into the page at that spot and hide the
+  // original. The page reflows for real, so you see the actual result — the
+  // gap closing where it left, everything downstream shifting up, the target
+  // container growing — while you are still dragging.
+  //
+  // The placeholder carries data-ve-editor-el, so isOurs() filters it out of
+  // pageChildren() and therefore out of every element path and index. The
+  // source-of-truth walk never sees it and the op maths is untouched.
+  var placeholder = null;
+
+  /** Absolutely/fixed-positioned elements are out of flow: hiding one frees no
+   * space and a block placeholder would invent space that never existed, so
+   * the preview would be a lie. Fall back to the plain marker for those. */
+  function canPreviewLayout(el) {
+    if (!prefs.livePreview) return false;
+    var pos = computedVal(el, 'position');
+    return pos !== 'absolute' && pos !== 'fixed';
+  }
+
+  function buildPlaceholder(el) {
+    var r = el.getBoundingClientRect();
+    var cs = getComputedStyle(el);
+    var ph = document.createElement('div');
+    ph.setAttribute('data-ve-editor-el', '');
+    // Deliberately hit-testable: elementFromPoint returning the stand-in is how
+    // computeCandidate recognises "the pointer is already over the drop slot".
+    // With pointer-events:none it would return whatever sits behind instead —
+    // usually the parent container — and the stand-in would jump away from the
+    // very spot the user is pointing at.
+    ph.style.cssText = [
+      'box-sizing:border-box',
+      'width:' + r.width + 'px',
+      'height:' + r.height + 'px',
+      'margin:' + cs.marginTop + ' ' + cs.marginRight + ' ' + cs.marginBottom + ' ' + cs.marginLeft,
+      'flex:0 0 auto',
+      'align-self:' + (cs.alignSelf || 'auto'),
+      'border:1.5px dashed rgba(79,156,249,.9)',
+      'border-radius:3px',
+      'background:rgba(79,156,249,.12)',
+    ].join(';');
+    return ph;
+  }
+
+  /** True when both candidates describe the same insertion slot. */
+  function sameSlot(a, b) {
+    return !!a && !!b && a.parent === b.parent && a.refEl === b.refEl &&
+      a.inside === b.inside && a.before === b.before;
+  }
+
+  /** Swap the element for its stand-in the moment the drag begins, in the
+   * element's OWN slot. Doing it here rather than on the first valid target
+   * means the page reaches its "element lifted out" layout once, at the start,
+   * instead of lurching into it mid-drag. */
+  function startLayoutPreview() {
+    if (!drag || placeholder || !canPreviewLayout(drag.el)) return;
+    placeholder = buildPlaceholder(drag.el);       // measure before hiding
+    drag.prevDisplay = drag.el.style.display;
+    drag.el.parentNode.insertBefore(placeholder, drag.el);
+    drag.el.style.display = 'none';
+    drag.originHidden = true;
+    drag.previewSlot = null;
+  }
+
+  /** Relocate the stand-in to the candidate slot. It is never removed here:
+   * pulling it out for an invalid or absent target would collapse the layout
+   * and slam it back on the next move. No target simply means "stay put". */
+  function showLayoutPreview(c) {
+    if (!placeholder || !c || !c.valid) return;
+    if (sameSlot(c, drag.previewSlot)) return;     // already there — no reflow
+    if (c.inside) c.parent.insertBefore(placeholder, c.parent === document.body ? host : null);
+    else if (c.before) c.parent.insertBefore(placeholder, c.refEl);
+    else c.parent.insertBefore(placeholder, c.refEl.nextElementSibling);
+    drag.previewSlot = c;
+  }
+
+  /** Tear the preview down and put the real element back on screen. */
+  function endLayoutPreview() {
+    if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+    placeholder = null;
+    if (drag) {
+      drag.previewSlot = null;
+      if (drag.originHidden) {
+        drag.el.style.display = drag.prevDisplay || '';
+        if (!drag.el.getAttribute('style')) drag.el.removeAttribute('style');
+        drag.originHidden = false;
+      }
+    }
+  }
+
   function startPotentialDrag(el, x, y, fromTree) {
     if (!el || isOurs(el) || !canDrag(el)) return;
     if (fromTree) select(el);
-    drag = { el: el, startX: x, startY: y, lastX: x, lastY: y, active: false, candidate: null, fromTree: !!fromTree };
+    drag = { el: el, startX: x, startY: y, lastX: x, lastY: y, slotX: x, slotY: y,
+      active: false, candidate: null, fromTree: !!fromTree };
+  }
+
+  /** Resolve an insertion point among a container's OWN children. Used when we
+   * deliberately hold on to the container we are already dropping into instead
+   * of re-deriving one from whatever happens to be topmost. */
+  function resolveWithin(parent, x, y, dtag) {
+    var sibs = pageChildren(parent);                       // index space the op uses
+    var prect = parent.getBoundingClientRect();
+    var ok = canContain(parent.tagName.toLowerCase(), dtag);
+    var best = null, bestRect = null, bestD = Infinity;
+    for (var i = 0; i < sibs.length; i++) {
+      if (sibs[i] === drag.el) continue;                   // hidden while dragging: no box
+      var kr = sibs[i].getBoundingClientRect();
+      if (!kr.width && !kr.height) continue;
+      var d = Math.abs(y - (kr.top + kr.height / 2)) + Math.abs(x - (kr.left + kr.width / 2)) * 0.25;
+      if (d < bestD) { bestD = d; best = sibs[i]; bestRect = kr; }
+    }
+    if (!best) {
+      return { parent: parent, refEl: null, inside: true, index: sibs.length, valid: ok, rect: prect };
+    }
+    var before = y < bestRect.top + bestRect.height / 2;
+    var cur = drag.candidate;
+    if (cur && cur.refEl === best && cur.before !== before &&
+        Math.abs(y - (bestRect.top + bestRect.height / 2)) < SWAP_MARGIN) {
+      before = cur.before;                                  // midline hysteresis
+    }
+    var idx = sibs.indexOf(best);
+    return {
+      parent: parent, refEl: best, inside: false, before: before, horizontal: false,
+      index: before ? idx : idx + 1, valid: ok, rect: bestRect,
+    };
   }
 
   // -- Insertion candidate under the pointer ------------------------------------
   function computeCandidate(x, y) {
     var t = document.elementFromPoint(x, y);
-    if (!t || isOurs(t)) return null;
     var dragged = drag.el;
+    // The pointer is over our own stand-in: the drop is already exactly where
+    // the user is aiming. Keep the current candidate. Re-deriving one here is
+    // the core oscillation — the stand-in would target its way out from under
+    // the pointer, reflow, and come straight back.
+    if (placeholder && (t === placeholder || placeholder.contains(t))) return drag.candidate;
+    if (!t || isOurs(t)) return null;
+    if (!placeholder) {
+      // No preview (toggle off, or an out-of-flow element): still hovering the
+      // element itself means the pointer has not been taken anywhere yet.
+      // Walking up to an ancestor would invent a target — a few px of travel
+      // inside the element would "move" it out into its own grandparent.
+      var dr = dragged.getBoundingClientRect();
+      if (x >= dr.left && x <= dr.right && y >= dr.top && y <= dr.bottom) return null;
+    }
     // Never target the dragged element or its descendants.
     while (t && (t === dragged || dragged.contains(t))) t = t.parentElement;
     if (!t || isOurs(t) || t === document.documentElement) return null;
     var dtag = dragged.tagName.toLowerCase();
+
+    // Sticky container. If the topmost element is an ANCESTOR of the container
+    // we are already dropping into, and the pointer is still inside that
+    // container, the pointer is in its padding or a gap between its children —
+    // it has not genuinely moved somewhere new. Re-deriving a parent here is
+    // what makes the target leap between nesting levels, and with the live
+    // preview that leap reshuffles the page. Going deeper, or sideways into a
+    // sibling subtree, is still free.
+    var held = drag.candidate;
+    if (held && held.parent && held.parent.isConnected && held.parent !== document.body &&
+        t !== held.parent && t.contains(held.parent)) {
+      var hr = held.parent.getBoundingClientRect();
+      if (x >= hr.left && x <= hr.right && y >= hr.top && y <= hr.bottom) {
+        return resolveWithin(held.parent, x, y, dtag);
+      }
+    }
 
     if (t === document.body) {
       return {
@@ -2165,6 +2629,14 @@
     var dy = y - (rect.top + rect.height / 2);
     var horizontal = Math.abs(dx) / Math.max(rect.width, 1) > Math.abs(dy) / Math.max(rect.height, 1);
     var before = horizontal ? dx < 0 : dy < 0;
+    // Hysteresis on the midline. Sitting right on a target's centre, a stray
+    // pixel — or the target shifting slightly under our own reflow — would
+    // flip before/after on every frame.
+    var cur = drag.candidate;
+    if (cur && cur.refEl === t && cur.before !== before &&
+        (horizontal ? Math.abs(dx) : Math.abs(dy)) < SWAP_MARGIN) {
+      before = cur.before;
+    }
     var parent = t.parentElement;
     if (!parent || parent === document.documentElement) return null;
     var sibs = pageChildren(parent);
@@ -2237,12 +2709,24 @@
       return;
     }
     var bad = c.valid ? '' : 'bad';
+    // With the live preview up, the placeholder IS the insertion marker.
+    // Keep only the label so the target container is still named.
+    if (c.valid && placeholder && placeholder.parentNode) {
+      ovLine.style.display = 'none';
+      ovInside.style.display = 'none';
+      var pr = placeholder.getBoundingClientRect();
+      ovDropLabel.className = 'ov ';
+      ovDropLabel.style.display = 'block';
+      ovDropLabel.style.left = pr.left + 'px';
+      ovDropLabel.style.top = Math.max(0, pr.top - 16) + 'px';
+      ovDropLabel.textContent = c.parent.tagName.toLowerCase();
+      return;
+    }
     var r = c.rect;
     var labelX = r.left, labelY = Math.max(0, r.top - 16);
     if (c.inside) {
       ovLine.style.display = 'none';
       ovInside.className = 'ov ' + bad;
-      ovInside.id = 'ov-inside';
       ovInside.style.display = 'block';
       ovInside.style.left = r.left + 'px';
       ovInside.style.top = r.top + 'px';
@@ -2251,7 +2735,6 @@
     } else {
       ovInside.style.display = 'none';
       ovLine.className = 'ov ' + bad;
-      ovLine.id = 'ov-line';
       ovLine.style.display = 'block';
       if (c.horizontal) {
         ovLine.style.left = (c.before ? r.left : r.right) - 1 + 'px';
@@ -2267,7 +2750,6 @@
       if (!c.before) labelY = r.bottom + 2;
     }
     ovDropLabel.className = 'ov ' + bad;
-    ovDropLabel.id = 'ov-drop-label';
     ovDropLabel.style.display = 'block';
     ovDropLabel.style.left = labelX + 'px';
     ovDropLabel.style.top = labelY + 'px';
@@ -2299,6 +2781,12 @@
     if (el.parentElement === c.parent && oldSibs.indexOf(el) !== -1 && oldSibs.indexOf(el) < index) {
       index--;
     }
+    // Dropping an element exactly where it already sits is not an edit. Don't
+    // rewrite the source file (or push an undo entry) for a no-op.
+    if (el.parentElement === c.parent && oldSibs.indexOf(el) === index) {
+      endLayoutPreview();
+      return;
+    }
     var inv = moveInverse(el);
     var redo = function () {
       if (c.inside) {
@@ -2311,6 +2799,9 @@
     };
     sendEdit(opFor(el, { op: 'moveTo', parentPath: parentPath, index: index }),
       { undo: inv.undo, redo: redo });
+    // Take the stand-in out and un-hide the real element BEFORE moving it, so
+    // redo() inserts against real siblings rather than against the placeholder.
+    endLayoutPreview();
     redo();
     // An "into" drop opens the target so the user sees where it landed.
     if (c.inside) state.open.set(c.parent, true);
@@ -2318,7 +2809,9 @@
   }
 
   function endDrag(commit) {
+    cancelCandidateUpdate();
     if (drag && drag.active && commit) finishDrop();
+    endLayoutPreview(); // idempotent: finishDrop() already ran it on the commit path
     drag = null;
     stopDragScroll();
     hideGhost();
@@ -2326,12 +2819,28 @@
     renderDropMarker();
   }
 
+  /** Coalesce target re-evaluation into one update per animation frame. */
+  function scheduleCandidateUpdate() {
+    if (previewRaf) return;
+    previewRaf = requestAnimationFrame(function () {
+      previewRaf = 0;
+      if (!drag || !drag.active) return;
+      drag.candidate = computeDragCandidate(drag.lastX, drag.lastY);
+      showLayoutPreview(drag.candidate);
+      renderDropMarker();
+    });
+  }
+  function cancelCandidateUpdate() {
+    if (previewRaf) { cancelAnimationFrame(previewRaf); previewRaf = 0; }
+  }
+
   // -- Pointer wiring -----------------------------------------------------------------
   function onPointerDown(ev) {
-    if (ev.button !== 0 || state.selectMode || isOurs(ev.target)) return;
+    if (ev.button !== 0 || isOurs(ev.target)) return;
     // Selection-first: pressing anywhere inside the already-selected element
     // (including on its children, which usually cover its whole surface)
-    // starts a page drag.
+    // starts a page drag. Works in select mode too: if the press never passes
+    // the drag threshold, the follow-up click simply selects as usual.
     if (state.selected && state.selected.contains(ev.target)) {
       startPotentialDrag(state.selected, ev.clientX, ev.clientY, false);
     }
@@ -2340,25 +2849,48 @@
   function onPointerMove(ev) {
     if (!drag) return;
     if (!drag.active) {
-      if (Math.abs(ev.clientX - drag.startX) < DRAG_THRESHOLD &&
-          Math.abs(ev.clientY - drag.startY) < DRAG_THRESHOLD) return;
+      var threshold = dragThreshold();
+      if (Math.abs(ev.clientX - drag.startX) < threshold &&
+          Math.abs(ev.clientY - drag.startY) < threshold) return;
       drag.active = true;
       setNoSelect(true);
       showGhost(drag.el, ev.clientX, ev.clientY);
+      startLayoutPreview(); // lift the element out once, in its own slot
       startDragScroll();
     }
     ev.preventDefault();
     drag.lastX = ev.clientX; drag.lastY = ev.clientY;
-    moveGhost(ev.clientX, ev.clientY);
-    drag.candidate = computeDragCandidate(ev.clientX, ev.clientY);
-    renderDropMarker();
+    moveGhost(ev.clientX, ev.clientY); // the ghost tracks every event, so it stays smooth
+    if (drag.evalX === undefined ||
+        Math.abs(ev.clientX - drag.evalX) >= CANDIDATE_STEP ||
+        Math.abs(ev.clientY - drag.evalY) >= CANDIDATE_STEP) {
+      drag.evalX = ev.clientX; drag.evalY = ev.clientY;
+      scheduleCandidateUpdate();
+    }
   }
 
   // Tree-row drags over the tree panel resolve against rows; everything else
   // resolves against the page canvas as before.
   function computeDragCandidate(x, y) {
-    if (drag.fromTree && overTreePanel(x, y)) return computeTreeCandidate(x, y);
-    return computeCandidate(x, y);
+    var next = (drag.fromTree && overTreePanel(x, y)) ? computeTreeCandidate(x, y) : computeCandidate(x, y);
+    // Commit hysteresis. Once a slot is chosen, hold it until the pointer has
+    // travelled far enough for the change to be clearly deliberate.
+    //
+    // This is the one that actually kills the oscillation. Moving the stand-in
+    // into a container reflows it; the container can then slide out from under
+    // a barely-moving pointer, which legitimately re-targets its ancestor,
+    // which reflows back, which re-targets the container... A "keep the
+    // container while the pointer is still inside it" rule cannot break that
+    // loop, because by the time we re-test, the pointer genuinely is outside.
+    // Distance since the last committed slot is immune to it: our own reflow
+    // never moves the pointer.
+    var cur = drag.candidate;
+    if (cur && next && !sameSlot(next, cur) &&
+        Math.abs(x - drag.slotX) < RELOCATE_MIN && Math.abs(y - drag.slotY) < RELOCATE_MIN) {
+      return cur;
+    }
+    if (!cur || !next || !sameSlot(next, cur)) { drag.slotX = x; drag.slotY = y; }
+    return next;
   }
 
   // Edge auto-scroll: while dragging near the viewport top/bottom, scroll the
@@ -2381,8 +2913,10 @@
         else if (y > window.innerHeight - DRAG_SCROLL_MARGIN) window.scrollBy(0, DRAG_SCROLL_STEP);
         else return;
       }
-      drag.candidate = computeDragCandidate(drag.lastX, drag.lastY);
-      renderDropMarker();
+      // Scrolling genuinely moves content under a still pointer, so this is a
+      // real re-evaluation rather than a self-inflicted one.
+      drag.evalX = drag.lastX; drag.evalY = drag.lastY;
+      scheduleCandidateUpdate();
     }, 50);
   }
   function stopDragScroll() {
@@ -2409,15 +2943,16 @@
   }
 
   // -- Text-selection suppression ---------------------------------------------
-  // Block selectstart whenever a drag is armed or active; block mousedown
-  // default on the selected element so press-drag never flashes a selection.
-  // Neither touches the page when no drag is involved.
+  // In select mode the page is inert: mousedown default is blocked for every
+  // page element so inputs never focus, buttons never arm, and text never
+  // selects — clicks themselves are swallowed by onClickCapture. Outside
+  // select mode, only block when a drag is armed or active.
   function onSelectStart(ev) {
-    if (drag && !isOurs(ev.target)) ev.preventDefault();
+    if ((drag || selMode()) && !isOurs(ev.target)) ev.preventDefault();
   }
   function onPageMouseDown(ev) {
     if (isOurs(ev.target)) return;
-    if (drag || (state.selected && state.selected.contains(ev.target))) {
+    if (selMode() || drag || (state.selected && state.selected.contains(ev.target))) {
       ev.preventDefault();
     }
   }
@@ -2437,6 +2972,8 @@
   document.addEventListener('keydown', onDragKey, true);
   document.addEventListener('keydown', onUndoKey, true);
   document.addEventListener('keydown', onNavKey, true);
+  document.addEventListener('keydown', onModeKeyDown, true);
+  document.addEventListener('keyup', onModeKeyUp, true);
   document.addEventListener('selectstart', onSelectStart, true);
   document.addEventListener('mousedown', onPageMouseDown, true);
 
@@ -2447,9 +2984,13 @@
     document.removeEventListener('keydown', onDragKey, true);
     document.removeEventListener('keydown', onUndoKey, true);
     document.removeEventListener('keydown', onNavKey, true);
+    document.removeEventListener('keydown', onModeKeyDown, true);
+    document.removeEventListener('keyup', onModeKeyUp, true);
     document.removeEventListener('selectstart', onSelectStart, true);
     document.removeEventListener('mousedown', onPageMouseDown, true);
     stopDragScroll();
+    cancelCandidateUpdate();
+    endLayoutPreview(); // tearing down mid-drag must not leave the element hidden
     hideGhost();
     setNoSelect(false);
   }
@@ -2457,15 +2998,25 @@
   // -------------------------------------------------------------------------
   // Global listeners
   // -------------------------------------------------------------------------
-  function onMouseMove(ev) { if (state.selectMode) onHover(ev); }
+  function onMouseMove(ev) { if (selMode()) onHover(ev); }
   function onScroll() { refreshOverlays(); }
-  function onResize() { refreshOverlays(); }
+  function onResize() {
+    // A narrower window can invalidate stored widths — re-clamp so the canvas
+    // strip between the panels never disappears.
+    var l = clampLeftW(prefs.leftW), r = clampRightW(prefs.rightW);
+    if (l !== prefs.leftW || r !== prefs.rightW) {
+      prefs.leftW = l; prefs.rightW = r;
+      applyPanelWidths();
+    }
+    refreshOverlays();
+  }
 
   document.addEventListener('mousemove', onMouseMove, true);
   document.addEventListener('click', onClickCapture, true);
   document.addEventListener('dblclick', onDblClick, true);
   window.addEventListener('scroll', onScroll, true);
   window.addEventListener('resize', onResize);
+  window.addEventListener('blur', onWindowBlur);
 
   // -------------------------------------------------------------------------
   // Public API + teardown
@@ -2477,9 +3028,12 @@
       document.removeEventListener('dblclick', onDblClick, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('blur', onWindowBlur);
       removeDragListeners();
       setDocked(false);
       document.documentElement.style.cursor = '';
+      // A pending "saved → idle" timer would keep poking detached nodes.
+      if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
       host.remove();
       delete window.__visualEditor;
     },
@@ -2487,7 +3041,12 @@
   };
   window.__visualEditor = api;
 
-  // Initial paint
+  // Initial paint — select mode is on from the start, so the page is inert
+  // (clicks select elements instead of activating links/buttons) until the
+  // user toggles browse mode with V / the Select button / Esc.
+  setSelectMode(true);
+  setLivePreview(prefs.livePreview);
+  applyPanelWidths();
   rebuildTree();
   rebuildProps();
 })();

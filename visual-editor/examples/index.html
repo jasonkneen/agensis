@@ -11,8 +11,8 @@
     <nav class="nav container">
       <a class="logo" href="/">Acme<span>Studio</span></a>
       <ul class="nav-links">
-        <li><a href="#work">Work</a></li>
         <li><a href="#services">Services</a></li>
+        <li><a href="#work">Work</a></li>
         <li><a href="#contact">Contact</a></li>
         <li><a href="about.html">About</a></li>
       </ul>
@@ -21,10 +21,10 @@
 
   <main>
     <section class="hero">
-      <div class="container hero-inner">
+      <div class="container hero-inner" style="display: grid; justify-items: start">
         <div class="hero-copy">
           <p class="eyebrow">Design &amp; build studio</p>
-          <h1>We make websites people remember.</h1>
+          <h1 style="display: block">We make websites people remember.</h1>
           <p class="lede">A small team with a big obsession for craft. Brand, web,
             and product design — from first sketch to shipped site.</p>
           <div class="hero-actions">
@@ -33,18 +33,18 @@
           </div>
         </div>
         <div class="hero-card">
+          <p>Every pixel earns its place.</p>
           <svg viewBox="0 0 200 200" role="img" aria-label="Abstract artwork">
             <circle cx="100" cy="100" r="80" fill="#5b8cff" opacity="0.9"/>
             <rect x="60" y="60" width="80" height="80" rx="12" fill="#ffd166" transform="rotate(15 100 100)"/>
             <circle cx="140" cy="70" r="24" fill="#ef476f"/>
           </svg>
-          <p>Every pixel earns its place.</p>
         </div>
       </div>
     </section>
 
     <section id="work" class="section container">
-      <h2>Selected work</h2>
+      <h2 style="margin-bottom: -2px">Selected work</h2>
       <p class="section-lede">A few recent projects we're proud of.</p>
       <div class="card-grid">
         <article class="card">

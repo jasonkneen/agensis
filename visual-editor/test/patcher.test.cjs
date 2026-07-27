@@ -10,6 +10,9 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { applyEdit, resolveFilePath, createUndoTracker } = require('../src/server.cjs');
 
 const FIXTURE = [
@@ -292,6 +295,76 @@ test('resolveFilePath rejects traversal', () => {
   assert.throws(() => resolveFilePath('/root', '../x.html'), /escapes root/);
   assert.throws(() => resolveFilePath('/root', '../../etc/passwd'), /escapes root/);
   assert.strictEqual(resolveFilePath('/root', 'a/b.html'), '/root/a/b.html');
+});
+
+test('resolveFilePath rejects a symlink that points outside root', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 've-symlink-'));
+  const root = path.join(base, 'site');
+  const outside = path.join(base, 'secret');
+  fs.mkdirSync(root);
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'creds.html'), 'top secret', 'utf8');
+  fs.symlinkSync(outside, path.join(root, 'escape'));
+  try {
+    // Lexically this stays under root — only realpath reveals the escape.
+    assert.throws(() => resolveFilePath(root, 'escape/creds.html'), /symlink/);
+    // A real file inside root still resolves.
+    fs.writeFileSync(path.join(root, 'ok.html'), 'x', 'utf8');
+    assert.strictEqual(resolveFilePath(root, 'ok.html'), path.join(root, 'ok.html'));
+    // A not-yet-existing file inside root is still allowed (new file writes).
+    assert.strictEqual(resolveFilePath(root, 'new.html'), path.join(root, 'new.html'));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// -- raw-text elements ----------------------------------------------------------
+
+test('setText refuses raw-text elements instead of corrupting them', () => {
+  const src = [
+    '<!doctype html>', '<html>',
+    '<head><style>a{color:red}</style><title>T</title></head>',
+    '<body><textarea>hi</textarea><p>ok</p></body>',
+    '</html>', '',
+  ].join('\n');
+  // <style> — escaping "a > b" to "a &gt; b" would silently break the CSS.
+  assert.throws(
+    () => applyEdit(src, { op: 'setText', path: [0, 0], text: 'nav > a { color: blue }' }),
+    /raw-text element/
+  );
+  assert.throws(() => applyEdit(src, { op: 'setText', path: [0, 1], text: 'x' }), /raw-text element/);
+  assert.throws(() => applyEdit(src, { op: 'setText', path: [1, 0], text: 'x' }), /raw-text element/);
+  // A normal element still works, and still escapes.
+  const out = applyEdit(src, { op: 'setText', path: [1, 1], text: 'a > b' });
+  assert.ok(out.includes('<p>a &gt; b</p>'));
+});
+
+// -- attribute removal whitespace -------------------------------------------------
+
+test('setAttr removing the FIRST attribute leaves a single space', () => {
+  const out = applyEdit(FIXTURE, { op: 'setAttr', path: [1, 0], name: 'id', value: null });
+  assert.ok(out.includes('<div class="wrap  pad" data-x=1 hidden>'), out.match(/<div[^>]*>/)[0]);
+  assert.ok(!out.includes('<div  '));
+});
+
+test('setAttr removing the only attribute closes the tag up', () => {
+  const src = '<!doctype html>\n<html>\n<body>\n  <div id="a">x</div>\n</body>\n</html>\n';
+  const out = applyEdit(src, { op: 'setAttr', path: [1, 0], name: 'id', value: null });
+  assert.ok(out.includes('<div>x</div>'), out);
+});
+
+// -- structural guard ---------------------------------------------------------------
+
+test('applyEdit rejects a patch that changes the document structure', () => {
+  // setText escapes, so markup in the text can never add elements…
+  const safe = applyEdit(FIXTURE, { op: 'setText', path: [1, 2], text: '<div><span>' });
+  assert.ok(safe.includes('&lt;div&gt;&lt;span&gt;'));
+  // …and the guard itself must be live: a remove is expected to drop exactly
+  // the target subtree, so claiming any other delta has to fail.
+  const before = FIXTURE.match(/<(div|ul|li|p|h1|span|footer|head|body|html|title)\b/g).length;
+  const out = applyEdit(FIXTURE, { op: 'remove', path: [1, 0] }); // div#main + 3 children
+  const after = out.match(/<(div|ul|li|p|h1|span|footer|head|body|html|title)\b/g).length;
+  assert.strictEqual(before - after, 4, 'div#main and its three children are gone');
 });
 
 // -- sanity -------------------------------------------------------------------

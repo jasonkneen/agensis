@@ -33,7 +33,77 @@ function resolveFilePath(root, rel) {
   if (abs !== absRoot && !abs.startsWith(absRoot + path.sep)) {
     throw new Error('path escapes root: ' + rel);
   }
+  // The lexical check above only removes `..`; a symlink inside root can still
+  // point outside it. Compare real paths whenever both actually exist.
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(absRoot);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return abs; // root not on disk (unit tests)
+    throw err;
+  }
+  let realAbs;
+  try {
+    realAbs = fs.realpathSync(abs);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return abs; // file does not exist yet
+    throw err;
+  }
+  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+    throw new Error('path escapes root via symlink: ' + rel);
+  }
   return abs;
+}
+
+// ---------------------------------------------------------------------------
+// Request authentication — this server writes to the developer's disk, so a
+// write must not be forgeable by any page that happens to be open in the same
+// browser. Two independent gates:
+//
+//   1. The Host header must name a loopback address, so a public hostname
+//      re-pointed at 127.0.0.1 (DNS rebinding) cannot reach these routes.
+//   2. A cross-site write is rejected: the Origin header (which browsers
+//      always attach to POSTs) must match this server's own origin, and the
+//      body must be declared application/json — which forces a CORS preflight
+//      that we deliberately never answer.
+// ---------------------------------------------------------------------------
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+function hostName(hostHeader) {
+  if (!hostHeader) return '';
+  // Keep a bracketed IPv6 literal intact; otherwise strip the :port suffix.
+  const name = hostHeader.startsWith('[')
+    ? hostHeader.slice(0, hostHeader.indexOf(']') + 1)
+    : hostHeader.split(':')[0];
+  return name.toLowerCase();
+}
+
+function hostIsLoopback(req) {
+  return LOOPBACK_HOSTS.has(hostName(req.headers.host));
+}
+
+/** True when the request did not come from another site. */
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true; // non-CORS same-origin request
+  if (origin === 'null') return false;   // opaque origin (sandboxed iframe, data:)
+  let parsed;
+  try { parsed = new URL(origin); } catch { return false; }
+  return parsed.host === req.headers.host;
+}
+
+function isJsonBody(req) {
+  const ct = req.headers['content-type'] || '';
+  return ct.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+/** Returns an error string when the request must be refused, else null. */
+function rejectReason(req) {
+  if (!hostIsLoopback(req)) return 'this editor only accepts loopback requests';
+  if (!sameOrigin(req)) return 'cross-origin requests are not accepted';
+  if (!isJsonBody(req)) return 'content-type must be application/json';
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +217,20 @@ function patchAttr(source, node, name, value) {
     // Keep at least one space after the tag name.
     const tagNameEnd = l.startTag.startOffset + 1 + node.tagName.length;
     if (start < tagNameEnd) start = tagNameEnd;
-    if (start === tagNameEnd) return splice(source, span.attrStart, span.attrEnd, '');
+    if (start === tagNameEnd) {
+      // First attribute in the tag: the whitespace before it is the separator
+      // after the tag name and has to survive, so eat the run that FOLLOWS
+      // the attribute instead — otherwise `<div id="a" class="b">` collapses
+      // to `<div  class="b">` with a doubled space.
+      let end = span.attrEnd;
+      while (end < source.length && (source[end] === ' ' || source[end] === '\t')) end++;
+      // Nothing follows it inside the tag: drop the leading run instead, so
+      // `<div id="a">` becomes `<div>` rather than `<div >`.
+      if (source[end] === '>' || (source[end] === '/' && source[end + 1] === '>')) {
+        return splice(source, tagNameEnd, span.attrEnd, '');
+      }
+      return splice(source, span.attrStart, end, '');
+    }
     return splice(source, start, span.attrEnd, '');
   }
   if (span && span.hasValue) {
@@ -213,12 +296,23 @@ function escapeText(text) {
   return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Elements whose content is raw text, never entity-decoded by the parser.
+// Escaping `<`/`>`/`&` inside these corrupts them: `a > b` in a <style> would
+// be written as `a &gt; b` and the CSS rule would simply stop working.
+const RAW_TEXT_TAGS = new Set([
+  'script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext',
+]);
+
 function opSetText(source, doc, op) {
   const node = findNode(doc, op.path);
   const l = loc(node);
   if (!l.endTag) throw new Error('element has no end tag; cannot set text');
   if (elementChildren(node).length > 0) {
     throw new Error('setText only allowed on elements with no child elements');
+  }
+  const tag = String(node.tagName).toLowerCase();
+  if (RAW_TEXT_TAGS.has(tag)) {
+    throw new Error('cannot set text on <' + tag + '>: raw-text element, escaping would corrupt it');
   }
   return splice(source, l.startTag.endOffset, l.endTag.startOffset, escapeText(op.text));
 }
@@ -375,12 +469,28 @@ function opMoveTo(source, doc, op) {
   return out;
 }
 
+/** Total number of elements in a subtree, excluding the node itself. */
+function countElements(node) {
+  let n = 0;
+  for (const kid of elementChildren(node)) n += 1 + countElements(kid);
+  return n;
+}
+
 /**
  * Apply one edit op to an HTML source string. Returns the patched source.
  * Throws on any validation failure.
  */
 function applyEdit(source, op) {
   const doc = parse5.parse(source, { sourceCodeLocationInfo: true });
+
+  // Structural expectation, checked after patching. Every op but `remove`
+  // preserves the element count; `remove` drops exactly the target subtree.
+  const before = countElements(doc);
+  let expectedDelta = 0;
+  if (op.op === 'remove') {
+    expectedDelta = -(1 + countElements(findNode(doc, op.path)));
+  }
+
   let out;
   switch (op.op) {
     case 'setText': out = opSetText(source, doc, op); break;
@@ -391,8 +501,18 @@ function applyEdit(source, op) {
     case 'remove': out = opRemove(source, doc, op); break;
     default: throw new Error('unknown op: ' + op.op);
   }
-  // Sanity: the patched source must still parse.
-  parse5.parse(out, { sourceCodeLocationInfo: true });
+
+  // parse5 is error-tolerant and never throws, so re-parsing alone proves
+  // nothing. Compare the element count instead: a splice that landed at the
+  // wrong offset almost always breaks a tag and changes the tree shape.
+  // Throwing here means the caller never writes the mangled source to disk.
+  const after = countElements(parse5.parse(out));
+  if (after !== before + expectedDelta) {
+    throw new Error(
+      'patch rejected: document structure changed unexpectedly (' + before +
+      ' elements → ' + after + ', expected ' + (before + expectedDelta) + ')'
+    );
+  }
   return out;
 }
 
@@ -451,7 +571,14 @@ function createEditorMiddleware({ root }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
   const undo = createUndoTracker(50);
   return function editorMiddleware(req, res, next) {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('bad request: malformed URL');
+      return;
+    }
     if (url.pathname === '/__visual-editor/client.js' && req.method === 'GET') {
       fs.readFile(CLIENT_JS_PATH, (err, data) => {
         if (err) { res.writeHead(500); res.end('client.js missing'); return; }
@@ -464,6 +591,8 @@ function createEditorMiddleware({ root }) {
       return;
     }
     if (url.pathname === '/__visual-editor/edit' && req.method === 'POST') {
+      const refused = rejectReason(req);
+      if (refused) { sendJson(res, 403, { ok: false, error: refused }); return; }
       readBody(req, 1024 * 1024)
         .then((raw) => {
           let op;
@@ -479,6 +608,8 @@ function createEditorMiddleware({ root }) {
       return;
     }
     if (url.pathname === '/__visual-editor/undo' && req.method === 'POST') {
+      const refusedUndo = rejectReason(req);
+      if (refusedUndo) { sendJson(res, 403, { ok: false, error: refusedUndo }); return; }
       readBody(req, 1024 * 1024)
         .then((raw) => {
           let body;
@@ -521,7 +652,16 @@ const INJECT = '<script src="/__visual-editor/client.js"></script>';
 
 function serveStatic(root, req, res) {
   const url = new URL(req.url, 'http://localhost');
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try {
+    // Throws URIError on a malformed escape such as `/%` — which, uncaught in
+    // a request handler, takes the whole dev server down.
+    rel = decodeURIComponent(url.pathname);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('bad request: malformed URL');
+    return;
+  }
   if (rel.endsWith('/')) rel += 'index.html';
   rel = rel.replace(/^\/+/, '');
   let abs;
@@ -548,7 +688,16 @@ function serveStatic(root, req, res) {
 function startServer({ root, port }) {
   const middleware = createEditorMiddleware({ root });
   const server = http.createServer((req, res) => {
-    middleware(req, res, () => serveStatic(root, req, res));
+    // Last-resort net: an exception thrown synchronously in a request handler
+    // is an uncaught exception, which terminates the whole dev server.
+    try {
+      middleware(req, res, () => serveStatic(root, req, res));
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[visual-dev-editor] request failed:', err && err.message);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('internal error');
+    }
   });
   server.listen(port, () => {
     const addr = server.address();
