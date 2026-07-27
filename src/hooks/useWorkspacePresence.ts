@@ -10,12 +10,28 @@ export type WorkspacePresenceUser = {
   kind?: 'user' | 'agent';
   status?: string;
   isCurrentUser?: boolean;
+  /**
+   * What this person is looking at, as display strings — "Channel: general",
+   * "Doc: Roadmap". Genuinely *activity*, and only ever populated for humans.
+   *
+   * It used to double as the agent metadata carrier: an agent's connection
+   * kind, host and cwd were pre-formatted into this same array
+   * ("Connected daemon", "Host: …", "Folder: /Users/…"), so the roster had no
+   * way to tell "what they're doing" from "where their daemon runs" and
+   * rendered all of it as one undifferentiated stack of chips — three per
+   * agent, each truncating, four lines per participant. Connection metadata
+   * now has its own fields below and is demoted out of the row entirely.
+   */
   activityItems?: string[];
   windows?: FloatingWindow[];
   /** Raw agent id (unprefixed) — used to open/find the direct-message thread. */
   agentId?: string | null;
   /** Agent handle (without @) — fallback key for the direct-message thread. */
   handle?: string | null;
+  /** Daemon host machine. Metadata: behind a disclosure, never on the row. */
+  host?: string | null;
+  /** Daemon working folder. Metadata: behind a disclosure, never on the row. */
+  cwd?: string | null;
 };
 
 type RemotePresenceUsers = ReturnType<typeof useItemPresence>['remotePresenceUsers'];
@@ -100,6 +116,12 @@ export function useWorkspacePresence({
         windows: visibleWindows,
       });
     });
+    // Agents are sourced from the DAEMON's connection rows, not from browser
+    // presence — an agent never holds a cursor or a LiveKit session, so a
+    // roster built from `cursors`/`remotePresenceUsers` alone shows an empty
+    // room in a workspace full of working agents. `status` here is the daemon
+    // heartbeat's view of liveness and is the only thing that decides whether
+    // an agent is in the list at all.
     agentConnections
       .filter(connection => connection.status !== 'offline')
       .forEach(connection => {
@@ -113,11 +135,11 @@ export function useWorkspacePresence({
           status: connection.status,
           agentId: connection.agent_id || null,
           handle: connection.handle || null,
-          activityItems: [
-            connection.status === 'busy' ? 'Running a job' : 'Connected daemon',
-            connection.host ? `Host: ${connection.host}` : '',
-            connection.cwd ? `Folder: ${connection.cwd}` : '',
-          ].filter(Boolean).slice(0, 3),
+          // Structured, NOT pre-formatted into `activityItems`. Where a daemon
+          // runs is reference material you go looking for; it is not what the
+          // agent is doing, and the roster row has no room for it.
+          host: connection.host || null,
+          cwd: connection.cwd || null,
           windows: [],
         });
       });
