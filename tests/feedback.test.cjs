@@ -33,6 +33,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
+const { flyLaneSource } = require('./helpers/fly-lane.cjs');
 const core = require('../shared/backend-core.cjs');
 
 // The Fly lane is no longer one file. Wave 2 of the server/index.cjs reduction
@@ -40,15 +41,7 @@ const core = require('../shared/backend-core.cjs');
 // index.cjs. Every assertion below is about what the FLY BACKEND does — not
 // about which file it happens to live in — so `serverSource` is the whole lane,
 // and stays correct as more blocks move out.
-const serverSource = ['server/index.cjs']
- .concat(
-  fs.readdirSync(path.join(root, 'server'))
-   .filter((name) => name.endsWith('-routes.cjs'))
-   .sort()
-   .map((name) => `server/${name}`),
- )
- .map((relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8'))
- .join('\n');
+const serverSource = flyLaneSource();
 const netlifySource = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 // Shaped exactly like issueAuthToken's output.

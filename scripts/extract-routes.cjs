@@ -51,12 +51,16 @@ function indexSymbols(lines) {
     /^(?:async )?function ([A-Za-z_]\w*)/gm,
     /^const ([A-Za-z_]\w*)\s*=/gm,
     /^let ([A-Za-z_]\w*)/gm,
-    // Nested declarations INSIDE createApp(). resolveGatewayRoute is one, and
+    // Nested FUNCTIONS inside createApp(). resolveGatewayRoute is one, and
     // missing it shipped an ai-chat extraction with an undefined reference.
-    // A route block can close over anything createApp declares, not only
-    // top-level names.
+    // A route block can close over anything createApp declares.
+    //
+    // Functions only, deliberately. Scanning one-space-indented `const` too also
+    // swept up every route handler's own locals — `id`, `name`, `status`,
+    // `params` — and a 230-line span reported 36 "dependencies", most of them
+    // noise. Nested consts in createApp are rare; a missed one is a lint error
+    // in the same gate run, whereas an unreadable report gets ignored.
     /^ (?:async )?function ([A-Za-z_]\w*)/gm,
-    /^ const ([A-Za-z_]\w*)\s*=/gm,
   ]) {
     let m;
     while ((m = re.exec(whole))) defs.add(m[1]);
@@ -83,13 +87,42 @@ function indexSymbols(lines) {
   return defs;
 }
 
+// Names the span declares for itself — locals, parameters, destructured fields.
+// Without subtracting these the report is unusable: scanning createApp()'s
+// one-space-indented declarations also picks up route-local consts, so a 230-line
+// span came back claiming it depended on `a`, `b`, `id`, `key` and `value`.
+// A symbol a block declares is not a symbol a block needs injected.
+function localNames(block) {
+  const local = new Set();
+  for (const re of [
+    /\b(?:const|let|var)\s+([A-Za-z_]\w*)\s*=/g,
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=/g,
+    /\(([^)]*)\)\s*=>/g,
+    /function\s*[A-Za-z_]*\s*\(([^)]*)\)/g,
+    /\bfor\s*\(\s*(?:const|let)\s+([A-Za-z_]\w*)/g,
+    /\.(?:map|forEach|filter|find|some|every|reduce|sort|flatMap)\(\s*\(?([A-Za-z_,\s]*)\)?\s*=>/g,
+  ]) {
+    let m;
+    while ((m = re.exec(block))) {
+      m[1].split(',').forEach((raw) => {
+        const name = raw.split(':').pop().replace(/[=.].*$/, '').trim();
+        if (/^[A-Za-z_]\w*$/.test(name)) local.add(name);
+      });
+    }
+  }
+  return local;
+}
+
 function analyze(startMarker, endMarker) {
   const lines = loadLines();
   const { start, end } = findSpan(lines, startMarker, endMarker);
   const block = lines.slice(start, end + 1).join('\n');
   const defs = indexSymbols(lines);
   const used = new Set(block.match(/\b[A-Za-z_]\w*\b/g) || []);
-  const hits = [...defs].filter((name) => used.has(name)).sort();
+  const local = localNames(block);
+  const hits = [...defs]
+    .filter((name) => used.has(name) && !local.has(name) && name !== 'app')
+    .sort();
   console.log(`span: lines ${start + 1}-${end + 1} (${end - start + 1} lines)`);
   console.log(`first: ${lines[start].trim().slice(0, 90)}`);
   console.log(`last:  ${lines[end].trim().slice(0, 90)}`);
