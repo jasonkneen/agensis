@@ -101,6 +101,7 @@ import {
   AGENT_LAYOUT_VIEW_PREF,
   AGENTS_SPLIT_HIDE_BELOW,
   AGENTS_SPLIT_ONLY_BELOW,
+  agentFormBarPlacement,
   toggleAgentSelection,
   type AgentLayoutView,
 } from '../../lib/agentsView';
@@ -327,10 +328,17 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     return acc;
   }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
   presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
-  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId
-    ? agents.filter(agent => agent.created_by === currentUserId)
+  const mineAgents = currentUserId ? agents.filter(agent => agent.created_by === currentUserId) : [];
+  // A persisted 'mine' filter must never hide EVERYTHING. The toggle that
+  // clears it only renders when there is at least one of your own agents
+  // (below), so a workspace whose agents were all created by someone else —
+  // or by an older build that did not stamp created_by — showed "you haven't
+  // created any agents yet" over a full workspace, with no control on screen
+  // to undo it. The filter now yields only when it would match nothing.
+  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId && mineAgents.length > 0
+    ? mineAgents
     : agents;
-  const mineCount = currentUserId ? agents.filter(agent => agent.created_by === currentUserId).length : 0;
+  const mineCount = mineAgents.length;
   const statusVisibleAgents = statusFilter.size === 0
     ? ownerVisibleAgents
     : ownerVisibleAgents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
@@ -591,7 +599,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               <Plus className="size-4 text-primary" />
               <span className="text-sm font-semibold">Create agent</span>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
               <AgentForm
                 name={newName}
                 avatar={newAvatar}
@@ -637,7 +644,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 submitLabel="Create"
                 submitIcon={<Plus data-icon="inline-start" />}
               />
-            </div>
           </div>
         ) : (
           // Master-detail, the inbox's pattern: grid/map stays on the LEFT and
@@ -651,7 +657,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 selectedAgent && cn('border-r border-border/60 pr-3', AGENTS_SPLIT_HIDE_BELOW),
               )}
             >
-            {agents.length > 0 && mineCount > 0 && (
+            {/* Shown when there is something to filter TO, or when the filter is
+                already engaged — otherwise an active filter can hide its own
+                control. */}
+            {agents.length > 0 && (mineCount > 0 || ownerFilter === 'mine') && (
               <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
                 <button
                   type="button"
@@ -898,6 +907,116 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   );
 });
 
+/**
+ * The agent form's runtime/model selects and its Cancel/Save pair — ONE
+ * definition, mounted twice (pinned to the top of the edit pane and to the
+ * bottom of it) so the two can never drift apart. Everything it shows is a
+ * prop, so both mounts read the same state and either one saves the same form.
+ *
+ * The dormant one is hidden with `visibility`, NOT `display: none`, and this is
+ * load-bearing rather than a style choice: `display: none` takes the bar out of
+ * the flow, which shortens the scrolled content, which makes the browser adjust
+ * `scrollTop` to anchor what you were looking at — and that adjustment feeds
+ * straight back into the decision that hid it. Measured in Chrome, the two bars
+ * flickered against each other around the swap point and settled on the wrong
+ * one. `visibility: hidden` keeps both boxes in the flow, so the swap changes no
+ * geometry at all and the decision is stable. It is still a real hide: an
+ * invisible bar paints nothing (the form scrolls under it as if it were not
+ * there), takes no clicks, takes no focus, and is not in the accessibility tree,
+ * so a screen reader is never offered two Save buttons.
+ */
+function AgentFormActionBar({
+  barRef,
+  placement,
+  dormant,
+  runMode,
+  model,
+  modelChoices,
+  canSubmit,
+  submitting,
+  submitLabel,
+  submitIcon,
+  onRunModeChange,
+  onModelChange,
+  onCancel,
+  onSubmit,
+}: {
+  barRef: React.RefObject<HTMLDivElement | null>;
+  placement: 'top' | 'bottom';
+  /** Initial state only — after mount the pane toggles `invisible` on the ref. */
+  dormant?: boolean;
+  runMode: 'builtin' | 'daemon' | 'sandbox';
+  model: string;
+  modelChoices: { id: string; label: string }[];
+  canSubmit: boolean;
+  submitting: boolean;
+  submitLabel: string;
+  submitIcon: React.ReactNode;
+  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
+  onModelChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div
+      ref={barRef}
+      // Pinned by the browser, not by measured offsets in JS: `sticky` against
+      // the pane's own scrollport. The negative margin cancels the pane's side
+      // padding so the bar spans the full width and nothing scrolls past it
+      // through a gutter. The pane deliberately carries NO vertical padding —
+      // that lives on the field group inside, so the sticky edge is the pane's
+      // own edge and no sliver of scrolling text shows above the pinned bar.
+      className={cn(
+        'sticky z-10 -mx-3 flex flex-wrap items-center gap-2 bg-card/85 px-3 py-2 backdrop-blur-md',
+        placement === 'top' ? 'top-0 border-b' : 'bottom-0 border-t',
+        dormant && 'invisible',
+      )}
+    >
+      <NativeSelect
+        value={runMode}
+        onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
+        size="sm"
+        className="max-w-48"
+        aria-label="Agent runtime"
+      >
+        <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
+        <NativeSelectOption value="daemon">Remote</NativeSelectOption>
+        {/* Not an offer — it is disabled, and only exists for a row that is
+            already one. Sandbox was withdrawn as a runtime you can choose, but
+            a <select> whose value matches no option silently falls back to the
+            FIRST one, so without this a sandbox agent would read as "Built-in"
+            while its sandbox settings sat open right below. Measured, not
+            assumed: selectedIndex came back 0. */}
+        {runMode === 'sandbox' && (
+          <NativeSelectOption value="sandbox" disabled>Sandbox (retired)</NativeSelectOption>
+        )}
+      </NativeSelect>
+      <NativeSelect
+        value={model}
+        onChange={e => onModelChange(e.target.value)}
+        size="sm"
+        className="max-w-56"
+        aria-label="Built-in agent model"
+      >
+        {modelChoices.map(option => (
+          <NativeSelectOption key={option.id} value={option.id}>
+            {option.label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <div className="flex-1" />
+      <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+        <X data-icon="inline-start" />
+        Cancel
+      </Button>
+      <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit || submitting}>
+        {submitIcon}
+        {submitLabel}
+      </Button>
+    </div>
+  );
+}
+
 function AgentForm({
   name,
   avatar,
@@ -986,6 +1105,10 @@ function AgentForm({
 }) {
   const options = modelOptions(model);
   const canSubmit = Boolean(name.trim());
+  const paneRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
+  const bottomBarRef = useRef<HTMLDivElement>(null);
   const [openPets, setOpenPets] = useState<OpenPet[]>([]);
   const [avatarTab, setAvatarTab] = useState<'icon' | 'avatar' | 'openpets' | 'upload'>('icon');
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -1002,6 +1125,47 @@ function AgentForm({
     };
   }, []);
 
+  // The action bar follows the scroll: top bar for the first half of the
+  // travel, bottom bar after it. Done by toggling one class on two refs rather
+  // than through React state, because this fires on every scroll frame of a
+  // pane that can be several screens long — a setState per frame would
+  // re-render every field in the form, and every controlled input in it, just
+  // to move one row. A ResizeObserver covers the two ways the geometry can
+  // change without a scroll: the window being resized, and the form growing or
+  // shrinking (the Advanced disclosure, the voice section, the avatar tabs).
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    const apply = () => {
+      const placement = agentFormBarPlacement(pane.scrollTop, pane.scrollHeight, pane.clientHeight);
+      topBarRef.current?.classList.toggle('invisible', placement !== 'top');
+      bottomBarRef.current?.classList.toggle('invisible', placement !== 'bottom');
+    };
+    apply();
+    pane.addEventListener('scroll', apply, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply);
+    observer?.observe(pane);
+    if (contentRef.current) observer?.observe(contentRef.current);
+    return () => {
+      pane.removeEventListener('scroll', apply);
+      observer?.disconnect();
+    };
+  }, []);
+
+  const actionBarProps = {
+    runMode,
+    model,
+    modelChoices: options,
+    canSubmit,
+    submitting,
+    submitLabel,
+    submitIcon,
+    onRunModeChange,
+    onModelChange,
+    onCancel,
+    onSubmit,
+  };
+
   const handleUploadAvatar = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
@@ -1014,7 +1178,12 @@ function AgentForm({
   };
 
   return (
-    <FieldGroup className="agent-form-fields gap-3">
+    // The form OWNS its scroll pane, so the sticky bars have a scrollport to
+    // pin against and both call sites (create + edit) get the same behaviour
+    // from one place.
+    <div ref={paneRef} className="min-h-0 flex-1 overflow-y-auto px-3">
+    <FieldGroup ref={contentRef} className="agent-form-fields gap-3 py-3">
+      <AgentFormActionBar {...actionBarProps} barRef={topBarRef} placement="top" />
       <div className="grid grid-cols-[4.5rem_1fr_10rem] gap-2">
         <Field>
           <FieldLabel>Preview</FieldLabel>
@@ -1233,41 +1402,9 @@ function AgentForm({
 
       {extraSections}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <NativeSelect
-          value={runMode}
-          onChange={e => { const v = e.target.value; onRunModeChange(v === 'daemon' ? 'daemon' : v === 'sandbox' ? 'sandbox' : 'builtin'); }}
-          size="sm"
-          className="max-w-48"
-          aria-label="Agent runtime"
-        >
-          <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
-          <NativeSelectOption value="daemon">Remote</NativeSelectOption>
-          <NativeSelectOption value="sandbox">Sandbox (isolated cloud)</NativeSelectOption>
-        </NativeSelect>
-        <NativeSelect
-          value={model}
-          onChange={e => onModelChange(e.target.value)}
-          size="sm"
-          className="max-w-56"
-          aria-label="Built-in agent model"
-        >
-          {options.map(option => (
-            <NativeSelectOption key={option.id} value={option.id}>
-              {option.label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        <div className="flex-1" />
-        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-          <X data-icon="inline-start" />
-          Cancel
-        </Button>
-        <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit || submitting}>
-          {submitIcon}
-          {submitLabel}
-        </Button>
-      </div>
+      {/* Unreachable from the runtime picker, which now offers Built-in and
+          Remote only — kept because an agent row saved as `sandbox` before the
+          option was removed must still show and round-trip its settings. */}
       {runMode === 'sandbox' && (
         <details className="rounded-lg border bg-card/40 px-3 py-2 text-sm">
           <summary className="cursor-pointer select-none font-medium text-muted-foreground">Advanced</summary>
@@ -1288,7 +1425,9 @@ function AgentForm({
           </div>
         </details>
       )}
+      <AgentFormActionBar {...actionBarProps} barRef={bottomBarRef} placement="bottom" dormant />
     </FieldGroup>
+    </div>
   );
 }
 
@@ -1497,7 +1636,6 @@ function AgentDetailPane({
             <X />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <AgentForm
             name={editName}
             avatar={editAvatar}
@@ -1551,7 +1689,6 @@ function AgentDetailPane({
               />
             )}
           />
-        </div>
       </div>
     );
   }

@@ -36,11 +36,22 @@ test('resolveRunTarget routes sandbox to the daemon dispatch path', async () => 
   assert.equal(__test.resolveRunTarget({}), 'builtin');
 });
 
-test('AgentsWindowContent offers a Sandbox runtime option', async () => {
+// Sandbox is no longer offered as a runtime you can PICK — every live agent is
+// builtin or daemon, none has ever been sandbox, and the sandbox story is now a
+// provisioner agent plus provider skills (see AGENTS.md). What must not go with
+// the option is the ability to READ one: the column, the type and the Advanced
+// disclosure stay, so a row written before the option was withdrawn still loads
+// and still saves back with its provider and config intact.
+test('AgentsWindowContent drops the Sandbox runtime option but still round-trips a sandbox agent', async () => {
   const src = await readFile(path.join(root, 'src/components/windows/AgentsWindowContent.tsx'), 'utf8');
   assert.match(src, /'builtin' \| 'daemon' \| 'sandbox'/);
-  assert.match(src, /value="sandbox"/);
+  assert.match(src, /runMode === 'sandbox'/);
   assert.match(src, /Advanced/);
+  // Nothing selectable. The one sandbox option left is disabled and rendered
+  // only for a row that already is one — without it the select would fall back
+  // to its first option and report a sandbox agent as "Built-in".
+  assert.doesNotMatch(src, /<NativeSelectOption value="sandbox">/);
+  assert.match(src, /<NativeSelectOption value="sandbox" disabled>/);
 });
 
 // An MCP-registered agent must NEVER be served by the builtin lane.

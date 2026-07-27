@@ -143,6 +143,13 @@ const {
  listTenantAccounts,
  getTenantAccount,
 } = require('../shared/tenant-admin.cjs');
+// Cost metering. Every helper here is FAIL-OPEN by contract — see
+// shared/usage-metering.cjs. Call sites deliberately do not try/catch them: a
+// metering write must never be able to fail a turn somebody is paying for.
+const {
+ recordAnthropicUsage,
+ createAnthropicUsageAccumulator,
+} = require('../shared/usage-metering.cjs');
 const {
  CHANNEL_MENTION_HANDLE,
  CHANNEL_MENTION_MAX_AGENTS,
@@ -1503,6 +1510,57 @@ async function ensureRuntimeSchema() {
   await ensureHuddlesSchema(getDb());
  } catch (error) {
   console.warn('[backend] huddles schema migration failed:', error.message || error);
+ }
+
+ // --- Cost metering -------------------------------------------------------
+ //
+ // The ledger behind the Tenants window's usage figures. One row per provider
+ // call, recording COUNTS ONLY — tokens/characters/seconds plus the provider
+ // and the resource. Never a price: rates move, and a stored price becomes a
+ // lie with no way to tell which rows are stale. Money is computed at display
+ // time from shared/usage-rates.cjs (see shared/usage-metering.cjs).
+ //
+ // Every column is a scalar. There is deliberately no jsonb here, so this
+ // table cannot reproduce the repo's most-repeated bind bug (an object bind
+ // that Fly needs and Netlify must have as a string).
+ //
+ // workspace_id is ON DELETE SET NULL, not CASCADE: deleting a workspace must
+ // not delete the record of what it cost. Such a row drops out of the
+ // per-account rollup (it can no longer be attributed) and stays in the
+ // deployment total, which is the honest place for it.
+ //
+ // NOT in the backendClient allowlists — there is no generic /backend/db route
+ // to this table. It is read only through the owner-gated tenant routes.
+ try {
+  await getDb().unsafe(`
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      provider text NOT NULL,
+      resource text NOT NULL DEFAULT '',
+      kind text NOT NULL DEFAULT '',
+      unit text NOT NULL DEFAULT 'tokens',
+      input_units bigint NOT NULL DEFAULT 0,
+      output_units bigint NOT NULL DEFAULT 0,
+      cache_write_units bigint NOT NULL DEFAULT 0,
+      cache_read_units bigint NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_created ON usage_events(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created ON usage_events(provider, created_at DESC);
+  `);
+  // The metering epoch, written ONCE. Every cost figure on the Tenants screen
+  // is labelled "since <this date>" because there is no usage history before
+  // it — no backfill is possible, and a total presented without this date
+  // would read as an all-time figure and be false.
+  await getDb().unsafe(
+   `insert into app_settings (key, value)
+         values ('usage.metering_started_at', now()::text)
+    on conflict (key) do nothing`,
+  );
+ } catch (error) {
+  console.warn('[backend] usage metering schema migration failed:', error.message || error);
  }
 }
 
@@ -5239,6 +5297,10 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
    workspaceContext: null,
    agentContext: null,
    workspaceId,
+   // Its own usage kind: this is a call the human never asked for, made on
+   // EVERY unaddressed message in an 'auto' channel. Small per call and easy to
+   // miss in a total — which is the argument for it having its own line.
+   usageKind: 'auto_interject',
   });
  } catch (error) {
   console.error('auto-interject relevance call failed', error?.message || error);
@@ -8495,10 +8557,11 @@ async function handleAgentJobSegment(ws, message) {
  );
 }
 
-async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
+async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion' }) {
  const apiKey = await getAnthropicApiKey(workspaceId);
  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
+ const resolvedModel = resolveAnthropicModel(model);
  const response = await fetch('https://api.anthropic.com/v1/messages', {
   method: 'POST',
   headers: {
@@ -8507,7 +8570,7 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
    'anthropic-version': '2023-06-01',
   },
   body: JSON.stringify({
-   model: resolveAnthropicModel(model),
+   model: resolvedModel,
    max_tokens: 4096,
    messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
    system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
@@ -8519,6 +8582,15 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
  }
 
  const payload = await response.json();
+ // Metered from the API's OWN reported usage, never estimated from the text.
+ // Awaited rather than fire-and-forget so a caller's own error handling cannot
+ // race the write; it cannot throw, so awaiting costs only the insert.
+ await recordAnthropicUsage(dbQuery, {
+  workspaceId,
+  model: resolvedModel,
+  kind: usageKind,
+  usage: payload.usage,
+ });
  return (payload.content || [])
   .map((part) => part?.type === 'text' ? part.text : '')
   .filter(Boolean)
@@ -8544,12 +8616,13 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
  * chat, or an array of content blocks once the loop starts appending assistant
  * tool_use / user tool_result turns.
  */
-async function streamAnthropicTurn({ model, messages, memory, documents, workspaceContext, agentContext, tools = null, maxTokens = 4096, workspaceId = null }, onDelta) {
+async function streamAnthropicTurn({ model, messages, memory, documents, workspaceContext, agentContext, tools = null, maxTokens = 4096, workspaceId = null, usageKind = 'builtin_turn' }, onDelta) {
  const apiKey = await getAnthropicApiKey(workspaceId);
  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
+ const resolvedModel = resolveAnthropicModel(model);
  const payload = {
-  model: resolveAnthropicModel(model),
+  model: resolvedModel,
   max_tokens: maxTokens,
   stream: true,
   messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
@@ -8577,6 +8650,12 @@ async function streamAnthropicTurn({ model, messages, memory, documents, workspa
  let full = '';
  let buffer = '';
  let stopReason = '';
+ // ONE model call is ONE usage row, and this function is called once per step of
+ // the builtin tool loop — up to BUILTIN_TOOL_LOOP_MAX_STEPS + 1 times in a
+ // single human turn. That multiplier is exactly why metering lives here rather
+ // than around the loop: recording once per turn would under-report a
+ // tool-heavy turn by up to 9x, and the tool-heavy turns are the expensive ones.
+ const usage = createAnthropicUsageAccumulator();
  // Blocks are addressed by index across the whole message, and text and tool_use
  // blocks share that numbering, so they are tracked in one map and split apart at
  // the end rather than assumed to arrive in any particular order.
@@ -8595,6 +8674,10 @@ async function streamAnthropicTurn({ model, messages, memory, documents, workspa
    if (!data || data === '[DONE]') continue;
    try {
     const parsed = JSON.parse(data);
+    // Fed EVERY frame — the accumulator picks out message_start (input and
+    // cache tokens) and message_delta (the running output total) and ignores
+    // the rest, so no frame handler below has to know about billing.
+    usage.event(parsed);
     if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
      blocks.set(parsed.index, {
       id: String(parsed.content_block.id || ''),
@@ -8640,6 +8723,14 @@ async function streamAnthropicTurn({ model, messages, memory, documents, workspa
   }
   toolUses.push({ id: block.id, name: block.name, input, inputError });
  }
+ // Recorded after the stream drains, so a turn that is cut off mid-flight still
+ // books the tokens it had already reported rather than nothing.
+ await recordAnthropicUsage(dbQuery, {
+  workspaceId,
+  model: resolvedModel,
+  kind: usageKind,
+  counts: usage.result(),
+ });
  return { text: full, toolUses, stopReason };
 }
 
@@ -14310,6 +14401,10 @@ function createApp() {
    const reader = response.body.getReader();
    const decoder = new TextDecoder();
    let buffer = '';
+   // The browser only ever sees text deltas — the usage frames are stripped out
+   // of the relay. They are read HERE, on the way past, which is the only place
+   // this turn's token counts exist at all.
+   const usage = createAnthropicUsageAccumulator();
    while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -14328,6 +14423,7 @@ function createApp() {
      }
      try {
       const parsed = JSON.parse(data);
+      usage.event(parsed);
       if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
        res.write(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`);
       }
@@ -14336,6 +14432,14 @@ function createApp() {
      }
     }
    }
+   // Recorded before res.end() but after the stream drains: a client that
+   // disconnects mid-turn still spent whatever the model had already reported.
+   await recordAnthropicUsage(dbQuery, {
+    workspaceId,
+    model: resolvedModel,
+    kind: 'ai_chat',
+    counts: usage.result(),
+   });
    res.end();
   } catch (error) {
    // Once the SSE headers/body have started flushing, the status line is

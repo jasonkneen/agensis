@@ -162,6 +162,46 @@ function makeTenantFixture() {
       return [workspaceRow('ws-member-1')];
     }
 
+    // The activity aggregate (WORKSPACE_STATS_SQL) and the usage ledger. Both
+    // carry PLANTED secrets here for the same reason every other tenant fixture
+    // does: these are new projections, and a new projection is exactly where a
+    // `select *` regression would put a password_hash back into a response.
+    if (n.startsWith('with ws as (')) {
+      return [{
+        workspace_id: 'ws-owned-1',
+        user_id: params[0] || 'owner-1',
+        channel_count: '4', dm_count: '1', thread_count: '2',
+        message_count: '90', agent_message_count: '60', human_message_count: '30',
+        huddle_count: '1', live_huddle_count: '0', huddle_seconds: '900',
+        agent_count: '2', live_daemon_count: '1',
+        document_count: '3', member_count: '3',
+        last_activity_at: '2026-07-20T00:00:00.000Z',
+        ...PLANTED,
+      }];
+    }
+    if (n.includes('from usage_events') && n.includes('group by')) {
+      return [{
+        workspace_id: 'ws-owned-1',
+        provider: 'anthropic',
+        resource: 'claude-opus-4-5',
+        calls: '3',
+        input_units: '1000',
+        output_units: '500',
+        cache_write_units: '0',
+        cache_read_units: '0',
+        first_at: '2026-07-02T00:00:00.000Z',
+        last_at: '2026-07-20T00:00:00.000Z',
+        ...PLANTED,
+      }];
+    }
+    if (n.includes("usage.metering_started_at")) {
+      return [{
+        configured_start: '2026-07-01T00:00:00.000Z',
+        first_event_at: '2026-07-02T00:00:00.000Z',
+        last_event_at: '2026-07-20T00:00:00.000Z',
+      }];
+    }
+
     throw new Error(`Unexpected SQL in tenant route test: ${sql}`);
   }
 

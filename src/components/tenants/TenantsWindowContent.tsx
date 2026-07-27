@@ -16,10 +16,17 @@ import {
 import { useTenants } from '../../hooks/useTenants';
 import {
   buildTenantRows,
+  tenantDeploymentTotals,
   tenantListFooter,
   tenantsEmptyState,
   type TenantRowModel,
 } from '../../lib/tenants';
+import {
+  compactUnits,
+  formatStatDate,
+  formatUsd,
+  type TenantMeteringWindow,
+} from '../../lib/tenantStats';
 import { TenantDetailPane } from './TenantDetailPane';
 import { TenantRow } from './TenantRow';
 
@@ -79,7 +86,7 @@ function readStoredWidth(): number {
 
 export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
   const {
-    accounts, total, truncated, loading, error, refetch,
+    accounts, total, truncated, metering, loading, error, refetch,
     detail, detailLoading, detailError, selectedId, select,
   } = useTenants(true);
 
@@ -192,6 +199,8 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
           loaded={accounts.length}
           total={total}
           truncated={truncated}
+          totals={tenantDeploymentTotals(accounts)}
+          metering={metering}
           loading={loading}
           error={error}
           selectedId={selectedId}
@@ -228,6 +237,7 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
         <TenantDetailPane
           account={selected}
           detail={detail}
+          metering={metering}
           loading={detailLoading}
           error={detailError}
           /* The back arrow exists only when the detail has replaced the list. */
@@ -248,6 +258,9 @@ interface TenantListProps {
   loaded: number;
   total: number;
   truncated: boolean;
+  /** Deployment-wide sums over the LOADED accounts — see the footer note. */
+  totals: ReturnType<typeof tenantDeploymentTotals>;
+  metering: TenantMeteringWindow | null;
   loading: boolean;
   error: string | null;
   selectedId: string | null;
@@ -256,7 +269,7 @@ interface TenantListProps {
 
 /** Pure list pane — takes pre-formatted rows, so it reads no clock and no store. */
 export function TenantList({
-  rows, query, loaded, total, truncated, loading, error, selectedId, onSelect,
+  rows, query, loaded, total, truncated, totals, metering, loading, error, selectedId, onSelect,
 }: TenantListProps) {
   // Arrow keys walk the rows; the rows are real buttons, so Enter/Space already
   // open them and no extra key handling is needed.
@@ -336,9 +349,30 @@ export function TenantList({
         {/* The count sits UNDER the list, not in the header: it is a footnote
             about what you are looking at, and a capped list has to say so
             rather than quietly under-reporting the deployment's size. */}
-        <p className={cn('px-3 pt-2 text-muted-foreground/80', TEXT_META)}>
-          {tenantListFooter(rows.length, loaded, total, truncated, query)}
-        </p>
+        <div className={cn('flex flex-col gap-0.5 px-3 pt-2 text-muted-foreground/80', TEXT_META)}>
+          <p>{tenantListFooter(rows.length, loaded, total, truncated, query)}</p>
+          {/* The deployment line. Summed over the accounts that were LOADED,
+              which is the same set the rows above came from — so it can never
+              disagree with the column, and a capped list's footer says so on
+              the line directly above this one. */}
+          <p>
+            {compactUnits(totals.messages)} messages
+            {totals.huddles > 0 ? ` · ${totals.huddles.toLocaleString()} huddles` : ''}
+            {totals.calls > 0 ? ` · ${formatUsd(totals.usd)} estimated` : ''}
+          </p>
+          {/* Metering honesty, on the surface itself rather than only in a pane
+              you have to open. There is no usage history before this date and
+              none can be back-filled, so a total shown without it would read as
+              all-time and be false. */}
+          <p>
+            {metering?.started_at
+              ? `Cost metering since ${formatStatDate(metering.started_at)} — estimates only, no data exists before that date.`
+              : 'Cost metering has not started on this deployment — no spend has been recorded.'}
+            {totals.unpricedProviders.length > 0
+              ? ` ${totals.unpricedProviders.join(', ')} usage is recorded but unpriced and is not in the figure above.`
+              : ''}
+          </p>
+        </div>
       </div>
     </ScrollArea>
   );

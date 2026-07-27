@@ -59,3 +59,32 @@ export function agentDetailPlacement(widthPx: number, remPx = 16): 'beside' | 'r
  */
 export const AGENTS_SPLIT_HIDE_BELOW = '@max-2xl/agentswin:hidden';
 export const AGENTS_SPLIT_ONLY_BELOW = 'hidden @max-2xl/agentswin:inline-flex';
+
+/**
+ * How far down the pane's scrollable distance the action bar hands over from
+ * the top edge to the bottom one. Halfway: the reader is nearer the end of the
+ * form than the start, so the buttons should be where they are looking.
+ */
+export const AGENT_FORM_BAR_SWAP_RATIO = 0.5;
+
+/**
+ * Which of the agent form's two action bars is the mounted one, from the edit
+ * pane's scroll geometry. Exactly one is ever returned, so the form can never
+ * show two Save buttons or none.
+ *
+ * A pane with nothing to scroll answers `'top'`. That is the case this function
+ * exists for: with a zero scrollable distance "past halfway" is never reached,
+ * and a naive `scrollTop / scrollHeight` ratio would hide the top bar without
+ * ever revealing the bottom one — a short window would have no buttons at all.
+ * Unusable numbers (NaN from an unmeasured node) take the same safe answer.
+ */
+export function agentFormBarPlacement(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): 'top' | 'bottom' {
+  const scrollable = scrollHeight - clientHeight;
+  if (!Number.isFinite(scrollable) || scrollable <= 0) return 'top';
+  if (!Number.isFinite(scrollTop) || scrollTop <= 0) return 'top';
+  return scrollTop / scrollable >= AGENT_FORM_BAR_SWAP_RATIO ? 'bottom' : 'top';
+}

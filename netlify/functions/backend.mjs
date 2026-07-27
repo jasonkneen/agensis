@@ -37,6 +37,9 @@ import {
  listTenantAccounts,
  getTenantAccount,
 } from '../../shared/tenant-admin.cjs';
+// Cost metering, shared with the Fly lane so both backends write identically
+// shaped rows into one table. FAIL-OPEN by contract — never wrap in try/catch.
+import { recordAnthropicUsage, createAnthropicUsageAccumulator } from '../../shared/usage-metering.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 import { markHumanIdentityWrite, identityWriteSql, synthesizeHumanIdentityInsert } from '../../shared/agentIdentity.cjs';
 import {
@@ -2218,6 +2221,10 @@ async function handleAiChat(req, userId) {
    // upstream SSE frame or multibyte char split across two chunks isn't
    // dropped/corrupted (M12).
    let buffer = '';
+   // Token counts, read off the frames on their way past. The browser is only
+   // sent text deltas, so this relay is the sole place this turn's usage is
+   // ever visible — exactly as on the Fly lane, using the same accumulator.
+   const usage = createAnthropicUsageAccumulator();
    const handleLine = (raw) => {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if (!line.startsWith('data: ')) return;
@@ -2228,6 +2235,7 @@ async function handleAiChat(req, userId) {
     }
     try {
      const parsed = JSON.parse(data);
+     usage.event(parsed);
      if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`));
      }
@@ -2245,6 +2253,16 @@ async function handleAiChat(req, userId) {
    }
    buffer += decoder.decode();
    for (const line of buffer.split('\n')) handleLine(line);
+   // Never throws (fail-open), so it cannot break the stream it is closing.
+   // This lane runs NO DDL of its own: if `usage_events` does not exist yet
+   // because the Fly bootstrap has not run, the insert quietly does nothing
+   // rather than 500-ing a chat turn.
+   await recordAnthropicUsage(query, {
+    workspaceId,
+    model: resolvedModel,
+    kind: 'ai_chat',
+    counts: usage.result(),
+   });
    controller.close();
   },
  });

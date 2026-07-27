@@ -539,7 +539,7 @@ export const Sidebar = React.memo(function Sidebar({
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
-    {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Show desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
+    {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
@@ -671,7 +671,7 @@ export const Sidebar = React.memo(function Sidebar({
       {onShowDesktop && (
        <ActionTile
         icon={<Minimize2 />}
-        label="Show desktop"
+        label="Desktop"
         active={showingDesktop}
         pressed={showingDesktop}
         onClick={onShowDesktop}

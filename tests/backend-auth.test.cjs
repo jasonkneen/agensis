@@ -564,6 +564,25 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
   });
 });
 
+/**
+ * Did a request write an APP-LEVEL SECRET into app_settings?
+ *
+ * Matches on the write's PARAMS, not merely on the table: the schema bootstrap
+ * also inserts into app_settings (the cost-metering epoch,
+ * `usage.metering_started_at`), and a bare "did anything touch app_settings"
+ * check would fail on that unrelated row while proving nothing about secrets.
+ * Naming the key is both narrower and a stronger assertion — it would still
+ * catch a secret written through some other statement shape.
+ */
+const APP_LEVEL_SECRET_KEYS = ['ANTHROPIC_API_KEY']; // mirrors MANAGED_SECRET_KEYS
+
+function appSettingsSecretWrites(fakeDb) {
+  return fakeDb.calls.some(call => {
+    if (!String(call.sql).includes('insert into app_settings')) return false;
+    return (call.params || []).some(param => APP_LEVEL_SECRET_KEYS.includes(String(param)));
+  });
+}
+
 test('settings secrets POST rejects app-level writes for ordinary authenticated users', async () => {
   const fakeDb = installDb({ authSecret: 'fixed-test-secret' });
 
@@ -579,7 +598,7 @@ test('settings secrets POST rejects app-level writes for ordinary authenticated 
     assert.equal(noWorkspace.status, 403);
     assert.match(noWorkspaceBody.error.message, /App-level secret management/i);
     assert.equal(
-      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      appSettingsSecretWrites(fakeDb),
       false,
     );
 
@@ -590,7 +609,7 @@ test('settings secrets POST rejects app-level writes for ordinary authenticated 
     });
     assert.equal(baseWorkspace.status, 403);
     assert.equal(
-      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      appSettingsSecretWrites(fakeDb),
       false,
     );
   });

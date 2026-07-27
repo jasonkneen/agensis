@@ -56,10 +56,16 @@ export const RAIL_RESERVE_WIDTH = RAIL_WIDTH + RAIL_EDGE_GAP;
 /** Mirrors `CHAT_COLUMN_CLASS`'s `max-w-[800px]` in ChatWindowContent. */
 export const CHAT_COLUMN_MAX_WIDTH = 800;
 /**
- * The composer shell's own `p-2`, on both sides. The composer column shares the
- * message column's 800px cap but starts 8px in, so it runs out of room 16px
- * sooner — it has to be counted or the composer narrows at the exact width
- * where the message column still fits.
+ * The horizontal inset the chat column sits in, on both sides — the composer
+ * shell's own `p-2`, now matched by `px-2` on the message scroll viewport so
+ * both halves of the column run out of room at the same width. It has to be
+ * counted here or the rail's gutter is granted at a surface width where the
+ * column can no longer be 800px wide.
+ *
+ * `p-2` is `0.5rem`, so this is only the 16px-root value; the DOM uses the rem
+ * on both sides rather than this number, and the two agree to within a pixel at
+ * the app's 15px root. The 1px is slack in the rail's favour — it reserves the
+ * gutter a hair later than it strictly could.
  */
 export const COMPOSER_SHELL_PADDING = 8;
 /**

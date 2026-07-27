@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import type { TenantAccount, TenantAccountDetail, TenantListPayload } from '../lib/tenants';
+import type { TenantMeteringWindow } from '../lib/tenantStats';
 
 // ---------------------------------------------------------------------------
 // Data for the owner-only Tenants surface.
@@ -74,6 +75,12 @@ export interface UseTenantsResult {
   total: number;
   /** The route capped the list — the UI says so rather than under-reporting. */
   truncated: boolean;
+  /**
+   * When cost metering began, straight from the server. Null until the list
+   * lands, and null FOREVER on a deployment where metering never started — the
+   * UI must render that as "not recording", never as zero spend.
+   */
+  metering: TenantMeteringWindow | null;
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -89,6 +96,7 @@ export function useTenants(enabled: boolean): UseTenantsResult {
   const [accounts, setAccounts] = useState<TenantAccount[]>([]);
   const [total, setTotal] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  const [metering, setMetering] = useState<TenantMeteringWindow | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,6 +121,7 @@ export function useTenants(enabled: boolean): UseTenantsResult {
       setAccounts(Array.isArray(data?.accounts) ? data.accounts : []);
       setTotal(typeof data?.total === 'number' ? data.total : 0);
       setTruncated(data?.truncated === true);
+      setMetering(data?.metering ?? null);
       setError(failure);
       setLoading(false);
     });
@@ -155,7 +164,7 @@ export function useTenants(enabled: boolean): UseTenantsResult {
   const select = useCallback((accountId: string | null) => setSelectedId(accountId), []);
 
   return {
-    accounts, total, truncated, loading, error, refetch,
+    accounts, total, truncated, metering, loading, error, refetch,
     detail, detailLoading, detailError, selectedId, select,
   };
 }

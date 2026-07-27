@@ -11,6 +11,18 @@
       "The demos are drawn from your theme, so they match whichever one you use",
       "They hold still if you have reduced motion turned on"
     ]
+    "version": "floating-chrome",
+    "date": "2026-07-27",
+    "title": "The feedback button moves, and Draw belongs to the desktop",
+    "summary": "Two floating controls were getting in the way. The feedback button sat in the bottom-right corner whatever was underneath it, which meant it covered the action buttons on the last message in a channel. You can now drag it anywhere you like and it stays there, on this machine, for you — and when you bring the pointer to it and there is a real button hiding beneath, it slides clear of its own accord so you can click what it was covering, then comes back once you move away. It never fades out or stops responding, because it is the thing to reach for when something is wrong. Separately, the Draw pencil now only appears on the desktop, where drawing actually happens, instead of hovering over every channel and document you open.",
+    "highlights": [
+      "Drag the feedback button anywhere; it stays put and is still there next time",
+      "It slides out of the way of buttons underneath it when you bring the pointer over, and comes back after",
+      "It can no longer end up off-screen or on top of the dock after you resize the window",
+      "Your position is yours — it does not follow you between accounts or shift when you switch workspace",
+      "The Draw pencil shows on the desktop only, not while a channel or document is open",
+      "Draw stays visible while you are drawing, so the mode is never one you cannot leave"
+]
   },
   {
     "version": "show-desktop",
@@ -37,6 +49,32 @@
       "Enter adds the best match, backspace on an empty field removes the last chip, Escape closes the list",
       "A brand-new skill name is still accepted exactly as typed",
       "The same skill cannot be added twice, whatever case you type it in"
+    ]
+  },
+  {
+    "version": "agent-edit-bar",
+    "date": "2026-07-27",
+    "title": "Save is always in reach while editing an agent",
+    "summary": "Editing an agent is a long form, and Cancel and Save sat at the very bottom of it — so on a short window you had to scroll past everything you had just written to reach them. The row with the runtime, the model, Cancel and Save now follows you: it stays pinned to the top of the pane while you are working through the first half of the form, then hands over to the bottom edge once you are nearer the end. There is always exactly one of it, wherever you are, and it works the same in the create form. The runtime picker also drops the \"Sandbox (isolated cloud)\" choice — sandboxes are not a runtime you switch an agent to any more; you ask the Sandbox agent for one.",
+    "highlights": [
+      "Cancel and Save stay on screen while you scroll the agent edit form, instead of only at the bottom",
+      "The bar pins to the top for the first half of the form and to the bottom after that",
+      "A form short enough not to scroll keeps its buttons where they have always been",
+      "Same behaviour when creating an agent as when editing one",
+      "Runtime is Built-in or Remote — the unused Sandbox option is gone from the picker"
+    ]
+  },
+  {
+    "version": "tenant-usage",
+    "date": "2026-07-27",
+    "title": "The Tenants screen now shows what each account uses, and what it costs",
+    "summary": "The owner-only Tenants view listed an account, a workspace count and a date, and repeated the same email address as both the heading and the line under it. It now leads with the name where there is one and puts real information on the second line, and every account carries what it actually does: channels, DMs and threads, messages split into the ones people wrote and the ones agents wrote, huddles and the time spent in them, agents, connected daemons, documents, and when anything last happened. Underneath that is the new part. agensis now records the tokens every model call spends, per workspace, and turns them into an estimated cost. Nothing was recorded before this release and none of it can be filled in afterwards, so every figure says which date it counts from \u2014 and a provider that is measured but has no price attached is named rather than quietly counted as free. The figures are estimates from our own counts against published list prices, not a bill.",
+    "highlights": [
+      "Per-account and per-workspace stats: channels, DMs, threads, messages by people vs agents, huddles and their duration, agents, live daemons, documents",
+      "Estimated model spend per account and per workspace, from recorded token counts",
+      "Every cost figure is labelled with the date metering started \u2014 there is no earlier data and it cannot be back-filled",
+      "Voice providers are recorded but not yet priced, and say so instead of showing zero",
+      "The account heading no longer prints the same email address twice"
     ]
   },
   {
