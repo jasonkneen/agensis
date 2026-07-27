@@ -93,6 +93,7 @@ import {
 } from './lib/desktopOverlay';
 import {
   clearShowDesktopStash,
+  isDrawToolAvailable,
   isShowingDesktop,
   resolveShowDesktop,
   type ShowDesktopStash,
@@ -1008,6 +1009,10 @@ function AppContent() {
       : windows;
     return exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
   }, [focusedRemotePresence, windows, viewedLayerId]);
+  // Draw belongs to the DESKTOP: it paints on the canvas behind the panels, so
+  // it is only offered when the desktop is what you are looking at. See
+  // isDrawToolAvailable in src/lib/showDesktop.ts.
+  const drawToolAvailable = isDrawToolAvailable(windows, activeLayerId, drawingActive);
   const { dockWindows, focusedDockWindow, dockEntries } = useMemo(() => {
     const dockWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
     const focusedDockWindow = dockWindows
@@ -2267,6 +2272,13 @@ function AppContent() {
                 documents={documents}
               />
 
+              {/*
+                The dock renders only when it has something in it. Draw used to
+                be its permanent last button, so an empty dock was impossible;
+                now that Draw is desktop-only, full-expand mode would otherwise
+                leave an empty glass pill floating over a maximized window.
+              */}
+              {((!isFullExpandMode && dockEntries.length > 0) || drawToolAvailable) && (
               <div
                 className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
                 style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
@@ -2308,25 +2320,28 @@ function AppContent() {
                     </div>
                   );
                 })}
-                {!isFullExpandMode && dockWindows.length > 0 && (
+                {!isFullExpandMode && dockWindows.length > 0 && drawToolAvailable && (
                   <Separator orientation="vertical" className="mx-0.5 h-6" />
                 )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDrawingActive(prev => !prev)}
-                  className={cn(
-                    'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
-                    drawingActive && 'border-border/70 bg-background/80 text-foreground shadow-sm',
-                  )}
-                  title={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
-                  aria-label={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
-                  aria-pressed={drawingActive}
-                >
-                  <Pencil className="size-4" />
-                </Button>
+                {drawToolAvailable && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDrawingActive(prev => !prev)}
+                    className={cn(
+                      'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+                      drawingActive && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+                    )}
+                    title={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                    aria-label={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                    aria-pressed={drawingActive}
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                )}
               </div>
+              )}
 
             </CanvasDropZone>
           </main>

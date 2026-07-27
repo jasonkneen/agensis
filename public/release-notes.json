@@ -1,5 +1,19 @@
 [
   {
+    "version": "floating-chrome",
+    "date": "2026-07-27",
+    "title": "The feedback button moves, and Draw belongs to the desktop",
+    "summary": "Two floating controls were getting in the way. The feedback button sat in the bottom-right corner whatever was underneath it, which meant it covered the action buttons on the last message in a channel. You can now drag it anywhere you like and it stays there, on this machine, for you — and when you bring the pointer to it and there is a real button hiding beneath, it slides clear of its own accord so you can click what it was covering, then comes back once you move away. It never fades out or stops responding, because it is the thing to reach for when something is wrong. Separately, the Draw pencil now only appears on the desktop, where drawing actually happens, instead of hovering over every channel and document you open.",
+    "highlights": [
+      "Drag the feedback button anywhere; it stays put and is still there next time",
+      "It slides out of the way of buttons underneath it when you bring the pointer over, and comes back after",
+      "It can no longer end up off-screen or on top of the dock after you resize the window",
+      "Your position is yours — it does not follow you between accounts or shift when you switch workspace",
+      "The Draw pencil shows on the desktop only, not while a channel or document is open",
+      "Draw stays visible while you are drawing, so the mode is never one you cannot leave"
+]
+  },
+  {
     "version": "show-desktop",
     "date": "2026-07-27",
     "title": "Show desktop — clear the panels away and get them back",

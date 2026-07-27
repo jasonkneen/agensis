@@ -164,3 +164,45 @@ export function resolveShowDesktop(
 export function clearShowDesktopStash(): ShowDesktopStash {
   return {};
 }
+
+// ---------------------------------------------------------------------------
+// The desktop as a SURFACE — a different question from the button above.
+//
+// `isShowingDesktop` asks "did the button put things away", which is about the
+// button's own state. This asks "is the wallpaper what the user is looking at",
+// which is about the screen. They differ on the ordinary case: a desktop you
+// simply never opened anything on is not "showing" (nothing was put away) but
+// IS the surface.
+// ---------------------------------------------------------------------------
+
+/**
+ * Nothing on this desktop is covering it — wallpaper, canvas objects and the
+ * home composer are what is on screen. Minimised windows do not count: they are
+ * in the dock, not over the surface.
+ */
+export function isDesktopSurfaceVisible(
+  windows: readonly ShowDesktopWindow[],
+  canvasId: string | null | undefined,
+): boolean {
+  return readDesktop(windows, canvasId, {}).visible.length === 0;
+}
+
+/**
+ * Should the Draw control be offered?
+ *
+ * Draw acts on the DESKTOP — it paints onto the canvas behind the windows — so
+ * offering it while a channel or a document has the surface is offering a tool
+ * that works somewhere the user is not looking. It belongs to the desktop view
+ * and appears there only.
+ *
+ * The one exception is drawing already being ON: a control that vanishes the
+ * moment its own mode opens a window would strand someone in a mode they cannot
+ * see how to leave.
+ */
+export function isDrawToolAvailable(
+  windows: readonly ShowDesktopWindow[],
+  canvasId: string | null | undefined,
+  drawingActive: boolean,
+): boolean {
+  return drawingActive || isDesktopSurfaceVisible(windows, canvasId);
+}
