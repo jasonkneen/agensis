@@ -346,7 +346,7 @@ test('the dispatcher consults cadence at the point a turn starts', () => {
   // is not exported in a shape a mock DB can drive to this branch, and the thing
   // worth pinning is the ORDER — after the busy check, before runAgentTurn, with
   // the message this reply answers as the jitter seed.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const gate = source.indexOf('const cadence = replyCadencePlan({');
   assert.ok(gate > 0, 'continueConversation must call replyCadencePlan');
   const busy = source.indexOf('hasActiveBurstJob(sessionId, nextAgent.id)');
@@ -363,11 +363,13 @@ test('the dispatcher consults cadence at the point a turn starts', () => {
 test('cadenceWakes is written from exactly one place', () => {
   // If a second writer appears, the "one wake per conversation" guarantee above
   // stops being a guarantee, and a reply can be scheduled twice.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const sets = source.match(/cadenceWakes\.set\(/g) || [];
   assert.equal(sets.length, 1, `cadenceWakes.set appears ${sets.length} times`);
   const calls = source.match(/scheduleCadenceWake\(/g) || [];
-  assert.equal(calls.length, 2, 'the definition and the ONE call site in continueConversation');
+  // The definition (server/task-dispatch.cjs, Wave 4), the ONE call site in
+  // continueConversation, and index.cjs's destructure of the module.
+  assert.equal(calls.length, 2, `expected the definition and ONE call site, found ${calls.length}`);
 });
 
 // --- the parity fixture -----------------------------------------------------
@@ -427,7 +429,7 @@ test('the hint never governs dispatch — only the stored mode does', () => {
     'prose must not pace a channel the operator left on auto',
   );
   // And it is not reachable from the dispatcher at all.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   assert.doesNotMatch(source, /socialCadenceHint/, 'the server must never read the prose hint');
 });
 

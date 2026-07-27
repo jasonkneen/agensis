@@ -34,7 +34,12 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const SERVER = read('server/index.cjs');
+const { flyLaneSource } = require('./helpers/fly-lane.cjs');
+// The Fly lane, not one file — Wave 2 of the index.cjs reduction moves route
+// blocks into server/*-routes.cjs. See tests/helpers/fly-lane.cjs.
+const SERVER = flyLaneSource();
+// The one assertion below that IS about a single file keeps its own read.
+const INDEX_ONLY = read('server/index.cjs');
 const TEMPLATES = read('src/lib/agentTemplates.ts');
 
 test('the server loads the skill-layer module', () => {
@@ -167,9 +172,18 @@ test('the sandbox credential routes exist, are manage-only, and are write-only',
 
   // Slice the three handlers out and check each one individually: a single
   // repo-wide grep for 'manage' would pass on the strength of a neighbour.
+  //
+  // The end marker used to be '--- Cartesia voices', the comment that followed
+  // these routes in index.cjs. Once the vault surface moved to
+  // server/vault-routes.cjs that comment stayed behind, and since the lane
+  // concatenates index.cjs FIRST it now appears BEFORE this block — so the
+  // marker resolved to a position ahead of `start` and the slice was empty.
+  // Anchor on the end of the vault module instead, falling back to the end of
+  // the lane, which is the honest "everything after this route".
   const start = SERVER.indexOf("app.get('/backend/workspaces/:id/sandbox-credentials'");
-  const end = SERVER.indexOf('--- Cartesia voices', start);
-  assert.ok(start > 0 && end > start, 'could not locate the sandbox-credentials route block');
+  assert.ok(start > 0, 'could not locate the sandbox-credentials route block');
+  const marker = SERVER.indexOf('module.exports = { mountVaultRoutes }', start);
+  const end = marker > start ? marker : SERVER.length;
   const block = SERVER.slice(start, end);
 
   const manageChecks = block.match(/enforceWorkspaceRole\(req\.userId, workspaceId, 'manage'\)/g) || [];
@@ -217,6 +231,9 @@ test('the configured-keys lookup binds no array and reads no plaintext', () => {
 
 const MCP = read('server/mcp.cjs');
 const SKILLS = read('server/sandbox-skills.cjs');
+// The outbound SSRF guard, extracted from server/index.cjs in Wave 1 of the
+// index.cjs reduction. The "exactly one predicate" assertion below follows it.
+const NET_GUARD = read('server/lib/net-guard.cjs');
 
 test('the MCP tool exists, is agent-only, and declares no destination argument', () => {
   assert.match(MCP, /name: 'call_provider'/);
@@ -308,8 +325,19 @@ test('the provider call refuses redirects and reuses the existing SSRF guard', (
   assert.match(fn, /await assertSafeOutboundUrl\(plan\.url, 'the provider URL'\)/);
   assert.ok(!/isBlockedAddress\(/.test(fn), 'do not re-derive the address predicate here');
   assert.ok(!SKILLS.includes('dns'), 'the pure skill module must not resolve anything');
-  const predicates = (SERVER.match(/function isBlockedAddress\(/g) || []);
+
+  // The predicate moved to server/lib/net-guard.cjs (index.cjs reduction, Wave 1);
+  // the invariant did not. Count it where it now lives, and assert index.cjs has
+  // not grown a second copy on its way back in.
+  const predicates = (NET_GUARD.match(/function isBlockedAddress\(/g) || []);
   assert.equal(predicates.length, 1, 'there must be exactly one blocked-address predicate');
+  assert.ok(!/function isBlockedAddress\(/.test(INDEX_ONLY),
+    'server/index.cjs must import the predicate, never re-declare it');
+  assert.match(INDEX_ONLY, /require\('\.\/lib\/net-guard\.cjs'\)/);
+  // NOTE: server/link-preview.cjs still carries its own v4-only copy for its
+  // redirect chain, and tests/link-preview.test.cjs asserts the two agree.
+  // Converging them is a behaviour change, not a move, so this count is
+  // deliberately scoped to net-guard rather than widened across server/.
 });
 
 test('the audit row carries no payload and binds jsonb as an object', () => {

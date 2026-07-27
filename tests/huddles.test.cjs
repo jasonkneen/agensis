@@ -1265,7 +1265,10 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   // lane appends to the system prompt instead. A note wired into one of them is
   // a feature that works for one kind of agent and silently does not for the
   // others — this repo's most repeated bug shape.
-  const source = read('server/index.cjs');
+  // runAgentTurn moved to server/builtin-turn.cjs (Wave 4 of the index.cjs
+  // reduction), and all four lanes went with it. Read the whole Fly lane so
+  // this counts call sites wherever they live.
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const calls = source.match(/(?<!function )buildDaemonPrompt\(contextMessages[^)]*\)/g) || [];
   assert.equal(calls.length, 3, 'expected three buildDaemonPrompt call sites');
   for (const call of calls) {

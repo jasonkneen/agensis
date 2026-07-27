@@ -81,6 +81,50 @@ const MUST_BE_LINTED = [
   // SSRF gate for link preview cards, including the per-redirect re-validation.
   // Anyone who can post a message picks the URL.
   'server/link-preview.cjs',
+  // Holds the path-traversal containment for every upload read and write, and
+  // the extension→Content-Type allowlist that neutralizes .html/.svg. Both are
+  // decided by an attacker-supplied filename. Extracted from server/index.cjs,
+  // which is on this list — moving code must not move it out of coverage.
+  'server/lib/storage-paths.cjs',
+  // Decides which identifiers reach Postgres unquoted, which tables are
+  // addressable at all, whether a workspace query is scoped to the caller, and
+  // what a database error may tell a client. Every /backend/db/* request goes
+  // through it. Extracted from server/index.cjs, which is on this list.
+  'server/lib/db-sql.cjs',
+  // The entire gate between a workspace column a 'manage' user can write
+  // (git_root / local_path) and an fs read or `git -C` on this host. Default is
+  // off; this file is what keeps it off. Extracted from server/index.cjs.
+  'server/lib/project-fs.cjs',
+  // Spawns 12 CLI probes with a resolved absolute path and scans dot-directories
+  // in the user's home. It also decides which library types exist at all — the
+  // reason `config` is a type the skill-content reader refuses, since
+  // ~/.gemini/settings.json holds API keys. Extracted from server/index.cjs.
+  'server/lib/capabilities.cjs',
+  // The outbound SSRF guard: whether this machine will fetch an operator-supplied
+  // URL at all. 169.254.169.254 serves cloud IAM credentials, and the response
+  // streams back to the caller. Extracted from server/index.cjs.
+  'server/lib/net-guard.cjs',
+  // Owns the WebSocket fanout and its authorization: which rows reach which
+  // subscriber, and which heavy/secret columns are stripped before they do.
+  // authorizeRealtimeBinding is the only thing standing between a subscribe
+  // frame and another workspace's data. Extracted from server/index.cjs.
+  'server/realtime.cjs',
+  // Owns the live-daemon map and the one-live-connection-per-agent invariant.
+  // A mistake here delivers a dispatch to a dead process, or lets a superseded
+  // daemon keep answering. Extracted from server/index.cjs.
+  'server/agent-connections.cjs',
+  // Decides which agent a task is handed to and whether a held reply is booked
+  // once or twice. claimTaskDispatch is a lease with a timeout; an unlinted
+  // mistake either wedges a task or dispatches it twice, and both are billed.
+  'server/task-dispatch.cjs',
+  // Owns whether an agent is BUSY. finalizeStuckJob writing a
+  // constraint-invalid status was swallowed and left jobs 'running' forever,
+  // which made DMs stop responding. Extracted from server/index.cjs.
+  'server/agent-jobs.cjs',
+  // The builtin agent turn: the tool loop, its three bounds, and the toolset an
+  // in-process agent reaches — shared verbatim with the external MCP door, so a
+  // mistake here changes what BOTH can do. Extracted from server/index.cjs.
+  'server/builtin-turn.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.

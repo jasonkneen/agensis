@@ -527,7 +527,7 @@ test('the agent credential appears exactly once in the redemption response', asy
 });
 
 test('a join link is not a bearer token anywhere in the auth chain', () => {
-  const source = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
 
   // verifyMcpToken is the chain an MCP client's Authorization header runs
   // through. workspace_invites IS in it (verifyInviteToken) and is therefore a
@@ -645,13 +645,15 @@ function codeOnly(source) {
 }
 
 test('no join code branches on User-Agent', () => {
-  const source = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
-  const start = source.indexOf('// Join links — ONE short-lived, single-use URL');
-  const end = source.indexOf('// --- Connect an MCP client (one workspace token)');
-  assert.ok(start > 0 && end > start, 'the join link block must still be findable');
+  // The join routes are now their own module (Wave 2 of the index.cjs
+  // reduction), so this is the whole file rather than a slice between two
+  // comment markers — the old end marker stayed in index.cjs when the start
+  // marker moved, which put `end` BEFORE `start` in the concatenated lane and
+  // silently emptied the block being checked.
+  const joinRoutes = fs.readFileSync(path.join(root, 'server/join-pages-routes.cjs'), 'utf8');
 
   for (const [where, block] of [
-    ['the join routes', codeOnly(source.slice(start, end))],
+    ['the join routes', codeOnly(joinRoutes)],
     ['the renderer', codeOnly(fs.readFileSync(path.join(root, 'server/join-page.cjs'), 'utf8'))],
   ]) {
     // Every way an Express handler can reach the header.
@@ -702,7 +704,7 @@ test('the preview renders both views and mints nothing', async () => {
 });
 
 test('the preview handler cannot reach the database or a token minter', () => {
-  const source = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const start = source.indexOf("app.get(['/backend/join/preview', '/join/preview']");
   assert.ok(start > 0, 'the preview route must still exist');
   const end = source.indexOf("app.get(['/backend/join/:token'", start);
@@ -789,7 +791,7 @@ test('netlify sets the same two headers on the proxied route', () => {
 // ---------------------------------------------------------------------------
 
 test('workspace_join_links is defined in all three schema places', () => {
-  const runtime = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+  const runtime = require('./helpers/fly-lane.cjs').flyLaneSource();
   const canonical = fs.readFileSync(path.join(root, 'database/neon-schema.sql'), 'utf8');
   const migrations = fs.readdirSync(path.join(root, 'supabase/migrations'))
     .map(name => fs.readFileSync(path.join(root, 'supabase/migrations', name), 'utf8'))

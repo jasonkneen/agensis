@@ -43,7 +43,17 @@ const {
 } = require('../server/mcp.cjs');
 
 const root = path.resolve(__dirname, '..');
-const SERVER = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+// runAgentTurn and the tool loop moved to server/builtin-turn.cjs (Wave 4 of
+// the index.cjs reduction). The lane assertions below read the whole Fly lane;
+// the ones that slice runAgentTurn's four branches read that MODULE, because a
+// slice bounded by "the next thing after runAgentTurn" is only meaningful
+// inside the file runAgentTurn lives in — continueConversation stayed in
+// index.cjs, and index.cjs is concatenated FIRST, so bounding on it returned -1.
+const SERVER = require('./helpers/fly-lane.cjs').flyLaneSource();
+const TURN = fs.readFileSync(path.join(root, 'server/builtin-turn.cjs'), 'utf8');
+// runAgentTurn's four lanes end where the next top-level declaration in the
+// module begins.
+const RUN_AGENT_TURN_END = TURN.indexOf('\n async function runAnthropicCompletion(');
 
 const WORKSPACE_ID = 'ws-1';
 const OTHER_WORKSPACE_ID = 'ws-2';
@@ -710,23 +720,23 @@ test('a failing tool marks its own chip and the turn still produces a reply', as
 test('the tool loop is reachable only from the builtin branch', () => {
   // runAgentTurn has four lanes in source order: MCP pull, external, builtin,
   // daemon. Only the third may know about tools.
-  const mcpStart = SERVER.indexOf('if (hasMcpPresence(agent.id)) {');
-  const externalStart = SERVER.indexOf("if (runMode === 'external') {", mcpStart);
-  const builtinStart = SERVER.indexOf("if (runMode === 'builtin') {", externalStart);
-  const daemonStart = SERVER.indexOf('const connection = findConnectedAgent(', builtinStart);
-  const daemonEnd = SERVER.indexOf('async function continueConversation(', daemonStart);
+  const mcpStart = TURN.indexOf('if (hasMcpPresence(agent.id)) {');
+  const externalStart = TURN.indexOf("if (runMode === 'external') {", mcpStart);
+  const builtinStart = TURN.indexOf("if (runMode === 'builtin') {", externalStart);
+  const daemonStart = TURN.indexOf('const connection = findConnectedAgent(', builtinStart);
+  const daemonEnd = RUN_AGENT_TURN_END;
   assert.ok(mcpStart > 0 && externalStart > mcpStart && builtinStart > externalStart
     && daemonStart > builtinStart && daemonEnd > daemonStart, 'could not locate the four lanes');
 
   const symbols = ['getBuiltinToolset', 'runToolUseLoop', 'builtinToolIdentity', 'BUILTIN_TOOL_NOTE', 'toolSpecs'];
-  const builtin = SERVER.slice(builtinStart, daemonStart);
+  const builtin = TURN.slice(builtinStart, daemonStart);
   for (const symbol of symbols) {
     assert.ok(builtin.includes(symbol), `${symbol} must be used inside the builtin branch`);
   }
   for (const [label, lane] of [
-    ['the MCP pull lane', SERVER.slice(mcpStart, externalStart)],
-    ['the external lane', SERVER.slice(externalStart, builtinStart)],
-    ['the daemon lane', SERVER.slice(daemonStart, daemonEnd)],
+    ['the MCP pull lane', TURN.slice(mcpStart, externalStart)],
+    ['the external lane', TURN.slice(externalStart, builtinStart)],
+    ['the daemon lane', TURN.slice(daemonStart, daemonEnd)],
   ]) {
     for (const symbol of symbols) {
       assert.ok(!lane.includes(symbol), `${label} must not mention ${symbol}`);
@@ -735,9 +745,9 @@ test('the tool loop is reachable only from the builtin branch', () => {
 });
 
 test('the daemon lane still sends buildDaemonPrompt, with no tool plumbing added', () => {
-  const start = SERVER.indexOf('const connection = findConnectedAgent(');
-  const end = SERVER.indexOf('async function continueConversation(', start);
-  const daemonLane = SERVER.slice(start, end > start ? end : start + 4000);
+  const start = TURN.indexOf('const connection = findConnectedAgent(');
+  assert.ok(start > 0, 'could not find the daemon lane');
+  const daemonLane = TURN.slice(start, RUN_AGENT_TURN_END);
   assert.match(daemonLane, /buildDaemonPrompt\(contextMessages, agent, coParticipants/);
   assert.ok(!daemonLane.includes('runToolUseLoop'), 'the daemon lane must not run the builtin loop');
   assert.ok(!daemonLane.includes('getBuiltinToolset'), 'the daemon lane must not build a builtin toolset');

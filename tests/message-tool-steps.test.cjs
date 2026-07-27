@@ -42,7 +42,7 @@ test.afterEach(() => __test.resetTestState());
 test('the tool-step columns exist in all three schema places', () => {
   // 1. Runtime bootstrap — what actually runs on Fly boot, so this is the only
   //    one that reaches an already-provisioned production DB.
-  const runtime = read('server/index.cjs');
+  const runtime = require('./helpers/fly-lane.cjs').flyLaneSource();
   for (const column of STEP_COLUMNS) {
     assert.match(
       runtime,
@@ -101,7 +101,7 @@ function messageSelectLists(source) {
 }
 
 test('every explicit message column list that selects sender_kind also selects the step columns', () => {
-  const lists = messageSelectLists(read('server/index.cjs'));
+  const lists = messageSelectLists(require('./helpers/fly-lane.cjs').flyLaneSource());
   assert.ok(lists.length > 0, 'no `select ... from messages` statements found — the scanner is broken');
 
   const explicit = lists.filter((list) => /\bsender_kind\b/.test(list));
@@ -118,7 +118,7 @@ test('every explicit message column list that selects sender_kind also selects t
 });
 
 test('the paged transcript route selects * so new message columns cannot be dropped', () => {
-  const flat = read('server/index.cjs').replace(/\s+/g, ' ');
+  const flat = require('./helpers/fly-lane.cjs').flyLaneSource().replace(/\s+/g, ' ');
   assert.match(
     flat,
     /select \* from messages where session_id = \$1 and deleted_at is null/,

@@ -46,3 +46,6 @@ SCRATCHPAD.md
 # Agent/Playwright debug screenshots dropped at the repo root. Deliberately
 # root-only: public/ and desktop/assets/ images are real assets.
 /*.png
+
+# Refactor gate's recorded node-test count (see scripts/refactor-gate.sh)
+.refactor-baseline
