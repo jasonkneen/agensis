@@ -5,6 +5,8 @@ import { ALL_TIP_IDS, resolveGetStartedSlot, type TipSurface } from '@/lib/pageT
 import { booleanPreference, setOf, viewPreferenceKey } from '@/lib/viewPreferences';
 import { usePersistedPreference } from '@/hooks/usePersistedPreference';
 import { GetStartedChecklist } from './GetStartedChecklist';
+import { OwnerMessageCard } from './OwnerMessageCard';
+import { useOwnerMessage } from '@/lib/ownerMessageContext';
 import { PageTipCard } from './PageTipCard';
 
 // The checklist's own state keeps the keys it has always had — they are global
@@ -68,12 +70,20 @@ export function GetStartedPanel({
     viewPreferenceKey('tips.collapsed', workspaceId), TIPS_COLLAPSED_PREF, false,
   );
 
+  // An owner broadcast for this surface, if there is one. Its DISMISSAL is not a
+  // preference: it is a server write against the row that made this user a
+  // recipient (useOwnerMessages), so it holds on their other machine and cannot
+  // be shared with another account signed in on this one. Only the collapsed
+  // toggle — which is a view preference like the other two — is stored locally.
+  const ownerMessage = useOwnerMessage('tip');
+
   const steps = useMemo(
     () => computeChecklistSteps({ agents, sessions, memberCount }),
     [agents, sessions, memberCount],
   );
 
   const content = resolveGetStartedSlot({
+    hasOwnerMessage: ownerMessage.message !== null,
     onboardingRemaining: remainingStepCount(steps),
     checklistDismissed,
     surface,
@@ -81,6 +91,17 @@ export function GetStartedPanel({
   });
 
   if (content.kind === 'none') return null;
+
+  if (content.kind === 'owner-message' && ownerMessage.message) {
+    return (
+      <OwnerMessageCard
+        message={ownerMessage.message}
+        collapsed={tipsCollapsed}
+        onToggleCollapse={() => setTipsCollapsed(prev => !prev)}
+        onDismiss={ownerMessage.dismiss}
+      />
+    );
+  }
 
   if (content.kind === 'checklist') {
     return (
@@ -97,12 +118,15 @@ export function GetStartedPanel({
     );
   }
 
+  if (content.kind !== 'tip') return null;
+  const { tip } = content;
+
   return (
     <PageTipCard
-      tip={content.tip}
+      tip={tip}
       collapsed={tipsCollapsed}
       onToggleCollapse={() => setTipsCollapsed(prev => !prev)}
-      onDismiss={() => setDismissedTipIds(prev => new Set(prev).add(content.tip.id))}
+      onDismiss={() => setDismissedTipIds(prev => new Set(prev).add(tip.id))}
     />
   );
 }

@@ -8,6 +8,7 @@ import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
 import { cn } from '@/lib/utils';
 import { WORKSPACE_BACKGROUND_IMAGES } from '@/lib/backgrounds';
+import { OwnerMessageBanner } from '../onboarding/OwnerMessageBanner';
 import { agentHandle } from '../../lib/agentAccent';
 import { getSlashCommands } from '../../lib/backendClient';
 import { matchSlashItems, slashInsertText, type SlashItem } from '../../lib/slashCommands';
@@ -413,6 +414,12 @@ export function HomeCanvas({
             </Button>
           ))}
         </div>
+
+        {/* An owner broadcast sits ABOVE the daily-brief prompt: one is a
+            message somebody sent to this account, the other is a standing
+            suggestion the app makes to everybody. Renders nothing when there is
+            no message, so the slot costs nothing the rest of the time. */}
+        <OwnerMessageBanner />
 
         {onOpenSchedules && !briefDismissed && (
           <div className="pointer-events-auto relative flex w-full max-w-3xl items-center gap-3 rounded-xl border border-border bg-card/90 px-4 py-3 shadow-lg backdrop-blur">

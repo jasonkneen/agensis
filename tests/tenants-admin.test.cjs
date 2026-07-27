@@ -250,9 +250,18 @@ async function call(method, pathname, options) {
  return { res, body: await res.json().catch(() => null) };
 }
 
+// EVERY owner-gated door on this surface, reads and writes alike. The negative
+// suites below run over this list, so adding a tenant route without adding it
+// here is the omission that would let an un-gated one ship — and the write
+// routes are the ones that matter most, since a broadcast reaches other people's
+// screens.
 const TENANT_ROUTES = [
  ['GET', '/backend/tenants'],
  [`GET`, `/backend/tenants/${OWNER_ID}`],
+ ['GET', '/backend/tenants/campaigns'],
+ ['GET', '/backend/tenants/campaigns/categories'],
+ ['POST', '/backend/tenants/campaigns/preview'],
+ ['POST', '/backend/tenants/campaigns'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -305,13 +314,16 @@ for (const [method, pathname] of TENANT_ROUTES) {
 
  test(`${method} ${pathname} refuses a non-owner who SUPPLIES the owner's email`, async () => {
   // The attack a hand-rolled check invites: hold your own valid session and name
-  // the owner in every channel a GET has — query string and headers. The gate
-  // reads none of them; the email comes from app_users, keyed by the userId the
-  // token was signed for. (These routes are GET-only, so a request body is not
-  // even expressible — the "READ-ONLY, no write route" test below pins that.)
+  // the owner in every channel a request has — query string, headers, and (now
+  // that write routes exist) the JSON body. The gate reads none of them; the
+  // email comes from app_users, keyed by the userId the token was signed for.
   const attempts = [
    { headers: { 'x-user-email': OWNER_EMAIL, 'x-agensis-owner': OWNER_EMAIL } },
    { headers: { 'x-forwarded-user': OWNER_EMAIL, 'x-agensis-user-id': OWNER_ID } },
+   // A body is only expressible on the write routes; GET keeps to the other two.
+   ...(method === 'POST'
+    ? [{ body: { email: OWNER_EMAIL, userId: OWNER_ID, owner: true, title: 'x', body: 'y', surface: 'tip' } }]
+    : []),
   ];
   for (const attempt of attempts) {
    const { res } = await call(method, `${pathname}?email=${encodeURIComponent(OWNER_EMAIL)}&userId=${OWNER_ID}`, {
@@ -322,6 +334,8 @@ for (const [method, pathname] of TENANT_ROUTES) {
   }
   // And the owner lookup only ever bound the caller's own id.
   assert.equal(issuedSql.some((sql) => /select email from app_users where id = \$1/i.test(sql)), true);
+  // Nothing was written on the way to any of those refusals.
+  assert.equal(issuedSql.some((sql) => /insert into tenant_campaign/i.test(sql)), false);
  });
 
  test(`${method} ${pathname} refuses a token for a user id that no longer exists`, async () => {
@@ -742,13 +756,26 @@ test('no stats or cost route exists outside the owner gate', async () => {
 // 6. Both backends, one gate — parity by source
 // ---------------------------------------------------------------------------
 
-test('BOTH backends register all three tenant routes — an admin route on one is a route nobody re-audits', () => {
+test('BOTH backends register every tenant route — an admin route on one is a route nobody re-audits', () => {
  assert.match(serverSource, /app\.get\('\/backend\/tenants\/access', requireAuth,/);
  assert.match(serverSource, /app\.get\('\/backend\/tenants', requireAuth,/);
  assert.match(serverSource, /app\.get\('\/backend\/tenants\/:id', requireAuth,/);
+ assert.match(serverSource, /app\.get\('\/backend\/tenants\/campaigns', requireAuth,/);
+ assert.match(serverSource, /app\.get\('\/backend\/tenants\/campaigns\/categories', requireAuth,/);
+ assert.match(serverSource, /app\.post\('\/backend\/tenants\/campaigns', requireAuth,/);
+ assert.match(serverSource, /app\.post\('\/backend\/tenants\/campaigns\/preview', requireAuth,/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants\/access'/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants'/);
  assert.match(netlifySource, /\\\/backend\\\/tenants\\\/\(\[\^\/\]\+\)\$/);
+ assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns'/);
+ assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns\/categories'/);
+ assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns\/preview'/);
+ // And the receiving end, which is NOT owner-gated and must exist on both too —
+ // present on only one backend means half the deployment never sees a broadcast.
+ assert.match(serverSource, /app\.get\('\/backend\/campaign-messages', requireAuth,/);
+ assert.match(serverSource, /app\.post\('\/backend\/campaign-messages\/:id\/dismiss', requireAuth,/);
+ assert.match(netlifySource, /pathname === '\/backend\/campaign-messages'/);
+ assert.match(netlifySource, /campaignDismissMatch/);
 });
 
 test('both backends import the SHARED gate and neither hardcodes an owner address', () => {
@@ -789,11 +816,15 @@ test('the shared gate does NOT inherit ensureSystemWorkspace\'s oldest-account f
 });
 
 test('every tenant route on both backends is rate limited, reusing the existing limiters', () => {
- // Each request costs a DB lookup of the caller\'s email BEFORE it can be
+ // Each request costs a DB lookup of the caller's email BEFORE it can be
  // refused, so an unlimited 403 is still a free query loop for any signed-up
  // account.
- const serverRoutes = serverSource.split(/app\.get\('\/backend\/tenants/).slice(1);
- assert.equal(serverRoutes.length, 3);
+ //
+ // Counted rather than hardcoded: the surface grew write routes, and a fixed
+ // number here would have had to be edited to keep passing, which is exactly the
+ // edit that stops noticing a new unlimited route.
+ const serverRoutes = serverSource.split(/app\.(?:get|post)\('\/backend\/tenants/).slice(1);
+ assert.ok(serverRoutes.length >= 5, 'expected the tenant routes to be found in server/index.cjs');
  for (const chunk of serverRoutes) {
   const body = chunk.slice(0, 900);
   assert.match(body, /dbRateLimitBlocked\(res, tenantsRateLimiter, tenantsDbRateLimiter/);
@@ -801,31 +832,73 @@ test('every tenant route on both backends is rate limited, reusing the existing 
  assert.match(serverSource, /const tenantsRateLimiter = createRateLimiter\(/);
  assert.match(serverSource, /tenantsDbRateLimiter = createDbRateLimiter\(\{[^}]*namespace: 'tenants'/);
 
- const netlifyRoutes = netlifySource.split(/pathname === '\/backend\/tenants|tenantDetailMatch\)/).slice(1);
- assert.ok(netlifyRoutes.length >= 3);
  assert.match(netlifySource, /const tenantsRateLimiter = createRateLimiter\(/);
  assert.match(netlifySource, /tenantsDbRateLimiter = createDbRateLimiter\(\{[^}]*namespace: 'tenants'/);
+ // One limiter call per tenant path test in the netlify router. Both sides are
+ // counted from the source so they cannot drift apart silently.
+ const netlifyTenantPaths = (netlifySource.match(/pathname === '\/backend\/tenants[^']*'/g) || []).length
+  + (netlifySource.match(/tenantDetailMatch =/g) || []).length;
  assert.equal(
-  (netlifySource.match(/dbRateLimitBlock\(tenantsRateLimiter, tenantsDbRateLimiter/g) || []).length, 3,
-  'all three netlify tenant routes must run the layered limiter',
+  (netlifySource.match(/dbRateLimitBlock\(tenantsRateLimiter, tenantsDbRateLimiter/g) || []).length,
+  netlifyTenantPaths,
+  'every netlify tenant route must run the layered limiter',
  );
+ assert.equal(netlifyTenantPaths, serverRoutes.length, 'both backends must expose the same number of tenant routes');
 });
 
-test('the tenant routes are READ-ONLY — no write route exists on either backend yet', () => {
- // Upgrades and credits are a later pass. Until they are designed, there must be
- // nothing on this surface that can change an account.
+test('the DELIVERY routes are rate limited too, on their own budget', () => {
+ // /backend/campaign-messages is read by EVERY signed-in session, not by the
+ // operator, so it must not share the admin surface's bucket — one would starve
+ // the other. Both backends, both routes.
  for (const [label, source] of [['server/index.cjs', serverSource], ['netlify', netlifySource]]) {
-  for (const verb of ['post', 'patch', 'put', 'delete']) {
-   assert.equal(
-    new RegExp(`app\\.${verb}\\('/backend/tenants`).test(source), false,
-    `${label} must not expose a ${verb.toUpperCase()} tenant route`,
-   );
-   assert.equal(
-    new RegExp(`method === '${verb.toUpperCase()}' && pathname === '/backend/tenants`).test(source), false,
-    `${label} must not expose a ${verb.toUpperCase()} tenant route`,
-   );
+  assert.match(source, /campaignMessageRateLimiter = createRateLimiter\(/, `${label} needs the in-memory limiter`);
+  assert.match(
+   source, /campaignMessageDbRateLimiter = createDbRateLimiter\(\{[^}]*namespace: 'campaign-messages'/,
+   `${label} needs the cross-instance limiter`,
+  );
+  assert.equal(
+   (source.match(/campaignMessageRateLimiter, campaignMessageDbRateLimiter/g) || []).length, 2,
+   `${label} must limit BOTH campaign-message routes`,
+  );
+ }
+});
+
+test('the ONLY tenant writes are the two campaign routes — nothing here can change an account', () => {
+ // Upgrades and credits are still a later pass. The surface acquired exactly two
+ // write routes, both of which add a dismissible message to somebody's UI and
+ // neither of which touches an account row. This test is the allow-list: a third
+ // write route fails it, whatever it does.
+ const ALLOWED_WRITES = ['/backend/tenants/campaigns', '/backend/tenants/campaigns/preview'];
+
+ const serverWrites = [...serverSource.matchAll(/app\.(post|patch|put|delete)\('(\/backend\/tenants[^']*)'/g)]
+  .map((match) => `${match[1]} ${match[2]}`);
+ for (const write of serverWrites) {
+  const [verb, pathname] = write.split(' ');
+  assert.equal(verb, 'post', `server/index.cjs must not expose a ${verb.toUpperCase()} tenant route`);
+  assert.ok(ALLOWED_WRITES.includes(pathname), `unexpected tenant write route in server/index.cjs: ${write}`);
+ }
+ assert.deepEqual([...serverWrites].sort(), ['post /backend/tenants/campaigns', 'post /backend/tenants/campaigns/preview']);
+
+ const netlifyWrites = [...netlifySource.matchAll(/method === '(POST|PATCH|PUT|DELETE)' && pathname === '(\/backend\/tenants[^']*)'/g)]
+  .map((match) => `${match[1].toLowerCase()} ${match[2]}`);
+ assert.deepEqual([...netlifyWrites].sort(), ['post /backend/tenants/campaigns', 'post /backend/tenants/campaigns/preview']);
+
+ // Both write routes run the gate. Not "the file mentions assertSystemOwner" —
+ // the handler for each one does, within its own body.
+ for (const [label, source, splitter] of [
+  ['server/index.cjs', serverSource, /app\.post\('\/backend\/tenants/],
+  ['netlify', netlifySource, /method === 'POST' && pathname === '\/backend\/tenants/],
+ ]) {
+  const handlers = source.split(splitter).slice(1);
+  assert.equal(handlers.length, 2, `${label} must have exactly two tenant write handlers`);
+  for (const handler of handlers) {
+   assert.match(handler.slice(0, 1200), /assertSystemOwner/, `${label}: a tenant write route without the gate`);
   }
  }
+
+ // And shared/tenant-admin.cjs is still write-free: the campaign writes live in
+ // shared/tenant-campaigns.cjs, so the module that reads across every account
+ // remains something that cannot change one.
  const source = fs.readFileSync(path.join(root, 'shared/tenant-admin.cjs'), 'utf8');
  for (const write of ['insert into', 'update ', 'delete from']) {
   assert.equal(
@@ -833,6 +906,24 @@ test('the tenant routes are READ-ONLY — no write route exists on either backen
    `shared/tenant-admin.cjs must contain no ${write.trim()} statement`,
   );
  }
+});
+
+test('the campaign routes are registered BEFORE /backend/tenants/:id on both backends', () => {
+ // Otherwise "campaigns" is swallowed as an account id and every campaign route
+ // 404s for the owner — the same ordering bug the /access probe already has a
+ // test for, on a path that would be far less obvious in use.
+ for (const marker of ["app.get('/backend/tenants/campaigns'", "app.post('/backend/tenants/campaigns'"]) {
+  assert.ok(
+   serverSource.indexOf(marker) < serverSource.indexOf("app.get('/backend/tenants/:id'"),
+   `${marker} must be registered before the parameterised route`,
+  );
+ }
+ assert.ok(
+  netlifySource.indexOf("pathname === '/backend/tenants/campaigns'") < netlifySource.indexOf('tenantDetailMatch ='),
+ );
+ assert.ok(
+  netlifySource.indexOf("pathname === '/backend/tenants/campaigns/preview'") < netlifySource.indexOf('tenantDetailMatch ='),
+ );
 });
 
 test('/backend/tenants/access is registered BEFORE /backend/tenants/:id on both backends', () => {

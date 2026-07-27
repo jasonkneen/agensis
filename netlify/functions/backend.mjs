@@ -40,6 +40,20 @@ import {
 // Cost metering, shared with the Fly lane so both backends write identically
 // shaped rows into one table. FAIL-OPEN by contract — never wrap in try/catch.
 import { recordAnthropicUsage, createAnthropicUsageAccumulator } from '../../shared/usage-metering.cjs';
+import {
+ CAMPAIGN_CATEGORIES,
+ normalizeSegment,
+ normalizeCampaignInput,
+ assertSendable,
+ selectSegmentMatches,
+ describeSegment,
+ loadTenantFacts,
+ buildSegmentPreview,
+ createCampaign,
+ listCampaigns,
+ listUserCampaignMessages,
+ dismissCampaignMessage,
+} from '../../shared/tenant-campaigns.cjs';
 import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
 import { markHumanIdentityWrite, identityWriteSql, synthesizeHumanIdentityInsert } from '../../shared/agentIdentity.cjs';
 import {
@@ -92,6 +106,9 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // so this is what stops an authenticated non-owner turning the 403 into a free
 // query loop.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Delivery side of owner broadcasts: read by every signed-in session, not by
+// the operator, so it gets its own budget rather than sharing the admin one.
+const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -121,6 +138,7 @@ const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db:
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'dispatch' });
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
+const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'campaign-messages' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
 // Callers MUST await it.
@@ -2473,6 +2491,74 @@ async function route(req) {
   await assertSystemOwner({ userId, db: query });
   return json({ data: await listTenantAccounts(query), error: null });
  }
+ // Owner broadcasts. Mirrors server/index.cjs route for route — an admin WRITE
+ // route present on one backend and absent on the other is the worst version of
+ // the "one lane only" bug: the lane that has it is the one nobody re-audits.
+ //
+ // MATCHED BEFORE the '/backend/tenants/:id' regex below, which would otherwise
+ // swallow '/backend/tenants/campaigns' as an account id.
+ if (req.method === 'GET' && pathname === '/backend/tenants/campaigns/categories') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({
+   data: {
+    categories: CAMPAIGN_CATEGORIES.map(({ id, label, days }) => ({ id, label, days: days === true })),
+   },
+   error: null,
+  });
+ }
+ if (req.method === 'POST' && pathname === '/backend/tenants/campaigns/preview') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  const body = await readBody(req);
+  const segment = normalizeSegment(body?.segment);
+  return json({ data: buildSegmentPreview(segment, await loadTenantFacts(query)), error: null });
+ }
+ if (req.method === 'GET' && pathname === '/backend/tenants/campaigns') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({ data: await listCampaigns(query), error: null });
+ }
+ if (req.method === 'POST' && pathname === '/backend/tenants/campaigns') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const ownerId = await assertSystemOwner({ userId, db: query });
+  const body = await readBody(req);
+  const input = normalizeCampaignInput(body);
+  const matched = selectSegmentMatches(input.segment, await loadTenantFacts(query));
+  // The audience is recomputed here from the segment in THIS request, and the
+  // confirmed count must equal it — the preview's list is never trusted.
+  assertSendable(matched.length, body?.confirm_recipient_count);
+  const ownerRows = await query('select email from app_users where id = $1 limit 1', [ownerId]);
+  const campaign = await createCampaign(query, {
+   title: input.title,
+   body: input.body,
+   surface: input.surface,
+   // STRING, not the object: @netlify/database is the exact opposite of
+   // porsager and requires a stringified bind for a ::jsonb cast. The Fly
+   // server binds the object. See tests/jsonb-bind-hygiene.test.cjs.
+   segmentBind: JSON.stringify(input.segment),
+   summary: describeSegment(input.segment),
+   recipientIds: matched.map((account) => account.user_id),
+   createdBy: ownerId,
+   createdByEmail: ownerRows?.[0]?.email || '',
+  });
+  console.log('[campaign] sent', {
+   id: campaign.id,
+   by: ownerId,
+   surface: campaign.surface,
+   recipients: campaign.recipient_count,
+   segment: campaign.summary,
+  });
+  return json({ data: { campaign }, error: null });
+ }
  const tenantDetailMatch = pathname.match(/^\/backend\/tenants\/([^/]+)$/);
  if (req.method === 'GET' && tenantDetailMatch) {
   const userId = await requireUserId(req);
@@ -2482,6 +2568,26 @@ async function route(req) {
   const detail = await getTenantAccount(query, decodeURIComponent(tenantDetailMatch[1]));
   if (!detail) return jsonError(404, new Error('No such account'));
   return json({ data: detail, error: null });
+ }
+
+ // The receiving end. NOT owner-gated, on a different path prefix so that stays
+ // obvious: any signed-in user reads and dismisses their OWN messages. The user
+ // id comes from the verified session and is bound into both statements.
+ if (req.method === 'GET' && pathname === '/backend/campaign-messages') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(campaignMessageRateLimiter, campaignMessageDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  return json({ data: await listUserCampaignMessages(query, userId), error: null });
+ }
+ const campaignDismissMatch = pathname.match(/^\/backend\/campaign-messages\/([^/]+)\/dismiss$/);
+ if (req.method === 'POST' && campaignDismissMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(campaignMessageRateLimiter, campaignMessageDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  return json({
+   data: await dismissCampaignMessage(query, userId, decodeURIComponent(campaignDismissMatch[1])),
+   error: null,
+  });
  }
  if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
   return handleCreateAgentWebhook(req, await requireUserId(req));

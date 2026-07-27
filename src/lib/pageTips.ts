@@ -406,21 +406,34 @@ export function nextTipFor(surface: TipSurface, dismissedIds: Iterable<string>):
 
 /** What the shared sidebar-footer space should render. */
 export type SlotContent =
+  | { kind: 'owner-message' }
   | { kind: 'checklist' }
   | { kind: 'tip'; tip: PageTip }
   | { kind: 'none' };
 
 /**
- * The priority rule for the one space both things share.
+ * The priority rule for the one space these three things share.
  *
- * Onboarding outranks tips whenever there is any of it left — a partially
- * complete checklist is exactly the case that must not be buried, since that is
- * a user who started setting up and stopped. Tips take the space when the
+ * OWNER MESSAGE FIRST, then the checklist, then tips.
+ *
+ * That an operator broadcast outranks onboarding is the one ordering here worth
+ * arguing about, so: the broadcast is targeted by BEHAVIOUR — "has no agents",
+ * "never started a huddle", "no activity for 30 days" — which describes exactly
+ * the accounts that still have an unfinished checklist. Rank it below the
+ * checklist and the feature inverts: the message reaches everyone EXCEPT the
+ * people it was segmented for. Nothing is lost by putting it first either: the
+ * checklist does not expire, it is restored the moment the message is dismissed,
+ * and dismissal is one click.
+ *
+ * Below that the old rule is unchanged. Onboarding outranks tips whenever there
+ * is any of it left — a partially complete checklist is a user who started
+ * setting up and stopped, and must not be buried. Tips take the space when the
  * checklist is complete, or when the user closed it: dismissing the checklist
- * says "stop tracking my setup", not "never tell me anything again", and the
- * tips have their own per-tip dismissal for that.
+ * says "stop tracking my setup", not "never tell me anything again".
  */
 export function resolveGetStartedSlot(input: {
+  /** An undismissed owner broadcast for the sidebar surface. */
+  hasOwnerMessage?: boolean;
   /** Unfinished checklist steps. */
   onboardingRemaining: number;
   /** The user closed the checklist with the X. */
@@ -428,6 +441,7 @@ export function resolveGetStartedSlot(input: {
   surface: TipSurface;
   dismissedTipIds: Iterable<string>;
 }): SlotContent {
+  if (input.hasOwnerMessage) return { kind: 'owner-message' };
   if (!input.checklistDismissed && input.onboardingRemaining > 0) return { kind: 'checklist' };
   const tip = nextTipFor(input.surface, input.dismissedTipIds);
   return tip ? { kind: 'tip', tip } : { kind: 'none' };
