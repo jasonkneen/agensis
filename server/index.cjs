@@ -102,8 +102,13 @@ const {
 } = require('./link-preview.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const {
+ CODEX_PETS_ROOT,
+ isPathInside,
+ contentTypeForImageAsset,
+ mergeLocalCodexPets,
+} = require('./lib/codex-pets.cjs');
+const {
  safeFileName,
- getUploadRoot,
  storagePathFor,
  resolveStoragePath,
  resolveStoragePathForWorkspace,
@@ -209,7 +214,6 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
 const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
 const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
-const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
 
 let envLoaded = false;
 let db;
@@ -2959,68 +2963,6 @@ function shellQuote(value) {
  const text = String(value || '');
  if (/^[A-Za-z0-9_/:.,=@%+-]+$/.test(text)) return text;
  return `'${text.replace(/'/g, `'\\''`)}'`;
-}
-
-function isPathInside(parent, candidate) {
- const relative = path.relative(parent, candidate);
- return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function codexPetAssetUrl(petDirName, assetName) {
- return `/backend/codex-pets/${encodeURIComponent(petDirName)}/${encodeURIComponent(assetName)}`;
-}
-
-function contentTypeForImageAsset(filePath) {
- const ext = path.extname(filePath).toLowerCase();
- if (ext === '.webp') return 'image/webp';
- if (ext === '.png') return 'image/png';
- if (ext === '.gif') return 'image/gif';
- if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
- return 'application/octet-stream';
-}
-
-function listCodexPets() {
- if (!fs.existsSync(CODEX_PETS_ROOT)) return [];
- return fs.readdirSync(CODEX_PETS_ROOT, { withFileTypes: true })
-  .filter(entry => entry.isDirectory())
-  .flatMap(entry => {
-   try {
-    const petDir = path.resolve(CODEX_PETS_ROOT, entry.name);
-    if (!isPathInside(CODEX_PETS_ROOT, petDir)) return [];
-    const manifestPath = path.join(petDir, 'pet.json');
-    if (!fs.existsSync(manifestPath)) return [];
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const spriteName = path.basename(String(manifest.spritesheetPath || 'spritesheet.webp'));
-    if (!/\.(webp|png|gif|jpe?g)$/i.test(spriteName)) return [];
-    const spritePath = path.resolve(petDir, spriteName);
-    if (!isPathInside(petDir, spritePath) || !fs.existsSync(spritePath)) return [];
-    const id = String(manifest.id || entry.name).trim() || entry.name;
-    const assetUrl = codexPetAssetUrl(entry.name, spriteName);
-    return [{
-     id: `codex:${id}`,
-     displayName: String(manifest.displayName || id),
-     description: typeof manifest.description === 'string' ? manifest.description : 'Local Codex pet.',
-     thumbnail: assetUrl,
-     spritesheet: assetUrl,
-     category: typeof manifest.category === 'string' ? manifest.category : 'codex',
-     featured: false,
-     original: false,
-     source: 'codex',
-    }];
-   } catch {
-    return [];
-   }
-  });
-}
-
-function mergeLocalCodexPets(openPetsPayload) {
- const remotePets = Array.isArray(openPetsPayload?.pets) ? openPetsPayload.pets : [];
- const codexPets = listCodexPets();
- return {
-  ...(openPetsPayload && typeof openPetsPayload === 'object' ? openPetsPayload : {}),
-  pets: [...codexPets, ...remotePets],
-  pageSize: codexPets.length + remotePets.length,
- };
 }
 
 function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, profile = null }) {
