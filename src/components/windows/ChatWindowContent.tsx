@@ -1611,7 +1611,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </span>
               )}
             </Button>
-            {showHuddleCard && <HuddleToolbarButton />}
+            {showHuddleCard && (
+              <HuddleToolbarButton
+                workspaceId={workspaceId}
+                sessionId={inferredSessionId}
+                title={channelTitle}
+              />
+            )}
             <div className="min-w-2 flex-1" />
             {!isDirectMessage && (
               <DropdownMenu>

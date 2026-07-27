@@ -69,6 +69,14 @@ export const CHROME_DEPTH = {
   agentFeed: 9500,
   cursors: 9999,
   appDock: 11500,
+  /**
+   * The floating huddle panel. ABOVE the window layer and the dock, because a
+   * live call must not be buried by whatever you navigate to next — that was
+   * the whole point of lifting it out of the channel. BELOW modalScrim, so a
+   * dialog raised from inside the huddle still paints over it rather than
+   * behind it.
+   */
+  huddlePanel: 11600,
   modalScrim: 11990,
   drawerScrim: 11999,
   modal: 12000,
@@ -98,6 +106,7 @@ export const CHROME_DEPTH_ORDER: readonly ChromeDepthLevel[] = [
   'agentFeed',
   'cursors',
   'appDock',
+  'huddlePanel',
   'modalScrim',
   'drawerScrim',
   'modal',

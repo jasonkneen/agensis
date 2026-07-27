@@ -1,56 +1,69 @@
 [
   {
+    "version": "huddle-panel",
+    "date": "2026-07-27",
+    "title": "A huddle is its own panel now, and it follows you",
+    "summary": "Starting a huddle opens one floating panel that stays with you. Walk to another channel, open a document, look at your agents \u2014 the call keeps running and the panel stays put, because it no longer lives inside the channel you started it from. It holds everyone in the call, the conversation, and a captions switch, and it collapses to a single line when you want the screen back.",
+    "highlights": [
+      "The call survives navigation \u2014 moving around the app no longer hangs up on you",
+      "One huddle at a time, so there is never a second call running somewhere you cannot see",
+      "Everyone in the call as chips, agents included \u2014 they are in the call even though they never hold a connection",
+      "Chat and transcript in the same panel, with captions you can show or hide",
+      "Collapse it to a single line and the call keeps going"
+    ]
+  },
+  {
     "version": "floating-chrome",
     "date": "2026-07-27",
     "title": "The feedback button moves, and Draw belongs to the desktop",
-    "summary": "Two floating controls were getting in the way. The feedback button sat in the bottom-right corner whatever was underneath it, which meant it covered the action buttons on the last message in a channel. You can now drag it anywhere you like and it stays there, on this machine, for you — and when you bring the pointer to it and there is a real button hiding beneath, it slides clear of its own accord so you can click what it was covering, then comes back once you move away. It never fades out or stops responding, because it is the thing to reach for when something is wrong. Separately, the Draw pencil now only appears on the desktop, where drawing actually happens, instead of hovering over every channel and document you open.",
+    "summary": "Two floating controls were getting in the way. The feedback button sat in the bottom-right corner whatever was underneath it, which meant it covered the action buttons on the last message in a channel. You can now drag it anywhere you like and it stays there, on this machine, for you \u2014 and when you bring the pointer to it and there is a real button hiding beneath, it slides clear of its own accord so you can click what it was covering, then comes back once you move away. It never fades out or stops responding, because it is the thing to reach for when something is wrong. Separately, the Draw pencil now only appears on the desktop, where drawing actually happens, instead of hovering over every channel and document you open.",
     "highlights": [
       "Drag the feedback button anywhere; it stays put and is still there next time",
       "It slides out of the way of buttons underneath it when you bring the pointer over, and comes back after",
       "It can no longer end up off-screen or on top of the dock after you resize the window",
-      "Your position is yours — it does not follow you between accounts or shift when you switch workspace",
+      "Your position is yours \u2014 it does not follow you between accounts or shift when you switch workspace",
       "The Draw pencil shows on the desktop only, not while a channel or document is open",
       "Draw stays visible while you are drawing, so the mode is never one you cannot leave"
-]
+    ]
   },
   {
     "version": "show-desktop",
     "date": "2026-07-27",
-    "title": "Show desktop — clear the panels away and get them back",
-    "summary": "Getting back to a clear desktop meant minimising every open panel one at a time from the dock, and putting them back was the same job again in reverse. There is now a Show desktop row in the sidebar, directly under Inbox. One press puts every panel on the desktop you are on into the dock, leaving the wallpaper and the message box. Press it again and exactly those panels come back. Nothing is ever closed — every panel keeps its scroll position and anything you had half-typed, and is still one click away in the dock. Panels you minimised yourself are left alone, and if you open something new while the desktop is clear, the next press puts that away with the rest instead of losing it.",
+    "title": "Show desktop \u2014 clear the panels away and get them back",
+    "summary": "Getting back to a clear desktop meant minimising every open panel one at a time from the dock, and putting them back was the same job again in reverse. There is now a Show desktop row in the sidebar, directly under Inbox. One press puts every panel on the desktop you are on into the dock, leaving the wallpaper and the message box. Press it again and exactly those panels come back. Nothing is ever closed \u2014 every panel keeps its scroll position and anything you had half-typed, and is still one click away in the dock. Panels you minimised yourself are left alone, and if you open something new while the desktop is clear, the next press puts that away with the rest instead of losing it.",
     "highlights": [
       "A Show desktop row under Inbox clears the current desktop to wallpaper and the message box",
       "Press it again to bring back exactly what it put away",
-      "Panels are minimised, never closed — scroll position and half-typed messages survive",
+      "Panels are minimised, never closed \u2014 scroll position and half-typed messages survive",
       "Panels you minimised yourself stay down; the button only restores its own",
       "Open something new while the desktop is clear and the next press puts it away too, rather than dropping it",
-      "Each desktop has its own — clearing one leaves the other's panels where they were"
-]
+      "Each desktop has its own \u2014 clearing one leaves the other's panels where they were"
+    ]
   },
   {
     "version": "skills-chips",
     "date": "2026-07-27",
     "title": "Skills on an agent are chips now, and the field suggests as you type",
-    "summary": "Editing an agent's skills meant typing a comma-separated list into a box and getting the punctuation right yourself, with a row of quick-pick buttons underneath that only knew about the skill folders on the agensis host. Each skill is now a chip with an x to remove it, and typing filters a list of every skill the workspace actually knows — the ones your agents advertise, the ones already set on another agent, the ones agensis ships, and those host folders. Enter or a click adds the highlighted one, backspace on an empty field takes the last chip back off. A skill name nothing has heard of is still accepted as you type it, because that is how a new one gets into the system in the first place.",
+    "summary": "Editing an agent's skills meant typing a comma-separated list into a box and getting the punctuation right yourself, with a row of quick-pick buttons underneath that only knew about the skill folders on the agensis host. Each skill is now a chip with an x to remove it, and typing filters a list of every skill the workspace actually knows \u2014 the ones your agents advertise, the ones already set on another agent, the ones agensis ships, and those host folders. Enter or a click adds the highlighted one, backspace on an empty field takes the last chip back off. A skill name nothing has heard of is still accepted as you type it, because that is how a new one gets into the system in the first place.",
     "highlights": [
       "Skills show as chips with a remove control, instead of a comma-separated string you had to punctuate",
       "Typing suggests from everything the workspace knows, not just the folders on the agensis host",
       "Enter adds the best match, backspace on an empty field removes the last chip, Escape closes the list",
       "A brand-new skill name is still accepted exactly as typed",
       "The same skill cannot be added twice, whatever case you type it in"
-]
+    ]
   },
   {
     "version": "agent-edit-bar",
     "date": "2026-07-27",
     "title": "Save is always in reach while editing an agent",
-    "summary": "Editing an agent is a long form, and Cancel and Save sat at the very bottom of it — so on a short window you had to scroll past everything you had just written to reach them. The row with the runtime, the model, Cancel and Save now follows you: it stays pinned to the top of the pane while you are working through the first half of the form, then hands over to the bottom edge once you are nearer the end. There is always exactly one of it, wherever you are, and it works the same in the create form. The runtime picker also drops the \"Sandbox (isolated cloud)\" choice — sandboxes are not a runtime you switch an agent to any more; you ask the Sandbox agent for one.",
+    "summary": "Editing an agent is a long form, and Cancel and Save sat at the very bottom of it \u2014 so on a short window you had to scroll past everything you had just written to reach them. The row with the runtime, the model, Cancel and Save now follows you: it stays pinned to the top of the pane while you are working through the first half of the form, then hands over to the bottom edge once you are nearer the end. There is always exactly one of it, wherever you are, and it works the same in the create form. The runtime picker also drops the \"Sandbox (isolated cloud)\" choice \u2014 sandboxes are not a runtime you switch an agent to any more; you ask the Sandbox agent for one.",
     "highlights": [
       "Cancel and Save stay on screen while you scroll the agent edit form, instead of only at the bottom",
       "The bar pins to the top for the first half of the form and to the bottom after that",
       "A form short enough not to scroll keeps its buttons where they have always been",
       "Same behaviour when creating an agent as when editing one",
-      "Runtime is Built-in or Remote — the unused Sandbox option is gone from the picker"
+      "Runtime is Built-in or Remote \u2014 the unused Sandbox option is gone from the picker"
     ]
   },
   {
@@ -70,27 +83,27 @@
     "version": "one-daemon-per-agent",
     "date": "2026-07-26",
     "title": "An agent appears once, on the machine actually doing the work",
-    "summary": "If the same agent's daemon was started twice — a second terminal, a machine you had forgotten about — agensis listed that agent twice and gave work to only one of the two. The other sat there heartbeating forever and never did anything, and which of them got the work was arbitrary. Connecting now takes over: the newest connection wins and the older one is told it has been replaced and stops, with the reason in its own log so it does not look like a network fault. Reconnecting after a laptop sleep or a dropped connection is unaffected — that comes straight back online, as before.",
+    "summary": "If the same agent's daemon was started twice \u2014 a second terminal, a machine you had forgotten about \u2014 agensis listed that agent twice and gave work to only one of the two. The other sat there heartbeating forever and never did anything, and which of them got the work was arbitrary. Connecting now takes over: the newest connection wins and the older one is told it has been replaced and stops, with the reason in its own log so it does not look like a network fault. Reconnecting after a laptop sleep or a dropped connection is unaffected \u2014 that comes straight back online, as before.",
     "highlights": [
       "One connection per agent in the agents list, instead of two copies of the same agent",
       "Starting a daemon for an agent that is already connected hands over cleanly, rather than leaving an idle duplicate",
       "The replaced daemon says why it stopped, so it is not debugged as a dropped network",
       "Coming back from sleep or a flaky connection still reconnects immediately"
-]
+    ]
   },
   {
     "version": "skill-content",
     "date": "2026-07-26",
     "title": "Skills your agents can actually use, and a page that shows who can use them",
-    "summary": "A skill used to be a name on a list. agensis knew that a machine somewhere had one called \"deploy-targets\" and nothing more, so you could not read it and — more importantly — no agent could use it unless it happened to be running on that exact machine. Skills are now stored in the workspace. Your agents can list them and read them as part of doing work, including a skill that belongs to a different agent, on a different machine, that is switched off right now. The Skills window is the visible half of that: each skill is a row, with a chip for every agent that has it. A filled chip is an agent whose machine reported the skill itself, so it really can do it; an outlined chip is a skill on that agent's profile that nothing has confirmed. Click a row to read the skill. Where agensis has no text yet it says exactly that and why — nothing is ever guessed at or filled in.",
+    "summary": "A skill used to be a name on a list. agensis knew that a machine somewhere had one called \"deploy-targets\" and nothing more, so you could not read it and \u2014 more importantly \u2014 no agent could use it unless it happened to be running on that exact machine. Skills are now stored in the workspace. Your agents can list them and read them as part of doing work, including a skill that belongs to a different agent, on a different machine, that is switched off right now. The Skills window is the visible half of that: each skill is a row, with a chip for every agent that has it. A filled chip is an agent whose machine reported the skill itself, so it really can do it; an outlined chip is a skill on that agent's profile that nothing has confirmed. Click a row to read the skill. Where agensis has no text yet it says exactly that and why \u2014 nothing is ever guessed at or filled in.",
     "highlights": [
       "Agents can now list and read skills mid-task, including another agent's skill while that agent is offline",
-      "One row per skill, with a chip per agent — so \"which agents can do this\" is one glance",
+      "One row per skill, with a chip per agent \u2014 so \"which agents can do this\" is one glance",
       "Filled chip = a connected machine advertises it; outlined chip = configured but unconfirmed",
       "Skills agensis ships still get a row even when no agent carries them yet",
       "A skill with no text says which kind of nothing it is, so you know whether there is anything to do",
-      "Skill text is read-only reference material — never treated as instructions, by an agent or the browser"
-]
+      "Skill text is read-only reference material \u2014 never treated as instructions, by an agent or the browser"
+    ]
   },
   {
     "version": "threads-unread",
@@ -103,13 +116,13 @@
       "Opening a thread jumps to the reply and marks that thread read, not the whole channel",
       "Voice-call transcripts are excluded; the call already has its own row in the channel",
       "Read state is shared with the inbox, so the two can never disagree about what you have seen"
-]
+    ]
   },
   {
     "version": "builtin-agent-tools",
     "date": "2026-07-26",
     "title": "Built-in agents can now actually use the workspace",
-    "summary": "An agent running inside agensis could only ever write text. That is why one would tell you it was about to create a to-do or look something up, and then nothing happened — there was no way for it to do anything but talk. It now has the real workspace tools: it can read channels, search messages and documents, write a doc, create and update tasks, put plan and to-do items on a thread's widget rail, save something to team memory, bring a teammate in, and use a provider key you have stored. And you can watch it work. Each tool it uses appears as a chip in the thread as it happens, a call that fails is marked as failed rather than quietly skipped, and what it says between steps arrives as separate messages instead of one paragraph that keeps growing. Agents run by a daemon on your own machine, and clients connected over MCP, are unchanged — this brings the ones agensis runs itself up to the same level.",
+    "summary": "An agent running inside agensis could only ever write text. That is why one would tell you it was about to create a to-do or look something up, and then nothing happened \u2014 there was no way for it to do anything but talk. It now has the real workspace tools: it can read channels, search messages and documents, write a doc, create and update tasks, put plan and to-do items on a thread's widget rail, save something to team memory, bring a teammate in, and use a provider key you have stored. And you can watch it work. Each tool it uses appears as a chip in the thread as it happens, a call that fails is marked as failed rather than quietly skipped, and what it says between steps arrives as separate messages instead of one paragraph that keeps growing. Agents run by a daemon on your own machine, and clients connected over MCP, are unchanged \u2014 this brings the ones agensis runs itself up to the same level.",
     "highlights": [
       "Built-in agents can read and post in channels, search, write docs, manage tasks and remember things",
       "They can raise a plan, to-dos or a blocker on the thread's widget rail while they work",
@@ -133,13 +146,13 @@
       "Owner and admin only, per workspace \u2014 a member of one workspace can never reach another's keys",
       "An orb's signing secret is visible in the list but still rotated from that orb's own panel",
       "When a key is missing, an agent tells you which vault entry to add and stops instead of failing at the provider"
-]
+    ]
   },
   {
     "version": "huddle-presence-reaper",
     "date": "2026-07-26",
     "title": "Huddles stop showing people who left",
-    "summary": "A huddle knew who had joined because each browser said so — and a browser that crashes, loses power or is force-quit never gets to say it left. That person stayed in the roster indefinitely, and a call everyone had walked away from stayed \"live\" in the channel forever. Now a browser in a huddle keeps saying \"still here\" while it holds the call, and presence that stops being refreshed is removed. A huddle nobody is left in closes itself and leaves the same one-line record in the channel as pressing End does. The window is deliberately generous: leaving the tab in the background, or dropping off wifi for a couple of minutes, does not take you out of a call you are still in — and if you are away long enough to be removed, coming back puts you straight back on the roster.",
+    "summary": "A huddle knew who had joined because each browser said so \u2014 and a browser that crashes, loses power or is force-quit never gets to say it left. That person stayed in the roster indefinitely, and a call everyone had walked away from stayed \"live\" in the channel forever. Now a browser in a huddle keeps saying \"still here\" while it holds the call, and presence that stops being refreshed is removed. A huddle nobody is left in closes itself and leaves the same one-line record in the channel as pressing End does. The window is deliberately generous: leaving the tab in the background, or dropping off wifi for a couple of minutes, does not take you out of a call you are still in \u2014 and if you are away long enough to be removed, coming back puts you straight back on the roster.",
     "highlights": [
       "Someone whose browser crashed or was force-quit disappears from the huddle instead of haunting it",
       "A huddle everyone has left closes itself, and files the usual \"You were in a huddle\" line in the channel",

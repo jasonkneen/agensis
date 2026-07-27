@@ -115,6 +115,8 @@ import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { WindowManagerProvider, useWindowManager } from './providers/WindowManagerProvider';
+import { HuddleDockProvider } from './components/huddle/HuddleDockContext';
+import { HuddleDock } from './components/huddle/HuddleDock';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
 import { useSharing } from './hooks/useSharing';
@@ -612,7 +614,12 @@ function reportWriteFailure(action: string, failure: WriteFailure | null) {
 export default function App() {
   return (
     <WindowManagerProvider>
-      <AppContent />
+      {/* Above AppContent, deliberately: the huddle session must outlive every
+          view AppContent renders, or navigating away drops the call — which is
+          exactly what it did while the session lived inside the channel. */}
+      <HuddleDockProvider>
+        <AppContent />
+      </HuddleDockProvider>
     </WindowManagerProvider>
   );
 }
@@ -2443,6 +2450,7 @@ function AppContent() {
         userId={user.id}
         contextLabel={viewedLayer.name || activeWorkspace?.name || ''}
       />
+      <HuddleDock />
       <AppUpdateManager />
       <Toaster />
     </TooltipProvider>
