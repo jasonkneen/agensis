@@ -41,8 +41,15 @@ const DEFAULTS: AppSettings = {
   ui_neo_theme: 'blueprint',
   ui_normal_theme: '',
   ui_tw_theme: 'gold',
-  ui_panel_translucency: 76,
-  ui_sidebar_translucency: 74,
+  // Panels sit over a wallpaper, so every percent of transparency is contrast
+  // spent on decoration. 76/74 let enough of the image through that text on a
+  // busy wallpaper became hard to read — the same class of problem as the
+  // sidebar section labels, which were mixing toward `transparent` and letting
+  // the image through the glyphs themselves. 88 keeps a visible frosting while
+  // putting the content first. The slider still spans 18-92 for anyone who
+  // wants more glass.
+  ui_panel_translucency: 88,
+  ui_sidebar_translucency: 88,
   ui_glass_blur: 14,
 };
 
