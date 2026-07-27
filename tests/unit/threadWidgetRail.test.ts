@@ -115,8 +115,8 @@ describe('resolveRailState — what it costs the message column', () => {
     const surface = RAIL_GUTTER_MIN_SURFACE_WIDTH;
     const { reserve } = state(true, 'auto', surface);
     // Both chat columns have to survive the reserve, not just the messages —
-    // the composer starts COMPOSER_SHELL_PADDING in on each side, so it runs
-    // out of room 16px before the message column does.
+    // messages and composer both start COMPOSER_SHELL_PADDING in on each side,
+    // so the column runs out of room 16px before the bare surface does.
     expect(surface - reserve).toBeGreaterThanOrEqual(CHAT_COLUMN_MAX_WIDTH);
     expect(surface - reserve - COMPOSER_SHELL_PADDING * 2).toBeGreaterThanOrEqual(CHAT_COLUMN_MAX_WIDTH);
   });

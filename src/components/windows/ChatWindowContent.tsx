@@ -62,7 +62,6 @@ import {
 } from '../chat/ComposerAddContent';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import {
-  COMPOSER_SHELL_PADDING,
   RAIL_ANIMATION_MS,
   parseRailPreference,
   railPreferenceKey,
@@ -291,6 +290,13 @@ type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 's
 // They were independent before — the composer was centred at max-w-[800px] while
 // the message list ran the full width of the window, so messages sat left of the
 // input they belong to. Change this in one place or they drift apart again.
+//
+// Sharing the cap is only half of sharing the measure: the box the column is
+// centred INSIDE has to be the same on both sides too, which is why the scroll
+// viewport carries the composer shell's own horizontal padding (see
+// MessageScrollerViewport below). The literal has to stay a literal for
+// Tailwind to emit it, and CHAT_COLUMN_MAX_WIDTH in threadWidgetRail.ts mirrors
+// it — the rail's gutter maths is derived from the same number.
 const CHAT_COLUMN_CLASS = 'mx-auto w-full max-w-[800px]';
 
 export const ChatWindowContent = React.memo(function ChatWindowContent({
@@ -1757,11 +1763,24 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 the room). Padding the scroll viewport rather than the rows is
                 the whole fix — `pr-[300px]` on each row used to take 220px
                 straight off the 800px column, which is why code blocks grew a
-                horizontal scrollbar and prose wrapped mid-window. */}
+                horizontal scrollbar and prose wrapped mid-window.
+
+                `px-2` is what keeps the transcript and the composer on the
+                same measure once the 800px cap stops binding — i.e. exactly
+                when a side panel is open. The composer sits inside the shell's
+                own `p-2`, so without a matching inset here the transcript ran
+                flush to the surface edge while the composer sat one step in on
+                each side: same centre line, 15px narrower, visibly two columns
+                instead of one. It has to be the same `0.5rem` the shell uses,
+                not a hardcoded 8 — this app's root font-size is 15px, so `p-2`
+                computes to 7.5px and a literal would be half a pixel out. */}
             <MessageScrollerViewport
               onScroll={handleScrollerScroll}
-              className="transition-[padding] ease-out motion-reduce:transition-none"
-              style={{ paddingRight: railReserve || undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+              className="px-2 transition-[padding] ease-out motion-reduce:transition-none"
+              style={{
+                paddingRight: railReserve ? `calc(0.5rem + ${railReserve}px)` : undefined,
+                transitionDuration: `${RAIL_ANIMATION_MS}ms`,
+              }}
             >
               <MessageScrollerContent className={cn('min-h-full gap-0 py-2', CHAT_COLUMN_CLASS)}>
                 {clearedAt && hiddenCount > 0 && (
@@ -1925,15 +1944,16 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               </div>
             )}
             {/* Match the message column's shift so the composer stays under the
-                conversation rather than under the rail. COMPOSER_SHELL_CLASS's
-                own `p-2` is 8px, so the reserve is added on top of it — that's
-                what keeps the two 800px columns on the same centre line. */}
+                conversation rather than under the rail. The reserve is added on
+                top of COMPOSER_SHELL_CLASS's own `p-2` — that's what keeps the
+                two 800px columns on the same centre line. Same `0.5rem` the
+                scroll viewport above uses, for the same reason. */}
             <div
               className={cn(COMPOSER_SHELL_CLASS, 'transition-[padding] ease-out motion-reduce:transition-none')}
-              style={{ paddingRight: railReserve ? railReserve + COMPOSER_SHELL_PADDING : undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+              style={{ paddingRight: railReserve ? `calc(0.5rem + ${railReserve}px)` : undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
             >
               {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
-                <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
+                <div className={cn('mb-2 flex flex-wrap gap-1.5', CHAT_COLUMN_CLASS)}>
                   {linkedFiles.map(file => (
                     <FileChip
                       key={file.id}
