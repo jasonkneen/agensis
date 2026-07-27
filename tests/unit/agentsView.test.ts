@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_LAYOUT_VIEWS,
   AGENT_LAYOUT_VIEW_PREF,
+  AGENT_SPLIT_DEFAULT_GRID_RATIO,
+  AGENT_SPLIT_MIN_GRID_PX,
+  AGENT_SPLIT_MIN_MAP_PX,
+  AGENT_SPLIT_PREF,
   AGENTS_SPLIT_MIN_REM,
   agentDetailPlacement,
   agentFormBarPlacement,
+  agentSplitGridHeight,
   toggleAgentSelection,
 } from '../../src/lib/agentsView';
 import { readPreference, type PreferenceStorage } from '../../src/lib/viewPreferences';
@@ -82,6 +87,105 @@ describe('agentDetailPlacement', () => {
   it('keeps the normal two-pane arrangement when the width is unknowable', () => {
     expect(agentDetailPlacement(Number.NaN)).toBe('beside');
     expect(agentDetailPlacement(Number.POSITIVE_INFINITY)).toBe('beside');
+  });
+});
+
+describe('AGENT_SPLIT_PREF', () => {
+  it('round-trips a dragged height as a plain integer', () => {
+    expect(AGENT_SPLIT_PREF.serialize(248)).toBe('248');
+    expect(AGENT_SPLIT_PREF.parse('248')).toBe(248);
+    expect(AGENT_SPLIT_PREF.parse('247.6')).toBe(248);
+  });
+
+  it('refuses anything that is not a measurement', () => {
+    // 0 is the "never dragged" fallback, so a stored 0 must read back as
+    // absent rather than as a pane with no height.
+    for (const raw of ['0', '-120', '', '   ', 'NaN', '240px', '{"h":240}', '[240]', 'undefined', '999999']) {
+      expect(AGENT_SPLIT_PREF.parse(raw)).toBeNull();
+    }
+  });
+});
+
+describe('agentSplitGridHeight', () => {
+  const MAP = AGENT_SPLIT_MIN_MAP_PX;
+  const GRID = AGENT_SPLIT_MIN_GRID_PX;
+
+  it('divides an untouched split by the default ratio', () => {
+    expect(agentSplitGridHeight(null, 800)).toBe(Math.round(800 * AGENT_SPLIT_DEFAULT_GRID_RATIO));
+    // 0 is what the preference stores for "never dragged".
+    expect(agentSplitGridHeight(0, 800)).toBe(Math.round(800 * AGENT_SPLIT_DEFAULT_GRID_RATIO));
+  });
+
+  it('honours a stored height that fits, leaving the rest to the map', () => {
+    expect(agentSplitGridHeight(300, 800)).toBe(300);
+    expect(agentSplitGridHeight(GRID, 800)).toBe(GRID);
+    expect(agentSplitGridHeight(800 - MAP, 800)).toBe(800 - MAP);
+  });
+
+  it('CLAMPS A SPLIT STORED IN A TALL WINDOW INTO A SHORT ONE', () => {
+    // The trap this exists for: 620px of grid was most of a 1000px-tall
+    // window. Restored into a 420px one it would leave the map -200px tall,
+    // i.e. gone, with nothing on screen saying the map is even there.
+    const stored = agentSplitGridHeight(620, 1000);
+    expect(stored).toBe(620);
+    const short = agentSplitGridHeight(620, 420);
+    expect(short).toBe(420 - MAP);
+    expect(420 - short).toBeGreaterThanOrEqual(MAP);
+    expect(short).toBeGreaterThanOrEqual(GRID);
+  });
+
+  it('never lets either pane fall below its minimum', () => {
+    // Dragged to the top…
+    expect(agentSplitGridHeight(0.5, 800)).toBe(GRID);
+    expect(agentSplitGridHeight(-4000, 800)).toBe(Math.round(800 * AGENT_SPLIT_DEFAULT_GRID_RATIO));
+    // …and to the bottom, past where the map would disappear.
+    expect(agentSplitGridHeight(4000, 800)).toBe(800 - MAP);
+    expect(agentSplitGridHeight(799, 800)).toBe(800 - MAP);
+  });
+
+  it('shrinks BOTH panes when the window cannot seat both minimums', () => {
+    // A 200px-tall pane cannot hold 132 + 176. One pane winning would mean the
+    // other is not on screen at all, so they take proportional shares instead.
+    const height = agentSplitGridHeight(600, 200);
+    expect(height).toBeGreaterThan(0);
+    expect(height).toBeLessThan(200);
+    expect(200 - height).toBeGreaterThan(0);
+    // Same proportion whatever was asked for — there is no room for a choice.
+    expect(agentSplitGridHeight(10, 200)).toBe(height);
+    expect(agentSplitGridHeight(null, 200)).toBe(height);
+    expect(height).toBe(Math.round(200 * (GRID / (GRID + MAP))));
+  });
+
+  it('is exact at the boundary where both minimums just fit', () => {
+    const exact = GRID + MAP;
+    expect(agentSplitGridHeight(4000, exact)).toBe(GRID);
+    expect(agentSplitGridHeight(4000, exact + 1)).toBe(GRID + 1);
+  });
+
+  it('answers the grid minimum, never zero, on an unmeasured container', () => {
+    // The first frame, and jsdom, where clientHeight is 0. A pane painted with
+    // no height is the thing this whole function is for.
+    expect(agentSplitGridHeight(null, 0)).toBe(GRID);
+    expect(agentSplitGridHeight(null, Number.NaN)).toBe(GRID);
+    expect(agentSplitGridHeight(300, 0)).toBe(300);
+    expect(agentSplitGridHeight(20, 0)).toBe(GRID);
+  });
+
+  it('survives garbage on either side', () => {
+    const untouched = Math.round(800 * AGENT_SPLIT_DEFAULT_GRID_RATIO);
+    // A non-finite stored value is not a measurement, so it reads as untouched
+    // rather than as "drag it as far as it will go".
+    expect(agentSplitGridHeight(Number.NaN, 800)).toBe(untouched);
+    expect(agentSplitGridHeight(Number.POSITIVE_INFINITY, 800)).toBe(untouched);
+    // An unmeasurable container is the same case as an unmeasured one.
+    expect(agentSplitGridHeight(300, Number.POSITIVE_INFINITY)).toBe(300);
+    expect(agentSplitGridHeight(300, -500)).toBe(300);
+  });
+
+  it('always returns a whole number of pixels', () => {
+    for (const [stored, container] of [[null, 777], [333.7, 900], [null, 201], [4000, 555]] as const) {
+      expect(Number.isInteger(agentSplitGridHeight(stored, container))).toBe(true);
+    }
   });
 });
 

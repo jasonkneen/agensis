@@ -450,6 +450,97 @@ export function meshLayout(childCount: number): MeshLayout {
   return { cx: CX, cy: CY, ring, nodeR, centerR: 58 };
 }
 
+/**
+ * Radius the connection endpoints sit at — outside the child ring, capped so a
+ * crowded level does not push them past the frame. ONE definition: the layout,
+ * the extent below and the dashed guide circle in the diagram all read it, and
+ * a fourth copy of `ring + 128` is how the endpoints end up clipped.
+ */
+export function providerRingRadius(layout: MeshLayout): number {
+  return Math.min(layout.ring + 128, 352);
+}
+
+/**
+ * How far the drawn graph actually reaches from the centre, per axis.
+ *
+ * A ring node's label sits at `r + 17` in 12px type, so it finishes around
+ * `r + 26`. A provider is a PILL, not a disc — up to 190 wide and 30 tall — so
+ * it reaches much further sideways than down, and a single bounding circle
+ * would reserve that sideways room in every direction and leave the graph
+ * looking small in its own box. Hence two half-extents.
+ */
+export const MESH_LABEL_ALLOWANCE = 26;
+const PROVIDER_HALF_W = 95;
+const PROVIDER_HALF_H = 15;
+
+export interface MeshExtent {
+  halfWidth: number;
+  halfHeight: number;
+}
+
+export function meshContentExtent(layout: MeshLayout, providerCount: number): MeshExtent {
+  const child = layout.ring + layout.nodeR + MESH_LABEL_ALLOWANCE;
+  if (providerCount <= 0) return { halfWidth: child, halfHeight: child };
+  const providers = providerRingRadius(layout);
+  return {
+    halfWidth: Math.max(child, providers + PROVIDER_HALF_W),
+    halfHeight: Math.max(child, providers + PROVIDER_HALF_H),
+  };
+}
+
+export interface MeshViewBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The window onto the diagram, so the graph FILLS the box it was given.
+ *
+ * The svg used to carry a fixed `0 0 1000 840`. With the default
+ * `preserveAspectRatio` that letterboxes: in a wide, short pane — which is what
+ * the split view hands it — the whole diagram scales down to the height and
+ * floats in the middle of two large empty margins. The space was already
+ * allocated; nothing was using it.
+ *
+ * The fix is to size the WINDOW to the container's aspect ratio instead of the
+ * drawing to a fixed one. Node coordinates never move: this only decides how
+ * much of the plane is on screen and therefore how big the graph is drawn.
+ *
+ * An unmeasurable container (first frame, jsdom) falls back to the content's
+ * own aspect — a box tight around the graph, which is still an improvement on
+ * a fixed one and is deterministic for tests.
+ */
+export function meshViewBox(
+  layout: MeshLayout,
+  extent: MeshExtent,
+  containerWidth: number,
+  containerHeight: number,
+): MeshViewBox {
+  const contentW = Math.max(1, extent.halfWidth * 2);
+  const contentH = Math.max(1, extent.halfHeight * 2);
+  const measured = Number.isFinite(containerWidth) && Number.isFinite(containerHeight)
+    && containerWidth > 0 && containerHeight > 0;
+  const aspect = measured ? containerWidth / containerHeight : contentW / contentH;
+  // The smallest box with the container's aspect that still contains the graph:
+  // whichever axis is the tighter fit decides the scale, and the other one gains
+  // the slack. That is the same rule `meet` uses — applied to a box that hugs
+  // the drawing rather than to a fixed 1000x840 frame.
+  const width = Math.max(contentW, contentH * aspect);
+  const height = width / aspect;
+  return {
+    x: round2(layout.cx - width / 2),
+    y: round2(layout.cy - height / 2),
+    width: round2(width),
+    height: round2(height),
+  };
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 /** Evenly-spaced slots, first at 12 o'clock. `count <= 0` yields nothing. */
 export function ringLayout(count: number, radius: number, cx = CX, cy = CY, startAngle = -Math.PI / 2): RingSlot[] {
   if (count <= 0) return [];
@@ -502,7 +593,7 @@ function buildProviders(
     entry.angles.push(slot.angle);
     grouped.set(label, entry);
   }
-  const radius = Math.min(layout.ring + 128, 352);
+  const radius = providerRingRadius(layout);
   const out: Array<{ node: MeshNode; slot: RingSlot }> = [];
   let index = children.length;
   for (const [label, { kind, angles }] of grouped) {
