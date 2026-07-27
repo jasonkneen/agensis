@@ -656,6 +656,12 @@
    row you are actually on — which is the one thing the frame is FOR.
    Hover and selected (below) put the treatment back. */
 :root[data-ui-theme="tinyworld"] .sidebar-action-row {
+ /* Match the SEARCH FIELD's height (min-h-8 = 2rem). The selected row is a
+    bar of the same family as the search bar directly above it, and at the
+    base 1.55rem it read as a shorter, meaner pill sitting under a taller
+    one. Only tinyworld: this theme frames the selection, so the frame's
+    proportions matter here in a way they do not where selection is a wash. */
+ min-height: 2rem !important;
  position: relative;
  overflow: hidden;
  border-width: 1px !important;
