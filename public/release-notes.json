@@ -1,5 +1,21 @@
 [
   {
+    "version": "huddle-connect",
+    "date": "2026-07-27",
+    "title": "Huddles connect again, and there is only one of them on screen",
+    "summary": "The huddle panel was opening without starting the call behind it, so nobody ever joined — not even you — and the list of people stayed empty while the panel sat on \"connecting\". Joining a huddle now actually connects you. The old huddle strip inside the channel and the old huddle side panel are both gone with it: the floating panel is the whole huddle, live or long finished, so there is one place to look instead of three that could disagree.",
+    "highlights": [
+      "Joining a huddle establishes the call, instead of opening a panel over nothing",
+      "You appear in the list of people in the huddle the moment you are connected",
+      "Mute, mute the replies, and switch which agent hears you — all in the panel",
+      "Live captions of what you are saying and who is speaking back",
+      "The strip that used to sit above the channel is gone — the toolbar button and the panel are the whole thing now",
+      "\"You were in a huddle\" in a channel opens that huddle in the same panel, instead of a separate side panel",
+      "Leaving posts your departure straight away, so the list is right for everyone else",
+      "If the call cannot be established, the panel says why instead of waiting forever"
+    ]
+  },
+  {
     "version": "message-attachments",
     "date": "2026-07-27",
     "title": "Files you send now show up as files",

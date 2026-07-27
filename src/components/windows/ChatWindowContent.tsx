@@ -69,7 +69,6 @@ import {
   toggledRailPreference,
   type RailPreference,
 } from '@/lib/threadWidgetRail';
-import { HuddleCard } from '../huddle/HuddleCard';
 import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
 import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
 import { EditChannelDialog } from '../chat/EditChannelDialog';
@@ -81,8 +80,8 @@ import {
   mentionsChannel,
   normalizeConversationMode,
 } from '../../lib/channelMentions';
-import { HuddlePanel } from '../huddle/HuddlePanel';
 import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
+import { useHuddleDock } from '../huddle/HuddleDockContext';
 import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
@@ -294,7 +293,7 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads' | 'huddle';
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
 
 // The chat column: message list and composer share ONE width so they line up.
 // They were independent before — the composer was centred at max-w-[800px] while
@@ -851,9 +850,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // `src/lib/threadWidgetRail.ts` for the whole decision, including why the
   // message column's width is identical whether the rail is open or shut.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
-  // Voice huddle strip, between the header and the transcript. Bound to THIS
-  // session so the call belongs to the conversation it was called from.
-  const showHuddleCard = !readOnly && !!inferredSessionId && !!workspaceId;
+  // The huddle trigger in the channel toolbar. Bound to THIS session so the
+  // call belongs to the conversation it was called from — but the call itself
+  // lives in the app-level dock, not here.
+  const showHuddle = !readOnly && !!inferredSessionId && !!workspaceId;
   const rail = useMemo(
     () => resolveRailState({
       hasContent: railHasContent,
@@ -1192,17 +1192,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => huddleAgentOptions(agents, persistedParticipants),
     [agents, persistedParticipants],
   );
-  // Which agent a huddle utterance is addressed to. Lifted here so the strip in
-  // the card and the composer in the panel talk to the SAME agent — two
-  // controls disagreeing about who is listening is worse than one.
-  const [huddleActiveAgentId, setHuddleActiveAgentId] = useState('');
-  // Which huddle the panel is showing. Null means "this channel's current one";
-  // a marker from an old huddle sets it explicitly.
-  const [huddlePanelId, setHuddlePanelId] = useState<string | null>(null);
-  const openHuddlePanel = useCallback((huddleId?: string | null) => {
-    setHuddlePanelId(huddleId || null);
-    setSidePanel('huddle');
-  }, []);
+  // A huddle marker in the transcript ("You were in a huddle · 12:04 · Ada,
+  // Sam") opens that huddle in the DOCK. There is no huddle side panel any
+  // more: the channel had a strip, a side panel and a toolbar button all
+  // showing the same call, which is how you end up with two surfaces
+  // disagreeing about whether you are connected. One panel, one answer.
+  const huddleDock = useHuddleDock();
+  const openHuddleRecord = useCallback((huddleId?: string | null) => {
+    if (!huddleId || !workspaceId || !huddleDock) return;
+    huddleDock.openHuddleRecord({ workspaceId, huddleId, title: channelTitle || 'this conversation' });
+  }, [huddleDock, workspaceId, channelTitle]);
   // Who replied and when, per parent message — derived from the messages already
   // in memory (threadReplyCounts stays the source of truth for the number itself).
   const threadReplySummaries = useMemo(
@@ -1568,8 +1567,8 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           huddle event (start / join / leave / end), never per message — the
           transcript itself lives in the panel's own hook. */}
       <HuddleSessionProvider
-        workspaceId={showHuddleCard ? workspaceId : null}
-        sessionId={showHuddleCard ? inferredSessionId : null}
+        workspaceId={showHuddle ? workspaceId : null}
+        sessionId={showHuddle ? inferredSessionId : null}
       >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
@@ -1632,11 +1631,12 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </span>
               )}
             </Button>
-            {showHuddleCard && (
+            {showHuddle && (
               <HuddleToolbarButton
                 workspaceId={workspaceId}
                 sessionId={inferredSessionId}
                 title={channelTitle}
+                agents={huddleAgents}
               />
             )}
             <div className="min-w-2 flex-1" />
@@ -1771,16 +1771,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
             </DropdownMenu>
           </div>
         </div>
-        {showHuddleCard && (
-          <HuddleCard
-            workspaceId={workspaceId}
-            sessionId={inferredSessionId}
-            agents={huddleAgents}
-            activeAgentId={huddleActiveAgentId}
-            onActiveAgentChange={setHuddleActiveAgentId}
-            onOpenPanel={openHuddlePanel}
-          />
-        )}
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             {/* The rail's width comes out of the SURFACE, never out of the
@@ -1870,7 +1860,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                         if (group) {
                           return (
                             <MessageScrollerItem key={group.key} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
-                              <HuddleMarkerGroupRow group={group} onOpen={openHuddlePanel} />
+                              <HuddleMarkerGroupRow group={group} onOpen={openHuddleRecord} />
                             </MessageScrollerItem>
                           );
                         }
@@ -1878,7 +1868,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                         if (huddleGroupedIds.has(msg.id)) return null;
                         return (
                           <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
-                            <HuddleMarkerRow message={msg} onOpen={openHuddlePanel} />
+                            <HuddleMarkerRow message={msg} onOpen={openHuddleRecord} />
                           </MessageScrollerItem>
                         );
                       }
@@ -2308,15 +2298,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
             onPointerDown={beginPanelResize}
             aria-hidden
           />
-          {sidePanel === 'huddle' ? (
-            <HuddlePanel
-              workspaceId={workspaceId}
-              huddleId={huddlePanelId}
-              agents={huddleAgents}
-              activeAgentId={huddleActiveAgentId}
-              onClose={closeSidePanel}
-            />
-          ) : sidePanel === 'profile' ? (
+          {sidePanel === 'profile' ? (
             <AgentProfileSidePanel
               agent={profileAgent}
               currentUserId={currentUserId}

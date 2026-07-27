@@ -121,6 +121,34 @@ export function huddleAgentOptions(
   return out;
 }
 
+/**
+ * Whether two rosters say the same thing, field by field.
+ *
+ * huddleAgentOptions() rebuilds its array on every render of the channel, so a
+ * reference check would report a change constantly. The dock keeps the roster
+ * on its target, and a new target object re-renders the whole call — including
+ * the speech hooks, whose effects tear a microphone down and back up. Comparing
+ * the values is what makes "the channel re-rendered" and "the roster changed"
+ * two different things.
+ */
+export function sameHuddleAgents(
+  a: readonly HuddleAgentOption[],
+  b: readonly HuddleAgentOption[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((agent, index) => {
+    const other = b[index];
+    return !!other
+      && agent.id === other.id
+      && agent.name === other.name
+      && agent.handle === other.handle
+      && agent.avatar === other.avatar
+      && agent.accent === other.accent
+      && agent.voiceId === other.voiceId;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // "Coder, what's the status" -> switch to Coder, say "what's the status"
 // ---------------------------------------------------------------------------
