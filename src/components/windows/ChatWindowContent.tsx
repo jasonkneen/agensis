@@ -25,7 +25,6 @@ import {
   Monitor,
   MoreHorizontal,
   Settings2,
-  Palette,
   PanelRightClose,
   PanelRightOpen,
   Paperclip,
@@ -53,13 +52,14 @@ import {
   ComposerAddContent,
   FileChip,
   buildFileContext,
-  formatBytes,
   linkedProjectFile,
   linkedUploadedFile,
   type LinkedFile,
   type ProjectFileEntry,
   type ProjectFileSource,
 } from '../chat/ComposerAddContent';
+import { FileDetailPanel, ProjectFileRow, UploadedFileRow } from '../files/FilePanelItems';
+import { panelFileName, type SelectedPanelFile } from '../../lib/uploadedFiles';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
 import {
   RAIL_ANIMATION_MS,
@@ -180,7 +180,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
@@ -3831,10 +3830,6 @@ function humanizeMetadataKey(value: string) {
     .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-type SelectedPanelFile =
-  | { kind: 'uploaded'; file: UploadedFile }
-  | { kind: 'project'; file: ProjectFileEntry; source: ProjectFileSource };
-
 function FileTreeSection({
   title,
   detail,
@@ -3893,204 +3888,6 @@ function FileTreeDirSection({
       {open && <div className="file-tree-children">{children}</div>}
     </div>
   );
-}
-
-function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      className="file-tree-row"
-      onClick={onOpen}
-      title={`Open ${file.name}`}
-    >
-      <Paperclip className="file-tree-icon" />
-      <span className="file-tree-name">{file.name}</span>
-      <span className="file-tree-meta">{file.type || 'File'}</span>
-      <span className="file-tree-size">{formatBytes(file.size || 0)}</span>
-    </button>
-  );
-}
-
-
-function ProjectFileRow({ file, source, onOpen }: { file: ProjectFileEntry; source: ProjectFileSource; onOpen: () => void }) {
-  const displayName = file.path.split('/').filter(Boolean).pop() || file.name || file.path;
-  const folderPath = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : source.label;
-  return (
-    <button
-      type="button"
-      className="file-tree-row"
-      onClick={onOpen}
-      title={file.path}
-    >
-      {source.kind === 'agent' ? <Bot className="file-tree-icon" /> : <FileText className="file-tree-icon" />}
-      <span className="file-tree-name">{displayName}</span>
-      <span className="file-tree-meta">{folderPath}</span>
-      <span className="file-tree-size">{formatBytes(file.size || 0)}</span>
-    </button>
-  );
-}
-
-function FileDetailPanel({
-  selectedFile,
-  agents,
-  onOpenUploaded,
-  onCreateTask,
-  onTaskCreated,
-}: {
-  selectedFile: SelectedPanelFile;
-  agents: WorkspaceAgent[];
-  onOpenUploaded: (file: UploadedFile) => Promise<void>;
-  onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
-  onTaskCreated: () => void;
-}) {
-  const defaultAgentId = agents[0]?.id || '';
-  const [agentId, setAgentId] = useState(defaultAgentId);
-  const [instructions, setInstructions] = useState(() => `Modify ${panelFileName(selectedFile)} based on the requested outcome. Preserve the existing style and report what changed.`);
-  const [saving, setSaving] = useState(false);
-  const fileName = panelFileName(selectedFile);
-  const palette = filePalette(fileName);
-  const haiku = fileHaiku(selectedFile);
-  const sourceLabel = panelFileSourceLabel(selectedFile);
-  const sourcePath = panelFilePath(selectedFile);
-  const size = selectedFile.kind === 'uploaded' ? selectedFile.file.size : selectedFile.file.size;
-  const selectedAgent = agents.find(agent => agent.id === agentId);
-
-  const handleCreateTask = async () => {
-    if (!onCreateTask || saving) return;
-    setSaving(true);
-    try {
-      await onCreateTask({
-        title: `Modify ${fileName}`,
-        description: [
-          `File: ${sourcePath}`,
-          `Source: ${sourceLabel}`,
-          selectedAgent ? `Assigned agent: ${selectedAgent.name}` : '',
-          `Palette: ${palette.join(', ')}`,
-          `Description:\n${haiku}`,
-          `Instructions:\n${instructions.trim() || `Modify ${fileName}.`}`,
-        ].filter(Boolean).join('\n\n'),
-        status: 'in_progress',
-        priority: 'normal',
-        assignee_id: agentId || null,
-        source_type: 'ai',
-        source_id: selectedFile.kind === 'uploaded' ? selectedFile.file.id : `${selectedFile.source.id}:${selectedFile.file.path}`,
-      });
-      onTaskCreated();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-lg border bg-muted/25 p-3">
-        <div className="mb-2 flex min-w-0 items-start gap-2">
-          {selectedFile.kind === 'project' && selectedFile.source.kind === 'agent' ? <Bot className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : <Folder className="mt-0.5 size-4 shrink-0 text-muted-foreground" />}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">{fileName}</div>
-            <div className="truncate text-xs text-muted-foreground" title={sourcePath}>{sourcePath}</div>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-          <div className="truncate">Source: {sourceLabel}</div>
-          <div>{formatBytes(size || 0)}</div>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          <Palette className="size-3.5" />
-          Palette
-        </div>
-        <div className="flex gap-2">
-          {palette.map(color => (
-            <span key={color} className="h-8 flex-1 rounded-md border shadow-inner" style={{ background: color }} title={color} />
-          ))}
-        </div>
-      </div>
-
-      <div className="rounded-lg border bg-background/50 p-3 text-sm leading-relaxed">
-        {haiku.split('\n').map(line => <div key={line}>{line}</div>)}
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assign agent</label>
-        <NativeSelect value={agentId} onChange={event => setAgentId(event.target.value)} className="w-full">
-          <NativeSelectOption value="">Unassigned</NativeSelectOption>
-          {agents.map(agent => (
-            <NativeSelectOption key={agent.id} value={agent.id}>
-              {agent.name}{agent.handle ? ` (@${agent.handle})` : ''}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Instruction</label>
-        <Textarea
-          value={instructions}
-          onChange={event => setInstructions(event.target.value)}
-          rows={5}
-          className="min-h-28 resize-none text-sm"
-          placeholder="Tell the assigned agent how to modify this file..."
-        />
-      </div>
-
-      <div className="flex items-center justify-between gap-2">
-        {selectedFile.kind === 'uploaded' ? (
-          <Button type="button" variant="outline" size="sm" onClick={() => void onOpenUploaded(selectedFile.file)}>
-            Open original
-          </Button>
-        ) : (
-          <span className="text-xs text-muted-foreground">Creates an active task from this file.</span>
-        )}
-        <Button type="button" size="sm" onClick={handleCreateTask} disabled={!onCreateTask || saving}>
-          {saving ? <Spinner /> : null}
-          Create task
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function panelFileName(selectedFile: SelectedPanelFile) {
-  return selectedFile.kind === 'uploaded' ? selectedFile.file.name : selectedFile.file.name || selectedFile.file.path.split('/').pop() || selectedFile.file.path;
-}
-
-function panelFilePath(selectedFile: SelectedPanelFile) {
-  return selectedFile.kind === 'uploaded' ? selectedFile.file.name : selectedFile.file.path;
-}
-
-function panelFileSourceLabel(selectedFile: SelectedPanelFile) {
-  return selectedFile.kind === 'uploaded' ? 'Uploaded' : selectedFile.source.label;
-}
-
-
-function filePalette(seed: string) {
-  const hash = hashText(seed);
-  return [0, 48, 112, 184, 252].map(offset => `hsl(${(hash + offset) % 360} 78% ${offset === 0 ? 46 : 58}%)`);
-}
-
-function fileHaiku(selectedFile: SelectedPanelFile) {
-  const name = panelFileName(selectedFile).replace(/\.[^.]+$/, '') || 'File';
-  const source = selectedFile.kind === 'uploaded' ? 'Uploaded' : selectedFile.source.kind === 'agent' ? 'Agent cwd' : 'Workspace';
-  return [
-    `${shortHaikuWord(name)} waits in place`,
-    `${source} light marks the path`,
-    'Hands reshape the file',
-  ].join('\n');
-}
-
-function shortHaikuWord(value: string) {
-  return value.split(/[-_\s]+/).filter(Boolean).slice(0, 3).join(' ') || 'File';
-}
-
-function hashText(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return hash;
 }
 
 function applyMessageOverrides(messages: ChatMessage[], overrides: MessageOverrides): ChatMessage[] {
