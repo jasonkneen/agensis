@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearShowDesktopStash,
+  isDesktopSurfaceVisible,
+  isDrawToolAvailable,
   isShowingDesktop,
   resolveShowDesktop,
   type ShowDesktopStash,
@@ -157,5 +159,51 @@ describe('isShowingDesktop', () => {
 describe('clearShowDesktopStash', () => {
   it('empties every desktop, because a workspace switch closes every window', () => {
     expect(clearShowDesktopStash()).toEqual({})
+  })
+})
+
+describe('isDesktopSurfaceVisible', () => {
+  it('is true for a desktop nobody has opened anything on — unlike isShowingDesktop', () => {
+    expect(isDesktopSurfaceVisible([], undefined)).toBe(true)
+    expect(isShowingDesktop([], undefined, {})).toBe(false)
+  })
+
+  it('is false while a window covers it', () => {
+    expect(isDesktopSurfaceVisible([win('a')], undefined)).toBe(false)
+  })
+
+  it('counts minimised windows as not covering it — they are in the dock', () => {
+    expect(isDesktopSurfaceVisible([win('a', { minimized: true })], undefined)).toBe(true)
+  })
+
+  it('only looks at the desktop you are on', () => {
+    const windows = [win('a', { canvasId: 'main' }), win('b', { canvasId: 'other', minimized: true })]
+    expect(isDesktopSurfaceVisible(windows, 'main')).toBe(false)
+    expect(isDesktopSurfaceVisible(windows, 'other')).toBe(true)
+  })
+})
+
+describe('isDrawToolAvailable', () => {
+  it('is offered on the bare desktop', () => {
+    expect(isDrawToolAvailable([], undefined, false)).toBe(true)
+  })
+
+  it('is not offered while a channel or document has the surface', () => {
+    expect(isDrawToolAvailable([win('a')], undefined, false)).toBe(false)
+  })
+
+  it('comes back when the windows are put away', () => {
+    const hidden = press([win('a')], undefined, {})
+    expect(isDrawToolAvailable(hidden.windows, undefined, false)).toBe(true)
+  })
+
+  it('stays reachable while drawing is on, so the mode can always be left', () => {
+    expect(isDrawToolAvailable([win('a')], undefined, true)).toBe(true)
+  })
+
+  it('is per desktop, like everything else here', () => {
+    const windows = [win('a', { canvasId: 'main' })]
+    expect(isDrawToolAvailable(windows, 'main', false)).toBe(false)
+    expect(isDrawToolAvailable(windows, 'other', false)).toBe(true)
   })
 })
