@@ -366,6 +366,10 @@ export function tipSurfaceFor(input: {
       return 'document';
     case 'agents':
       return 'agents';
+    // Tenants is a WINDOW now, not an overlay. Without this case its tips
+    // silently stopped resolving when it stopped being passed as `overlay`.
+    case 'tenants':
+      return 'tenants';
     case 'inbox':
       return 'inbox';
     case 'tasks':
