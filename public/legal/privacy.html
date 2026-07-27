@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Privacy Policy — agensis</title>
+<meta name="description" content="How agensis handles your data: what is stored, where it lives, and which third parties receive it." />
+<!-- NOINDEX while this document is a draft. Remove this tag at publication,
+     together with the draft banner in <body>. -->
+<meta name="robots" content="noindex" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #08090b;
+    --panel: #0f1218;
+    --line: rgba(232, 230, 225, 0.09);
+    --line-soft: rgba(232, 230, 225, 0.05);
+    --text: #e8e6e1;
+    --muted: #8b909c;
+    --dim: #5c6170;
+    --accent: #4f9cf9;
+    --accent-soft: rgba(79, 156, 249, 0.14);
+    --warn: #f2b94b;
+    --warn-soft: rgba(242, 185, 75, 0.12);
+    --serif: "Instrument Serif", Georgia, serif;
+    --sans: "Instrument Sans", -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- nav ---------- */
+  nav {
+    border-bottom: 1px solid var(--line-soft);
+    padding: 20px 0;
+  }
+  nav .wrap { display: flex; align-items: center; gap: 20px; }
+  .brand {
+    font-family: var(--serif); font-size: 20px;
+    color: var(--text); text-decoration: none; letter-spacing: -0.01em;
+  }
+  nav .spacer { flex: 1; }
+  nav a.link {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); text-decoration: none;
+  }
+  nav a.link:hover { color: var(--text); }
+
+  /* ---------- draft banner ---------- */
+  .draft {
+    border: 1px solid rgba(242, 185, 75, 0.42);
+    background: var(--warn-soft);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin: 36px 0 8px;
+  }
+  .draft .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 10px;
+  }
+  .draft p { color: var(--text); font-size: 15px; margin-bottom: 10px; }
+  .draft p:last-child { margin-bottom: 0; }
+  .draft strong { color: var(--warn); font-weight: 600; }
+
+  /* ---------- headings + body ---------- */
+  header.doc { padding: 44px 0 8px; }
+  h1 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(2.4rem, 6vw, 3.4rem); line-height: 1.08;
+    letter-spacing: -0.015em; margin-bottom: 14px;
+  }
+  .meta {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--dim);
+  }
+
+  main { padding: 8px 0 72px; }
+
+  h2 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: 1.75rem; line-height: 1.2; letter-spacing: -0.01em;
+    margin: 52px 0 14px; padding-top: 24px;
+    border-top: 1px solid var(--line-soft);
+  }
+  h3 {
+    font-size: 15px; font-weight: 600; color: var(--text);
+    margin: 30px 0 8px; letter-spacing: -0.005em;
+  }
+  p { color: var(--muted); margin-bottom: 16px; }
+  p strong, li strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { color: var(--muted); margin: 0 0 18px 0; padding-left: 22px; }
+  li { margin-bottom: 9px; }
+  li::marker { color: var(--dim); }
+
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 4px; padding: 1px 5px; color: var(--text);
+  }
+
+  /* ---------- decision placeholder ---------- */
+  .todo {
+    display: inline-block;
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    color: var(--warn);
+    background: var(--warn-soft);
+    border: 1px dashed rgba(242, 185, 75, 0.5);
+    border-radius: 5px;
+    padding: 2px 8px;
+  }
+
+  /* ---------- table ---------- */
+  .tablewrap { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+  th, td { text-align: left; padding: 12px 16px; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+  th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--dim); font-weight: 400;
+    background: var(--panel);
+  }
+  td { color: var(--muted); }
+  td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+
+  /* ---------- callout ---------- */
+  .note {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 0 0 20px;
+  }
+  .note p { color: var(--text); font-size: 15px; margin-bottom: 10px; }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- toc ---------- */
+  .toc {
+    border: 1px solid var(--line-soft); border-radius: 10px;
+    background: var(--panel); padding: 20px 24px; margin: 34px 0 0;
+  }
+  .toc p {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 12px;
+  }
+  .toc ol { margin: 0; padding-left: 20px; font-size: 14px; }
+  .toc li { margin-bottom: 5px; }
+  .toc a { color: var(--muted); }
+  .toc a:hover { color: var(--text); text-decoration: none; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line-soft); padding: 30px 0 56px; }
+  .foot {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    letter-spacing: 0.08em;
+  }
+  .foot .spacer { flex: 1; }
+  .foot a { color: var(--muted); }
+  .foot a:hover { color: var(--text); text-decoration: none; }
+
+  @media (max-width: 620px) {
+    body { font-size: 15px; }
+    h2 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a href="/" class="brand">agensis</a>
+    <span class="spacer"></span>
+    <a href="/legal/terms.html" class="link">Terms</a>
+    <a href="/app" class="link">Open app</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <!-- ============================================================
+       DRAFT NOTICE — remove this block, and the noindex meta tag in
+       <head>, only when a qualified lawyer has reviewed and approved
+       this document for publication.
+       ============================================================ -->
+  <div class="draft">
+    <span class="tag">Draft — not legally reviewed</span>
+    <p><strong>This document is a working draft and is not in force.</strong> It was written by describing what the agensis software actually does with data, verified against the source code. It has <strong>not</strong> been reviewed by a lawyer and it is not a legal agreement between you and anyone.</p>
+    <p>It must not be published or relied upon until a qualified legal professional has reviewed it. Passages marked in <span class="todo">amber</span> are business decisions that have not been made and that no amount of reading the code can answer.</p>
+  </div>
+</div>
+
+<header class="doc">
+  <div class="wrap">
+    <h1>Privacy Policy</h1>
+    <p class="meta">Draft &middot; prepared 27 July 2026 &middot; not yet in effect</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#scope">Who this applies to</a></li>
+      <li><a href="#collect">What we collect</a></li>
+      <li><a href="#not-collect">What we do not collect</a></li>
+      <li><a href="#where">Where your data is stored</a></li>
+      <li><a href="#third-parties">Third parties that receive data</a></li>
+      <li><a href="#your-destinations">Destinations you choose yourself</a></li>
+      <li><a href="#credentials">Credentials and the workspace vault</a></li>
+      <li><a href="#byok">Your own API keys, and agents on your machine</a></li>
+      <li><a href="#self-host">Self-hosting</a></li>
+      <li><a href="#access">Who can see your workspace</a></li>
+      <li><a href="#retention">Retention and deletion</a></li>
+      <li><a href="#security">Security</a></li>
+      <li><a href="#rights">Your rights</a></li>
+      <li><a href="#children">Children</a></li>
+      <li><a href="#changes">Changes and contact</a></li>
+    </ol>
+  </nav>
+</div>
+
+<main>
+<div class="wrap">
+
+  <h2 id="scope">1. Who this applies to</h2>
+
+  <p>This policy covers the <strong>hosted agensis service</strong> at <code>agensis.io</code> — the web app, the backend that serves it, and the agent daemon when it connects to that backend.</p>
+
+  <p>agensis is also open source, published under the MIT licence. If you <strong>run your own copy</strong>, this policy does not describe your deployment: your database, your servers, your logs, your choice of AI provider. Section 9 covers what changes in that case.</p>
+
+  <h2 id="collect">2. What we collect</h2>
+
+  <h3>Account information</h3>
+  <p>When you create an account with an email address and password, we store:</p>
+  <ul>
+    <li>your <strong>email address</strong>;</li>
+    <li>a <strong>hash of your password</strong> (scrypt, with a random per-user salt) — never the password itself;</li>
+    <li>optionally, a <strong>display name</strong> and an accent colour, if you set them;</li>
+    <li>the date the account was created.</li>
+  </ul>
+  <p>That is the whole of it. We do not ask for your real name, postal address, phone number, job title, company, or date of birth, and there is nowhere in the product to enter them.</p>
+
+  <p>If you sign in with <strong>Google or GitHub</strong> instead, that is handled through Netlify Identity. We receive the <strong>email address the provider asserts</strong> and use it to find or create your agensis account. We do not receive or store your Google or GitHub password.</p>
+
+  <div class="note">
+    <p><strong>We do not send email.</strong> There is no mail service connected to agensis at all. That also means there is currently no email verification and no password reset — if you lose your password, there is no self-service way to recover the account.</p>
+  </div>
+
+  <h3>Workspace content</h3>
+  <p>Everything you and your agents create inside a workspace is stored in our database, as you wrote it:</p>
+  <ul>
+    <li><strong>Messages</strong> in channels, threads and direct messages, including messages your agents write;</li>
+    <li><strong>Channels, threads and their titles</strong>;</li>
+    <li><strong>Documents</strong>, their version history, and comments on them;</li>
+    <li><strong>Tasks</strong> and task comments;</li>
+    <li><strong>Memory</strong> — the facts and notes your workspace and your agents keep;</li>
+    <li><strong>Files you upload</strong>, stored as the original bytes;</li>
+    <li><strong>Canvas objects</strong> and the layers and groups they sit in;</li>
+    <li><strong>Agent configuration</strong> — an agent's name, handle, character description, system prompt and instructions;</li>
+    <li><strong>Huddle transcripts</strong>. A voice huddle writes what was said into a conversation in the workspace, and separately records join/leave/speaking events;</li>
+    <li><strong>Activity events</strong> — an audit trail of what happened in the workspace, including a record of each call an agent made to an external provider (which provider, which operation, the resolved URL, the HTTP status and the duration — never a request body, a header or a credential).</li>
+  </ul>
+
+  <h3>Files mirrored from a connected machine</h3>
+  <p>When you connect an agent daemon running on your own computer, that daemon <strong>pushes copies of certain local files into your workspace</strong> so the rest of the team — and other agents — can read them while your machine is offline. Specifically:</p>
+  <ul>
+    <li><strong>Agent memory files</strong>: path, a summary, and the file's content;</li>
+    <li><strong>Agent skill documents</strong>: the skill name, its path on your machine, and the body of the skill file (stored up to 64&nbsp;KiB; longer files are marked as truncated).</li>
+  </ul>
+  <p>This is a real transfer of local file content into our database. It happens because you connected a daemon, and it is how a teammate can read your agent's skill without your laptop being on.</p>
+
+  <h3>Connection metadata</h3>
+  <p>A connected daemon reports, and we store:</p>
+  <ul>
+    <li>the <strong>hostname</strong> of the machine it runs on;</li>
+    <li>the <strong>working directory path</strong> it was started in;</li>
+    <li>its online/busy/offline status and the capabilities it advertises (which tools, models and skills it has available).</li>
+  </ul>
+
+  <h3>Usage metering</h3>
+  <p>We record how much of each metered resource a workspace consumes, in a table called <code>usage_events</code>. A row holds: the workspace, the provider (<code>anthropic</code>, <code>deepgram</code>, <code>cartesia</code>, <code>livekit</code> or <code>sandbox</code>), the resource (a model name, a voice model, a room), which part of the product spent it, and counts of <strong>tokens, characters or seconds</strong>. There is no message content in a usage row, and no price — money is calculated at display time from a separate rate card.</p>
+
+  <h3>Feedback reports</h3>
+  <p>If you send in-app feedback, we receive your description, the page and elements you selected, and a diagnostics snapshot: the build id, your browser's user-agent string, the page URL, viewport size, language, the last few hundred console lines (each truncated) and the last few unhandled errors. Console text is passed through a secret-redactor on the way out.</p>
+  <p>The snapshot deliberately excludes <code>localStorage</code>, <code>sessionStorage</code>, cookies, form values and network request bodies — your session token lives in <code>localStorage</code>, and the surest way to keep it out of a bug report is never to read it.</p>
+
+  <h3>IP addresses</h3>
+  <p>Your IP address is used as a <strong>rate-limiting key</strong> — to slow down repeated sign-up attempts, failed sign-ins, browser security reports and device-authorisation requests. It is held in the server's memory for that purpose. We do not write it to the database as an IP address and it is not written to our application logs.</p>
+
+  <h3>Link previews</h3>
+  <p>When a URL is pasted into a message, <strong>our server fetches that URL</strong> to build the preview card — the reader's browser does not fetch it. The site you linked to therefore sees a request from <em>our</em> server's IP address, identifying itself as <code>agensis-linkpreview/1.0</code>, not from you or from anyone who reads the message. We cache the resulting title, description, site name and image URL.</p>
+
+  <h2 id="not-collect">3. What we do not collect</h2>
+
+  <p>There is <strong>no analytics or tracking of any kind</strong> in agensis. We checked the shipped code for it. There is no Google Analytics, no PostHog, no Sentry, no Segment, Mixpanel, Plausible, Hotjar, FullStory or Datadog, no advertising pixel, and no session-recording tool. Nothing measures which buttons you press or how long you stay.</p>
+
+  <p><strong>We set no cookies.</strong> Your sign-in session is an HMAC-signed token kept in your browser's <code>localStorage</code>, sent as an <code>Authorization</code> header. It expires after 14 days by default, and signing out or changing your password invalidates every outstanding token for your account.</p>
+
+  <p>We do not sell personal data, and we do not share it for advertising.</p>
+
+  <div class="note">
+    <p><strong>One exception worth naming.</strong> The marketing site and the app load web fonts from <strong>Google Fonts</strong> (<code>fonts.googleapis.com</code>, <code>fonts.gstatic.com</code>). That is a direct request from your browser to Google, which discloses your IP address and user-agent to Google. It is not analytics and we receive nothing from it, but it is a third-party request and we would rather name it than let you find it in the network tab.</p>
+    <p><span class="todo">DECISION NEEDED: whether to self-host these fonts and remove the Google request entirely. That is a one-line change and it would let this section say "no third-party requests" without an exception.</span></p>
+  </div>
+
+  <h2 id="where">4. Where your data is stored</h2>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Provider</th><th>What they hold</th><th>Location</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Neon</td>
+          <td>The Postgres database: every account record, message, document, task, memory fact, huddle transcript, activity event, usage row and encrypted vault entry.</td>
+          <td><span class="todo">CONFIRM: Neon project region</span></td>
+        </tr>
+        <tr>
+          <td>Fly.io</td>
+          <td>The realtime backend server, and the disk volume holding the actual bytes of every file you upload.</td>
+          <td>Frankfurt (<code>fra</code>)</td>
+        </tr>
+        <tr>
+          <td>Netlify</td>
+          <td>The web app and marketing site as static files, a mirror of the HTTP API running as serverless functions, and the Google/GitHub sign-in flow (Netlify Identity).</td>
+          <td><span class="todo">CONFIRM: Netlify edge regions</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Uploaded files are subject to a 25&nbsp;MB per-file limit and a per-workspace storage quota (2&nbsp;GB by default). They are served back only to authenticated members of the workspace that owns them, and they are not copied to any object store or third party.</p>
+
+  <h2 id="third-parties">5. Third parties that receive data</h2>
+
+  <p>Below is every external service that receives data from the hosted agensis service, what reaches it, and when. Each entry was verified against the source code rather than assumed.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Service</th><th>What it receives</th><th>When</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Anthropic</td>
+          <td>The conversation text of the turn — the messages in context, the sender's display name (or, if they have not set one, their email address), and the system prompt, which can include the workspace name, team memory, linked documents, open tasks, canvas notes and the agent roster. <strong>Uploaded files and images are never sent</strong>; only text.</td>
+          <td>Every AI turn that runs on our server.</td>
+        </tr>
+        <tr>
+          <td>Deepgram</td>
+          <td>Raw microphone audio from a voice huddle. Your browser sends audio to <em>our</em> server over the app's own authenticated connection, and our server relays it to Deepgram. Your browser never contacts Deepgram directly.</td>
+          <td>While you are speaking in a huddle with speech-to-text on.</td>
+        </tr>
+        <tr>
+          <td>Cartesia</td>
+          <td>The <strong>text of an agent's reply</strong>, to be spoken aloud. Your browser sends this straight to Cartesia; the audio never passes through our servers. Cartesia is authenticated with a token our backend mints that lasts <strong>120 seconds</strong> and can only do text-to-speech — the underlying API key never reaches your browser.</td>
+          <td>When an agent speaks in a huddle.</td>
+        </tr>
+        <tr>
+          <td>LiveKit</td>
+          <td>Huddle audio, the room name, your user id, and your display name — <strong>or your email address, if you have not set a display name</strong>. Your browser connects to LiveKit directly for the media.</td>
+          <td>For the duration of a huddle.</td>
+        </tr>
+        <tr>
+          <td>ascii.dev (Box sandboxes)</td>
+          <td>Whatever an agent sends to provision or drive a sandbox: the image or runtime requested, shell commands, and free-text instructions the agent writes. Requests are capped at 8,000 characters.</td>
+          <td>Only when an agent with the Box provider skill is asked to create or operate a sandbox.</td>
+        </tr>
+        <tr>
+          <td>Google Fonts</td>
+          <td>Your IP address and user-agent, from your browser, when a page loads its fonts.</td>
+          <td>Every page load.</td>
+        </tr>
+        <tr>
+          <td>openpets.dev</td>
+          <td>Nothing about you. Our server fetches a public catalogue file; only <em>our</em> server's IP address is exposed.</td>
+          <td>When the pet picker is opened.</td>
+        </tr>
+        <tr>
+          <td>Sites you link to</td>
+          <td>A page request from our server, to build a link preview. See section 2.</td>
+          <td>The first time a URL is pasted, then cached.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><span class="todo">DECISION NEEDED: a data processing agreement (DPA) with each of Neon, Fly.io, Netlify, Anthropic, Deepgram, Cartesia, LiveKit and ascii.dev, and a statement of whether each provider trains on the data it receives. Their retention and training practices are contractual and cannot be determined from our source code. This policy should not claim anything about them until those terms are checked.</span></p>
+
+  <h3>Services that receive nothing</h3>
+  <p>For the avoidance of doubt: there is <strong>no payment processor</strong> connected (see the Terms — billing is not yet implemented), no email provider, no SMS provider, no CRM, no error-tracking service and no analytics vendor.</p>
+
+  <h2 id="your-destinations">6. Destinations you choose yourself</h2>
+
+  <p>Several features send your data somewhere <strong>you</strong> nominated. We cannot list those destinations, because you pick them:</p>
+
+  <ul>
+    <li><strong>Inference gateways.</strong> If you configure an OpenAI-compatible endpoint in Settings and select it for a conversation, the <strong>full system prompt and the full message history</strong> for that turn are sent to whatever host you pointed it at, with the API key you supplied. That host is your subprocessor, not ours.</li>
+    <li><strong>Flow webhooks.</strong> If you configure a webhook URL, events are POSTed to it — and for message events that payload includes <strong>the message content and sender fields</strong>, signed with an HMAC so the receiver can verify it came from us.</li>
+    <li><strong>Provider skills.</strong> An agent carrying a provider skill can call that provider's API through us. The destination comes from the skill definition, and the request body is whatever the agent wrote.</li>
+    <li><strong>MCP clients.</strong> agensis exposes an MCP server. Any MCP client you connect to it — and grant a workspace token — can read the workspace content that token permits.</li>
+    <li><strong>Link previews.</strong> Any URL pasted into a workspace is fetched by our server, as described above.</li>
+  </ul>
+
+  <p>Requests to all of these are restricted to public HTTPS addresses. Internal and private network addresses are blocked, redirects are refused rather than followed, and an agent cannot supply a URL, host or header of its own — a fact we consider part of the privacy story rather than only a security one.</p>
+
+  <h2 id="credentials">7. Credentials and the workspace vault</h2>
+
+  <p>Every credential a workspace holds — model API keys, provider keys, webhook signing secrets, shared secrets — lives in the <strong>workspace vault</strong>. Three properties of it are worth stating plainly, because they are unusual:</p>
+
+  <ul>
+    <li><strong>The vault is write-only.</strong> No route in the product returns a stored secret, in full or masked, to anyone — not to you, not to an admin, not to an agent. The route that lists your vault entries does not even ask the database for the secret columns; it asks only whether each entry is configured. There is nothing to redact, because nothing is read.</li>
+    <li><strong>Secrets are encrypted at rest</strong> with AES-256-GCM, using a key held by the application, not by the database.</li>
+    <li><strong>An agent can use a credential without ever seeing it.</strong> When an agent needs to call a provider, it names a skill and an operation — never a URL, a host or a header. Our server resolves the address from the skill definition, attaches the credential itself, makes the request, and hands the agent back only the response. The credential is never in the agent's context, so it cannot be repeated into a chat message, written to a file, or leaked by a prompt injection.</li>
+  </ul>
+
+  <p>The trade-off is the honest one: <strong>if you lose a secret, we cannot give it back to you.</strong> You can only replace it.</p>
+
+  <h2 id="byok">8. Your own API keys, and agents on your machine</h2>
+
+  <p>agensis is designed so that, if you want, <strong>your conversations need never reach our AI account</strong>.</p>
+
+  <h3>Bring your own key</h3>
+  <p>If you put your own Anthropic API key in your workspace vault, turns that run on our server use <strong>your</strong> key. The request still leaves from our server, so we are still transmitting the content — but the relationship with Anthropic, including their retention and any enterprise terms you hold, is yours. If you set no key, the turn uses our platform key and falls under our account with Anthropic instead.</p>
+
+  <h3>Agents running on your own machine</h3>
+  <p>An agent in <code>daemon</code> mode runs on <strong>your computer</strong>, not ours. For those agents:</p>
+  <ul>
+    <li>We assemble the conversation context and send it over our connection <strong>to your machine</strong>.</li>
+    <li>Your machine calls the AI provider under <strong>your own credentials</strong>. The prompt goes to the model from your machine, not from our server. We never see that request and it is not billed to us.</li>
+    <li>The agent's reply comes back to us and is stored in your workspace like any other message — that part is unchanged.</li>
+    <li>The daemon can be given access to folders on your machine. Anything it reads from them may end up quoted in a message, and therefore in our database. That is a decision you make when you grant the folder.</li>
+  </ul>
+
+  <h2 id="self-host">9. Self-hosting</h2>
+
+  <p>agensis is MIT-licensed and can be run entirely by you: your own Postgres, your own server, your own AI keys.</p>
+
+  <p><strong>In that configuration, none of your data comes to us.</strong> There is no licence check, no telemetry, no usage reporting, no update ping. The app's version check reads a file from your own deployment's origin. Sections 4 and 5 of this policy describe our hosted service and simply do not apply — you become the operator, and you decide which third parties your deployment talks to.</p>
+
+  <p>Two outbound calls still happen from a self-hosted server, and both are to services that are not us:</p>
+  <ul>
+    <li><strong>openpets.dev</strong> — a public catalogue file is fetched when the pet picker is opened. No user data is sent.</li>
+    <li><strong>Link previews</strong> — your server fetches URLs your users paste, exactly as described in section 2.</li>
+  </ul>
+  <p>Everything else — Anthropic, Deepgram, Cartesia, LiveKit, sandbox providers — is off unless you configure a key for it.</p>
+
+  <h2 id="access">10. Who can see your workspace</h2>
+
+  <h3>Inside your workspace</h3>
+  <p>Workspace membership carries a role — <strong>owner, admin, editor, commenter or viewer</strong> — which controls what a member can <em>change</em>. You should understand that it does <strong>not</strong> narrow what a member can <em>read</em>:</p>
+
+  <div class="note">
+    <p><strong>Read access is all-or-nothing.</strong> Any member of a workspace, including a viewer, can read every channel, every direct message, every document, every memory fact, every task and every uploaded file in that workspace. There are no per-channel or per-DM permissions. A direct message in agensis is a private-feeling surface, not a private one.</p>
+  </div>
+
+  <p>Roles are inherited downward from a parent workspace to its children, never upward. Only <code>manage</code> — owner and admin — can add or remove members, write vault secrets, configure agent host folders, or delete the workspace.</p>
+
+  <h3>By us, as the operator</h3>
+  <p>There is exactly one cross-workspace surface in the product, reserved for the service operator. It exposes <strong>account records and aggregate counts only</strong> — email, display name, sign-up date, workspace names, and counts of messages, huddles, agents, documents and members. It <strong>cannot return message bodies or document text</strong>; those columns are not in the query. The operator can also send an in-app announcement to a segment of accounts.</p>
+
+  <p>Separately, and unavoidably, whoever operates the service holds the database credentials and access to the file volume. <strong>Message and document content is not encrypted at rest</strong> (vault secrets are), so an operator with infrastructure access could read it. We are telling you this because it is true of essentially every hosted product and is rarely said out loud. <span class="todo">DECISION NEEDED: what internal policy governs operator access to customer content, who is permitted it, and whether such access is logged. This paragraph should describe a real control, not just an admission.</span></p>
+
+  <h2 id="retention">11. Retention and deletion</h2>
+
+  <div class="note">
+    <p><strong>Read this section carefully — it describes the software as it is today, not as it ought to be.</strong></p>
+  </div>
+
+  <h3>What deletion currently means</h3>
+  <ul>
+    <li><strong>Deleting a conversation or a message hides it; it does not erase it.</strong> The app marks the row with a deletion timestamp and stops showing it. The content stays in the database indefinitely.</li>
+    <li><strong>Deleting a workspace does remove its content</strong> from the database — sessions, messages, documents, tasks, agents, huddles, activity and file records all cascade away with it. However, <strong>the bytes of uploaded files are left on disk</strong>: only deleting a file individually removes the actual file. This is a known gap.</li>
+    <li><strong>There is no way to delete your account from within the product.</strong> No such button and no such API route exists. Removing an account today requires the service operator to run a database script by hand.</li>
+  </ul>
+
+  <h3>What expires automatically</h3>
+  <p>Very little. Offline agent connection records are cleared after about two minutes; huddle presence rows are removed when a huddle ends; device-authorisation codes are purged after 24 hours; rate-limit rows are swept opportunistically. <strong>Everything else is kept indefinitely</strong> — messages, documents, memory, tasks, uploads, huddle events, usage rows, activity events, invitations and cached link previews all persist until something explicitly deletes them.</p>
+
+  <p><span class="todo">DECISION NEEDED — and this is the largest gap in this document:</span></p>
+  <ul>
+    <li><span class="todo">A retention period for workspace content, and for content in a deleted or dormant account.</span></li>
+    <li><span class="todo">Whether to build self-service account deletion. A privacy policy that promises erasure while the product has no delete route would be a false statement, so either the feature or the promise has to change.</span></li>
+    <li><span class="todo">Whether "delete" in the UI should become a real erasure, and after how long.</span></li>
+    <li><span class="todo">Backup retention at Neon and Fly — how long a deleted row survives in backups.</span></li>
+  </ul>
+
+  <h2 id="security">12. Security</h2>
+  <ul>
+    <li>Passwords are hashed with scrypt and a per-user random salt. A minimum length and character-class policy is enforced on the server.</li>
+    <li>Sessions are HMAC-signed tokens with a 14-day default lifetime, revocable in bulk by signing out or changing your password.</li>
+    <li>Sign-up and failed sign-ins are rate-limited by both email and IP address.</li>
+    <li>Vault secrets are encrypted at rest with AES-256-GCM and are never returned by any route.</li>
+    <li>All outbound requests made on your behalf are checked against private and internal network addresses, re-checked after DNS resolution, and refuse redirects rather than following them.</li>
+    <li>Content written by agents or fetched from external providers is passed to a model inside an explicit untrusted-data fence, so it is treated as data rather than as instructions.</li>
+    <li>User-generated rich text is sanitised at every render and paste boundary.</li>
+    <li>The service sets <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, a referrer policy, a permissions policy that allows the microphone only for the app's own pages and blocks camera and geolocation outright, and a Content-Security-Policy.</li>
+  </ul>
+  <p>No system is perfectly secure, and we make no guarantee that ours is. <span class="todo">DECISION NEEDED: a breach-notification commitment — who we tell, and within what period.</span></p>
+
+  <h2 id="rights">13. Your rights</h2>
+
+  <p><span class="todo">DECISION NEEDED — this entire section depends on facts not present in the code.</span> Which privacy regimes apply turns on where the operating entity is established and where its users are, and the answers determine what must be offered here: access, rectification, erasure, portability, restriction, objection, the lawful basis for each kind of processing, whether a Data Protection Officer or an EU/UK representative is required, and the mechanism relied on for transfers of personal data outside the UK/EEA to our providers.</p>
+
+  <p>Two things are true today regardless of which regime applies, and are stated here so the gap is visible rather than papered over:</p>
+  <ul>
+    <li><strong>Access and portability</strong> — you can read everything in your workspace through the app, but there is no export button. A portability request would currently be fulfilled by hand.</li>
+    <li><strong>Erasure</strong> — as described in section 11, the product cannot currently erase an account or hard-delete a message on request.</li>
+  </ul>
+
+  <h2 id="children">14. Children</h2>
+  <p><span class="todo">DECISION NEEDED: a minimum age for the service, and the wording that goes with it — commonly 13 (US COPPA), 16 (several EU states), or 18. Nothing in the product asks for or checks an age today, so whichever number is chosen is a statement of policy, enforced by nothing.</span></p>
+
+  <h2 id="changes">15. Changes and contact</h2>
+  <p>If this policy changes materially we will say so here and update the date at the top. <span class="todo">DECISION NEEDED: whether material changes are also notified in-app or by email — and note that there is currently no way to send email.</span></p>
+
+  <p>Questions about this policy, or a request about your data:</p>
+  <p><span class="todo">DECISION NEEDED: the legal entity name, its registered address, and a working contact address for privacy enquiries. No such address exists in the product today and none has been invented here.</span></p>
+
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <span>agensis &copy; 2026</span>
+      <span class="spacer"></span>
+      <a href="/">Home</a>
+      <a href="/legal/terms.html">Terms</a>
+      <a href="/app">Open app</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

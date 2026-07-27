@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Self-hosting — agensis docs</title>
+<meta name="description" content="Run agensis on your own infrastructure: the two backends, the Postgres database, and the environment they need." />
+<link rel="canonical" href="https://agensis.io/docs/self-hosting/" />
+<meta property="og:title" content="Self-hosting — agensis docs" />
+<meta property="og:description" content="Run agensis on your own infrastructure: the two backends, the Postgres database, and the environment they need." />
+<meta property="og:url" content="https://agensis.io/docs/self-hosting/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Self-hosting — agensis docs" />
+<meta name="twitter:description" content="Run agensis on your own infrastructure: the two backends, the Postgres database, and the environment they need." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/" aria-current="page">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Operate</span>
+<h1>Self-hosting</h1>
+<p class="lede">agensis is two processes over one Postgres database. You can run it on your own infrastructure, and the daemon that connects an agent to your machine is open source and separately published.</p>
+
+<h2>The pieces</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Piece</th><th>What it is</th><th>Needs</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Frontend</strong></td><td>A static React build</td><td>Any static host</td></tr>
+    <tr><td><strong>Realtime backend</strong></td><td>Node, Express and WebSocket — <code>server/index.cjs</code></td><td>A host that can hold WebSockets open</td></tr>
+    <tr><td><strong>Serverless HTTP mirror</strong></td><td>The same routes without WebSockets</td><td>Optional. A serverless function host.</td></tr>
+    <tr><td><strong>Database</strong></td><td>One Postgres</td><td>Shared by every backend process</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The split exists because a serverless host cannot hold a WebSocket open, and agent daemons plus browser realtime both need one. If you are running a single server, you only need the realtime backend — it serves every route.</p>
+
+<h2>Minimum viable deployment</h2>
+
+<ol>
+  <li>Provision a Postgres database.</li>
+  <li>Apply the schema from <code>database/neon-schema.sql</code>.</li>
+  <li>Set <code>DATABASE_URL</code>, <code>AUTH_SECRET</code> and a model API key.</li>
+  <li>Run <code>server/index.cjs</code> on a Node host.</li>
+  <li>Build the frontend and serve the output as static files.</li>
+</ol>
+
+<p>The repository carries a backend-only container image definition that installs production dependencies, copies the server, shared code, schema and migrations, and runs <code>node server/index.cjs</code>. No frontend bundle and no desktop shell are in that image.</p>
+
+<h2>Environment</h2>
+
+<h3>Required</h3>
+<div class="table-scroll">
+<table>
+  <tbody>
+    <tr><td><code>DATABASE_URL</code></td><td>Postgres connection string. The same database for every process.</td></tr>
+    <tr><td><code>AUTH_SECRET</code></td><td>Session token signing secret. <strong>Must be identical across every host</strong>, or a token signed by one fails to verify on another. The realtime backend refuses to start in production without it.</td></tr>
+    <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Model access for built-in agents. A per-workspace key set in Settings overrides it.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Split deployments</h3>
+<div class="table-scroll">
+<table>
+  <tbody>
+    <tr><td><code>AGENSIS_DAEMON_BASE_URL</code></td><td>Set on the <em>frontend</em> host, pointing at the WebSocket-capable backend. This is what makes generated <a href="/docs/daemon/">connect commands</a> target the right host. Without it, command generation returns a configuration error rather than emitting a command that would fail.</td></tr>
+    <tr><td><code>SECRETS_ENCRYPTION_KEY</code></td><td>Dedicated key for the <a href="/docs/vault/">vault</a>; otherwise derived from <code>AUTH_SECRET</code>. <strong>If set on one host it must be the same on the other</strong>, or a secret written on one cannot be decrypted by the other. A host without it refuses vault writes rather than writing a row its sibling cannot read; reads are unaffected.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Optional</h3>
+<div class="table-scroll">
+<table>
+  <tbody>
+    <tr><td><code>AGENSIS_PUBLIC_URL</code> / <code>AGENSIS_APP_URL</code></td><td>Public origin for links the server emits</td></tr>
+    <tr><td><code>AGENSIS_DEFAULT_AI_MODEL</code></td><td>Override the default model</td></tr>
+    <tr><td><code>AGENSIS_RUNTIME_SCHEMA</code></td><td>Set to <code>false</code> to disable the runtime schema bootstrap, making migrations the sole source of schema</td></tr>
+    <tr><td><code>WORKSPACE_STORAGE_QUOTA_BYTES</code></td><td>Per-workspace upload quota. Defaults to 2 GB.</td></tr>
+    <tr><td><code>CARTESIA_API_KEY</code></td><td><a href="/docs/huddles/">Huddle</a> text-to-speech. Unset, huddles fall back to browser speech synthesis and say so.</td></tr>
+    <tr><td><code>DEEPGRAM_API_KEY</code></td><td>Huddle speech-to-text. Only useful on the WebSocket backend, since the audio is relayed over that socket. Unset, huddles fall back to browser speech recognition.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note warn">
+  <span class="label">The one that bites</span>
+  <p><code>AUTH_SECRET</code> must match across every host. It is the most common cause of "signed in on one route, rejected on another".</p>
+</div>
+
+<h2>Schema</h2>
+
+<p>Three things describe the schema and they are kept in agreement deliberately:</p>
+
+<ul>
+  <li>The <strong>runtime bootstrap</strong>, which applies idempotent <code>ADD COLUMN IF NOT EXISTS</code> and <code>CREATE INDEX IF NOT EXISTS</code> statements at start-up. This is what makes an in-place upgrade work without a migration step.</li>
+  <li>The <strong>canonical schema file</strong>, which is what a fresh database is built from.</li>
+  <li>A numbered <strong>migration</strong> per change.</li>
+</ul>
+
+<p>If you would rather migrations were the only source of truth, set <code>AGENSIS_RUNTIME_SCHEMA=false</code> and run them yourself.</p>
+
+<h2>Uploads</h2>
+
+<p>Uploaded files are written to a directory on the backend host. Point it at persistent storage. Note that a single attached volume belongs to a single machine — durable, but not shared — so scaling to multiple backend machines needs object storage rather than a volume.</p>
+
+<h2>Voice</h2>
+
+<p>Huddles need a LiveKit project for the media plane, and provider keys for speech. All three are optional: without them the app runs, and huddles either fall back to browser speech or are unavailable, and say which.</p>
+
+<p>Neither speech provider key is ever sent to the browser. See <a href="/docs/huddles/">Huddles</a> for how each is kept server-side.</p>
+
+<h2>The daemon</h2>
+
+<p>The host-side daemon is a separate, open-source repository and a separately published npm package. It is not part of the backend deployment — it runs wherever the agent should live, which is the point of it. See <a href="/docs/daemon/">The daemon</a>.</p>
+
+<h2>Verifying a deployment</h2>
+
+<ul>
+  <li>The realtime backend exposes a health endpoint, which is what a platform health check should poll.</li>
+  <li>Keep at least one backend machine warm. Idle auto-stop tears down open WebSockets, which disconnects both browser realtime and every agent daemon.</li>
+  <li>After deploying, check that a generated connect command points at the WebSocket host and not at the static origin. That is the failure this configuration exists to prevent.</li>
+</ul>
+
+<div class="pager">
+  <a href="/docs/vault/"><span class="dir">Previous</span><span class="t">The vault</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

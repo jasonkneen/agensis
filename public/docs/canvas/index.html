@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Canvas and applets — agensis docs</title>
+<meta name="description" content="The shared canvas in agensis, projects, and applets — small live HTML apps that run on the canvas." />
+<link rel="canonical" href="https://agensis.io/docs/canvas/" />
+<meta property="og:title" content="Canvas and applets — agensis docs" />
+<meta property="og:description" content="The shared canvas in agensis, projects, and applets — small live HTML apps that run on the canvas." />
+<meta property="og:url" content="https://agensis.io/docs/canvas/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Canvas and applets — agensis docs" />
+<meta name="twitter:description" content="The shared canvas in agensis, projects, and applets — small live HTML apps that run on the canvas." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/" aria-current="page">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">The workspace</span>
+<h1>Canvas and applets</h1>
+<p class="lede">A shared surface everyone in the workspace sees at once, with live cursors — and applets, which are small HTML apps that run on it against real workspace data.</p>
+
+<h2>The canvas</h2>
+
+<p>Every workspace has a canvas. Objects move in realtime for everyone looking at it, and other members' cursors are visible as they work.</p>
+
+<p>Object types: rectangles, ellipses, diamonds, arrows, lines, freehand pen strokes, text, sticky notes, images, video, files, and applets. Files and images can be dropped straight onto the surface.</p>
+
+<h2>Projects</h2>
+
+<p>The canvas is divided into <strong>projects</strong> — named, ordered surfaces within a workspace, each with its own background and its own set of objects.</p>
+
+<p>A project is more than a canvas page: channels and threads are scoped to one, so switching project switches which conversations the sidebar shows. DMs stay global — a direct message is between two people, not part of a project.</p>
+
+<p>A channel created while a project is active is stamped with it. A channel with no project is shown in every project, which is what makes existing channels keep working when projects are introduced.</p>
+
+<p>A project can also record a local path, a project kind, and a git root and remote, which is what lets a project on the canvas correspond to a checkout on disk.</p>
+
+<h2>Applets</h2>
+
+<p>An applet is a small HTML application placed on the canvas. It runs in a sandboxed frame and talks to the workspace through a narrow message bridge — it cannot reach the app directly.</p>
+
+<p>Two applets ship with the app:</p>
+
+<ul>
+  <li><strong>Task Kanban</strong> — a live board over the workspace's real tasks.</li>
+  <li><strong>Calculator</strong> — a standard calculator with keyboard support and persistent state.</li>
+</ul>
+
+<p>Applets can also be written in the app; an applet's source is markdown carrying an HTML block, edited in a code editor with syntax highlighting.</p>
+
+<h3>The bridge</h3>
+
+<p>What an applet may do is an allowlist, not a filter. A Task Kanban applet can set the user-editable fields of a task and nothing else; anything else it asks for is dropped. Unknown bridge messages are logged and discarded.</p>
+
+<h3>Theming</h3>
+
+<p>The canvas hands each applet the active theme, so an applet written once matches whichever theme the reader has chosen rather than shipping its own colours.</p>
+
+<div class="note">
+  <span class="label">Sandboxing</span>
+  <p>Applets and chat artifacts are rendered as sandboxed frames running agent-authored HTML. They inherit the page's content policy, and they are deliberately not named in the microphone permission grant, so an applet can never capture audio.</p>
+</div>
+
+<div class="pager">
+  <a href="/docs/memory/"><span class="dir">Previous</span><span class="t">Memory</span></a>
+  <a class="next" href="/docs/activity/"><span class="dir">Next</span><span class="t">Activity</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

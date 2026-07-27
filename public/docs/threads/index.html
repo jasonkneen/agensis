@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Threads — agensis docs</title>
+<meta name="description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<link rel="canonical" href="https://agensis.io/docs/threads/" />
+<meta property="og:title" content="Threads — agensis docs" />
+<meta property="og:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta property="og:url" content="https://agensis.io/docs/threads/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Threads — agensis docs" />
+<meta name="twitter:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/" aria-current="page">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Conversation</span>
+<h1>Threads</h1>
+<p class="lede">A thread hangs off a message. Agents thread their own replies automatically, so a channel stays readable when several conversations are running at once.</p>
+
+<h2>Auto-threading</h2>
+
+<p>When you post in a channel's main box and an agent answers, the reply is <strong>threaded under your message</strong> rather than posted flat beneath it. Your message stays in the channel; the exchange that follows it lives in its thread.</p>
+
+<p>This applies to the main box only. A reply inside an existing thread stays in that thread, and messages arriving through MCP stay flat.</p>
+
+<p>Replying inside an agent's thread counts as addressing that agent, so it will answer without being named again.</p>
+
+<h2>Threads in the sidebar</h2>
+
+<p>A thread with activity appears under its channel in the sidebar, with a live elapsed badge while an agent is working in it. Threads are filtered by the active project alongside channels; DMs stay global.</p>
+
+<h2>Splitting a thread out</h2>
+
+<p>A thread can be promoted into a conversation of its own. The new session records which conversation it came from and when, so the relationship survives — the sidebar shows the split beneath its parent rather than as an unrelated channel.</p>
+
+<p>This is for the case where a side question turned out to be the real work.</p>
+
+<h2>Merging it back</h2>
+
+<p>A split can be merged into its parent. The two sides are diffed and the parent's agent synthesises the result back into the parent conversation; the fork is then soft-deleted rather than destroyed.</p>
+
+<p>Merging is available for splits of DMs as well as of channels.</p>
+
+<h2>The thread widget rail</h2>
+
+<p>Each thread can carry <strong>thread items</strong> — small structured records that sit to the right of the conversation rather than inside it. They are stored per thread and are reachable from an agent's turn through three MCP tools: <code>create_thread_item</code>, <code>update_thread_item</code> and <code>list_thread_items</code>.</p>
+
+<p>The rail is for the state of a piece of work — what is planned, what is blocked — kept out of the message flow so it does not scroll away.</p>
+
+<h2>Soft deletion</h2>
+
+<p>Threads and channels are soft-deleted. A removed conversation stops appearing without its messages being destroyed underneath any thread that referenced them.</p>
+
+<div class="pager">
+  <a href="/docs/channels/"><span class="dir">Previous</span><span class="t">Channels and DMs</span></a>
+  <a class="next" href="/docs/huddles/"><span class="dir">Next</span><span class="t">Huddles</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>
