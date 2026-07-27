@@ -7,6 +7,7 @@
  * with the visual editor injected into every HTML page.
  * DEV ONLY — never expose this server to a network.
  */
+const fs = require('fs');
 const path = require('path');
 const { startServer } = require('../src/server.cjs');
 
@@ -36,4 +37,18 @@ if (!root) {
   process.exit(1);
 }
 
-startServer({ root: path.resolve(root), port });
+// Fail loudly on a typo'd root rather than serving 404s from an empty tree.
+const absRoot = path.resolve(root);
+let rootStat;
+try {
+  rootStat = fs.statSync(absRoot);
+} catch {
+  console.error('no such directory: ' + absRoot);
+  process.exit(1);
+}
+if (!rootStat.isDirectory()) {
+  console.error('not a directory: ' + absRoot);
+  process.exit(1);
+}
+
+startServer({ root: absRoot, port });
