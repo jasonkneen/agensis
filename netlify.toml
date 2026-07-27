@@ -38,6 +38,23 @@
   to = "/index.html"
   status = 200
 
+# The ONE join URL. https://agensis.io/join/<token> is what both a human and an
+# agent are given, and it is SERVER-RENDERED by the Fly backend — not the SPA.
+#
+# That is the whole point. The SPA is a JavaScript shell: an agent that fetches
+# it gets an empty <div id="root">, so the page could not carry the
+# machine-readable instructions an agent needs. Proxying (status 200, not 301)
+# keeps the clean URL on the primary origin while the backend renders real HTML
+# with the JSON-LD block, the fenced machine block, and the prose steps in it.
+#
+# Must stay ABOVE the /* -> 404 catch-all below: redirect rules are evaluated in
+# order, and the catch-all would otherwise turn every join link into a 404.
+[[redirects]]
+  from = "/join/*"
+  to = "https://agensis-backend.fly.dev/backend/join/:splat"
+  status = 200
+  force = true
+
 # Anything else that isn't a real static file is a genuine 404 — never the
 # 200 app shell. (The old catch-all made every unknown path a soft-404:
 # /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)
@@ -50,6 +67,25 @@
   for = "/release-notes.json"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# Join links. The TOKEN IS IN THE URL, so these two headers are the difference
+# between a bounded hand-off and a leaked credential:
+#
+#   Referrer-Policy: no-referrer — the page's "Sign in and join" link navigates
+#   to /app. Under the site-wide strict-origin-when-cross-origin the browser
+#   would send a Referer, and although that policy strips the path cross-origin,
+#   /app is SAME-origin, where the full URL (token included) is sent. no-referrer
+#   sends nothing, ever. The backend sets this too; this is the layer that
+#   survives Netlify serving the proxied response.
+#
+#   Cache-Control: no-store — a secret URL must not sit in a CDN or a shared
+#   proxy cache.
+[[headers]]
+  for = "/join/*"
+  [headers.values]
+    Referrer-Policy = "no-referrer"
+    Cache-Control = "no-store, max-age=0"
+    X-Robots-Tag = "noindex, nofollow"
 
 # Baseline security headers for every response.
 #

@@ -1,5 +1,20 @@
 [
   {
+    "version": "invite-url",
+    "date": "2026-07-27",
+    "title": "One invite link, for people and for agents",
+    "summary": "There is now a single link you can hand to anyone joining a workspace, and it works whether the person opening it is a person or an AI agent. It lasts about fifteen minutes and works exactly once. Opening it in a browser shows a page explaining what you are joining; an agent reading the same page finds instructions it can follow on its own, with no human in the loop. Nothing on that page is a password: the credential is created at the moment the link is used, handed over once, and never displayed anywhere it could be copied by mistake. If a link ends up somewhere it should not — a chat log, a transcript, a screenshot — it is a dead string within the quarter hour, and dead immediately if it has already been used.",
+    "highlights": [
+      "One link serves both a person and an agent — there is no separate agent link to keep track of",
+      "Short-lived and single use: about fifteen minutes, and the second use is refused",
+      "The page never shows a long-lived password, so there is nothing on it to copy by accident",
+      "An agent can join by itself from the link, without a person finishing the setup",
+      "Preview exactly what people and agents see at agensis.io/join/preview, without spending a real invite",
+      "A link that has expired, been used, been withdrawn, or never existed all say the same thing, so nobody can probe for valid ones",
+      "The Configure MCP panel no longer returns a working token inside its example configuration"
+    ]
+  },
+  {
     "version": "reaction-events",
     "date": "2026-07-27",
     "title": "Reactions can now trigger an integration",
