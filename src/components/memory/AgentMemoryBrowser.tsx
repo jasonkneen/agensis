@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Clock, Code2, Eye, FileText, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Brain, ChevronLeft, Clock, Code2, Eye, FileText, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { useAgentMemory } from '../../hooks/useAgentMemory';
 import { useMemoryFileComments } from '../../hooks/useMemoryFileComments';
+import { usePaneSplit } from '../../hooks/usePaneSplit';
+import { MEMORY_SPLIT_BOUNDS, MEMORY_SPLIT_WIDE_PX } from '../../lib/memorySplit';
+import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { DocumentComments } from '../editor/DocumentComments';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@/components/ui/badge';
@@ -30,7 +33,23 @@ interface AgentMemoryBrowserProps {
   agents: WorkspaceAgent[];
   userId: string;
   userEmail: string;
+  /**
+   * Open the Team-facts composer on a category. Supplied by MemorySection,
+   * which owns both tabs — this pane can only READ agent files (phase 1 of
+   * docs/agent-memory-plan.md is a read-only mirror), so the only honest place
+   * in this window to write a new memory is the other tab. Absent means the
+   * suggestion chips that would lead there are not rendered at all, rather than
+   * rendered dead.
+   */
+  onStartFact?: (category: string) => void;
 }
+
+/**
+ * The categories offered as "start a memory" chips. Drawn from the same seed
+ * list MemorySection uses, so a chip can never create a category the facts
+ * pane does not already know about.
+ */
+const SUGGESTED_FACT_CATEGORIES = ['about me', 'preferences', 'work', 'goals'];
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
@@ -44,7 +63,7 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: AgentMemoryBrowserProps) {
+export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail, onStartFact }: AgentMemoryBrowserProps) {
   const { files, loading, refresh, fetchFileContent } = useAgentMemory(workspaceId);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -52,20 +71,21 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [showComments, setShowComments] = useState(false);
 
-  // Master-detail is responsive: above SPLIT_WIDTH the selected file opens as a
-  // right-hand panel with the list still visible; below it, the detail takes over
-  // the whole surface (the original full-swap behaviour).
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(false);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setWide(entry.contentRect.width >= 960);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  // Master-detail is responsive AND resizable. Above MEMORY_SPLIT_WIDE_PX the
+  // list and the preview sit side by side with a draggable divider between
+  // them; below it the preview takes over the whole surface (the original
+  // full-swap behaviour, because there is no width left to divide).
+  //
+  // One measurement serves both decisions — the hook already observes this
+  // container for the clamp, so `wide` reads off the same number rather than
+  // running a second ResizeObserver on the same node.
+  const split = usePaneSplit({
+    preferenceKey: viewPreferenceKey('memory.files-split', workspaceId),
+    direction: 'row',
+    bounds: MEMORY_SPLIT_BOUNDS,
+    label: 'Resize memory file list',
+  });
+  const wide = split.containerSize >= MEMORY_SPLIT_WIDE_PX;
 
   // Only agents that actually have mirrored files are worth showing as filters.
   const agentsWithFiles = useMemo(() => {
@@ -81,6 +101,15 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   const selectedFile = useMemo(
     () => agentFiles.find(f => f.path === selectedPath) ?? null,
     [agentFiles, selectedPath],
+  );
+  // The three most recently synced files, offered as one-click chips in the
+  // empty preview. Most-recent is the useful order here: the list itself is
+  // sorted by path, so "what changed last" is not otherwise reachable.
+  const recentFiles = useMemo(
+    () => [...agentFiles]
+      .sort((a, b) => String(b.last_synced ?? '').localeCompare(String(a.last_synced ?? '')))
+      .slice(0, 3),
+    [agentFiles],
   );
 
   // NET-06 pattern: the file list is metadata-only, so the selected file's body
@@ -216,6 +245,95 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
     );
   };
 
+  // What the preview pane shows before a file is picked.
+  //
+  // This pane is rendered FROM LOAD, not on first click. It used to appear only
+  // once a file was selected, which meant the first click resized the file list
+  // from full width to a column and shoved every row sideways under the cursor.
+  // A pane holding an explanation is a better trade than a layout that jumps.
+  //
+  // Every chip below performs a real action. Nothing here offers to generate a
+  // memory file: agent files are a READ-ONLY mirror (docs/agent-memory-plan.md
+  // — write-back is phase 2), so a "write a memory" button on this tab would be
+  // a lie. The honest write path in this window is the Team facts tab, and the
+  // chips that lead there open its composer for real.
+  const renderEmptyPreview = () => (
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-6 py-10">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <FileText className="size-5" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="text-sm font-semibold">Select a memory file</p>
+              <p className="text-sm text-muted-foreground">
+                Pick a file on the left to read it. Agent files are a read-only mirror of the
+                memory an agent keeps on its own machine — the daemon pushes them here.
+              </p>
+            </div>
+          </div>
+
+          {(recentFiles.length > 0 || !!effectiveAgentId) && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground">Recently synced</p>
+              <div className="flex flex-wrap gap-2">
+                {recentFiles.map(file => (
+                  <Badge key={file.id} asChild variant="outline" className="cursor-pointer">
+                    <button type="button" onClick={() => setSelectedPath(file.path)}>
+                      <FileText data-icon="inline-start" />
+                      {fileName(file.path)}
+                    </button>
+                  </Badge>
+                ))}
+                {effectiveAgentId && (
+                  <Badge asChild variant="outline" className="cursor-pointer">
+                    <button type="button" onClick={handleRefresh} disabled={refreshing}>
+                      <RefreshCw data-icon="inline-start" className={refreshing ? 'animate-spin' : ''} />
+                      Pull the latest from {agentName(effectiveAgentId)}
+                    </button>
+                  </Badge>
+                )}
+              </div>
+            </div>
+          )}
+
+          {onStartFact && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground">Start a team fact</p>
+              <div className="flex flex-wrap gap-2">
+                {SUGGESTED_FACT_CATEGORIES.map(category => (
+                  <Badge key={category} asChild variant="outline" className="cursor-pointer">
+                    <button type="button" onClick={() => onStartFact(category)}>
+                      <Brain data-icon="inline-start" />
+                      {category}
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Opens the Team facts composer. Facts are workspace memory every agent reads;
+                agent files stay the agent&apos;s own.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5 border-t border-border pt-4">
+            <p className="text-xs font-medium text-muted-foreground">Tips</p>
+            <p className="text-xs text-muted-foreground">
+              Comments are anchored to a file&apos;s path, so they survive the agent re-syncing
+              or deleting it.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Only agents running the daemon mirror their files. If one is missing here,
+              connect it and pull the latest.
+            </p>
+          </div>
+        </div>
+      </ScrollArea>
+    </div>
+  );
+
   // List view: agent filter chips + that agent's files. `compact` tightens the
   // padding for the narrow left column when a detail panel sits beside it.
   const renderList = (compact: boolean) => (
@@ -312,26 +430,40 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
     </>
   );
 
-  const showFullDetail = !!selectedFile && !wide;
-  const showSplitDetail = !!selectedFile && wide;
-
   return (
-    <div ref={containerRef} className="flex h-full overflow-hidden">
-      {showFullDetail ? (
+    <div ref={split.containerRef} className="flex h-full overflow-hidden">
+      {wide ? (
+        <>
+          {/* The list owns a WIDTH, dragged and remembered. usePaneSplit
+              re-clamps it against this container on every render, so a width
+              chosen in a wide window cannot squeeze either pane away when the
+              window narrows. */}
+          <div
+            className="relative flex shrink-0 flex-col overflow-hidden border-r border-border"
+            style={{ width: `${split.size}px` }}
+          >
+            {renderList(true)}
+            {/* The same invisible grab strip the account list uses: a hairline
+                that only appears under the pointer or focus. Inside the pane
+                rather than straddling the border, because the pane clips. */}
+            <button
+              {...split.dividerProps}
+              className="group/split absolute inset-y-0 right-0 z-30 flex w-2.5 cursor-col-resize justify-center rounded-none outline-none"
+            >
+              <span
+                aria-hidden="true"
+                className="h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
+              />
+            </button>
+          </div>
+          {selectedFile ? renderDetail(false) : renderEmptyPreview()}
+        </>
+      ) : selectedFile ? (
         renderDetail(true)
       ) : (
-        <>
-          <div
-            className={
-              showSplitDetail
-                ? 'flex w-[340px] shrink-0 flex-col overflow-hidden border-r border-border'
-                : 'flex min-w-0 flex-1 flex-col overflow-hidden'
-            }
-          >
-            {renderList(showSplitDetail)}
-          </div>
-          {showSplitDetail && renderDetail(false)}
-        </>
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {renderList(false)}
+        </div>
       )}
     </div>
   );

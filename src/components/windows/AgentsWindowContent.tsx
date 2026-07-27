@@ -97,13 +97,13 @@ import { buildSkillEntries } from '../../lib/skillsView';
 import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { usePaneSplit } from '../../hooks/usePaneSplit';
 import {
   AGENT_LAYOUT_VIEW_PREF,
-  AGENT_SPLIT_PREF,
+  AGENT_SPLIT_BOUNDS,
   AGENTS_SPLIT_HIDE_BELOW,
   AGENTS_SPLIT_ONLY_BELOW,
   agentFormBarPlacement,
-  agentSplitGridHeight,
   toggleAgentSelection,
   type AgentLayoutView,
 } from '../../lib/agentsView';
@@ -298,84 +298,17 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     viewPreferenceKey('agents.layout-view', workspaceId), AGENT_LAYOUT_VIEW_PREF, 'grid' as AgentLayoutView,
   );
   // Where the Both view's divider sits, in px of grid height. A REQUEST, never
-  // the layout: `agentSplitGridHeight` re-clamps it against the live container
-  // on every render, so a split stored for a tall window cannot hide the map in
-  // a short one — and because nothing is written back, growing the window
-  // returns the split that was actually chosen.
-  const [storedSplit, setStoredSplit] = usePersistedPreference(
-    viewPreferenceKey('agents.split', workspaceId), AGENT_SPLIT_PREF, 0,
-  );
-  // The live value while the divider is under the pointer. The persisted setter
-  // is only touched on release: it writes through to storage on every change,
-  // and a drag changes sixty times a second.
-  const [draftSplit, setDraftSplit] = useState<number | null>(null);
-  const [splitBox, setSplitBox] = useState(0);
-  const splitDragRef = useRef<{ y: number; height: number } | null>(null);
-  const splitObserverRef = useRef<ResizeObserver | null>(null);
-  // A callback ref rather than an effect: the split root mounts and unmounts
-  // with the view mode and the empty states, and this way the measurement is
-  // tied to the node existing rather than to a dependency list that has to
-  // predict every reason it might not.
-  const attachSplit = useCallback((node: HTMLDivElement | null) => {
-    splitObserverRef.current?.disconnect();
-    splitObserverRef.current = null;
-    if (!node) return;
-    const measure = () => setSplitBox(current => (current === node.clientHeight ? current : node.clientHeight));
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    splitObserverRef.current = observer;
-  }, []);
-  useEffect(() => () => splitObserverRef.current?.disconnect(), []);
-
-  const splitGridHeight = agentSplitGridHeight(draftSplit ?? storedSplit, splitBox);
-
-  const beginSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    // setPointerCapture THROWS NotFoundError when the pointer is already gone —
-    // the case useFidgetDrag documents. Capture is an improvement (the drag
-    // survives leaving the strip), not a requirement, so a throw must not abort
-    // the gesture before any drag state exists.
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* drag works uncaptured */ }
-    splitDragRef.current = { y: event.clientY, height: splitGridHeight };
-    setDraftSplit(splitGridHeight);
-  }, [splitGridHeight]);
-
-  const moveSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = splitDragRef.current;
-    if (!drag) return;
-    // Unclamped on the way in: the clamp is applied on the way OUT, so dragging
-    // past a floor and back again tracks the pointer instead of sticking.
-    setDraftSplit(drag.height + (event.clientY - drag.y));
-  }, []);
-
-  const endSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!splitDragRef.current) return;
-    splitDragRef.current = null;
-    try {
-      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    } catch { /* never captured, or the browser already dropped it */ }
-    // Store the CLAMPED height, not the raw pointer distance.
-    setStoredSplit(splitGridHeight);
-    setDraftSplit(null);
-  }, [splitGridHeight, setStoredSplit]);
-
-  // Keyboard parity for the divider: it is a real control, and a drag-only
-  // control is unreachable without a pointer.
-  const nudgeSplit = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const step = event.key === 'ArrowUp' ? -24 : event.key === 'ArrowDown' ? 24 : 0;
-    if (!step) return;
-    event.preventDefault();
-    setStoredSplit(agentSplitGridHeight(splitGridHeight + step, splitBox));
-  }, [splitGridHeight, splitBox, setStoredSplit]);
-
-  const resetSplit = useCallback(() => {
-    setDraftSplit(null);
-    setStoredSplit(0);
-  }, [setStoredSplit]);
+  // the layout: usePaneSplit re-clamps it against the live container on every
+  // render, so a split stored for a tall window cannot hide the map in a short
+  // one — and because nothing is written back, growing the window returns the
+  // split that was actually chosen. Shared with the Memory window's
+  // files/preview divider; only the floors below are specific to this one.
+  const split = usePaneSplit({
+    preferenceKey: viewPreferenceKey('agents.split', workspaceId),
+    direction: 'column',
+    bounds: AGENT_SPLIT_BOUNDS,
+    label: 'Resize agent grid',
+  });
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   // Cards are draggable and spring back — a fidget, not a layout. One hook for
@@ -943,30 +876,22 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // need. That is the whole behaviour: dragging up genuinely
                 // shrinks it and it scrolls inside itself, instead of the pair
                 // sharing one scroller where growing the roster pushes the map
-                // off the bottom. Neither pane can be dragged away —
-                // agentSplitGridHeight re-clamps against the measured container
-                // on every render, so a window resize cannot orphan one either.
+                // off the bottom. Neither pane can be dragged away — usePaneSplit
+                // re-clamps against the measured container on every render, so a
+                // window resize cannot orphan one either.
                 return (
                   <div className="flex min-h-0 flex-1 flex-col px-1 pt-1.5 pb-2">
-                    <div ref={attachSplit} className="flex min-h-0 flex-1 flex-col">
+                    <div ref={split.containerRef} className="flex min-h-0 flex-1 flex-col">
                       {/* pb-2 is the gutter between the panes, INSIDE the grid
                           pane's own box, so the two heights still sum to the
                           container the clamp was handed. */}
-                      <div className="relative shrink-0 pb-2" style={{ height: `${splitGridHeight}px` }}>
+                      <div className="relative shrink-0 pb-2" style={{ height: `${split.size}px` }}>
                         <div className="h-full overflow-y-auto pr-0.5">{grid}</div>
                         {/* The same invisible grab strip the account list uses,
                             turned on its side: a hairline that only appears
                             under the pointer or focus. */}
                         <button
-                          type="button"
-                          aria-label="Resize agent grid"
-                          title="Drag to resize. Double-click to reset."
-                          onPointerDown={beginSplitResize}
-                          onPointerMove={moveSplitResize}
-                          onPointerUp={endSplitResize}
-                          onPointerCancel={endSplitResize}
-                          onKeyDown={nudgeSplit}
-                          onDoubleClick={resetSplit}
+                          {...split.dividerProps}
                           className="group/split absolute inset-x-0 bottom-0 z-30 flex h-2 cursor-row-resize items-center rounded-none outline-none"
                         >
                           <span

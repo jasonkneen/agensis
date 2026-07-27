@@ -215,9 +215,18 @@ describe('smoke: a stored preference cannot strand the user', () => {
 // Coverage guard
 //
 // Same idea as tests/lint-coverage.test.cjs: a check nobody remembers to extend
-// is a check that quietly stops covering things. Every `usePersistedPreference`
-// call site in src/ must be accounted for — either it is one of the traps above,
-// or it is listed here as something that cannot empty a list, with the reason.
+// is a check that quietly stops covering things. Every persisted preference in
+// src/ must be accounted for — either it is one of the traps above, or it is
+// listed here as something that cannot empty a list, with the reason.
+//
+// The scan keys off `viewPreferenceKey('name', …)`, which is the single door to
+// a namespaced storage key, rather than off `usePersistedPreference` alone. It
+// used to key off the hook, and that stopped seeing anything the moment a
+// preference was read through a WRAPPER hook (usePaneSplit takes an already-
+// built key, so the hook call names no preference at all) — the guard would
+// have gone quiet and then reported the still-live 'agents.split' as stale. The
+// `usePersistedPreference` pattern is still scanned, but only to catch a key
+// built from a bare constant that skips viewPreferenceKey entirely.
 // ---------------------------------------------------------------------------
 
 const NOT_A_FILTER: Record<string, string> = {
@@ -232,6 +241,16 @@ const NOT_A_FILTER: Record<string, string> = {
   // both. Pinned by the "stored in a tall window, restored in a short one" and
   // "neither pane below its minimum" cases in tests/unit/agentsView.test.ts.
   'agents.split': 'grid/map divider position, re-clamped against the live container every render — hides no data',
+  // The Memory window's files/preview divider, in px of list width. Same shape
+  // as 'agents.split' and clamped by the same shared function
+  // (clampPaneSplit + MEMORY_SPLIT_BOUNDS), re-derived from the measured
+  // container on every render rather than read out of storage as a layout. It
+  // also cannot hide the file list in the narrow layout, because below
+  // MEMORY_SPLIT_WIDE_PX there is no split at all — the preview replaces the
+  // list and a back arrow returns. Pinned by "clamps a wide-window list width
+  // into a narrow window" and "keeps the document readable no matter how far
+  // the divider is dragged" in tests/unit/paneSplit.test.ts.
+  'memory.files-split': 'files/preview divider position, re-clamped against the live container every render — hides no data',
   'tasks.view': 'chooses list/kanban/gantt — every view shows the same tasks',
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
@@ -270,13 +289,18 @@ describe('smoke: every persisted preference is accounted for', () => {
 
     for (const file of walk(src)) {
       const text = readFileSync(file, 'utf8');
-      // The call spans lines: usePersistedPreference(\n  viewPreferenceKey('x', …
+      // Every namespaced key in the app is built here, wherever it is then read
+      // from — directly, or through a wrapper hook like usePaneSplit.
+      for (const match of text.matchAll(/viewPreferenceKey\(\s*'([^']+)'/g)) {
+        found.add(match[1]);
+      }
+      // A key built from a bare constant never reaches viewPreferenceKey, so it
+      // would be invisible above. The call spans lines:
+      // usePersistedPreference(\n  viewPreferenceKey('x', …
       const pattern = /usePersistedPreference\(\s*(?:viewPreferenceKey\(\s*'([^']+)'|([A-Z_][A-Z0-9_]*))/g;
       for (const match of text.matchAll(pattern)) {
-        const scoped = match[1];
         const constant = match[2];
-        if (scoped) found.add(scoped);
-        else if (constant && !UNSCOPED_PREFERENCES.has(constant)) {
+        if (constant && !UNSCOPED_PREFERENCES.has(constant)) {
           unresolved.push(`${file.slice(src.length + 1)}: ${constant}`);
         }
       }
