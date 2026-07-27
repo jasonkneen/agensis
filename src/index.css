@@ -2034,30 +2034,27 @@
 }
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
-/* Floating thread widgets — macOS-style: hairline edge + a single soft,
-   theme-aware shadow. Kept deliberately tight (not the big --shadow-xl) so
-   stacked cards don't wash the gutter grey in light themes. */
-.thread-widget-card {
- box-shadow: var(--shadow-md);
-}
 
-.thread-widget-card:hover {
- box-shadow: var(--shadow-lg);
-}
+/* Thread widgets have NO FRAME. They used to be bordered, filled, rounded cards
+   with a --shadow-md (and a 2px ink border under [data-ui-theme="neo"], to match
+   [data-slot="card"]). The owner asked for the boxed treatment to go: the
+   widgets are sections of the rail, not three floating panels. What separates
+   one from the next is now a heading, a hairline under it and the grid's
+   gap-y-4 — all in ThreadWidgetRail.tsx. Nothing here re-adds a card, in ANY
+   theme scope, which is the point: a per-theme frame rule would put the box
+   back for exactly the people who chose that theme. */
 
 /* Too narrow to seat the rail beside the conversation (see
    RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
-   squeezing the message column, the cards float ON TOP of it. Heavier
-   elevation is what tells the eye they're above the text, not in a column of
-   their own. */
-.thread-widget-overlay[data-rail-layout="overlay"] .thread-widget-card {
- box-shadow: var(--shadow-xl);
-}
+   squeezing the message column, the widgets float ON TOP of it. The wash below
+   is what tells the eye they're above the text.
 
-/* ...and a soft wash behind them, fading in from the left. Without it the
-   cards slice sentences mid-word and the result reads as broken text rather
-   than as a panel sitting on top of it. Painted before the cards (they're
-   position:relative and later in the DOM), so only the gaps get washed. */
+   It is now FULLY OPAQUE (it was 88%, over cards that each carried their own
+   bg-card). With the frames gone the wash is the only thing between a to-do and
+   the sentence underneath it, so a translucent one would show message text
+   through the widget. It still fades in from the left over 28px, so it reads as
+   a panel laid over the conversation rather than a hard vertical cut through
+   it. */
 .thread-widget-overlay[data-rail-layout="overlay"]::before {
  content: '';
  position: absolute;
@@ -2065,17 +2062,9 @@
  pointer-events: none;
  background: linear-gradient(to right,
    transparent,
-   color-mix(in srgb, var(--channel-surface, var(--card)) 88%, transparent) 28px);
+   var(--channel-surface, var(--card)) 28px);
  backdrop-filter: blur(3px);
  -webkit-backdrop-filter: blur(3px);
-}
-
-/* Neo/brutal: match the 2px ink border every other card surface gets
-   ([data-slot="card"], line ~638). These cards aren't data-slot cards, so
-   without this they stayed at Tailwind's 1px .border while the shadow already
-   resolved to the hard --neo-shadow-md offset — thin edge, heavy shadow. */
-:root[data-ui-theme="neo"] .thread-widget-card {
- border-width: 2px;
 }
 
 .chat-message-row[data-agent-message="true"] .chat-message-avatar,

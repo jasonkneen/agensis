@@ -11,6 +11,19 @@
       "Your position is yours — it does not follow you between accounts or shift when you switch workspace",
       "The Draw pencil shows on the desktop only, not while a channel or document is open",
       "Draw stays visible while you are drawing, so the mode is never one you cannot leave"
+    ]
+  },
+  {
+    "version": "chrome-cleanup",
+    "date": "2026-07-27",
+    "title": "Tenants fills the window, thread widgets lose their boxes, and an ended huddle stops announcing itself",
+    "summary": "Three things that only ever showed up by looking at them. Tenants opened as a narrow strip of accounts stranded in the middle of an otherwise empty screen, under a search bar that ran the full width — it now opens as the two panes it always was, with the account list on the left and the space for an account on the right, so it fills the window the way every other view does. The To-do, Plan and Blockers widgets beside a conversation no longer sit in shaded, bordered boxes; each is now a heading with a hairline under it and its items below, on the same surface as everything else. And when a huddle ends, the strip above the conversation goes with it instead of lingering for five minutes to say the call is over — the huddle already leaves a line in the conversation, which is the record.",
+    "highlights": [
+      "Tenants fills its window: the account list is a proper left column and the right-hand pane says what to do next until you open an account",
+      "Drag the divider between the two panes whether or not an account is open",
+      "Narrow windows are unchanged — the list still takes the whole width and an open account still replaces it",
+      "To-do, Plan and Blockers widgets lose their card frames; a heading, a hairline and more space between them do the separating",
+      "No more \"Huddle ended\" strip after a call — the huddle's own line in the conversation is what remains"
 ]
   },
   {
