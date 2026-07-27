@@ -801,6 +801,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         // The card is its own toggle: clicking the open agent
                         // again closes the detail pane (lib/agentsView.ts).
                         onClick={() => { setSelectedAgentId(prev => toggleAgentSelection(prev, agent.id)); setEditingId(null); }}
+                        // Drag handlers ride alongside the click: the fidget
+                        // hook swallows a click that turned into a drag, so a
+                        // pull never opens the detail pane by accident.
                         {...fidget.handlers}
                         style={agentAccentStyle(agent)}
                         data-agent-selected={selected ? 'true' : undefined}
@@ -855,6 +858,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // Stacked: the card grid with the live map under it, in ONE
                 // scroll container — a short window scrolls the pair rather
                 // than crushing both into slivers.
+                // The grid takes the height its cards need; the map takes
+                // EVERYTHING left. A fixed map height left dead space below it
+                // in a tall window, which is the one thing a two-panel view
+                // must not do. min-h keeps the map readable in a short window,
+                // where the outer container scrolls instead.
                 return (
                   // The grid takes the height its cards need; the map takes
                   // EVERYTHING left. A fixed map height left a dead band below
