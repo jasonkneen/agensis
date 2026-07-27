@@ -2009,6 +2009,7 @@ function AppContent() {
             onDocumentUpdate={saveDocument}
             onAddToCanvasApplet={handleCreateDocApp}
             onSessionOpen={handleSessionOpen}
+            activeSessionId={activeSession?.id ?? null}
             onSessionUpdate={updateSession}
             onSessionArchive={archiveSession}
             onSessionDelete={deleteSession}

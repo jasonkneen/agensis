@@ -1648,6 +1648,15 @@
  color: var(--foreground);
 }
 
+/* The currently open channel/DM/thread — a soft tint everywhere except neo,
+   which draws its own boxed-card version (see the neo block above). */
+.sidebar-item-row[data-active="true"],
+.sidebar-session-row[data-active="true"],
+.sidebar-agent-row[data-active="true"] {
+ background: color-mix(in srgb, var(--primary) 12%, var(--card)) !important;
+ color: var(--foreground) !important;
+}
+
 .sidebar-agent-row {
  display: grid !important;
  grid-template-columns: minmax(0, 1fr) auto;
@@ -1846,6 +1855,30 @@
  background: var(--muted) !important;
  border-color: transparent !important;
  box-shadow: none !important;
+ color: var(--text-primary) !important;
+}
+
+/* The one row a person actually has open reads as the "selected" card —
+   same treatment as the top-level nav's active state — while every other
+   row in the list (and the section/folder headers above them) stays flat
+   text. Covers channels/threads (.sidebar-item-row, .sidebar-session-row)
+   and DMs (.sidebar-agent-row). */
+:root[data-ui-theme="neo"] .sidebar-item-row[data-active="true"] {
+ border-width: 2px !important;
+ border-style: solid !important;
+ border-color: var(--border) !important;
+ background: var(--card) !important;
+ box-shadow: var(--neo-shadow-sm) !important;
+ color: var(--text-primary) !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-session-row[data-active="true"],
+:root[data-ui-theme="neo"] .sidebar-agent-row[data-active="true"] {
+ border-width: 2px !important;
+ border-style: solid !important;
+ border-color: var(--border) !important;
+ background: var(--card) !important;
+ box-shadow: var(--neo-shadow-sm) !important;
  color: var(--text-primary) !important;
 }
 
@@ -4145,7 +4178,9 @@ select {
 
 /* Neo / TinyWorld: section headers and folder triggers match action-row card style */
 
-/* ── Neo: section-header card (trigger + optional + button share the same card) ── */
+/* ── Neo: section header (Channels, Direct messages, …) — plain label, not a
+   card. Only the item a person actually selects should read as a "button";
+   the group header just introduces it, same as every other theme. ── */
 :root[data-ui-theme="neo"] .sidebar-section-header {
  box-sizing: border-box;
  width: calc(100% - 6px) !important;
@@ -4154,10 +4189,10 @@ select {
  margin-bottom: 4px !important;
  border-width: 2px !important;
  border-style: solid !important;
- border-color: var(--border) !important;
+ border-color: transparent !important;
  border-radius: 9px !important;
- background: var(--card) !important;
- box-shadow: var(--neo-shadow-sm) !important;
+ background: transparent !important;
+ box-shadow: none !important;
  /* 2rem, down from 2.55. neo keeps the card frame — that is the theme's
     identity — but the thing inside it is now a small label, and 2.55rem was
     sized for the row it used to be. */
@@ -4167,7 +4202,6 @@ select {
 
 :root[data-ui-theme="neo"] .sidebar-section-header:hover {
  background: var(--secondary) !important;
- transform: translate(1px, 1px) !important;
 }
 
 /* Trigger inside header owns no border/shadow — the header card does */
@@ -4196,13 +4230,14 @@ select {
  transform: none !important;
 }
 
-/* Folder triggers are standalone buttons — same card frame */
+/* Folder triggers are standalone buttons but, like section headers, are group
+   labels rather than selectable rows — plain, not boxed. */
 :root[data-ui-theme="neo"] .sidebar-folder-trigger {
  border-width: 2px !important;
  border-style: solid !important;
- border-color: var(--border) !important;
- background: var(--card) !important;
- box-shadow: var(--neo-shadow-sm) !important;
+ border-color: transparent !important;
+ background: transparent !important;
+ box-shadow: none !important;
  /* Reduced with the base rows. Every theme that overrides a sidebar height
     has to move, or the setting only appears to work on whichever theme the
     person changing it happened to be using. */
@@ -4212,7 +4247,6 @@ select {
 
 :root[data-ui-theme="neo"] .sidebar-folder-trigger:hover {
  background: var(--secondary) !important;
- transform: translate(1px, 1px) !important;
 }
 
 /* ── TinyWorld: section-header card ── */

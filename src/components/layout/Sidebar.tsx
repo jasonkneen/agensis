@@ -228,6 +228,9 @@ interface SidebarProps {
  onDocumentUpdate?: (id: string, updates: { title?: string; content?: string; folder?: string | null }) => void;
  onAddToCanvasApplet?: (doc: Document) => void;
  onSessionOpen: (session: ChatSession) => void;
+ /** The session currently focused in a window — highlighted in the list so
+  * "what am I looking at" reads back from the sidebar, not just the window. */
+ activeSessionId?: string | null;
  onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
  onSessionArchive?: (id: string, archived?: boolean) => void;
  onSessionDelete?: (id: string) => void;
@@ -299,6 +302,7 @@ export const Sidebar = React.memo(function Sidebar({
  onDocumentUpdate,
  onAddToCanvasApplet,
  onSessionOpen,
+ activeSessionId = null,
  onSessionUpdate,
  onSessionArchive,
  onSessionDelete,
@@ -381,6 +385,7 @@ export const Sidebar = React.memo(function Sidebar({
      depth={depth}
      chip="SPLIT"
      canMerge
+     active={fork.id === activeSessionId}
      onOpen={() => onSessionOpen(fork)}
      onMoveFolder={folder => onSessionUpdate?.(fork.id, { folder })}
      onArchive={() => onSessionArchive?.(fork.id, true)}
@@ -761,6 +766,7 @@ export const Sidebar = React.memo(function Sidebar({
           icon={<Hash />}
           limit={8}
           chatPresence={chatPresence}
+          activeSessionId={activeSessionId}
           onSessionOpen={onSessionOpen}
           onSessionUpdate={onSessionUpdate}
           onSessionArchive={onSessionArchive}
@@ -782,6 +788,7 @@ export const Sidebar = React.memo(function Sidebar({
            icon={<Hash />}
            limit={8}
            chatPresence={chatPresence}
+           activeSessionId={activeSessionId}
            onSessionOpen={onSessionOpen}
            onSessionUpdate={onSessionUpdate}
            onSessionArchive={onSessionArchive}
@@ -851,6 +858,7 @@ export const Sidebar = React.memo(function Sidebar({
          <DirectAgentRow
           agent={agent}
           favorite={favoriteAgentKeys.has(getAgentKey(agent))}
+          active={Boolean(agent.session && agent.session.id === activeSessionId)}
           onMessage={() => {
            if (agent.session) {
             onSessionOpen(agent.session);
@@ -880,6 +888,7 @@ export const Sidebar = React.memo(function Sidebar({
          key={session.id}
          session={session}
          archived
+         active={session.id === activeSessionId}
          onOpen={() => onSessionOpen(session)}
          onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
          onArchive={() => onSessionArchive?.(session.id, false)}
@@ -1265,6 +1274,7 @@ function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: 
 function DirectAgentRow({
  agent,
  favorite,
+ active = false,
  onMessage,
  onProfile,
  onCopyMention,
@@ -1273,6 +1283,8 @@ function DirectAgentRow({
 }: {
  agent: SidebarMessageTarget;
  favorite: boolean;
+ /** This agent's DM session is the one currently open/focused. */
+ active?: boolean;
  onMessage: () => void;
  onProfile: () => void;
  onCopyMention: () => void;
@@ -1288,7 +1300,10 @@ function DirectAgentRow({
  const profileEnabled = Boolean(agent.agentId || handle);
 
  return (
-  <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 flex-nowrap rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
+  <div
+   className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 flex-nowrap rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
+   data-active={active ? 'true' : undefined}
+  >
    <button
     type="button"
     className="sidebar-agent-primary min-w-0 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1679,6 +1694,7 @@ function SessionTree({
  archiveNoun,
  limit,
  chatPresence,
+ activeSessionId = null,
  onSessionOpen,
  onSessionUpdate,
  onSessionArchive,
@@ -1691,6 +1707,7 @@ function SessionTree({
  archiveNoun?: string;
  limit?: number;
  chatPresence: Record<string, ItemPresenceUser[]>;
+ activeSessionId?: string | null;
  onSessionOpen: (session: ChatSession) => void;
  onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
  onSessionArchive?: (id: string, archived?: boolean) => void;
@@ -1715,6 +1732,7 @@ function SessionTree({
      depth={depth}
      chip={chip}
      canMerge={chip === 'SPLIT'}
+     active={session.id === activeSessionId}
      onOpen={() => onSessionOpen(session)}
      onMoveFolder={folder => onSessionUpdate?.(session.id, { folder })}
      onArchive={() => onSessionArchive?.(session.id, true)}
@@ -1739,6 +1757,7 @@ function SessionRow({
  depth = 0,
  chip = null,
  canMerge = false,
+ active = false,
  onOpen,
  onMoveFolder,
  onArchive,
@@ -1754,6 +1773,8 @@ function SessionRow({
  depth?: number;
  chip?: 'SPLIT' | 'SUB' | null;
  canMerge?: boolean;
+ /** This session is the one currently open/focused — render it boxed. */
+ active?: boolean;
  onOpen: () => void;
  onMoveFolder: (folder: string) => void;
  onArchive: () => void;
@@ -1800,6 +1821,7 @@ function SessionRow({
    <ContextMenuTrigger asChild>
     <div
      className="sidebar-session-row group flex min-w-0 w-full items-center gap-1 rounded-md pr-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+     data-active={active ? 'true' : undefined}
      style={depth ? { paddingLeft: depth * 12 } : undefined}
     >
      <button
