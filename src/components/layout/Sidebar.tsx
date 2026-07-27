@@ -540,13 +540,18 @@ export const Sidebar = React.memo(function Sidebar({
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
     {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
+    {/* Same order as the expanded panel, and for the same reason — collapsing
+        the sidebar must not reshuffle where things are. The two Separators sit
+        where the expanded panel draws its two rules. */}
+    {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
+    <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+    <Separator />
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
     <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
-    {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
-    <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+    <Separator />
     {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
@@ -677,6 +682,17 @@ export const Sidebar = React.memo(function Sidebar({
         onClick={onShowDesktop}
        />
       )}
+      {/* Tasks and Memory join the fixed top block rather than sitting below the
+          sections. They are the two destinations you go to REPEATEDLY and by
+          name — the rest of the standalone rows are occasional — and down there
+          they were separated from Inbox and Desktop by five collapsible
+          sections whose height changes every time one is opened, so their
+          position on screen was never twice the same. */}
+      {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
+      <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+      {/* Closes the fixed block. Below it everything is a collapsible section;
+          above it, nothing moves. See .sidebar-group-divider. */}
+      <div aria-hidden="true" className="sidebar-group-divider" />
       <SidebarSection
        id="threads"
        label="Threads"
@@ -872,8 +888,16 @@ export const Sidebar = React.memo(function Sidebar({
         />
        ))}
       </SidebarSection>
-      {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
-      <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+      {/* Closes the band of collapsible sections. Everything below is a
+          top-level destination, not a member of the section above it: flush
+          against Archive's header they read as Archive's CONTENTS, which is
+          exactly how they were reported. The rule is a sibling of the Archive
+          <Collapsible>, not a child, so it lands below Archive's rows when
+          Archive is open and directly below the ARCHIVE label when it is
+          closed. Correct in both states, which is why it is placed here rather
+          than "after the Archive header". Paired with the rule above THREADS —
+          together they bracket the sections, which is the Slack shape. */}
+      <div aria-hidden="true" className="sidebar-group-divider" />
       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}

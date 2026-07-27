@@ -318,6 +318,28 @@ export function applyHideDone<T extends Pick<Task, 'status'>>(tasks: T[], hideDo
   return hideDone ? tasks.filter(task => !isClosedTask(task)) : tasks;
 }
 
+/**
+ * THE definition of "N open tasks", for every surface that shows that number.
+ *
+ * Top-level ONLY. A subtask is not a row in the Tasks window — it lives inside
+ * its parent's expanded detail — so counting subtasks produced a sidebar badge
+ * that promised more work than the list could show. Reported as "why is tasks
+ * showing 3? click and nothing to see": in production one workspace had 5 open
+ * tasks but 3 top-level, another 4 open but 1 top-level. A badge you cannot
+ * reconcile with the screen is worse than no badge.
+ *
+ * "Open" is the complement of `isClosedTask` — not-done AND not-cancelled — so
+ * the toolbar's "Hide done" toggle provably cannot change this number: it only
+ * removes closed tasks, and none are counted here. That is why the sidebar
+ * badge does not need to read that preference to agree with the window.
+ *
+ * What it deliberately does NOT apply is the window's assignment filter
+ * (all / mine / others). See the call site in App.tsx.
+ */
+export function countOpenTasks<T extends Pick<Task, 'status' | 'parent_id'>>(tasks: T[]): number {
+  return tasks.filter(task => !task.parent_id && !isClosedTask(task)).length;
+}
+
 // --- Focus requests ---------------------------------------------------------
 
 export type TaskAssignmentFilter = 'all' | 'mine' | 'others';

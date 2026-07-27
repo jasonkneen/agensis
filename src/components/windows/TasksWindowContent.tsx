@@ -35,6 +35,7 @@ import {
   DAY_MS,
   applyHideDone,
   buildGanttRows,
+  countOpenTasks,
   buildTaskSpans,
   dependencyCandidates as resolveDependencyCandidates,
   dueDateFromExclusiveEnd,
@@ -304,7 +305,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     return 'Someone';
   };
 
-  const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+  // Same function the sidebar badge uses, so the two "N open" numbers can only
+  // ever differ by the assignment filter the user can see in this toolbar —
+  // never by what counts as a task. `filteredTopLevel` is already top-level, so
+  // countOpenTasks' parent_id check is a no-op here; sharing it is the point.
+  const openCount = countOpenTasks(filteredTopLevel);
 
   // The right-hand editor panel (Kanban/Gantt) is driven by a selected task id.
   // Resolving against live `tasks` means a deleted selection auto-closes the panel.

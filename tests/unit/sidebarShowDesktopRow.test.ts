@@ -91,6 +91,43 @@ describe('Desktop row', () => {
     expect(order[inbox + 1]).toBe('Desktop');
   });
 
+  // Tasks and Memory moved up to join Inbox and Desktop in the fixed block
+  // above the collapsible sections. Desktop is still directly under Inbox — the
+  // two assertions above still describe the truth — but "directly under Inbox"
+  // no longer pins the whole block, so the block itself is asserted here rather
+  // than left to be reshuffled silently.
+  it('leads a fixed top block of Inbox, Desktop, Tasks, Memory', () => {
+    mount({ onShowDesktop: () => {}, onOpenTasks: () => {} });
+    const order = rows().map(labelOf);
+    const inbox = order.findIndex(label => label === 'Inbox');
+    expect(order.slice(inbox, inbox + 4)).toEqual(['Inbox', 'Desktop', 'Tasks', 'Memory']);
+  });
+
+  it('uses that same block order in the collapsed rail', () => {
+    mount({ collapsed: true, onShowDesktop: () => {}, onOpenTasks: () => {} });
+    const order = rows().map(labelOf);
+    const inbox = order.findIndex(label => label === 'Inbox');
+    expect(order.slice(inbox, inbox + 4)).toEqual(['Inbox', 'Desktop', 'Tasks', 'Memory']);
+  });
+
+  // The block exists to sit ABOVE the sections; if a section ever renders
+  // between Memory and Threads the divider is separating the wrong things.
+  it('puts the whole block above the collapsible sections', () => {
+    mount({ onShowDesktop: () => {}, onOpenTasks: () => {} });
+    const order = rows().map(labelOf);
+    const memory = order.findIndex(label => label === 'Memory');
+    const threads = order.findIndex(label => label.startsWith('Threads'));
+    expect(memory).toBeGreaterThanOrEqual(0);
+    expect(threads).toBeGreaterThan(memory);
+  });
+
+  // The rules are decoration, not navigation: they must not turn up as rows.
+  it('draws its dividers as non-interactive elements, not rows', () => {
+    mount({ onShowDesktop: () => {}, onOpenTasks: () => {} });
+    expect(container.querySelectorAll('.sidebar-group-divider')).toHaveLength(2);
+    expect(container.querySelectorAll('button.sidebar-group-divider')).toHaveLength(0);
+  });
+
   it('is a keyboard-reachable button, not a div', () => {
     mount({ onShowDesktop: () => {} });
     const row = findRow('Desktop');
