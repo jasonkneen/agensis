@@ -95,6 +95,27 @@ async function render(
   await act(async () => {
     root.render(createElement(VoiceSection, { agent, roster: [agent], ...options }));
   });
+  // ...and then wait for the catalogue to actually land.
+  //
+  // `await act(async () => …)` drains the microtask queue ONCE. The voice
+  // catalogue arrives through fetch → json() → setState, which is more than one
+  // turn, so a single flush was enough only while the machine was idle. Under a
+  // full parallel run it was not: the selects had not rendered when the test
+  // reached for them, and eight tests failed with "Cannot set properties of
+  // undefined (setting 'value')" — every one of them green again when re-run on
+  // its own.
+  //
+  // A gate that is red at random is worse than no gate, because the habit it
+  // teaches is to re-run it until it passes.
+  await settle(() => container.querySelector('select') !== null);
+}
+
+/** Flush React until `until` holds, or the attempts run out. */
+async function settle(until: () => boolean, attempts = 50) {
+  for (let i = 0; i < attempts && !until(); i += 1) {
+    // eslint-disable-next-line no-await-in-loop -- sequential flushes are the point
+    await act(async () => { await Promise.resolve(); });
+  }
 }
 
 function selects() {

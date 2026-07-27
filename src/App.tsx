@@ -1464,6 +1464,56 @@ function AppContent() {
     })();
   }, [user]);
 
+  // The human half of a JOIN LINK (the single short-lived invite URL that serves
+  // people and agents alike). /join/<token> is a server-rendered page on the
+  // backend; its "Sign in and join" button lands here as ?join=<token>, and this
+  // redeems it with the signed-in user's own session token.
+  //
+  // Why a second effect rather than folding it into the ?invite= one above: they
+  // hit different endpoints with different lifetimes and different failure
+  // semantics. A join link is single-use and expires in minutes, so "it did not
+  // work" is a NORMAL outcome — and the ?invite= handler's unconditional reload
+  // would wipe the message explaining it off the screen before anyone read it.
+  // So the two paths diverge: success reloads (to pick up the new workspace),
+  // failure stays put and says why.
+  //
+  // Either way the token leaves the URL immediately, so it never lands in a
+  // bookmark, the back button, or a screenshot of the address bar.
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('join');
+    if (!token) return;
+    params.delete('join');
+    const qs = params.toString();
+    const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+    (async () => {
+      let joined = false;
+      try {
+        const res = await fetch(apiUrl(`/backend/join/${encodeURIComponent(token)}/redeem`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({}),
+        });
+        joined = res.ok;
+      } catch {
+        joined = false;
+      }
+      if (joined) {
+        window.location.replace(cleanUrl);
+        return;
+      }
+      // Strip the token without a navigation, so the toast survives to be read.
+      window.history.replaceState(null, '', cleanUrl);
+      // Expired, already used, withdrawn, or never valid — the server refuses
+      // all four identically, so there is one message here too. Saying which
+      // would answer "did this link ever exist?" for anyone willing to ask.
+      toast.error('That join link is no longer valid', {
+        description: 'It may have expired, been used, or been withdrawn. Ask whoever sent it for a new one.',
+      });
+    })();
+  }, [user]);
+
   // A channel edited its own row (title, icon, description, intent,
   // participants). The window that saved it updates its own header, but the
   // SIDEBAR reads this session list — so a rename showed in the header and

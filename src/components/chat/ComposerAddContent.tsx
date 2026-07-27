@@ -3,6 +3,7 @@ import { Bot, Command as CommandIcon, FileText, FolderOpen, HardDrive, Layers, P
 import type { CanvasGroup, Document, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import { agentHandle } from '../../lib/agentAccent';
+import { safeAttachmentSize } from '../../lib/messageAttachments';
 
 export type ComposerContextOption = {
   id: string;
@@ -86,10 +87,19 @@ export function buildFileContext(files: LinkedFile[]) {
   ].join('\n');
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+// `bytes` is typed `number` at every call site and is NOT always one at
+// runtime: `uploaded_files.size` is a Postgres bigint, which neither backend's
+// driver parses (postgres.js's number parser covers OIDs 21/23/26/700/701 —
+// int8 is 20), so it arrives as the string "3314900". `Number.isFinite` is
+// false for a string, which rendered every uploaded file in the workspace as
+// "0 B" on both lanes. safeAttachmentSize is the coercion the attachment path
+// already ran for exactly this reason; the parameter is widened so the lie in
+// the type is at least visible here.
+export function formatBytes(bytes: number | string | null | undefined): string {
+  const bytesValue = safeAttachmentSize(bytes);
+  if (bytesValue <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
-  let value = bytes;
+  let value = bytesValue;
   let idx = 0;
   while (value >= 1024 && idx < units.length - 1) {
     value /= 1024;

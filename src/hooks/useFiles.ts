@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
+import { normalizeUploadedFile, normalizeUploadedFiles } from '../lib/uploadedFiles';
 import type { UploadedFile } from '../types';
 
 function fileToBase64(file: File): Promise<string> {
@@ -15,12 +16,16 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+// Every row entering this hook goes through normalizeUploadedFile, on all three
+// ways in (bootstrap seed, list fetch, upload response). `size` is a bigint that
+// neither driver parses, so without this the whole app holds a string in a field
+// typed `number` — see the header of lib/uploadedFiles.ts.
 export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | null) {
-  const [files, setFiles] = useState<UploadedFile[]>(() => seed || []);
+  const [files, setFiles] = useState<UploadedFile[]>(() => normalizeUploadedFiles(seed));
   const [loading, setLoading] = useState(!seed?.length);
 
   useEffect(() => {
-    if (seed) setFiles(seed);
+    if (seed) setFiles(normalizeUploadedFiles(seed));
   }, [seed]);
 
   const fetchFiles = useCallback(async () => {
@@ -34,7 +39,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
         .order('created_at', { ascending: false });
       return data;
     });
-    if (data) setFiles(data);
+    if (data) setFiles(normalizeUploadedFiles(data));
     setLoading(false);
   }, [workspaceId]);
 
@@ -59,7 +64,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
         }),
       });
       const payload = await response.json();
-      if (response.ok && payload.data) uploaded.push(payload.data as UploadedFile);
+      if (response.ok && payload.data) uploaded.push(normalizeUploadedFile(payload.data as UploadedFile));
     }
     if (uploaded.length > 0) setFiles(prev => [...uploaded, ...prev]);
     return uploaded;
