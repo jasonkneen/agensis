@@ -140,7 +140,7 @@ import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { ChannelParticipant, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, OrbConfigInput, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, OrbConfigInput, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -1734,12 +1734,16 @@ function AppContent() {
     targetSession?: ChatSession | null,
     // Thread composer's "Send to channel" switch (messages.broadcast_to_channel).
     broadcastToChannel?: boolean,
+    // Structured uploaded-file references for rendering (messages.attachments).
+    // The agent's view of an attachment is still the "[Linked files]" text the
+    // composer folded into `content`.
+    attachments?: MessageAttachment[],
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
     // The result travels back to whichever composer called this: `delivered:
     // false` means the row was rolled back, so that composer must put the
     // user's text back instead of leaving them with an empty box.
-    return sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel);
+    return sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel, attachments);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleCreateCustomApplet = useCallback(async () => {
@@ -2652,7 +2656,7 @@ function CanvasLayerScene({
   onShareWindow: (title: string) => void;
   // Resolves `{ delivered: false }` when the message was rejected and rolled
   // back, so the composer that called it can restore the draft.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
   onOpenSessionById: (sessionId: string) => void;
   onDeleteDocument: (id: string) => void;
@@ -3352,7 +3356,7 @@ function InactiveChatWindow({
   onSetActiveSession: (session: ChatSession) => void;
   // Resolves `{ delivered: false }` when the message was rejected and rolled
   // back, so the composer that called it can restore the draft.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => Promise<SendMessageResult>;
   onOpenThread: (messageId: string) => void;
 }) {
   const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
@@ -3370,9 +3374,9 @@ function InactiveChatWindow({
 
   // Stable references, or the React.memo on ChatWindowContent never hits.
   const handleSendMessage = useCallback(
-    (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
+    (content: string, model: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
       onSetActiveSession(session);
-      return onSendMessage(content, model, mf, docs, null, session);
+      return onSendMessage(content, model, mf, docs, null, session, undefined, attachments);
     },
     [onSetActiveSession, onSendMessage, session],
   );

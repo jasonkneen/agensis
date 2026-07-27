@@ -244,6 +244,10 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+-- Attachment REFERENCES: [{id, name, type, size}] pointing at uploaded_files
+-- rows, for rendering (image inline, anything else as a download chip). Never
+-- file bytes. Mirrors the runtime ALTER in server/index.cjs.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments jsonb DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
 

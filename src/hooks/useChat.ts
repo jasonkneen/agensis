@@ -9,7 +9,7 @@ import { channelMessages } from '../components/chat/channelView';
 import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
 import { isHuddleSession } from '../lib/huddleTranscript';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
+import type { ChannelParticipant, ChatSession, Message, MemoryFact, MessageAttachment, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
 // NET-05: a chat window loads the newest MESSAGE_PAGE_SIZE on open and pages
@@ -324,6 +324,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
           sender_kind: m.sender_kind ?? null,
           sender_id: m.sender_id ?? null,
           sender_name: m.sender_name ?? null,
+          // Present on EVERY copy for the reason above: absent from copies[0]
+          // and the column is dropped for the whole batch, so a split thread's
+          // messages would render with their attachment chips missing.
+          attachments: m.attachments ?? [],
         };
         return row;
       });
@@ -406,6 +410,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     content: string,
     threadParentId?: string | null,
     broadcastToChannel?: boolean,
+    attachments?: MessageAttachment[],
   ): Promise<{ message: Message | null; error: { message: string; code?: string | null } | null }> => {
     // "Send to channel" from the thread composer. Only meaningful for a reply that
     // has a thread to be broadcast OUT of — a top-level message is already in the
@@ -420,6 +425,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       sender_name: currentUserName || null,
       thread_parent_id: threadParentId ?? null,
       broadcast_to_channel: broadcast,
+      // Painted optimistically so the chip appears with the message rather than
+      // one realtime round-trip later. The INSERT below stores the same list.
+      attachments: attachments && attachments.length > 0 ? attachments : null,
       created_at: new Date().toISOString(),
     };
 
@@ -434,6 +442,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     if (currentUserName) insertPayload.sender_name = currentUserName;
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
     if (broadcast) insertPayload.broadcast_to_channel = true;
+    // Bind the ARRAY, not a JSON string. `messages.attachments` is registered in
+    // JSON_COLUMNS_BY_TABLE, so each backend serialises it the way ITS driver
+    // needs (the Fly server binds the object; Netlify stringifies). Pre-encoding
+    // here would double-encode on Fly into a jsonb string scalar — see
+    // tests/jsonb-bind-hygiene.test.cjs.
+    if (attachments && attachments.length > 0) insertPayload.attachments = attachments;
     const { error } = await backendClient.from('messages').insert(insertPayload);
 
     // backendClient swallows HTTP failures into { error } instead of throwing,
@@ -715,6 +729,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
     broadcastToChannel?: boolean,
+    attachments?: MessageAttachment[],
   ): Promise<SendMessageResult> => {
     const session = targetSession ?? activeSession;
     // No session to send into: the composer must keep the draft rather than
@@ -722,7 +737,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     if (!session) return { delivered: false, failure: WORKSPACE_UNAVAILABLE };
 
     if (!navigator.onLine) {
-      await insertUserMessage(session, content, threadParentId, broadcastToChannel);
+      await insertUserMessage(session, content, threadParentId, broadcastToChannel, attachments);
       const offlineReply: Message = {
         id: crypto.randomUUID(),
         session_id: session.id,
@@ -738,7 +753,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       return { delivered: true, failure: null };
     }
 
-    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel);
+    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel, attachments);
     // The message never reached the DB (viewer role, rate limit, server error).
     // The optimistic row is already rolled back; say why and abort before
     // dispatch/stream run against a messageId the server has never seen.
