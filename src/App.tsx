@@ -1,7 +1,6 @@
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { createPortal } from 'react-dom';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -38,7 +37,7 @@ import { NotificationsBell } from './components/notifications/NotificationsBell'
 import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { inviteUrl } from './hooks/useWorkspaceUsers';
-import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage } from './components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
   AlertDialog,
@@ -140,6 +139,7 @@ import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
+import { PresenceRoster } from './components/presence/PresenceRoster';
 import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, OrbConfigInput, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
@@ -1464,6 +1464,56 @@ function AppContent() {
     })();
   }, [user]);
 
+  // The human half of a JOIN LINK (the single short-lived invite URL that serves
+  // people and agents alike). /join/<token> is a server-rendered page on the
+  // backend; its "Sign in and join" button lands here as ?join=<token>, and this
+  // redeems it with the signed-in user's own session token.
+  //
+  // Why a second effect rather than folding it into the ?invite= one above: they
+  // hit different endpoints with different lifetimes and different failure
+  // semantics. A join link is single-use and expires in minutes, so "it did not
+  // work" is a NORMAL outcome — and the ?invite= handler's unconditional reload
+  // would wipe the message explaining it off the screen before anyone read it.
+  // So the two paths diverge: success reloads (to pick up the new workspace),
+  // failure stays put and says why.
+  //
+  // Either way the token leaves the URL immediately, so it never lands in a
+  // bookmark, the back button, or a screenshot of the address bar.
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('join');
+    if (!token) return;
+    params.delete('join');
+    const qs = params.toString();
+    const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+    (async () => {
+      let joined = false;
+      try {
+        const res = await fetch(apiUrl(`/backend/join/${encodeURIComponent(token)}/redeem`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({}),
+        });
+        joined = res.ok;
+      } catch {
+        joined = false;
+      }
+      if (joined) {
+        window.location.replace(cleanUrl);
+        return;
+      }
+      // Strip the token without a navigation, so the toast survives to be read.
+      window.history.replaceState(null, '', cleanUrl);
+      // Expired, already used, withdrawn, or never valid — the server refuses
+      // all four identically, so there is one message here too. Saying which
+      // would answer "did this link ever exist?" for anyone willing to ask.
+      toast.error('That join link is no longer valid', {
+        description: 'It may have expired, been used, or been withdrawn. Ask whoever sent it for a new one.',
+      });
+    })();
+  }, [user]);
+
   // A channel edited its own row (title, icon, description, intent,
   // participants). The window that saved it updates its own header, but the
   // SIDEBAR reads this session list — so a rename showed in the header and
@@ -2073,7 +2123,7 @@ function AppContent() {
             )}
             notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" />}
             presenceSlot={(
-              <WorkspacePresenceAvatars
+              <PresenceRoster
                 users={workspacePresenceUsers}
                 getMode={getPresenceMode}
                 onModeChange={setPresenceMode}
@@ -3449,366 +3499,6 @@ function InactiveChatWindow({
       onOpenThread={handleOpenThread}
       channelTitle={session.title || windowTitle}
     />
-  );
-}
-
-function WorkspacePresenceAvatars({
-  users,
-  getMode,
-  onModeChange,
-  favoriteIds,
-  focusedUserId,
-  onToggleFavorite,
-  onFocusUser,
-  onOpenRemoteWindow,
-  onCopyInviteLink,
-  onMessageAgent,
-}: {
-  users: WorkspacePresenceUser[];
-  getMode: (id?: string | null) => PresenceVisibilityMode;
-  onModeChange: (id: string, mode: PresenceVisibilityMode) => void;
-  favoriteIds: string[];
-  focusedUserId: string | null;
-  onToggleFavorite: (id: string) => void;
-  onFocusUser: (id: string | null) => void;
-  onOpenRemoteWindow: (win: FloatingWindow) => void;
-  onCopyInviteLink?: () => Promise<string | null>;
-  onMessageAgent?: (person: WorkspacePresenceUser) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  // The trigger pill (measured anchor) and the portaled popover panel. The
-  // popover is portaled to document.body because the sidebar clips its own
-  // content (overflow-hidden for the rounded corners), so a w-96 panel wider
-  // than the sidebar would otherwise get cut off at the edge — same reason the
-  // agent status feed portals out (see AgentStatusFeedOverlay in Sidebar.tsx).
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const portalRef = useRef<HTMLDivElement>(null);
-  const [portalPos, setPortalPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
-  const [inviteCopied, setInviteCopied] = useState(false);
-  const hoverCloseTimer = useRef<number | null>(null);
-  const openOnHover = () => {
-    if (hoverCloseTimer.current) {
-      window.clearTimeout(hoverCloseTimer.current);
-      hoverCloseTimer.current = null;
-    }
-    setExpanded(true);
-  };
-  const closeOnHover = () => {
-    if (hoverCloseTimer.current) window.clearTimeout(hoverCloseTimer.current);
-    hoverCloseTimer.current = window.setTimeout(() => setExpanded(false), 220);
-  };
-  useEffect(() => () => {
-    if (hoverCloseTimer.current) window.clearTimeout(hoverCloseTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (!expanded) return;
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      // The popover is portaled out of panelRef, so check both the trigger
-      // wrapper and the portaled panel before treating a click as "outside".
-      const insideTrigger = panelRef.current?.contains(target);
-      const insidePopover = portalRef.current?.contains(target);
-      if (!insideTrigger && !insidePopover) {
-        setExpanded(false);
-      }
-    };
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, [expanded]);
-
-  // Position the portaled popover off the trigger pill's measured rect. The
-  // panel is fixed-positioned over document.body (it can't render inline — the
-  // sidebar clips it), anchored so its bottom sits just above the pill and it
-  // opens rightward over the canvas, where there's room. Measured before paint
-  // and on resize/scroll so it tracks the pill and never flashes clipped.
-  useLayoutEffect(() => {
-    if (!expanded) {
-      setPortalPos(null);
-      return;
-    }
-    const measure = () => {
-      const el = triggerRef.current;
-      if (!el) return;
-      const box = el.getBoundingClientRect();
-      const left = box.left;
-      // w-96 (384px), clamped so it never runs off the right of the viewport.
-      const width = Math.min(384, window.innerWidth - left - 16);
-      // Grow upward from just above the pill (8px gap, matching the old mb-2).
-      const bottom = window.innerHeight - box.top + 8;
-      setPortalPos({ left, bottom, width });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    if (triggerRef.current) observer.observe(triggerRef.current);
-    window.addEventListener('resize', measure);
-    window.addEventListener('scroll', measure, true);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('scroll', measure, true);
-    };
-  }, [expanded]);
-
-  if (users.length === 0) return null;
-
-  const visibleUsers = users.slice(0, 5);
-  const overflow = users.length - visibleUsers.length;
-  const favorites = users.filter(user => favoriteIds.includes(user.id));
-  const focused = users.find(user => user.id === focusedUserId);
-  const chipUsers = focused && !favorites.find(user => user.id === focused.id) ? [focused, ...favorites] : favorites;
-  const showFocusControls = chipUsers.length > 0 || Boolean(focusedUserId);
-  const modeOptions: Array<{ value: PresenceVisibilityMode; label: string }> = [
-    { value: 'visible', label: 'Visible' },
-    { value: 'dimmed', label: 'Dim' },
-    { value: 'hidden', label: 'Muted' },
-  ];
-  return (
-    <div
-      ref={panelRef}
-      data-presence-panel
-      className="relative flex flex-col items-end gap-2"
-      onMouseEnter={openOnHover}
-      onMouseLeave={closeOnHover}
-    >
-      {expanded && portalPos && createPortal(
-        <div
-          ref={portalRef}
-          data-presence-popover
-          className="fixed z-[9600] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl"
-          style={{ left: portalPos.left, bottom: portalPos.bottom, width: portalPos.width }}
-          onMouseEnter={openOnHover}
-          onMouseLeave={closeOnHover}
-        >
-          <div className="flex items-center justify-between border-b px-3 py-2">
-            <div>
-              <div className="text-sm font-semibold">Shared users and agents</div>
-              <div className="text-[11px] text-muted-foreground">View activity, focus a participant, or share your windows</div>
-            </div>
-            <Badge variant="secondary">{users.length}</Badge>
-          </div>
-          {onCopyInviteLink && (
-            <div className="border-b px-3 py-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={async () => {
-                  const url = await onCopyInviteLink();
-                  if (url) {
-                    setInviteCopied(true);
-                    window.setTimeout(() => setInviteCopied(false), 1600);
-                  }
-                }}
-              >
-                <Users data-icon="inline-start" className="size-3.5" />
-                {inviteCopied ? 'Invite link copied' : 'Copy invite link'}
-              </Button>
-            </div>
-          )}
-          <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
-            Non-private open windows appear here as local-open references. Moving, closing, or resizing your copy does not affect theirs.
-          </div>
-          <div className="max-h-80 overflow-auto p-2">
-            {users.map(person => {
-              const mode = getMode(person.id);
-              const isFavorite = favoriteIds.includes(person.id);
-              return (
-                <div
-                  key={person.id}
-                  className={cn(
-                    'flex items-start gap-2 rounded-md px-2 py-2',
-                    focusedUserId === person.id && 'bg-accent/35',
-                  )}
-                >
-                  <Avatar
-                    size="sm"
-                    className={cn(
-                      mode === 'dimmed' && 'opacity-45 saturate-50',
-                      mode === 'hidden' && 'opacity-25 saturate-0',
-                    )}
-                  >
-                    <AvatarFallback className="text-[10px] font-bold">
-                      {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                    {(person.isCurrentUser || person.kind === 'agent') && (
-                      <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'} />
-                    )}
-                  </Avatar>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium">{person.name}</span>
-                      {person.isCurrentUser && <Badge variant="outline">You</Badge>}
-                      {person.kind === 'agent' && <Badge variant="secondary">@agent</Badge>}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {person.kind === 'agent'
-                        ? person.status === 'busy' ? 'Daemon running' : 'Daemon connected'
-                        : person.isCurrentUser ? 'Your workspace view' : mode === 'visible' ? 'Showing activity' : mode === 'dimmed' ? 'Dimmed activity' : 'Muted activity'}
-                    </div>
-                    {person.activityItems && person.activityItems.length > 0 && (
-                      <div className="presence-activity-chips mt-2 flex min-w-0 flex-wrap gap-x-1.5 gap-y-2">
-                        {person.activityItems.map(item => (
-                          <Badge
-                            key={item}
-                            variant="secondary"
-                            title={item}
-                            className="presence-activity-chip min-w-0 max-w-full shrink justify-start text-[10px]"
-                          >
-                            <span className="min-w-0 truncate">{item}</span>
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                    {!person.isCurrentUser && person.windows && person.windows.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {person.windows.slice(0, 6).map(win => (
-                          <Button
-                            key={win.id}
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-6 max-w-[10rem] px-2 text-[10px]"
-                            onClick={() => onOpenRemoteWindow(win)}
-                            title={`Open locally: ${win.title}`}
-                          >
-                            <span className="truncate">{windowLabel(win)}</span>
-                          </Button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <div className="flex items-center gap-1">
-                      {person.kind === 'agent' && onMessageAgent && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon-xs"
-                          title={`Message ${person.name}`}
-                          onClick={() => onMessageAgent(person)}
-                        >
-                          <MessageSquare />
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant={isFavorite ? 'secondary' : 'outline'}
-                        size="icon-xs"
-                        title={isFavorite ? 'Remove favorite' : 'Favorite user'}
-                        onClick={() => onToggleFavorite(person.id)}
-                      >
-                        <Star fill={isFavorite ? 'currentColor' : 'none'} />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={focusedUserId === person.id ? 'default' : 'outline'}
-                        size="sm"
-                        className="h-7 px-2 text-[11px]"
-                        onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
-                      >
-                        {focusedUserId === person.id ? 'Viewing' : 'View'}
-                      </Button>
-                    </div>
-                    {!person.isCurrentUser && (
-                      <div className="flex items-center gap-1">
-                        {modeOptions.map(option => (
-                          <Button
-                            key={option.value}
-                            type="button"
-                            variant={mode === option.value ? 'default' : 'outline'}
-                            size="sm"
-                            className="h-7 px-2 text-[11px]"
-                            onClick={() => onModeChange(person.id, option.value)}
-                          >
-                            {option.label}
-                          </Button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>,
-        document.body,
-      )}
-      <div ref={triggerRef} className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
-        <button
-          type="button"
-          onClick={() => setExpanded(prev => !prev)}
-          className="presence-avatar-trigger flex items-center rounded-full p-0.5 text-left transition-colors hover:bg-muted/60"
-          aria-expanded={expanded}
-          aria-label={`${users.length} shared participants`}
-          title={`${users.length} shared participants`}
-        >
-          <AvatarGroup className="presence-avatar-group">
-            {visibleUsers.map(person => {
-              const mode = getMode(person.id);
-              return (
-                <Avatar
-                  key={person.id}
-                  size="sm"
-                  title={`${person.name}${person.isCurrentUser ? ' (you)' : ''}`}
-                  className={cn(
-                    mode === 'dimmed' && 'opacity-45 saturate-50',
-                    mode === 'hidden' && 'opacity-25 saturate-0',
-                  )}
-                >
-                  <AvatarFallback className="text-[10px] font-bold">
-                    {person.kind === 'agent' ? <Bot className="size-3" /> : (person.name || '?').slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                  {(person.isCurrentUser || person.kind === 'agent') && (
-                    <AvatarBadge className={person.kind === 'agent' && person.status === 'busy' ? 'bg-amber-500 animate-pulse' : 'bg-green-500'} />
-                  )}
-                </Avatar>
-              );
-            })}
-            {overflow > 0 && (
-              <AvatarGroupCount title={`${overflow} more users`} className="presence-avatar-overflow size-6 text-[10px]">
-                +{overflow}
-              </AvatarGroupCount>
-            )}
-          </AvatarGroup>
-        </button>
-        {showFocusControls && (
-          <>
-            <div className="mx-1 h-6 w-px bg-border" aria-hidden />
-            <Button
-              type="button"
-              variant={focusedUserId ? 'outline' : 'default'}
-              size="sm"
-              className="h-8 rounded-md px-3 text-xs"
-              onClick={() => onFocusUser(null)}
-            >
-              All
-            </Button>
-            {chipUsers.map(person => (
-              <Button
-                key={person.id}
-                type="button"
-                variant={focusedUserId === person.id ? 'default' : 'outline'}
-                size="sm"
-                className="h-8 max-w-40 rounded-md px-2 text-xs"
-                onClick={() => onFocusUser(focusedUserId === person.id ? null : person.id)}
-                onDoubleClick={() => onToggleFavorite(person.id)}
-                title="Double-click to remove from favorites"
-              >
-                <span
-                  aria-hidden
-                  className="size-2 rounded-full"
-                  style={{ backgroundColor: person.color }}
-                />
-                <span className="truncate">{person.name}</span>
-              </Button>
-            ))}
-          </>
-        )}
-      </div>
-    </div>
   );
 }
 

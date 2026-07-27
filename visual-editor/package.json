@@ -16,5 +16,18 @@
   },
   "engines": {
     "node": ">=16"
-  }
+  },
+  "optionalDependencies": {
+    "@babel/parser": "^7.24.0"
+  },
+  "exports": {
+    ".": "./src/server.cjs",
+    "./stamp": "./src/stamp.cjs",
+    "./discover": "./src/discover.cjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md"
+  ]
 }

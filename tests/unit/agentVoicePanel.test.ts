@@ -95,6 +95,27 @@ async function render(
   await act(async () => {
     root.render(createElement(VoiceSection, { agent, roster: [agent], ...options }));
   });
+  // ...and then wait for the catalogue to actually land.
+  //
+  // `await act(async () => …)` drains the microtask queue ONCE. The voice
+  // catalogue arrives through fetch → json() → setState, which is more than one
+  // turn, so a single flush was enough only while the machine was idle. Under a
+  // full parallel run it was not: the selects had not rendered when the test
+  // reached for them, and eight tests failed with "Cannot set properties of
+  // undefined (setting 'value')" — every one of them green again when re-run on
+  // its own.
+  //
+  // A gate that is red at random is worse than no gate, because the habit it
+  // teaches is to re-run it until it passes.
+  await settle(() => container.querySelector('select') !== null);
+}
+
+/** Flush React until `until` holds, or the attempts run out. */
+async function settle(until: () => boolean, attempts = 50) {
+  for (let i = 0; i < attempts && !until(); i += 1) {
+    // eslint-disable-next-line no-await-in-loop -- sequential flushes are the point
+    await act(async () => { await Promise.resolve(); });
+  }
 }
 
 function selects() {
@@ -108,7 +129,17 @@ function change(element: HTMLSelectElement, value: string) {
   });
 }
 
-describe('the voice section', () => {
+// Every test here pays for a `vi.resetModules()` plus a fresh dynamic import of
+// AgentsWindowContent — a ~3000-line module — before it can render anything (see
+// the note on `render` above; the module-scope voice cache is why it has to).
+// On the default 5s that is fine on an idle machine and marginal on a busy one:
+// adding ONE more file to this suite was enough to push the first test past the
+// limit, and once it times out mid-`act` the half-initialised module takes the
+// other seven with it (they report "Loading voices…", a missing <select>, or an
+// empty container). Reproduced with a filler file containing nothing but a 3s
+// busy loop, so it is contention, not any one neighbour. A longer budget for the
+// import is the fix; nothing here asserts on timing.
+describe('the voice section', { timeout: 30_000 }, () => {
   it('loads the catalogue through OUR backend, not Cartesia directly', async () => {
     const fetchMock = stubVoices({ data: CATALOGUE, configured: true });
     await render(AGENT);

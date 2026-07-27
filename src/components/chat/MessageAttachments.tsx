@@ -1,24 +1,29 @@
 // Message attachments — the rendering half. See lib/messageAttachments.ts for
-// the decisions (what counts as an image, how the list parses, what a missing
-// file degrades to); this file only draws them.
+// the decisions (what counts as an image, how the list parses, how a thumbnail
+// is sized, what a missing file degrades to); this file only draws them.
 //
 // Two shapes:
-//   image -> an inline thumbnail
+//   image -> a compact thumbnail that opens a modal preview
 //   other -> a download chip
 //
-// Both are the SAME control underneath: an authenticated fetch of
-// /backend/files/:id/content followed by a download. There is no public URL and
-// no <img src> pointing at the route directly — the route requires an
-// Authorization header, which an <img> cannot send, so the bytes come through
-// useAuthenticatedObjectUrl into a blob: URL exactly like the Files panel's
-// preview already does.
+// Both are fed the SAME way: an authenticated fetch of
+// /backend/files/:id/content. There is no public URL and no <img src> pointing
+// at the route directly — the route requires an Authorization header, which an
+// <img> cannot send, so the bytes come through useAuthenticatedObjectUrl into a
+// blob: URL exactly like the Files panel's preview already does. The modal
+// reuses the thumbnail's blob rather than fetching again: it is the same file,
+// full size, already in memory.
 //
-// Nothing here opens an attachment in a tab. A downloaded file is inert; a file
-// handed to a viewer in this origin is not, and `type` is attacker-chosen.
+// Nothing here opens an attachment in a TAB. A downloaded file is inert; a file
+// handed to a viewer at this origin is not, and `type` is attacker-chosen. The
+// modal is not a viewer in that sense — it is the same <img> the thumbnail
+// already is, drawn larger, and `type` had to clear the closed raster allowlist
+// (no SVG) to reach an <img> at all.
 //
 // The name is rendered as TEXT (React escapes it), pre-sanitised and
-// length-capped by safeAttachmentName, and every chip truncates inside a
-// bounded box — a crafted name can neither inject markup nor widen the row.
+// length-capped by safeAttachmentName, and every chip, title and thumbnail
+// truncates inside a bounded box — a crafted name can neither inject markup,
+// widen a row, nor stretch the dialog.
 
 import { useState } from 'react';
 import { Paperclip, TriangleAlert } from 'lucide-react';
@@ -26,12 +31,27 @@ import { apiAuthHeaders, apiUrl } from '../../lib/backendClient';
 import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import { formatBytes } from './ComposerAddContent';
 import {
+  ATTACHMENT_THUMB_MAX_HEIGHT,
+  ATTACHMENT_THUMB_PLACEHOLDER,
   ATTACHMENT_UNAVAILABLE_LABEL,
   attachmentContentPath,
+  attachmentPreviewState,
+  attachmentThumbnailBox,
   isImageAttachment,
   parseMessageAttachments,
+  type AttachmentPreviewState,
   type MessageAttachment,
 } from '../../lib/messageAttachments';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 const CHIP_CLASS = 'inline-flex max-w-[260px] items-center gap-2 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-left text-xs';
@@ -61,6 +81,19 @@ export function MessageAttachmentList({
   );
 }
 
+/** The honest end state: the row this attachment points at is gone. */
+function UnavailableChip({ attachment }: { attachment: MessageAttachment }) {
+  return (
+    <span className={cn(CHIP_CLASS, 'text-muted-foreground')} title={attachment.name}>
+      <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0">
+        <span className="block truncate">{attachment.name}</span>
+        <span className="block truncate text-[11px]">{ATTACHMENT_UNAVAILABLE_LABEL}</span>
+      </span>
+    </span>
+  );
+}
+
 function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }) {
   const isImage = isImageAttachment(attachment);
   const href = apiUrl(attachmentContentPath(attachment.id));
@@ -69,26 +102,46 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
   const { src, loading, error } = useAuthenticatedObjectUrl(isImage ? href : null);
   const [downloadFailed, setDownloadFailed] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const unavailable = error || downloadFailed;
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Reserved before the bytes arrive, replaced with the real aspect on load.
+  const [box, setBox] = useState<{ width: number; height: number }>(() => ({ ...ATTACHMENT_THUMB_PLACEHOLDER }));
   const sizeLabel = attachment.size > 0 ? formatBytes(attachment.size) : '';
 
-  // The row this attachment points at is gone (deleted file, or a workspace the
-  // viewer can no longer read). Say so, rather than leaving a broken-image glyph
-  // or a chip that does nothing when clicked.
-  if (unavailable) {
-    return (
-      <span className={cn(CHIP_CLASS, 'text-muted-foreground')} title={attachment.name}>
-        <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0">
-          <span className="block truncate">{attachment.name}</span>
-          <span className="block truncate text-[11px]">{ATTACHMENT_UNAVAILABLE_LABEL}</span>
-        </span>
-      </span>
-    );
+  // Say so, rather than leaving a broken-image glyph or a chip that does
+  // nothing when clicked. An image keeps its dialog mounted while it is open
+  // even if the file disappears underneath — the modal has its own honest
+  // branch, and yanking the whole dialog out from under a keyboard user mid-
+  // interaction is worse than telling them what happened.
+  const unavailable = error || downloadFailed;
+  if (unavailable && !(isImage && previewOpen)) {
+    return <UnavailableChip attachment={attachment} />;
   }
+
+  // Hand the bytes to the browser as a SAVE, never a navigation: `download`
+  // means the file is written to disk rather than rendered at this origin.
+  // `attachment.name` is sanitised upstream — one line, no control or bidi
+  // characters, length-capped.
+  const saveToDisk = (objectUrl: string, revokeAfter: boolean) => {
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = attachment.name;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    if (revokeAfter) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
 
   const download = async () => {
     if (downloading) return;
+    // An image's bytes are already here, as the blob behind the thumbnail. Do
+    // not fetch the file a second time to save it, and do NOT revoke that URL
+    // afterwards — the hook owns its lifetime and revoking would blank the
+    // thumbnail and the open preview.
+    if (isImage && src) {
+      saveToDisk(src, false);
+      return;
+    }
     setDownloading(true);
     try {
       const response = await fetch(href, { headers: apiAuthHeaders() });
@@ -96,19 +149,7 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
         setDownloadFailed(true);
         return;
       }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      // Sanitised upstream: one line, no control or bidi-override characters,
-      // length-capped. `download` also forces a save rather than a navigation,
-      // so the browser never renders the bytes in this origin.
-      anchor.download = attachment.name;
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      saveToDisk(URL.createObjectURL(await response.blob()), true);
     } catch {
       setDownloadFailed(true);
     } finally {
@@ -117,22 +158,47 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
   };
 
   if (isImage) {
+    const state = attachmentPreviewState({ src, loading, error: unavailable });
     return (
-      <button
-        type="button"
-        onClick={download}
-        title={attachment.name}
-        aria-label={`Download ${attachment.name}`}
-        className="block max-w-[min(20rem,100%)] overflow-hidden rounded-lg border border-border bg-muted/40 transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        {src ? (
-          <img src={src} alt={attachment.name} className="max-h-64 w-auto max-w-full object-contain" />
-        ) : (
-          <span className="flex h-24 w-40 items-center justify-center text-[11px] text-muted-foreground">
-            {loading ? 'Loading…' : attachment.name}
-          </span>
-        )}
-      </button>
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogTrigger asChild>
+          <button
+            type="button"
+            title={attachment.name}
+            aria-label={`Open preview of ${attachment.name}`}
+            // The box is a STYLE, not a class: it comes from the image's own
+            // dimensions, so there is no finite set of utilities for it.
+            // max-w-full keeps it inside a narrow floating window; the image
+            // letterboxes rather than distorting when that clamp bites.
+            style={{ width: box.width, height: box.height }}
+            className="block max-w-full overflow-hidden rounded-lg border border-border bg-muted/40 transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {state === 'ready' ? (
+              <img
+                src={src}
+                alt={attachment.name}
+                // Intrinsic size is only knowable once the bytes have decoded.
+                onLoad={event => setBox(attachmentThumbnailBox(
+                  event.currentTarget.naturalWidth,
+                  event.currentTarget.naturalHeight,
+                ))}
+                className="size-full object-contain"
+              />
+            ) : (
+              <span className="flex size-full items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+                {state === 'loading' ? 'Loading…' : ATTACHMENT_UNAVAILABLE_LABEL}
+              </span>
+            )}
+          </button>
+        </DialogTrigger>
+        <AttachmentPreviewDialog
+          attachment={attachment}
+          state={state}
+          src={src}
+          sizeLabel={sizeLabel}
+          onDownload={download}
+        />
+      </Dialog>
     );
   }
 
@@ -150,5 +216,62 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
         {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
       </span>
     </button>
+  );
+}
+
+/**
+ * The full-size preview.
+ *
+ * Deliberately the app's Dialog primitive rather than a hand-rolled portal: the
+ * focus trap, the Escape handler, the return of focus to the thumbnail that
+ * opened it, `aria-modal`, and the surface treatment every theme family applies
+ * to `dialog-content` all come with it. A hand-rolled one is how the presence
+ * popover ended up rendering transparent under neo.
+ */
+function AttachmentPreviewDialog({
+  attachment,
+  state,
+  src,
+  sizeLabel,
+  onDownload,
+}: {
+  attachment: MessageAttachment;
+  state: AttachmentPreviewState;
+  src: string;
+  sizeLabel: string;
+  onDownload: () => void;
+}) {
+  return (
+    <DialogContent
+      // Wide enough to be worth opening, bounded by the viewport rather than by
+      // a breakpoint — chat lives in a floating, resizable window and the
+      // preview has to survive being opened from a narrow one.
+      className="max-w-[min(56rem,calc(100vw-2rem))] gap-3 sm:max-w-[min(56rem,calc(100vw-2rem))]"
+      data-testid="attachment-preview"
+    >
+      <DialogHeader className="pr-8">
+        {/* Plain text, truncated: a crafted name cannot widen the dialog. */}
+        <DialogTitle className="truncate">{attachment.name}</DialogTitle>
+        <DialogDescription className="truncate">{sizeLabel || 'Image attachment'}</DialogDescription>
+      </DialogHeader>
+      <div
+        className="flex items-center justify-center overflow-auto rounded-lg border border-border bg-muted/30"
+        style={{ minHeight: ATTACHMENT_THUMB_MAX_HEIGHT }}
+      >
+        {state === 'ready' ? (
+          <img src={src} alt={attachment.name} className="max-h-[70vh] max-w-full object-contain" />
+        ) : (
+          <span className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            {state === 'unavailable' && <TriangleAlert className="size-4 shrink-0" aria-hidden />}
+            {state === 'loading' ? 'Loading…' : ATTACHMENT_UNAVAILABLE_LABEL}
+          </span>
+        )}
+      </div>
+      <DialogFooter showCloseButton>
+        <Button type="button" variant="outline" onClick={onDownload} disabled={state !== 'ready'}>
+          Download
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 }

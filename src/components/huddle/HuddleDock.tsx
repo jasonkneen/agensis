@@ -310,57 +310,63 @@ export function HuddleDock() {
         </Button>
       </div>
 
-      {/* Participants stay visible while collapsed: "who is in this call" is
-          the one thing worth seeing without expanding it. */}
-      {participants.length > 0 && (
-        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
-          {participants.map(participant => (
-            <span
-              key={participant.id}
-              title={participant.name}
-              className={cn(
-                'grid size-6 place-items-center rounded-full text-[10px] font-semibold',
-                participant.kind === 'agent'
-                  ? 'bg-primary/15 text-primary'
-                  : 'bg-muted text-muted-foreground',
-                participant.active && 'ring-1 ring-primary',
-                participant.speaking && 'ring-2 ring-emerald-500',
-              )}
-            >
-              {participantInitials(participant.name)}
-            </span>
-          ))}
-          {connection && <HuddleSpeakingNow className="ml-auto" />}
-        </div>
-      )}
+      {/* WHO is here and WHAT you can do about it, on ONE line.
+          These were two stacked bars, each ~34px with its own divider, holding
+          six small controls between them. In a dock this narrow that is two
+          rules across the width to separate an avatar from a microphone.
 
-      {/* The in-call controls. Only while we hold a connection: off the call
-          there is no microphone of ours to mute and no voice to silence. */}
-      {connection && (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-3 py-1.5">
-          <HuddleMicButton connected={local.connected} />
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="size-7 p-0 text-muted-foreground"
-            onClick={() => setOutputMuted(value => !value)}
-            aria-pressed={outputMuted}
-            aria-label={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
-            title={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
-          >
-            {outputMuted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
-          </Button>
-          {/* Who your voice goes to. Only in a channel: a DM has one agent, and
-              a switcher with one option is a control with nothing behind it. */}
-          {agents.length > 0 && (
-            <HuddleAgentStrip
-              agents={agents}
-              activeId={activeAgent?.id || ''}
-              onSelect={setActiveAgentId}
-              enabled
-              className="ml-auto"
-            />
+          Participants stay visible while collapsed — "who is in this call" is
+          the one thing worth seeing without expanding it — and the controls
+          still appear only while we hold a connection: off the call there is no
+          microphone of ours to mute and no voice to silence. */}
+      {(participants.length > 0 || connection) && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1">
+            {participants.map(participant => (
+              <span
+                key={participant.id}
+                title={participant.name}
+                className={cn(
+                  'grid size-6 place-items-center rounded-full text-[10px] font-semibold',
+                  participant.kind === 'agent'
+                    ? 'bg-primary/15 text-primary'
+                    : 'bg-muted text-muted-foreground',
+                  participant.active && 'ring-1 ring-primary',
+                  participant.speaking && 'ring-2 ring-emerald-500',
+                )}
+              >
+                {participantInitials(participant.name)}
+              </span>
+            ))}
+          </div>
+          {connection && <HuddleSpeakingNow />}
+          {connection && (
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              <HuddleMicButton connected={local.connected} />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="size-7 p-0 text-muted-foreground"
+                onClick={() => setOutputMuted(value => !value)}
+                aria-pressed={outputMuted}
+                aria-label={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
+                title={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
+              >
+                {outputMuted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
+              </Button>
+              {/* Who your voice goes to. Only in a channel: a DM has one agent,
+                  and a switcher with one option is a control with nothing
+                  behind it. */}
+              {agents.length > 0 && (
+                <HuddleAgentStrip
+                  agents={agents}
+                  activeId={activeAgent?.id || ''}
+                  onSelect={setActiveAgentId}
+                  enabled
+                />
+              )}
+            </div>
           )}
         </div>
       )}
@@ -428,7 +434,6 @@ export function HuddleDock() {
                 huddleId={recordHuddleId || state?.id || null}
                 agents={agents}
                 activeAgentId={activeAgent?.id || ''}
-                onClose={recordHuddleId ? dock.closeHuddle : handleLeave}
               />
             ) : (
               <div className="p-3 text-sm text-muted-foreground">

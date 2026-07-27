@@ -376,7 +376,12 @@ export type ActivityEventType =
  // never holds the credential itself). The audit trail for that: metadata carries
  // the provider, the operation, the resolved URL and the HTTP status — never a
  // request or response body, and never a header.
- | 'provider_call';
+ | 'provider_call'
+ // The single-use join URL. Created by someone with manage; redeemed once by
+ // either a person or an agent. metadata carries the link's id, the lane it was
+ // redeemed on and the role — never the token, which exists only as a hash.
+ | 'join_link_created'
+ | 'join_link_redeemed';
 
 export interface ActivityEvent {
  id: string;

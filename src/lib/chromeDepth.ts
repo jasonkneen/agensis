@@ -33,6 +33,7 @@
 //
 //   overlay         Radix portals: tooltip / popover / select / hover card
 //   agentFeed       the sidebar's agent status feed, portalled to the body
+//   presencePanel   the presence roster, likewise portalled out of the sidebar
 //   cursors         live collaborator cursors
 //   appDock         mobile window switcher + the feedback launcher
 //   modalScrim      dialog + alert-dialog backdrops
@@ -67,6 +68,23 @@ export const CHROME_DEPTH = {
   workspaceRail: 40,
   overlay: 50,
   agentFeed: 9500,
+  /**
+   * The presence roster popover.
+   *
+   * It is a Radix popover, which would land at `overlay` (50) on its own — but
+   * the two chrome portals just below it (`agentFeed`) and just above it
+   * (`cursors`) both sit near 10k, so a roster on the Radix default would open
+   * *behind* the status-feed bubble it shares a corner with. It carried a bare
+   * `z-[9600]` for exactly that reason; this is the same number, named.
+   *
+   * Note what it does NOT clear: `appDock` (11500) is the feedback launcher,
+   * so a launcher parked over the roster still paints on top of it. That is
+   * deliberate — the launcher is the one control a stuck user must always be
+   * able to reach — and it dodges only obstructions under 120px tall
+   * (MAX_OBSTRUCTION_HEIGHT in FeedbackButton.tsx), so it will never slide
+   * clear of a panel. Keeping the roster short is what keeps them apart.
+   */
+  presencePanel: 9600,
   cursors: 9999,
   appDock: 11500,
   /**
@@ -104,6 +122,7 @@ export const CHROME_DEPTH_ORDER: readonly ChromeDepthLevel[] = [
   'workspaceRail',
   'overlay',
   'agentFeed',
+  'presencePanel',
   'cursors',
   'appDock',
   'huddlePanel',

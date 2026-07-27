@@ -93,21 +93,26 @@ describe('HuddlePanel', () => {
     // are inert with a null workspace — so this exercises the real import graph
     // and the real JSX without a network, a socket or a LiveKit room.
     act(() => {
-      root.render(createElement(HuddlePanel, { workspaceId: null, onClose: () => {} }));
+      root.render(createElement(HuddlePanel, { workspaceId: null }));
     });
     expect(container.textContent).toContain('No huddle here yet');
     // The composer must not be offered when there is no live huddle to type into.
     expect(container.querySelector('textarea')).toBeNull();
   });
 
-  it('closes through the caller, not by unmounting itself', () => {
-    let closed = 0;
+  it('renders NO chrome of its own — the dock owns the header', () => {
+    // This panel is only ever mounted inside HuddleDock, which already draws
+    // the title, the running timer, the participant avatars and the close
+    // button. When the panel drew its own too, one huddle showed two headers,
+    // two timers and two close buttons stacked together, and the transcript was
+    // squeezed into the bottom third of the dock.
+    //
+    // The close button is the cheapest proof: if it comes back, so has the
+    // whole duplicated header it belongs to.
     act(() => {
-      root.render(createElement(HuddlePanel, { workspaceId: null, onClose: () => { closed += 1; } }));
+      root.render(createElement(HuddlePanel, { workspaceId: null }));
     });
-    const close = container.querySelector('button[aria-label="Close huddle"]');
-    expect(close).not.toBeNull();
-    act(() => { close?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(closed).toBe(1);
+    expect(container.querySelector('button[aria-label="Close huddle"]')).toBeNull();
+    expect(container.querySelector('.channel-header')).toBeNull();
   });
 });

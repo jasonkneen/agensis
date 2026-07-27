@@ -69,6 +69,7 @@
  --z-workspace-rail: 40;
  --z-overlay: 50;
  --z-agent-feed: 9500;
+ --z-presence-panel: 9600;
  --z-cursors: 9999;
  --z-app-dock: 11500;
  --z-huddle-panel: 11600;
@@ -656,12 +657,11 @@
    row you are actually on — which is the one thing the frame is FOR.
    Hover and selected (below) put the treatment back. */
 :root[data-ui-theme="tinyworld"] .sidebar-action-row {
- /* Match the SEARCH FIELD's height (min-h-8 = 2rem). The selected row is a
-    bar of the same family as the search bar directly above it, and at the
-    base 1.55rem it read as a shorter, meaner pill sitting under a taller
-    one. Only tinyworld: this theme frames the selection, so the frame's
-    proportions matter here in a way they do not where selection is a wash. */
- min-height: 2rem !important;
+ /* Height is --sidebar-action-row-h, set to 2rem for this theme at the top of
+    the file. The reason is unchanged: the selected row is a bar of the same
+    family as the search bar directly above it, and at the base 1.55rem it read
+    as a shorter, meaner pill sitting under a taller one. Only tinyworld frames
+    the selection, so the frame's proportions matter here. */
  position: relative;
  overflow: hidden;
  border-width: 1px !important;
@@ -1658,11 +1658,26 @@
 :root {
  --sidebar-row-frame: 0px;
  --sidebar-row-clearance: 0px;
+ /* The air ABOVE a section heading — the whole of what separates one section
+    from the last one's items. It lived as a `pt-3` literal on the Collapsible
+    in Sidebar.tsx, so it was invisible to this block and could not be tuned
+    with the rest of the rhythm. At 0.75rem it was the single largest piece of
+    non-content height in the column: five sections spent 56px on it. */
+ --sidebar-section-gap: 0.375rem;
  --sidebar-action-row-h: 1.55rem;
  --sidebar-item-row-h: 1.5rem;
  --sidebar-section-trigger-h: 1.35rem;
  --sidebar-folder-trigger-h: 1.7rem;
  --sidebar-agent-row-h: 2.1rem;
+}
+
+:root[data-ui-theme="tinyworld"] {
+ /* Match the SEARCH FIELD's height (min-h-8 = 2rem) — see the action-row rule
+    in the tinyworld block. Stated as the SHARED variable, not as a
+    `min-height: … !important` on the row: a theme adjusting the metric is part
+    of the system, a theme restating a height is what put neo 1.6x out and made
+    a base-scope change a no-op. */
+ --sidebar-action-row-h: 2rem;
 }
 
 :root[data-ui-theme="neo"] {
@@ -1674,6 +1689,13 @@
     the shadow it was clearing and, times fourteen rows, most of the extra
     height. */
  --sidebar-row-clearance: 2px;
+}
+
+/* The Collapsible that wraps one section: its heading and that heading's items.
+   Owns the gap above the section so the rhythm is tunable from the block above
+   rather than from a Tailwind literal in the component. */
+.sidebar-section {
+ padding-top: var(--sidebar-section-gap);
 }
 
 .sidebar-action-row {
@@ -2249,19 +2271,29 @@
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
 
-/* Thread widgets have NO FRAME by default. They used to be bordered, filled,
-   rounded cards with a --shadow-md (and a 2px ink border under
-   [data-ui-theme="neo"], to match [data-slot="card"]). The owner asked for the
-   boxed treatment to go: the widgets are sections of the rail, not three
-   floating panels. What separates one from the next is now a heading, a
-   hairline under it and the grid's gap-y-4 — all in ThreadWidgetRail.tsx.
-   Nothing here re-adds a card in the normal themes — a per-theme frame rule
-   would put the box back for exactly the people who chose that theme.
+/* THE WIDGET CARD IS A CARD. THE ITEMS INSIDE IT ARE NOT.
+   Both halves matter and they are easy to swap by mistake:
 
-   BRUTAL IS THE EXCEPTION (below): every other bordered surface in that theme
-   — cards, dialogs, popovers, tables — wears a hard 2px ink edge, so a
-   frameless rail there reads as unstyled/broken rather than "intentionally
-   quiet". Re-add the edge, scoped to [data-ui-theme="neo"] only. */
+   - The CARD gets a frame and, just as importantly, an OPAQUE SURFACE. The rail
+     sits directly over the message list, which is the worst backdrop in the app
+     — without a background the conversation's text and a to-do list's text
+     interleave and neither is readable. A bordered but transparent card does
+     not fix that; the fill is the fix and the border says where it ends.
+   - The ITEMS keep NO border (see .thread-widget-item-row below). Boxing every
+     to-do inside a boxed card made six items read as six nested cards.
+
+   This was neo-only, which is why every other family — tinyworld included —
+   was showing the conversation straight through the widget body. A card's
+   frame belongs to the component, not to one theme; the per-family part is
+   only how heavy the edge is. */
+.thread-widget-card {
+ border: 1px solid var(--border);
+ border-radius: var(--radius-md);
+ background: var(--card);
+}
+
+/* Brutal: every bordered surface in this theme wears a hard 2px ink edge, so
+   the rail's cards do too, with the offset shadow that goes with it. */
 :root[data-ui-theme="neo"] .thread-widget-card {
  border: 2px solid var(--neo-edge);
  border-radius: var(--radius-md);
@@ -4232,6 +4264,28 @@ body {
  user-select: none;
 }
 
+/* ...but prose is for reading, and reading means copying.
+ *
+ * The rule above exists so dragging a window by its chrome moves the window
+ * instead of painting a selection across it. It is set on the whole window, so
+ * it inherits into the message list and made every message in the app
+ * unselectable — you could not copy what an agent said to you.
+ *
+ * These are the surfaces whose content is the point rather than the frame. A
+ * directly-matching declaration beats an inherited one, so each of these turns
+ * selection back on for itself and its subtree without weakening the drag
+ * behaviour of the chrome around it.
+ */
+.chat-message-row,
+.chat-markdown,
+.chat-thread-message,
+.doc-preview-body,
+.memory-file-body,
+pre,
+code {
+ user-select: text;
+}
+
 html {
  font-size: var(--agensis-ui-font-size, 15px);
 }
@@ -4352,7 +4406,11 @@ select {
 :root[data-ui-theme="tinyworld"] .sidebar-search,
 :root[data-ui-theme="tinyworld"] .sidebar-section-trigger,
 :root[data-ui-theme="tinyworld"] .sidebar-folder-trigger,
-:root[data-ui-theme="tinyworld"] .sidebar-item-row {
+:root[data-ui-theme="tinyworld"] .sidebar-item-row,
+/* The DM row, for the same reason it was added to neo's list: left out, it is
+   the ONE row that runs the full panel width, so the selected DM's fill reaches
+   the panel edge while every other selected row stops 6px short of it. */
+:root[data-ui-theme="tinyworld"] .sidebar-agent-row {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-left: 0 !important;
@@ -4463,7 +4521,11 @@ select {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-right: 6px !important;
- margin-bottom: 4px !important;
+ /* 0 for this theme, not 4px. The 4px was the gap under a bordered CONTROL;
+    the frame is gone (border-width above) and the section content's own pt-0.5
+    is the gap a heading needs under it. Four sections' worth of it was 16px of
+    the space between headings the owner flagged. */
+ margin-bottom: var(--sidebar-row-clearance) !important;
  border-width: 0 !important;
  border-style: solid !important;
  border-color: transparent !important;
@@ -4948,6 +5010,44 @@ select {
    went a translucent blue-grey and the anti-glass rule above stopped applying
    to anything but the rail. Keep this rule separated by a blank line, and keep
    its own selector list self-contained. */
+
+/* WORKSPACE TILES: an edge that always runs OPPOSITE to the mode.
+   The tiles are flat squares of identity colour on the strip's own fill, so
+   with no edge they float rather than reading as objects. The edge is mixed
+   from --foreground, which is dark in light mode and light in dark mode by
+   definition — so "darker line in light, lighter in dark" falls out of the
+   token instead of being two hardcoded colours, and it holds across every
+   theme family without a per-family rule.
+
+   It frames the colour rather than tinting it: the border is a separate box
+   edge, and the fill is set inline from the agent-avatar palette (identity, not
+   decoration — it is what stands in for the emoji this app does not use).
+
+   SELECTION STILL WINS. Every tile now has an edge, so the active one takes the
+   full-strength version while the rest sit at 55% AND at the 60% opacity the
+   swatch already carries for inactive tiles — two multiplied differences, on
+   top of the left-edge marker and the squarer radius. */
+.workspace-tile-swatch {
+ border-color: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+
+/* Brutal draws every edge in ink at 2px; a 1px mixed edge here would be the one
+   soft outline in a theme that has none. Declared BEFORE the selected rules
+   below, not after: this selector and the [data-active] one have identical
+   specificity, so written the other way round it repainted the selected tile's
+   edge as well and selection lost one of its two cues. */
+:root[data-ui-theme="neo"] .workspace-tile-swatch {
+ border-width: 2px;
+ border-color: color-mix(in srgb, var(--neo-edge) 55%, transparent);
+}
+
+[data-workspace-rail-tile][data-active="true"] .workspace-tile-swatch {
+ border-color: var(--foreground);
+}
+
+:root[data-ui-theme="neo"] [data-workspace-rail-tile][data-active="true"] .workspace-tile-swatch {
+ border-color: var(--neo-edge);
+}
 
 /* The rail is the ONE chrome column that is deliberately not `--card`. One flat
    colour for the whole rail rather than the page background showing through it:
