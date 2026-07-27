@@ -104,6 +104,11 @@ const MUST_BE_LINTED = [
   // URL at all. 169.254.169.254 serves cloud IAM credentials, and the response
   // streams back to the caller. Extracted from server/index.cjs.
   'server/lib/net-guard.cjs',
+  // Owns the WebSocket fanout and its authorization: which rows reach which
+  // subscriber, and which heavy/secret columns are stripped before they do.
+  // authorizeRealtimeBinding is the only thing standing between a subscribe
+  // frame and another workspace's data. Extracted from server/index.cjs.
+  'server/realtime.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
