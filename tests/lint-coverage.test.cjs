@@ -113,6 +113,10 @@ const MUST_BE_LINTED = [
   // A mistake here delivers a dispatch to a dead process, or lets a superseded
   // daemon keep answering. Extracted from server/index.cjs.
   'server/agent-connections.cjs',
+  // Decides which agent a task is handed to and whether a held reply is booked
+  // once or twice. claimTaskDispatch is a lease with a timeout; an unlinted
+  // mistake either wedges a task or dispatches it twice, and both are billed.
+  'server/task-dispatch.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
