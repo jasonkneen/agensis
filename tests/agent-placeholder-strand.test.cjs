@@ -39,7 +39,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { __test } = require('../server/index.cjs');
 
-const source = fs.readFileSync(path.resolve(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+const source = require('./helpers/fly-lane.cjs').flyLaneSource();
 
 const AUTH = { agentId: 'agent-1', workspaceId: 'ws-1', name: 'Coder', handle: 'coder' };
 

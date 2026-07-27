@@ -117,6 +117,10 @@ const MUST_BE_LINTED = [
   // once or twice. claimTaskDispatch is a lease with a timeout; an unlinted
   // mistake either wedges a task or dispatches it twice, and both are billed.
   'server/task-dispatch.cjs',
+  // Owns whether an agent is BUSY. finalizeStuckJob writing a
+  // constraint-invalid status was swallowed and left jobs 'running' forever,
+  // which made DMs stop responding. Extracted from server/index.cjs.
+  'server/agent-jobs.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.

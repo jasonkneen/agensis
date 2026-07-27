@@ -41,6 +41,7 @@ const EXTRACTED_NON_ROUTE_MODULES = [
   'server/realtime.cjs',
   'server/agent-connections.cjs',
   'server/task-dispatch.cjs',
+  'server/agent-jobs.cjs',
 ];
 
 function flyLaneFiles() {
