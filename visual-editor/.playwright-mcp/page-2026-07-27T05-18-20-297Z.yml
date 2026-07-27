@@ -1,0 +1,192 @@
+- generic [active] [ref=f1e1]:
+  - banner [ref=f1e2]:
+    - navigation [ref=f1e3]:
+      - link "AcmeStudio" [ref=f1e4] [cursor=pointer]:
+        - /url: /
+      - list [ref=f1e5]:
+        - listitem [ref=f1e6]:
+          - link "Work" [ref=f1e7] [cursor=pointer]:
+            - /url: "#work"
+        - listitem [ref=f1e8]:
+          - link "Services" [ref=f1e9] [cursor=pointer]:
+            - /url: "#services"
+        - listitem [ref=f1e10]:
+          - link "Contact" [ref=f1e11] [cursor=pointer]:
+            - /url: "#contact"
+        - listitem [ref=f1e12]:
+          - link "About" [ref=f1e13] [cursor=pointer]:
+            - /url: about.html
+  - main [ref=f1e14]:
+    - generic [ref=f1e16]:
+      - generic [ref=f1e17]:
+        - paragraph [ref=f1e18]: Design & build studio
+        - heading "We make websites people remember." [level=1] [ref=f1e19]
+        - paragraph [ref=f1e20]: A small team with a big obsession for craft. Brand, web, and product design — from first sketch to shipped site.
+        - generic [ref=f1e21]:
+          - link "Start a project" [ref=f1e22] [cursor=pointer]:
+            - /url: "#contact"
+          - link "See our work" [ref=f1e23] [cursor=pointer]:
+            - /url: "#work"
+      - generic [ref=f1e24]:
+        - img "Abstract artwork" [ref=f1e25]
+        - paragraph [ref=f1e29]: Every pixel earns its place.
+    - generic [ref=f1e30]:
+      - heading "Selected work" [level=2] [ref=f1e31]
+      - paragraph [ref=f1e32]: A few recent projects we're proud of.
+      - generic [ref=f1e33]:
+        - article [ref=f1e34]:
+          - heading "Nimbus Bank" [level=3] [ref=f1e36]
+          - paragraph [ref=f1e37]: Rebrand and marketing site for a challenger bank. Conversion up 34%.
+          - link "Case study →" [ref=f1e38] [cursor=pointer]:
+            - /url: "#work"
+        - article [ref=f1e39]:
+          - heading "Fern & Field" [level=3] [ref=f1e41]
+          - paragraph [ref=f1e42]: E-commerce for a plant studio, with a hand-drawn illustration system.
+          - link "Case study →" [ref=f1e43] [cursor=pointer]:
+            - /url: "#work"
+        - article [ref=f1e44]:
+          - heading "Pulse FM" [level=3] [ref=f1e46]
+          - paragraph [ref=f1e47]: Live-streaming radio platform with a Webflow-lite show scheduler.
+          - link "Case study →" [ref=f1e48] [cursor=pointer]:
+            - /url: "#work"
+    - generic [ref=f1e50]:
+      - heading "What we do" [level=2] [ref=f1e51]
+      - list [ref=f1e52]:
+        - listitem [ref=f1e53]:
+          - strong [ref=f1e54]: Brand identity
+          - text: — naming, logo, voice, guidelines.
+        - listitem [ref=f1e55]:
+          - strong [ref=f1e56]: Web design
+          - text: — marketing sites, landing pages, blogs.
+        - listitem [ref=f1e57]:
+          - strong [ref=f1e58]: Product design
+          - text: — flows, prototypes, design systems.
+        - listitem [ref=f1e59]:
+          - strong [ref=f1e60]: Build
+          - text: — fast, accessible, hand-coded front-ends.
+      - table [ref=f1e61]:
+        - rowgroup [ref=f1e62]:
+          - row [ref=f1e63]:
+            - columnheader "Package" [ref=f1e64]
+            - columnheader "Timeline" [ref=f1e65]
+            - columnheader "From" [ref=f1e66]
+        - rowgroup [ref=f1e67]:
+          - row [ref=f1e68]:
+            - cell "Landing page" [ref=f1e69]
+            - cell "2 weeks" [ref=f1e70]
+            - cell "$4,500" [ref=f1e71]
+          - row [ref=f1e72]:
+            - cell "Marketing site" [ref=f1e73]
+            - cell "4–6 weeks" [ref=f1e74]
+            - cell "$12,000" [ref=f1e75]
+          - row [ref=f1e76]:
+            - cell "Full rebrand + site" [ref=f1e77]
+            - cell "8–10 weeks" [ref=f1e78]
+            - cell "$30,000" [ref=f1e79]
+    - generic [ref=f1e80]:
+      - heading "Say hello" [level=2] [ref=f1e81]
+      - generic [ref=f1e82]:
+        - generic [ref=f1e83]:
+          - text: Name
+          - textbox "Name" [ref=f1e84]:
+            - /placeholder: Ada Lovelace
+        - generic [ref=f1e85]:
+          - text: Email
+          - textbox "Email" [ref=f1e86]:
+            - /placeholder: ada@example.com
+        - generic [ref=f1e87]:
+          - text: Budget
+          - combobox "Budget" [ref=f1e88]:
+            - option "Under $5k" [selected]
+            - option "$5k – $15k"
+            - option "$15k+"
+        - generic [ref=f1e89]:
+          - text: Project details
+          - textbox "Project details" [ref=f1e90]:
+            - /placeholder: Tell us about it…
+        - button "Send message" [ref=f1e91] [cursor=pointer]
+  - contentinfo [ref=f1e92]:
+    - generic [ref=f1e93]:
+      - paragraph [ref=f1e94]: © 2026 AcmeStudio. Built with too much coffee.
+      - list [ref=f1e95]:
+        - listitem [ref=f1e96]:
+          - link "Twitter" [ref=f1e97] [cursor=pointer]:
+            - /url: "#"
+        - listitem [ref=f1e98]:
+          - link "Dribbble" [ref=f1e99] [cursor=pointer]:
+            - /url: "#"
+        - listitem [ref=f1e100]:
+          - link "GitHub" [ref=f1e101] [cursor=pointer]:
+            - /url: "#"
+  - generic:
+    - generic [ref=f1e102]:
+      - generic [ref=f1e103]:
+        - generic [ref=f1e104]: NAVIGATOR
+        - generic [ref=f1e105]: "104"
+        - button "Expand all" [ref=f1e106] [cursor=pointer]
+        - button "Collapse all" [ref=f1e109] [cursor=pointer]
+      - 'textbox "Find tag, #id, .class, text…" [ref=f1e113]'
+      - generic [ref=f1e114]:
+        - generic [ref=f1e115]:
+          - generic [ref=f1e116] [cursor=pointer]: header.site-header
+          - generic [ref=f1e125]:
+            - generic [ref=f1e126] [cursor=pointer]: nav.nav.container
+            - generic [ref=f1e134]:
+              - generic [ref=f1e136] [cursor=pointer]:
+                - generic [ref=f1e143]: a.logo
+                - generic [ref=f1e144]: "1"
+              - generic [ref=f1e146] [cursor=pointer]:
+                - generic [ref=f1e153]: ul.nav-links
+                - generic [ref=f1e154]: "4"
+        - generic [ref=f1e155]:
+          - generic [ref=f1e156] [cursor=pointer]: main
+          - generic [ref=f1e164]:
+            - generic [ref=f1e165]:
+              - generic [ref=f1e166] [cursor=pointer]: section.hero
+              - generic [ref=f1e176] [cursor=pointer]:
+                - generic [ref=f1e183]: div.container.hero-inner
+                - generic [ref=f1e184]: "2"
+            - generic [ref=f1e185]:
+              - generic [ref=f1e186] [cursor=pointer]: section#work.section.container
+              - generic [ref=f1e194]:
+                - generic [ref=f1e195]: h2 “Selected work”
+                - generic [ref=f1e202]: p.section-lede “A few recent projects we'r…”
+                - generic [ref=f1e210] [cursor=pointer]:
+                  - generic [ref=f1e217]: div.card-grid
+                  - generic [ref=f1e218]: "3"
+            - generic [ref=f1e219]:
+              - generic [ref=f1e220] [cursor=pointer]: section#services.section.section-alt
+              - generic [ref=f1e230] [cursor=pointer]:
+                - generic [ref=f1e237]: div.container
+                - generic [ref=f1e238]: "3"
+            - generic [ref=f1e239]:
+              - generic [ref=f1e240] [cursor=pointer]: section#contact.section.container
+              - generic [ref=f1e248]:
+                - generic [ref=f1e249]: h2 “Say hello”
+                - generic [ref=f1e257] [cursor=pointer]:
+                  - generic [ref=f1e264]: form.contact-form
+                  - generic [ref=f1e265]: "5"
+        - generic [ref=f1e266]:
+          - generic [ref=f1e267] [cursor=pointer]: footer.site-footer
+          - generic [ref=f1e276]:
+            - generic [ref=f1e277] [cursor=pointer]: div.container.footer-inner
+            - generic [ref=f1e285]:
+              - generic [ref=f1e286]: p “© 2026 AcmeStudio. Built w…”
+              - generic [ref=f1e294] [cursor=pointer]:
+                - generic [ref=f1e301]: ul.footer-links
+                - generic [ref=f1e302]: "3"
+      - generic "Drag to resize — double-click to reset" [ref=f1e303]
+    - generic [ref=f1e304]:
+      - generic "Drag to resize — double-click to reset" [ref=f1e305]
+      - generic [ref=f1e308]: Nothing selected.Click anything on the page,or pick from the Navigator.
+    - generic [ref=f1e313]:
+      - button "Select" [ref=f1e315] [cursor=pointer]
+      - generic [ref=f1e318]:
+        - button "Move before previous sibling" [ref=f1e319] [cursor=pointer]
+        - button "Move after next sibling" [ref=f1e322] [cursor=pointer]
+        - button "Delete element (⌫)" [ref=f1e325] [cursor=pointer]
+      - button "Undo" [ref=f1e329] [cursor=pointer]
+      - 'button "Live layout preview: while dragging, reflow the page around where the element would land" [ref=f1e332] [cursor=pointer]'
+      - 'button "Dock: push the page aside instead of overlapping it" [ref=f1e335] [cursor=pointer]'
+      - generic [ref=f1e338]: idle
+      - button "Close editor" [ref=f1e341] [cursor=pointer]

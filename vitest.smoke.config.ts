@@ -14,7 +14,12 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['tests/smoke/**/*.smoke.ts'],
-    setupFiles: ['tests/smoke/setup.ts'],
+    // test-env.cjs FIRST: it makes loadEnvFile() inert and clears every
+    // credential name, so a smoke run cannot read a developer's .env or build
+    // a live production database client. Its own guard test asserts every
+    // runner preloads it — this config is a runner, and adding one without
+    // this line is exactly what that guard exists to catch.
+    setupFiles: ['./tests/helpers/test-env.cjs', 'tests/smoke/setup.ts'],
     globals: false,
     // One surface at a time. These mount React trees into a shared jsdom
     // document; parallel files would race on it for no speed win at this size.
