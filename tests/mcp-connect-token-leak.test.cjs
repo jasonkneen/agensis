@@ -31,7 +31,7 @@ test('the command builder defaults to a placeholder, not a real token', () => {
 test('the connect route builds the command WITHOUT the live token', () => {
   // Read the route rather than booting it: the point is that nobody quietly
   // passes `token` back in as a second argument.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const call = source.match(/claudeMcpAdd:\s*claudeMcpAddCommand\(([^)]*)\)/);
   assert.ok(call, 'the connect route must still build a claude mcp add string');
   assert.ok(
@@ -56,7 +56,7 @@ test('the mcp-token route builds the config block WITHOUT the live token either'
   //
   // The rule this pins: a response may have exactly ONE field a secret can be
   // taken from. Here that field is `token`, which the dialog masks.
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const calls = [...source.matchAll(/config:\s*configBlock\(([^)]*)\)/g)];
   assert.ok(calls.length > 0, 'the mcp-token route must still return a config block');
   for (const call of calls) {

@@ -285,7 +285,7 @@ test('a body larger than the cap is truncated, not returned whole', (t) => {
 // --------------------------------------------------------------------------
 
 test('the skill-content route is authed, rate limited and workspace-scoped', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const start = source.indexOf("app.get('/backend/system/skill-content'");
   assert.ok(start > 0, 'the /backend/system/skill-content route must exist');
   const route = source.slice(start, start + 1600);
@@ -296,7 +296,7 @@ test('the skill-content route is authed, rate limited and workspace-scoped', () 
 });
 
 test('the host-filesystem read is gated on AGENSIS_ALLOW_PROJECT_FS', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const start = source.indexOf('async function skillLibraryPayload');
   assert.ok(start > 0, 'skillLibraryPayload must exist');
   const fn = source.slice(start, start + 1200);

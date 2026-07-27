@@ -99,6 +99,7 @@ const {
 } = require('./link-preview.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const { isBlockedAddress, assertSafeOutboundUrl } = require('./lib/net-guard.cjs');
+const { createGatewayResolver } = require('./lib/gateways.cjs');
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
@@ -113,6 +114,9 @@ const { mountAuthRoutes } = require('./auth-routes.cjs');
 const { mountMembersInvitesRoutes } = require('./members-invites-routes.cjs');
 const { mountJoinLinksRoutes } = require('./join-links-routes.cjs');
 const { mountFlowRoutes } = require('./flow-routes.cjs');
+const { mountSystemRoutes } = require('./system-routes.cjs');
+const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
+const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const {
  detectSkillLibraries,
  mergeSlashCommands,
@@ -10115,6 +10119,13 @@ function publicLinkPreview(row) {
  * spread extras alongside it (`{ ...coreDeps(), webhookRateLimiter }`) rather
  * than growing this object with one-module dependencies.
  */
+// One resolver, shared by the gateway CRUD routes and the per-turn ai-chat
+// lookup. See server/lib/gateways.cjs for why it is not a nested helper of
+// either module.
+const resolveGatewayRoute = createGatewayResolver({
+ getDb, decryptVaultSecret, parseJsonObject,
+});
+
 function coreDeps() {
  return {
   // Database handle + SQL error mapping
@@ -10277,75 +10288,7 @@ function createApp() {
   }
  });
 
- app.get('/backend/system/capabilities', requireAuth, async (req, res) => {
-  try {
-   const workspacePath = typeof req.query.workspacePath === 'string' ? req.query.workspacePath : '';
-   res.json({ data: await detectCapabilities(workspacePath), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Slash commands/skills the connected daemons actually expose on their machines.
- // The composer's `/` menu can't see the user's filesystem (only fly's), so it
- // sources the real commands from what each daemon pushed on its capability sync.
- app.get('/backend/system/slash-commands', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.query.workspaceId || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    `select capabilities
-         from agent_connections
-         where workspace_id = $1
-           and last_seen_at > now() - interval '24 hours'`,
-    [workspaceId],
-   );
-   const items = mergeSlashCommands(rows.map(row => parseJsonObject(row.capabilities)));
-   res.json({ data: items, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // The BODY behind a row in the Skills window. Three shapes, one route:
- //   ?skill=<name>            -> the document for a skill some agent carries
- //   ?library=<id>            -> the entries inside a detected skill library
- //   ?library=<id>&entry=<n>  -> one entry's markdown
- //
- // Fly only (like /backend/system/slash-commands): the hosted frontend targets the
- // Fly backend for every /backend call, and the sandbox-skill resolution needs the
- // CommonJS skill modules. Not on Netlify.
- //
- // Workspace-scoped throughout — the skills, the authored definitions and the
- // daemon-pushed documents are all read WHERE workspace_id = the id the caller
- // proved `read` on, so a member of one workspace cannot reach another's.
- app.get('/backend/system/skill-content', requireAuth, async (req, res) => {
-  try {
-   if (rateLimitBlocked(res, skillRateLimiter, `skill-content:${req.userId || clientIpFromReq(req)}`)) return;
-   const workspaceId = String(req.query.workspaceId || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-
-   const libraryId = String(req.query.library || '').trim();
-   if (libraryId) return res.json({ data: await skillLibraryPayload(libraryId, String(req.query.entry || '')), error: null });
-
-   const skill = String(req.query.skill || '').trim().slice(0, 200);
-   if (!skill) return jsonError(res, 400, new Error('skill or library is required'));
-   res.json({ data: await skillContentPayload(workspaceId, skill), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- app.post('/backend/system/inspect-path', requireAuth, async (req, res) => {
-  try {
-   const inspected = await inspectProjectPath(req.body?.path || '');
-   res.json({ data: inspected, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
+ mountSystemRoutes(app, { ...coreDeps(), detectCapabilities, inspectProjectPath, mergeSlashCommands, skillContentPayload, skillLibraryPayload, skillRateLimiter });
 
  mountFilesRoutes(app, { ...coreDeps(), FORCE_ATTACHMENT_CONTENT_TYPES, FORCE_ATTACHMENT_EXTENSIONS, getUploadExtension, lookupUploadContentType, resolveStoragePath, resolveStoragePathForWorkspace, safeFileName, storagePathFor });
 
@@ -10520,177 +10463,10 @@ function createApp() {
   }
  });
 
- app.get('/backend/workspaces', requireAuth, async (req, res) => {
-  try {
-   const rows = await getDb().unsafe(
-    `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
-                w.local_path, w.project_kind, w.git_root, w.git_remote,
-                w.created_at, w.updated_at,
-                case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
-         from workspaces w
-         left join workspace_members wm on wm.workspace_id = w.id and wm.user_id = $1
-         where w.user_id = $1 or wm.user_id = $1
-         order by w.updated_at desc nulls last, w.created_at desc nulls last, w.name asc`,
-    [req.userId],
-   );
-   res.json({ data: rows.map(publicWorkspace), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
+ mountWorkspacesRoutes(app, {
+  ...coreDeps(),
+  agentRuntimePayload, assertSafeOutboundUrl, encryptVaultSecret, publicWorkspace,
  });
-
- app.get('/backend/workspaces/:id/agents', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
-         from workspace_agents
-         where workspace_id = $1
-         order by created_at asc, name asc`,
-    [workspaceId],
-   );
-   res.json({ data: rows.map(agentRuntimePayload), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Gateway configs: workspace-level named routes to an external OpenAI-compatible
- // endpoint. The API key is stored encrypted (api_key_cipher) and is NEVER
- // returned to the client — publicGatewayConfig strips it and reports only whether
- // a key is configured. Selecting a gateway in chat routes that turn's inference
- // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
-
- // SSRF guard (H1). base_url comes straight from the request body and /backend/ai-chat
- function publicGatewayConfig(row) {
-  return {
-   id: row.id,
-   workspace_id: row.workspace_id,
-   name: row.name,
-   base_url: row.base_url,
-   model: row.model,
-   protocol: row.protocol || 'openai-chat',
-   headers: parseJsonObject(row.headers),
-   has_key: Boolean(row.api_key_cipher),
-   created_at: row.created_at,
-   updated_at: row.updated_at,
-  };
- }
-
- // Resolve a `gateway:<id>` model to its upstream call config (with the decrypted
- // key) for server-side inference. Returns null when the id is unknown to the
- // workspace. Server-only — the plaintext key never leaves this process.
- async function resolveGatewayRoute(workspaceId, gatewayId) {
-  const rows = await getDb().unsafe(
-   'select * from gateway_configs where id = $1 and workspace_id = $2 limit 1',
-   [String(gatewayId || ''), String(workspaceId || '')],
-  );
-  const row = rows[0];
-  if (!row) return null;
-  let apiKey = '';
-  if (row.api_key_cipher) {
-   try { apiKey = await decryptVaultSecret(row.api_key_cipher); } catch { apiKey = ''; }
-  }
-  return {
-   id: row.id,
-   name: row.name,
-   baseUrl: String(row.base_url || '').replace(/\/+$/, ''),
-   model: row.model,
-   protocol: row.protocol || 'openai-chat',
-   headers: parseJsonObject(row.headers),
-   apiKey,
-  };
- }
-
- app.get('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    'select * from gateway_configs where workspace_id = $1 order by created_at asc, name asc',
-    [workspaceId],
-   );
-   res.json({ data: rows.map(publicGatewayConfig), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- app.post('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const name = String(req.body?.name || 'Gateway').trim().slice(0, 120) || 'Gateway';
-   const rawBaseUrl = String(req.body?.base_url || req.body?.baseUrl || '').trim().slice(0, 500);
-   const model = String(req.body?.model || '').trim().slice(0, 200);
-   const apiKey = String(req.body?.api_key || req.body?.apiKey || '');
-   const headers = parseJsonObject(req.body?.headers);
-   if (!rawBaseUrl) return jsonError(res, 400, new Error('base_url is required'));
-   const baseUrl = await assertSafeOutboundUrl(rawBaseUrl);
-   const cipher = apiKey ? await encryptVaultSecret(apiKey) : '';
-   const rows = await getDb().unsafe(
-    `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
-         values ($1, $2, $3, $4, $5, 'openai-chat', $6::jsonb, $7) returning *`,
-    [workspaceId, name, baseUrl, cipher, model, headers, req.userId || null],
-   );
-   notifyDbSubscribers('gateway_configs', 'INSERT', rows.map(publicGatewayConfig));
-   res.status(201).json({ data: publicGatewayConfig(rows[0]), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- app.patch('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   const gatewayId = String(req.params.gatewayId || '').trim();
-   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const sets = ['updated_at = now()'];
-   const params = [gatewayId, workspaceId];
-   const push = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
-   if (req.body?.name !== undefined) push('name', String(req.body.name).trim().slice(0, 120) || 'Gateway');
-   if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) {
-    push('base_url', await assertSafeOutboundUrl(String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500)));
-   }
-   if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
-   if (req.body?.headers !== undefined) { params.push(parseJsonObject(req.body.headers)); sets.push(`headers = $${params.length}::jsonb`); }
-   // Only rotate the key when a non-empty api_key is provided; an omitted or empty
-   // field leaves the stored cipher intact so a name/model edit never wipes it.
-   if (req.body?.api_key || req.body?.apiKey) push('api_key_cipher', await encryptVaultSecret(String(req.body.api_key || req.body.apiKey)));
-   const rows = await getDb().unsafe(
-    `update gateway_configs set ${sets.join(', ')} where id = $1 and workspace_id = $2 returning *`,
-    params,
-   );
-   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
-   notifyDbSubscribers('gateway_configs', 'UPDATE', rows.map(publicGatewayConfig));
-   res.json({ data: publicGatewayConfig(rows[0]), error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- app.delete('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   const gatewayId = String(req.params.gatewayId || '').trim();
-   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const rows = await getDb().unsafe('delete from gateway_configs where id = $1 and workspace_id = $2 returning id, workspace_id', [gatewayId, workspaceId]);
-   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
-   notifyDbSubscribers('gateway_configs', 'DELETE', [{ id: gatewayId, workspace_id: workspaceId }]);
-   res.json({ data: { id: gatewayId, deleted: true }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Voice huddles (LiveKit). Fly-only, like gateways: it needs the websocket fanout,
- // so the Netlify mirror deliberately has no huddle routes.
  mountHuddleRoutes(app, { ...coreDeps(), webhookRateLimiter });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
@@ -12018,96 +11794,7 @@ function createApp() {
  mountJoinLinksRoutes(app, { ...coreDeps(), createJoinLinkToken, hashAgentToken, joinLinkTtlMs, joinPublicBaseUrl, joinUrlFor, logJoinLinkActivity });
 
  mountFlowRoutes(app, { ...coreDeps(), createPostgresFlowConnectionStore, getFlowConnectionCore, mcpEndpoint, normalizeBaseUrl, normalizeFlowWebhookUrl, requestBaseUrl });
- app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const token = createWorkspaceMcpToken();
-   const rows = await getDb().unsafe(
-    'update workspaces set mcp_token_hash = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',
-    [workspaceId, hashAgentToken(token)],
-   );
-   if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
-   const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
-   res.json({
-    data: {
-     token,
-     autoApprove: Boolean(rows[0].mcp_auto_approve),
-     endpoint: mcpEndpoint(baseUrl),
-     // PLACEHOLDER too, matching `claudeMcpAdd` below and matching every other
-     // caller of configBlock (server/skills.cjs passes TOKEN_PLACEHOLDER at all
-     // three of its call sites). This was built with the LIVE token: it carries
-     // no copy button, so it is not the leak that was reported — it is the same
-     // mistake in a second place, shipping a working credential inside a
-     // convenience payload the UI is free to render anywhere it likes. `token`
-     // is returned as its own field two lines up, masked on screen and copied
-     // deliberately, so this response now has exactly ONE field a secret can be
-     // taken from.
-     config: configBlock(baseUrl),
-     // PLACEHOLDER, not the live token. This one-liner is displayed in full and
-     // has a copy button, so embedding the real bearer token put it on the
-     // clipboard as plain text — and it has already been pasted into a
-     // transcript that way. The endpoint and the token are separate fields
-     // right beside it (the token masked, copied deliberately), so nothing is
-     // lost by making the convenience string non-secret.
-     claudeMcpAdd: claudeMcpAddCommand(baseUrl),
-    },
-    error: null,
-   });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // When on, a registering client is approved without a popup.
- app.patch('/backend/workspaces/:id/mcp-auto-approve', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const autoApprove = req.body?.autoApprove === true || req.body?.auto_approve === true;
-   const rows = await getDb().unsafe(
-    'update workspaces set mcp_auto_approve = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',
-    [workspaceId, autoApprove],
-   );
-   if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
-   res.json({ data: { autoApprove: Boolean(rows[0].mcp_auto_approve) }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Pending registrations drive the approval popup (realtime delivers new ones; this is
- // the initial load / fallback).
- app.get('/backend/workspaces/:id/agent-registrations', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const status = ['pending', 'approved', 'denied'].includes(req.query?.status) ? req.query.status : 'pending';
-   const rows = await getDb().unsafe(
-    'select id, agent_id, requested_handle, requested_name, client_label, status, created_at from agent_registrations where workspace_id = $1 and status = $2 order by created_at desc limit 50',
-    [workspaceId, status],
-   );
-   res.json({ data: { registrations: rows }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Approve / deny a pending registration (the popup's buttons).
- app.post('/backend/agent-registrations/:id/:action', requireAuth, async (req, res) => {
-  try {
-   const registrationId = String(req.params.id || '').trim();
-   const action = String(req.params.action || '').trim();
-   if (!['approve', 'deny'].includes(action)) return jsonError(res, 400, new Error('Unknown action'));
-   const found = await getDb().unsafe('select id, workspace_id from agent_registrations where id = $1 limit 1', [registrationId]);
-   if (!found[0]) return jsonError(res, 404, new Error('Registration not found'));
-   await enforceWorkspaceRole(req.userId, found[0].workspace_id, 'manage');
-   const result = await decideAgentRegistration({ registrationId, approve: action === 'approve' });
-   res.json({ data: { result }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
+ mountWorkspaceMcpRoutes(app, { ...coreDeps(), claudeMcpAddCommand, configBlock, createWorkspaceMcpToken, decideAgentRegistration, hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl });
 
  app.post('/backend/db/select', requireAuth, async (req, res) => {
   try {
