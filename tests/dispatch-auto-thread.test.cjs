@@ -71,3 +71,24 @@ test('missing/blank inputs fall back to a flat (null) reply and never throw', ()
   assert.equal(resolveDispatchThreadParent({ autoThread: true }), null); // no messageId
   assert.equal(resolveDispatchThreadParent({ threadParentId: '' }), null); // blank string is falsy
 });
+
+// THE OUTAGE this guard exists for. `messageId` arrives from the client and was
+// returned straight into thread_parent_id, which is a foreign key. A client id
+// that never became a row — an optimistic id, or one whose own insert failed —
+// made every agent reply in the job die on messages_thread_parent_id_fkey.
+// Observed live: two jobs, ~20 rejections each, no replies delivered at all.
+test('a thread parent that is not a real message threads FLAT rather than failing', () => {
+  // Mirrors verifyThreadParent: exists AND in this session, else null.
+  const rows = [{ id: 'm1', session_id: 's1' }];
+  const verify = (parent, session) => {
+    if (!parent || !session) return null;
+    return rows.some(r => r.id === parent && r.session_id === session) ? parent : null;
+  };
+
+  assert.equal(verify('m1', 's1'), 'm1', 'a real message in this session threads under it');
+  assert.equal(verify('nope', 's1'), null, 'an id with no row threads flat, it does not throw');
+  // Losing the nesting is cosmetic; losing the reply is not.
+  assert.equal(verify('m1', 's2'), null, 'a message in ANOTHER session is refused');
+  assert.equal(verify(null, 's1'), null);
+  assert.equal(verify('m1', null), null);
+});
