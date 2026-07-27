@@ -11,6 +11,8 @@
       "The demos are drawn from your theme, so they match whichever one you use",
       "They hold still if you have reduced motion turned on"
     ]
+  },
+  {
     "version": "floating-chrome",
     "date": "2026-07-27",
     "title": "The feedback button moves, and Draw belongs to the desktop",
