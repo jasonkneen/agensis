@@ -411,3 +411,54 @@ describe('labelFitsInsideBar', () => {
     expect(labelFitsInsideBar(undefined as unknown as string, 30 * DAY)).toBe(false);
   });
 });
+
+// "It's not remembering hidden done items."
+//
+// resolveTaskFocus widens the filters so a focused task that the current
+// filters hide can still be reached — arriving from a comment or @mention link
+// on a DONE task while "Hide done" is on. That is correct. What was wrong is
+// what the caller DID with it: it called setFilter/setHideDone, which are the
+// PERSISTED setters, so following one link wrote the user's preference away
+// permanently. They set "Hide done" once, followed a link, and it was off
+// forever with nothing to point at.
+//
+// The widening is now applied as a transient override for the duration of the
+// focus. These pin the contract resolveTaskFocus offers the caller: it asks for
+// the WIDEST filters, it stops asking once they are in force, and it never
+// describes that widening as something to keep.
+describe('resolveTaskFocus does not ask the caller to persist anything', () => {
+  const HIDDEN = { filter: 'mine' as const, hideDone: true };
+
+  it('asks to widen when the focused task is hidden', () => {
+    const action = resolveTaskFocus({
+      focusRowId: 't1', handledFocusId: null, isVisible: false, filters: HIDDEN,
+    });
+    expect(action.kind).toBe('widen');
+    // It names the WIDEST filters, not a tweak of the user's own.
+    expect(action.kind === 'widen' && action.next).toEqual(WIDEST_TASK_FILTERS);
+  });
+
+  it('stops asking once the widest filters are in force', () => {
+    // The caller reports EFFECTIVE filters, so once the transient override is
+    // on, this must not loop asking to widen again.
+    const action = resolveTaskFocus({
+      focusRowId: 't1', handledFocusId: null, isVisible: false, filters: WIDEST_TASK_FILTERS,
+    });
+    expect(action.kind).toBe('consume');
+  });
+
+  it('a visible task never triggers widening, whatever the filters', () => {
+    // The common case: nothing should touch filters at all.
+    const action = resolveTaskFocus({
+      focusRowId: 't1', handledFocusId: null, isVisible: true, filters: HIDDEN,
+    });
+    expect(action.kind).toBe('reveal');
+  });
+
+  it('an already-handled focus is idle, so a re-render cannot re-widen', () => {
+    const action = resolveTaskFocus({
+      focusRowId: 't1', handledFocusId: 't1', isVisible: false, filters: HIDDEN,
+    });
+    expect(action.kind).toBe('idle');
+  });
+});

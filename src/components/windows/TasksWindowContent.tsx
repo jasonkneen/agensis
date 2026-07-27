@@ -41,6 +41,7 @@ import {
   fromDateInputValue,
   labelFitsInsideBar,
   resolveTaskFocus,
+  WIDEST_TASK_FILTERS,
   startOfDay,
   taskDependsOn,
   toDateInputValue,
@@ -220,6 +221,14 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
   );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Which focus request we widened the filters FOR. Transient on purpose: the
+  // widening below used to call setFilter/setHideDone, which are the PERSISTED
+  // setters — so arriving from a comment or @mention link on a task that the
+  // current filters hide (a done task, with "Hide done" on) silently wrote the
+  // user's preference away. They set "Hide done" once, followed one link, and it
+  // was off forever with nothing to point at. Overriding for the duration of the
+  // focus shows the task without touching what they chose.
+  const [widenedForFocus, setWidenedForFocus] = useState<string | null>(null);
 
   const childrenMap = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -233,9 +242,22 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
   const allTopLevel = useMemo(() => tasks.filter(task => !task.parent_id), [tasks]);
 
+  const focusRowId = useMemo(() => {
+    if (!focusTaskId) return undefined;
+    const target = tasks.find(t => t.id === focusTaskId);
+    return target?.parent_id || focusTaskId;
+  }, [focusTaskId, tasks]);
+
+  // The filters actually in force: the user's, unless a focus request needed
+  // them widened to reach its task.
+  const focusWidened = Boolean(focusRowId) && widenedForFocus === focusRowId;
+  const effectiveFilter = focusWidened ? WIDEST_TASK_FILTERS.filter : filter;
+  const effectiveHideDone = focusWidened ? WIDEST_TASK_FILTERS.hideDone : hideDone;
+
   const filteredTopLevel = useMemo(() => {
     const me = currentUserId || members.find(member => member.email === currentUserEmail)?.user_id || '';
     let list = allTopLevel;
+    const filter = effectiveFilter;
     if (filter === 'mine') {
       list = me ? allTopLevel.filter(task => task.assignee_id === me) : [];
     } else if (filter === 'others') {
@@ -243,8 +265,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     }
     // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
     // "Done" here means closed — done AND cancelled; see isClosedTask.
-    return applyHideDone(list, hideDone);
-  }, [allTopLevel, filter, hideDone, members, currentUserEmail, currentUserId]);
+    return applyHideDone(list, effectiveHideDone);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -311,11 +333,6 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   // A focused task may be a subtask (rendered inside its parent's expanded
   // row, not as its own top-level row) — resolve to the row that actually
   // needs to scroll/expand.
-  const focusRowId = useMemo(() => {
-    if (!focusTaskId) return undefined;
-    const target = tasks.find(t => t.id === focusTaskId);
-    return target?.parent_id || focusTaskId;
-  }, [focusTaskId, tasks]);
 
   // The last focus request that reached a terminal action. Kept in a ref so it
   // does not re-trigger the effect: its only job is to stop a spent request
@@ -332,7 +349,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       focusRowId,
       handledFocusId: handledFocusRef.current,
       isVisible: Boolean(focusRowId) && filteredTopLevel.some(task => task.id === focusRowId),
-      filters: { filter, hideDone },
+      filters: { filter: effectiveFilter, hideDone: effectiveHideDone },
     });
     if (action.kind === 'reset') {
       handledFocusRef.current = null;
@@ -340,8 +357,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     }
     if (action.kind === 'idle') return;
     if (action.kind === 'widen') {
-      setFilter(action.next.filter);
-      setHideDone(action.next.hideDone);
+      // Transient — NOT setFilter/setHideDone, which persist. See widenedForFocus.
+      setWidenedForFocus(focusRowId ?? null);
       return; // re-runs once the wider list renders
     }
     // Terminal: mark the request spent BEFORE consuming, so a re-render in
@@ -355,7 +372,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     onFocusTaskConsumed?.();
     // setFilter/setHideDone are stable (see usePersistedPreference) but are not
     // the useState setters the lint rule knows to ignore, so they are listed.
-  }, [focusRowId, filter, hideDone, filteredTopLevel, onFocusTaskConsumed, setFilter, setHideDone]);
+  }, [focusRowId, effectiveFilter, effectiveHideDone, filteredTopLevel, onFocusTaskConsumed]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
