@@ -102,6 +102,13 @@ const {
 } = require('./link-preview.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
 const {
+ projectFsAllowed,
+ isWithinAllowedProjectRoot,
+ workspaceProjectRoot,
+ validFileSourceRoot,
+ listProjectFiles,
+} = require('./lib/project-fs.cjs');
+const {
  quoteIdent,
  ensureTable,
  normalizeColumns,
@@ -8877,89 +8884,9 @@ async function streamAnthropicTurn({ model, messages, memory, documents, workspa
  return { text: full, toolUses, stopReason };
 }
 
-const PROJECT_FILE_IGNORE_DIRS = new Set([
- '.git',
- '.hg',
- '.svn',
- 'node_modules',
- 'dist',
- 'build',
- '.next',
- '.nuxt',
- 'out',
- 'coverage',
- '.agensis_uploads',
- 'release',
- '.cache',
- '.turbo',
-]);
-
-// F3 (2026-07 review): git_root/local_path are user-writable workspace columns
-// (set via the generic /backend/db/workspaces update, gated only on 'manage'),
-// and feed straight into fs reads + `git -C <root>` on THIS host. Without an
-// allowlist, a workspace admin could point either column at any directory the
-// process can read/commit. AGENSIS_PROJECT_ROOTS is a colon-separated list of
-// absolute prefixes this host is willing to touch; AGENSIS_ALLOW_PROJECT_FS is
-// the opt-in switch (default OFF — e.g. the shared fly.dev backend leaves both
-// unset so project/git routes always return their empty payload instead of
-// touching disk). A per-user local daemon opts in by setting both.
-function projectFsAllowed() {
- return String(process.env.AGENSIS_ALLOW_PROJECT_FS || '').trim() === 'true';
-}
-
-function allowedProjectRootPrefixes() {
- return String(process.env.AGENSIS_PROJECT_ROOTS || '')
-  .split(':')
-  .map(entry => entry.trim())
-  .filter(Boolean)
-  .map(entry => path.resolve(entry));
-}
-
-// Realpath-contained within one of the allowlisted prefixes (mirrors the
-// resolveWithinRoot symlink-escape check below, but against a set of roots
-// instead of one path's relative traversal).
-function isWithinAllowedProjectRoot(resolvedPath) {
- if (!projectFsAllowed()) return false;
- const prefixes = allowedProjectRootPrefixes();
- if (prefixes.length === 0) return false;
- let real;
- try { real = fs.realpathSync(resolvedPath); } catch { real = resolvedPath; }
- return prefixes.some((prefix) => {
-  let realPrefix;
-  try { realPrefix = fs.realpathSync(prefix); } catch { realPrefix = prefix; }
-  const withSep = realPrefix.endsWith(path.sep) ? realPrefix : `${realPrefix}${path.sep}`;
-  return real === realPrefix || real.startsWith(withSep);
- });
-}
-
-function workspaceProjectRoot(workspace) {
- const candidate = String(workspace?.git_root || workspace?.local_path || '').trim();
- if (!candidate) return '';
- const resolved = path.resolve(candidate);
- if (!isWithinAllowedProjectRoot(resolved)) return '';
- try {
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
-  return resolved;
- } catch {
-  return '';
- }
-}
-
-function validFileSourceRoot(value) {
- const candidate = String(value || '').trim();
- if (!candidate) return '';
- const resolved = path.resolve(candidate);
- // Same allowlist gate as workspaceProjectRoot — never list arbitrary host dirs
- // just because a daemon reported them as cwd.
- if (!isWithinAllowedProjectRoot(resolved)) return '';
- try {
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return '';
-  return resolved;
- } catch {
-  return '';
- }
-}
-
+// Not a pure leaf (getDb + slugHandle), so it stayed behind when the rest of the
+// project-fs allowlist moved to server/lib/project-fs.cjs. It goes with the
+// project-files routes in Wave 2.
 async function workspaceProjectFileSources(workspaceId, workspace, filters = {}) {
  const agentFilterKeys = new Set(
   (Array.isArray(filters.agents) ? filters.agents : [])
@@ -9021,46 +8948,6 @@ async function workspaceProjectFileSources(workspaceId, workspace, filters = {})
  return sources;
 }
 
-function listProjectFiles(root, maxFiles = 300) {
- const files = [];
- const queue = [''];
- while (queue.length > 0 && files.length < maxFiles) {
-  const relativeDir = queue.shift();
-  const absoluteDir = path.join(root, relativeDir || '');
-  let entries = [];
-  try {
-   entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
-  } catch {
-   continue;
-  }
-  entries
-   .filter(entry => !entry.name.startsWith('.') || entry.name === '.env.example')
-   .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
-   .forEach(entry => {
-    if (files.length >= maxFiles) return;
-    const rel = path.join(relativeDir || '', entry.name);
-    if (entry.isDirectory()) {
-     if (!PROJECT_FILE_IGNORE_DIRS.has(entry.name)) queue.push(rel);
-     return;
-    }
-    if (!entry.isFile()) return;
-    const fullPath = path.join(root, rel);
-    try {
-     const stat = fs.statSync(fullPath);
-     files.push({
-      path: rel.split(path.sep).join('/'),
-      name: entry.name,
-      size: stat.size,
-      mtime: stat.mtime.toISOString(),
-      kind: 'file',
-     });
-    } catch {
-     // ignore files that disappear while listing
-    }
-   });
- }
- return files;
-}
 
 function textFromValue(value) {
  if (typeof value === 'string') {

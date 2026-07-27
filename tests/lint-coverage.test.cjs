@@ -91,6 +91,10 @@ const MUST_BE_LINTED = [
   // what a database error may tell a client. Every /backend/db/* request goes
   // through it. Extracted from server/index.cjs, which is on this list.
   'server/lib/db-sql.cjs',
+  // The entire gate between a workspace column a 'manage' user can write
+  // (git_root / local_path) and an fs read or `git -C` on this host. Default is
+  // off; this file is what keeps it off. Extracted from server/index.cjs.
+  'server/lib/project-fs.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
