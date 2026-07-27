@@ -1,5 +1,19 @@
 [
   {
+    "version": "show-desktop",
+    "date": "2026-07-27",
+    "title": "Show desktop — clear the panels away and get them back",
+    "summary": "Getting back to a clear desktop meant minimising every open panel one at a time from the dock, and putting them back was the same job again in reverse. There is now a Show desktop row in the sidebar, directly under Inbox. One press puts every panel on the desktop you are on into the dock, leaving the wallpaper and the message box. Press it again and exactly those panels come back. Nothing is ever closed — every panel keeps its scroll position and anything you had half-typed, and is still one click away in the dock. Panels you minimised yourself are left alone, and if you open something new while the desktop is clear, the next press puts that away with the rest instead of losing it.",
+    "highlights": [
+      "A Show desktop row under Inbox clears the current desktop to wallpaper and the message box",
+      "Press it again to bring back exactly what it put away",
+      "Panels are minimised, never closed — scroll position and half-typed messages survive",
+      "Panels you minimised yourself stay down; the button only restores its own",
+      "Open something new while the desktop is clear and the next press puts it away too, rather than dropping it",
+      "Each desktop has its own — clearing one leaves the other's panels where they were"
+]
+  },
+  {
     "version": "skills-chips",
     "date": "2026-07-27",
     "title": "Skills on an agent are chips now, and the field suggests as you type",

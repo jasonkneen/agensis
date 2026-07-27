@@ -91,6 +91,12 @@ import {
   DESKTOP_TIER_PENDING_MESSAGE,
   type OverlayWorkspaceTile,
 } from './lib/desktopOverlay';
+import {
+  clearShowDesktopStash,
+  isShowingDesktop,
+  resolveShowDesktop,
+  type ShowDesktopStash,
+} from './lib/showDesktop';
 import { InlineRename } from './components/common/InlineRename';
 import { TenantsWindowContent } from './components/tenants/TenantsWindowContent';
 import { useTenantAccess } from './hooks/useTenants';
@@ -766,12 +772,18 @@ function AppContent() {
     focusWindow,
     updateWindow,
     minimizeWindow,
+    setWindowsMinimized,
     focusWindowGroup,
     minimizeWindowGroup,
     ungroupTiledWindows,
     viewMode,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
+
+  // Which windows the "Show desktop" sidebar row put away, per desktop. In
+  // memory alongside the windows themselves — a stash that outlived a reload
+  // would name ids that no longer exist. See src/lib/showDesktop.ts.
+  const [showDesktopStash, setShowDesktopStash] = useState<ShowDesktopStash>({});
 
   // The viewport clips floating panels to the 8px chrome gap by default. Only a
   // full-bleed candidate — a maximized window, or a tiled group that can fill the
@@ -802,6 +814,10 @@ function AppContent() {
     prevWorkspaceIdRef.current = activeWorkspaceId;
     if (prev && prev !== activeWorkspaceId) {
       closeAllWindows();
+      // Show desktop's stash is keyed by desktop id, and 'base' is every
+      // workspace's default — so ids stashed against the outgoing workspace
+      // would name the incoming one's desktop. Nothing survives the switch.
+      setShowDesktopStash(clearShowDesktopStash());
     }
   }, [activeWorkspaceId, closeAllWindows]);
   const { cursors } = useMultiplayerCursors(
@@ -1216,6 +1232,18 @@ function AppContent() {
     }
     openWindow('inbox', { title: 'Inbox', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  // Show desktop: put this desktop's open panels away so the wallpaper and the
+  // home composer are all that's left, and bring them back on the next press.
+  // Minimise, never close — the windows stay in the dock with their state.
+  const handleShowDesktop = useCallback(() => {
+    const decision = resolveShowDesktop(windows, activeLayerId, showDesktopStash);
+    setShowDesktopStash(decision.stash);
+    if (decision.action === 'none') return;
+    setWindowsMinimized(decision.windowIds, decision.action === 'hide');
+  }, [windows, activeLayerId, showDesktopStash, setWindowsMinimized]);
+
+  const showingDesktop = isShowingDesktop(windows, activeLayerId, showDesktopStash);
 
   const handleOpenUsers = useCallback(() => {
     const existing = windows.find(w => w.type === 'users');
@@ -1950,6 +1978,8 @@ function AppContent() {
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
             onOpenInbox={handleOpenInbox}
+            onShowDesktop={handleShowDesktop}
+            showingDesktop={showingDesktop}
             onOpenThread={handleOpenThreadFromSidebar}
             onOpenMemory={handleOpenMemory}
             onOpenSkills={handleOpenSkills}
