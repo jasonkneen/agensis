@@ -49,6 +49,53 @@ With your own dev server, just make sure the client script is served at
 Tear the editor down at any time with `window.__visualEditor.disable()` or the
 × button in the toolbar.
 
+## React / JSX / TSX
+
+Add the Vite plugin and the editor edits your components in place, not just
+static HTML:
+
+```js
+// vite.config.js
+import react from '@vitejs/plugin-react'
+import { createRequire } from 'module'
+const { visualEditor } = createRequire(import.meta.url)('visual-dev-editor/vite')
+
+export default { plugins: [react(), visualEditor()] }
+```
+
+That does three dev-only things: stamps JSX with source locations, mounts the
+edit routes on Vite's middleware, and injects the client. A production build is
+untouched.
+
+**Why a stamp.** For HTML the DOM and the file are the same tree, so element
+indices address a node exactly. For JSX they are not: `{items.map(...)}` makes
+N DOM nodes from one source node, a file holds several components, and a
+conditional hides which branch ran. A positional path would be a guess, and a
+wrong guess corrupts your file. The plugin adds `data-ve-loc="file:line:col"`
+to each intrinsic element, so the DOM can name the exact source node behind it.
+Line numbers are preserved (the source is spliced, never reprinted) and no
+stamp ever reaches disk — edits are computed against the original file.
+
+**What it refuses, and why that is the point.** The editor will not guess about
+code it cannot safely rewrite. Each refusal names its reason in the Inspector:
+
+| Situation | Behaviour |
+|---|---|
+| `<div className="p-4">` | fully editable |
+| `<Card title="x" />` | props editable — it edits the usage, not the component |
+| `{items.map(i => <li/>)}` | **read-only.** Every row shares one stamp, which is how the editor knows. Editing one would rewrite the template behind all of them |
+| `className={cn(a, b)}` | **refused.** The value is an expression; splicing a string over it would delete code |
+| `style={{...}}` | **refused**, with a pointer to className |
+
+**Placing a component brings its import.** Pick `Badge` from the palette and
+the editor writes `<Badge />` *and* `import { Badge } from "@/components/ui/badge"`
+— joining an existing import from the same module, or adding a line, or doing
+nothing if the name is already in scope. The import path comes from the
+project's own `components.json` aliases, resolved through tsconfig paths.
+
+`@babel/parser` is an **optional** dependency. Without it, HTML editing works
+exactly as before and JSX files simply report that they need it.
+
 ## What you can edit
 
 - **Navigator (left panel)** — searchable element tree. Rows carry a per-type

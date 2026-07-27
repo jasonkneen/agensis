@@ -355,6 +355,9 @@
       '.palitem .meta { flex: none; font-size: 9px; color: var(--tx3); }',
       '.palitem.off { opacity: .45; cursor: not-allowed; }',
       '.palitem.off:hover { background: transparent; }',
+      '.blocked { margin: 8px 10px; padding: 7px 9px; border-radius: 6px; line-height: 1.5;',
+      '  background: rgba(242,185,75,.10); border: 1px solid rgba(242,185,75,.35);',
+      '  color: var(--amber); font-size: 10px; white-space: normal; }',
       '.palnote { color: var(--tx3); font-size: 9.5px; padding: 2px 10px 6px; line-height: 1.45;',
       '  white-space: normal; }',
       '',
@@ -750,11 +753,78 @@
     };
   }
 
+  // -------------------------------------------------------------------------
+  // Source addressing
+  //
+  // HTML: the DOM and the file are the same tree, so element indices work.
+  // JSX: they are not. One {items.map(...)} makes N DOM nodes from one source
+  // node, a file holds several components, and a conditional hides which
+  // branch ran — a positional path would be a guess. The build-time stamp
+  // (data-ve-loc="file:line:col") turns it into a fact, so when a stamp is
+  // present it wins.
+  // -------------------------------------------------------------------------
+  var STAMP = 'data-ve-loc';
+
+  function stampOf(el) {
+    if (!el || !el.getAttribute) return null;
+    var raw = el.getAttribute(STAMP);
+    if (!raw) return null;
+    var m = /^(.*):(\d+):(\d+)$/.exec(raw);
+    if (!m) return null;
+    return { raw: raw, file: m[1], line: +m[2], column: +m[3] };
+  }
+
+  /** Nearest stamped ancestor-or-self — components have no stamp of their own. */
+  function stampFor(el) {
+    for (var n = el; n && n !== document.documentElement; n = n.parentElement) {
+      var s = stampOf(n);
+      if (s) return s;
+    }
+    return null;
+  }
+
+  /**
+   * Elements sharing one stamp were rendered from a single source node in a
+   * loop. Editing any of them edits the template behind all of them, so the
+   * editor treats them as read-only and says why.
+   */
+  var iteratedStamps = null;
+  function refreshIteratedStamps() {
+    iteratedStamps = null;
+    var nodes = document.querySelectorAll('[' + STAMP + ']');
+    if (!nodes.length) return;
+    var seen = Object.create(null);
+    var dupes = Object.create(null);
+    var any = false;
+    for (var i = 0; i < nodes.length; i++) {
+      var v = nodes[i].getAttribute(STAMP);
+      if (seen[v]) { dupes[v] = true; any = true; } else seen[v] = true;
+    }
+    if (any) iteratedStamps = dupes;
+  }
+
+  /** Why this element cannot be edited, or null when it can. */
+  function editBlockedReason(el) {
+    var s = stampFor(el);
+    if (!s) return null;
+    if (iteratedStamps && iteratedStamps[s.raw]) {
+      return 'rendered from a list — one source node produces every copy, so editing here would change them all';
+    }
+    return null;
+  }
+
   function opFor(el, extra) {
     var op = extra || {};
     var file = fileFor(el);
-    if (file) op.file = file;
-    op.path = elementPath(el);
+    var stamp = stampFor(el);
+    if (stamp) {
+      // The stamp names its own file; it is authoritative over the page URL.
+      op.file = stamp.file;
+      op.loc = { line: stamp.line, column: stamp.column };
+    } else {
+      if (file) op.file = file;
+      op.path = elementPath(el);
+    }
     return op;
   }
 
@@ -1165,6 +1235,7 @@
   }
 
   function rebuildTree() {
+    refreshIteratedStamps();
     computeFilter();
     var total = countPageElements();
     treeCount.textContent = filterKeep ? filterMatchCount + '/' + total : String(total);
@@ -1317,7 +1388,10 @@
    * Insert a snippet next to / inside the selection. The path is captured
    * before the DOM is touched, per the rule the rest of this file follows.
    */
-  function insertSnippet(html, label) {
+  function insertSnippet(html, label, opts) {
+    opts = opts || {};
+    var code = opts.code || null;      // JSX source, when different from html
+    var imports = opts.imports || null;
     var tag = rootTagOf(html);
     var target = insertTargetFor(tag, state.selected);
     var parent = target.parent, index = target.index;
@@ -1326,8 +1400,13 @@
       return;
     }
 
-    var parentPath = elementPath(parent);   // BEFORE mutating
-    if (!parentPath) { setStatus('cannot resolve insert target', 'err'); return; }
+    // Address the parent the same way every other op does: stamp when the file
+    // is JSX, positional path when it is HTML.
+    var parentStamp = stampFor(parent);
+    var parentPath = parentStamp ? null : elementPath(parent);   // BEFORE mutating
+    if (!parentStamp && !parentPath) { setStatus('cannot resolve insert target', 'err'); return; }
+    var blockedHere = editBlockedReason(parent);
+    if (blockedHere) { setStatus('cannot insert here: ' + blockedHere, 'err'); return; }
 
     var tmp = document.createElement('div');
     tmp.innerHTML = html;
@@ -1340,10 +1419,18 @@
     var undo = function () { if (node.parentNode) node.parentNode.removeChild(node); };
     redo();
 
-    var file = fileFor(parent);
+    var file = parentStamp ? parentStamp.file : fileFor(parent);
     if (file) {
-      sendEdit({ op: 'insert', file: file, parentPath: parentPath, index: index, html: html },
-        { undo: undo, redo: redo });
+      var op = { op: 'insert', file: file, index: index };
+      if (parentStamp) {
+        op.parentLoc = { line: parentStamp.line, column: parentStamp.column };
+        op.code = code || html;
+      } else {
+        op.parentPath = parentPath;
+        op.html = html;
+      }
+      if (imports && imports.length) op.imports = imports;
+      sendEdit(op, { undo: undo, redo: redo });
     }
     select(node);
     setStatus('added ' + (label || tag), 'ok');
@@ -1384,25 +1471,35 @@
     });
 
     if (!project) return;
-    // Component libraries only mean something in a file the editor can write
-    // components into. Say so plainly rather than offering a dead button.
-    var jsxReady = false; // set true when a JSX locator backs the current file
-    var why = jsxReady ? null : 'Needs JSX file support — discovered, not yet insertable';
+    // A React component can only be placed into a file that holds JSX, and we
+    // know that from whether the page carries source stamps.
+    var jsxReady = !!document.querySelector('[' + STAMP + ']');
+    var why = jsxReady ? null
+      : 'Only insertable into a JSX/TSX file — add the visualEditor() Vite plugin';
+
+    function addComponent(name, importPath, exportNames) {
+      // Prefer the named export matching the file; fall back to the first.
+      var exp = (exportNames && exportNames.indexOf(name) !== -1)
+        ? name : (exportNames && exportNames[0]) || name;
+      var imports = importPath ? [{ name: exp, from: importPath }] : null;
+      palBody.appendChild(palItem(exp, null, function () {
+        // Self-closing is always valid JSX and never leaves an unclosed tag.
+        insertSnippet('<div></div>', exp, { code: '<' + exp + ' />', imports: imports });
+      }, why));
+    }
 
     (project.libraries || []).forEach(function (lib) {
       if (lib.headless || !lib.components || !lib.components.length) return;
       palBody.appendChild(groupHead(lib.label.toUpperCase(), lib.componentCount));
       lib.components.slice(0, 60).forEach(function (c) {
-        palBody.appendChild(palItem(c.name, null, function () {}, why));
+        addComponent(c.name, c.importPath, c.exports);
       });
     });
 
     var own = project.components || [];
     if (own.length) {
       palBody.appendChild(groupHead('PROJECT COMPONENTS', own.length));
-      own.slice(0, 40).forEach(function (c) {
-        palBody.appendChild(palItem(c.name, null, function () {}, why));
-      });
+      own.slice(0, 40).forEach(function (c) { addComponent(c.name, null, c.exports); });
     }
 
     var libs = (project.libraries || []).filter(function (l) { return l.headless || !l.componentCount; });
@@ -2275,9 +2372,16 @@
     dimsEl = h('span', { class: 'dims' });
     elTag.appendChild(dimsEl);
     updateDims();
-    var file = fileFor(el);
+    var stamp = stampFor(el);
+    var file = stamp ? stamp.file : fileFor(el);
     fileChip.textContent = file;
-    fileChip.title = file;
+    fileChip.title = stamp ? file + ' (line ' + stamp.line + ')' : file;
+    var blocked = editBlockedReason(el);
+    if (blocked) {
+      propsBox.appendChild(h('div', { class: 'blocked' }, [
+        h('strong', { text: 'Read-only. ' }), blocked,
+      ]));
+    }
 
     if (state.tab === 'design') buildDesignTab(el, propsBox);
     else buildElementTab(el, propsBox);

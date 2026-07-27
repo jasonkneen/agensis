@@ -19,6 +19,8 @@ const fs = require('fs');
 const path = require('path');
 const parse5 = require('parse5');
 const { discover } = require('./discover.cjs');
+const { applyJsxEdit } = require('./jsxOps.cjs');
+const jsxLocator = require('./locators/jsx.cjs');
 
 const CLIENT_JS_PATH = path.join(__dirname, 'client.js');
 const ATTR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9\-_:.]*$/;
@@ -565,6 +567,24 @@ function countElements(node) {
 }
 
 /**
+ * Pick the patcher for a file. Each language answers the same question — which
+ * byte range does this edit replace — so the splice model is shared; only the
+ * way a target is located differs.
+ */
+function patchSource(file, source, op) {
+  if (/\.[jt]sx$/.test(file)) {
+    if (!jsxLocator.isAvailable()) {
+      throw new Error(
+        'editing ' + path.basename(file) + ' needs @babel/parser — ' +
+        'install it in this project (npm i -D @babel/parser)'
+      );
+    }
+    return applyJsxEdit(source, op);
+  }
+  return applyEdit(source, op);
+}
+
+/**
  * Apply one edit op to an HTML source string. Returns the patched source.
  * Throws on any validation failure.
  */
@@ -662,7 +682,12 @@ function createUndoTracker(cap) {
 function createEditorMiddleware({ root }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
   const undo = createUndoTracker(50);
+  // Short-lived, not permanent: `npx shadcn add button` mid-session must show
+  // up. A scan is ~40ms on a large project, so a few seconds of staleness is
+  // the right trade against a palette that silently never updates.
   let paletteCache = null;
+  let paletteCachedAt = 0;
+  const PALETTE_TTL_MS = 5000;
   return function editorMiddleware(req, res, next) {
     let url;
     try {
@@ -687,9 +712,12 @@ function createEditorMiddleware({ root }) {
       const refusedRead = rejectReadReason(req);
       if (refusedRead) { sendJson(res, 403, { ok: false, error: refusedRead }); return; }
       try {
-        // Cached: the scan walks the project tree, and the answer only changes
-        // when dependencies or component files do. ?fresh=1 forces a rescan.
-        if (!paletteCache || url.searchParams.get('fresh')) paletteCache = discover(root);
+        // ?fresh=1 forces a rescan regardless of the TTL.
+        const stale = Date.now() - paletteCachedAt > PALETTE_TTL_MS;
+        if (!paletteCache || stale || url.searchParams.get('fresh')) {
+          paletteCache = discover(root);
+          paletteCachedAt = Date.now();
+        }
         sendJson(res, 200, { ok: true, ...paletteCache });
       } catch (err) {
         // Discovery is a convenience; never let it take the editor down.
@@ -706,7 +734,7 @@ function createEditorMiddleware({ root }) {
           try { op = JSON.parse(raw); } catch { throw new Error('invalid JSON body'); }
           const file = resolveFilePath(root, op.file);
           const source = fs.readFileSync(file, 'utf8');
-          const patched = applyEdit(source, op);
+          const patched = patchSource(file, source, op);
           undo.push(file, source); // only reached when applyEdit succeeded
           fs.writeFileSync(file, patched, 'utf8');
           sendJson(res, 200, { ok: true });
@@ -817,6 +845,7 @@ function startServer({ root, port }) {
 
 module.exports = {
   createEditorMiddleware,
+  patchSource,
   startServer,
   applyEdit,
   resolveFilePath,
