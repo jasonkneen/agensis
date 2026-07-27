@@ -86,6 +86,11 @@ const MUST_BE_LINTED = [
   // decided by an attacker-supplied filename. Extracted from server/index.cjs,
   // which is on this list — moving code must not move it out of coverage.
   'server/lib/storage-paths.cjs',
+  // Decides which identifiers reach Postgres unquoted, which tables are
+  // addressable at all, whether a workspace query is scoped to the caller, and
+  // what a database error may tell a client. Every /backend/db/* request goes
+  // through it. Extracted from server/index.cjs, which is on this list.
+  'server/lib/db-sql.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
