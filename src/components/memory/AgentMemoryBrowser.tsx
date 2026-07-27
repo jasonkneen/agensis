@@ -1,8 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Clock, Code2, Eye, FileText, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, Clock, Code2, Eye, FileText, Lightbulb, Lock, MessageCircle, Pencil, RefreshCw } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { useAgentMemory } from '../../hooks/useAgentMemory';
 import { useMemoryFileComments } from '../../hooks/useMemoryFileComments';
+import { useSplitResize } from '../../hooks/useSplitResize';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { viewPreferenceKey } from '../../lib/viewPreferences';
+import {
+  MEMORY_SPLIT_MIN_CONTAINER_PX,
+  MEMORY_SPLIT_PREF,
+  memoryBrowserTips,
+  memorySplitListWidth,
+  suggestedMemoryFiles,
+} from '../../lib/memoryBrowserView';
 import { DocumentComments } from '../editor/DocumentComments';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +34,8 @@ import {
   ItemTitle,
 } from '@/components/ui/item';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { FOCUS_RING } from '../inbox/inboxPresentation';
+import { cn } from '@/lib/utils';
 
 interface AgentMemoryBrowserProps {
   workspaceId: string;
@@ -51,21 +63,60 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const [showComments, setShowComments] = useState(false);
+  const [openTipId, setOpenTipId] = useState<string | null>(null);
 
-  // Master-detail is responsive: above SPLIT_WIDTH the selected file opens as a
-  // right-hand panel with the list still visible; below it, the detail takes over
-  // the whole surface (the original full-swap behaviour).
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(false);
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setWide(entry.contentRect.width >= 960);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+  // Master-detail is responsive: above MEMORY_SPLIT_MIN_CONTAINER_PX both panes
+  // are on screen FROM LOAD — the preview says "select a memory file" rather
+  // than appearing on the first click and reflowing the window under the
+  // pointer. Below it there is not room for two useful panes, so the detail
+  // takes over the whole surface (the original full-swap behaviour).
+  const [containerWidth, setContainerWidth] = useState(0);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  // A callback ref rather than an effect: this root unmounts and remounts with
+  // the tab and the empty state, and this way the measurement is tied to the
+  // node existing rather than to a dependency list that has to predict every
+  // reason it might not.
+  const attachContainer = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!node) return;
+    const measure = () => setContainerWidth(current => (current === node.clientWidth ? current : node.clientWidth));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    observerRef.current = observer;
   }, []);
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  // Where the divider sits, in px of list width. A REQUEST, never the layout:
+  // memorySplitListWidth re-clamps it against the measured container on every
+  // render, so a width stored for a wide window cannot squeeze the preview out
+  // of a narrow one — and because nothing is written back, widening the window
+  // returns the width that was actually chosen.
+  const [storedWidth, setStoredWidth] = usePersistedPreference(
+    viewPreferenceKey('memory.file-split', workspaceId), MEMORY_SPLIT_PREF, 0,
+  );
+  // The live value while the divider is under the pointer. The persisted setter
+  // writes through to storage on every change, and a drag changes it sixty
+  // times a second.
+  const [draftWidth, setDraftWidth] = useState<number | null>(null);
+  const listWidth = memorySplitListWidth(draftWidth ?? storedWidth, containerWidth);
+
+  const clampListWidth = useCallback(
+    (value: number) => memorySplitListWidth(value, containerWidth),
+    [containerWidth],
+  );
+  const { handlers: splitHandlers, dragging } = useSplitResize({
+    axis: 'x',
+    size: listWidth,
+    clamp: clampListWidth,
+    // Raw on the way in, clamped on the way out: dragging past a floor and back
+    // again tracks the pointer instead of sticking there.
+    onPreview: setDraftWidth,
+    onCommit: value => { setStoredWidth(value); setDraftWidth(null); },
+    onReset: () => { setDraftWidth(null); setStoredWidth(0); },
+  });
 
   // Only agents that actually have mirrored files are worth showing as filters.
   const agentsWithFiles = useMemo(() => {
@@ -97,6 +148,14 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   }, [selectedFile, fetchFileContent]);
 
   const comments = useMemoryFileComments(workspaceId, effectiveAgentId, selectedPath, userId);
+
+  // What the empty preview offers. Both chip kinds are real actions: a file chip
+  // selects that file, a tip chip opens that tip below the chips. There is no
+  // "generate a memory" chip because there is no such capability — this browser
+  // is a read-only mirror of what the daemon pushed up.
+  const suggestions = useMemo(() => suggestedMemoryFiles(agentFiles), [agentFiles]);
+  const tips = useMemo(() => memoryBrowserTips(), []);
+  const openTip = tips.find(tip => tip.id === openTipId) ?? null;
 
   const agentName = (id: string | null) => agents.find(a => a.id === id)?.name ?? 'Agent';
 
@@ -312,25 +371,129 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
     </>
   );
 
-  const showFullDetail = !!selectedFile && !wide;
-  const showSplitDetail = !!selectedFile && wide;
+  // What the preview pane says before anything is selected. It is mounted from
+  // load rather than on the first click, so the window does not reflow under the
+  // pointer the moment someone opens a file — and the space is worth something
+  // while it waits.
+  const renderEmptyPreview = () => (
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="mx-auto flex max-w-md flex-col gap-5 px-6 py-10">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <div className="flex size-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <FileText className="size-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold">Select a memory file</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Pick a file on the left to read it here. These are mirrored from the
+                agent&rsquo;s own machine, so opening one changes nothing it remembers.
+              </p>
+            </div>
+          </div>
+
+          {suggestions.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Start here
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {suggestions.map(file => (
+                  <Badge key={file.id} asChild variant="outline" className="cursor-pointer">
+                    <button type="button" onClick={() => setSelectedPath(file.path)}>
+                      <FileText data-icon="inline-start" />
+                      {fileName(file.path)}
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tips.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Tips
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {tips.map(tip => (
+                  <Badge
+                    key={tip.id}
+                    asChild
+                    variant={openTipId === tip.id ? 'default' : 'outline'}
+                    className="cursor-pointer"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={openTipId === tip.id}
+                      onClick={() => setOpenTipId(current => (current === tip.id ? null : tip.id))}
+                    >
+                      <Lightbulb data-icon="inline-start" />
+                      {tip.title}
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              {openTip && (
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <p className="text-sm font-medium">{openTip.title}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{openTip.body}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+
+  // Both panes, or one. `split` is a property of the WINDOW, not of the
+  // selection — that is the whole point: the preview is there from load.
+  const split = containerWidth >= MEMORY_SPLIT_MIN_CONTAINER_PX;
+  const showFullDetail = !!selectedFile && !split;
 
   return (
-    <div ref={containerRef} className="flex h-full overflow-hidden">
+    <div ref={attachContainer} className="relative flex h-full overflow-hidden">
       {showFullDetail ? (
         renderDetail(true)
       ) : (
         <>
           <div
             className={
-              showSplitDetail
-                ? 'flex w-[340px] shrink-0 flex-col overflow-hidden border-r border-border'
+              split
+                ? 'flex shrink-0 flex-col overflow-hidden border-r border-border'
                 : 'flex min-w-0 flex-1 flex-col overflow-hidden'
             }
+            style={split ? { width: `${listWidth}px` } : undefined}
           >
-            {renderList(showSplitDetail)}
+            {renderList(split)}
           </div>
-          {showSplitDetail && renderDetail(false)}
+          {split && (selectedFile ? renderDetail(false) : renderEmptyPreview())}
+          {/* An invisible 12px grab strip whose hairline only appears under the
+              pointer, on focus, or mid-drag — the divider itself is the pane
+              border. Sits in the OUTER box rather than hanging off the list
+              pane's edge, which overflow-hidden would clip. */}
+          {split && (
+            <button
+              type="button"
+              aria-label="Resize file list"
+              title="Drag to resize. Double-click to reset."
+              style={{ left: `${listWidth}px` }}
+              {...splitHandlers}
+              className={cn(
+                'group/resize absolute inset-y-0 z-30 -ml-1.5 w-3 cursor-col-resize',
+                FOCUS_RING,
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors',
+                  dragging ? 'bg-primary/70' : 'bg-transparent group-hover/resize:bg-border group-focus-visible/resize:bg-border',
+                )}
+              />
+            </button>
+          )}
         </>
       )}
     </div>

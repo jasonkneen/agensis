@@ -235,6 +235,18 @@ const NOT_A_FILTER: Record<string, string> = {
   'tasks.view': 'chooses list/kanban/gantt — every view shows the same tasks',
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
+  // The Agent-files divider position, in px of file-list width. Same class as
+  // 'agents.split': a stored number that could, unclamped, squeeze a pane to
+  // nothing. It cannot. `memorySplitListWidth` re-derives it from the measured
+  // container on every render (never from storage directly) and holds BOTH the
+  // list and the preview above their floors — so the file list, the agent chips
+  // and every row stay on screen at every stored value and every window width.
+  // Below MEMORY_SPLIT_MIN_CONTAINER_PX the divider is not rendered at all and
+  // the stored number has no effect. Pinned by the "stored in a wide window,
+  // restored into a narrow one" and "never puts either pane below its minimum"
+  // cases in tests/unit/memoryBrowserView.test.ts, and by the shared clamp's own
+  // cases in tests/unit/splitPane.test.ts.
+  'memory.file-split': 'file-list/preview divider position, re-clamped against the live container every render — hides no data',
   'tips.dismissed': 'onboarding tips, not a data list',
   // Also collapses an owner broadcast in that same slot (OwnerMessageCard), so
   // a stored `true` means a message can ARRIVE collapsed. Not a filter and not a

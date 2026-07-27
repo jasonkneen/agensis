@@ -97,6 +97,7 @@ import { buildSkillEntries } from '../../lib/skillsView';
 import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { useSplitResize } from '../../hooks/useSplitResize';
 import {
   AGENT_LAYOUT_VIEW_PREF,
   AGENT_SPLIT_PREF,
@@ -310,7 +311,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   // and a drag changes sixty times a second.
   const [draftSplit, setDraftSplit] = useState<number | null>(null);
   const [splitBox, setSplitBox] = useState(0);
-  const splitDragRef = useRef<{ y: number; height: number } | null>(null);
   const splitObserverRef = useRef<ResizeObserver | null>(null);
   // A callback ref rather than an effect: the split root mounts and unmounts
   // with the view mode and the empty states, and this way the measurement is
@@ -331,51 +331,23 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
   const splitGridHeight = agentSplitGridHeight(draftSplit ?? storedSplit, splitBox);
 
-  const beginSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    // setPointerCapture THROWS NotFoundError when the pointer is already gone —
-    // the case useFidgetDrag documents. Capture is an improvement (the drag
-    // survives leaving the strip), not a requirement, so a throw must not abort
-    // the gesture before any drag state exists.
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* drag works uncaptured */ }
-    splitDragRef.current = { y: event.clientY, height: splitGridHeight };
-    setDraftSplit(splitGridHeight);
-  }, [splitGridHeight]);
-
-  const moveSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = splitDragRef.current;
-    if (!drag) return;
-    // Unclamped on the way in: the clamp is applied on the way OUT, so dragging
-    // past a floor and back again tracks the pointer instead of sticking.
-    setDraftSplit(drag.height + (event.clientY - drag.y));
-  }, []);
-
-  const endSplitResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!splitDragRef.current) return;
-    splitDragRef.current = null;
-    try {
-      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    } catch { /* never captured, or the browser already dropped it */ }
-    // Store the CLAMPED height, not the raw pointer distance.
-    setStoredSplit(splitGridHeight);
-    setDraftSplit(null);
-  }, [splitGridHeight, setStoredSplit]);
-
-  // Keyboard parity for the divider: it is a real control, and a drag-only
-  // control is unreachable without a pointer.
-  const nudgeSplit = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const step = event.key === 'ArrowUp' ? -24 : event.key === 'ArrowDown' ? 24 : 0;
-    if (!step) return;
-    event.preventDefault();
-    setStoredSplit(agentSplitGridHeight(splitGridHeight + step, splitBox));
-  }, [splitGridHeight, splitBox, setStoredSplit]);
-
-  const resetSplit = useCallback(() => {
-    setDraftSplit(null);
-    setStoredSplit(0);
-  }, [setStoredSplit]);
+  // The drag itself is `useSplitResize` — one implementation of pointer capture
+  // (including the NotFoundError guard), the keyboard equivalent and
+  // double-click-to-reset, shared with the Memory browser's divider.
+  const clampSplit = useCallback(
+    (value: number) => agentSplitGridHeight(value, splitBox),
+    [splitBox],
+  );
+  const { handlers: splitHandlers } = useSplitResize({
+    axis: 'y',
+    size: splitGridHeight,
+    clamp: clampSplit,
+    // Raw on the way in, clamped on the way out: dragging past a floor and back
+    // again tracks the pointer instead of sticking there.
+    onPreview: setDraftSplit,
+    onCommit: value => { setStoredSplit(value); setDraftSplit(null); },
+    onReset: () => { setDraftSplit(null); setStoredSplit(0); },
+  });
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
   // Cards are draggable and spring back — a fidget, not a layout. One hook for
@@ -961,12 +933,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           type="button"
                           aria-label="Resize agent grid"
                           title="Drag to resize. Double-click to reset."
-                          onPointerDown={beginSplitResize}
-                          onPointerMove={moveSplitResize}
-                          onPointerUp={endSplitResize}
-                          onPointerCancel={endSplitResize}
-                          onKeyDown={nudgeSplit}
-                          onDoubleClick={resetSplit}
+                          {...splitHandlers}
                           className="group/split absolute inset-x-0 bottom-0 z-30 flex h-2 cursor-row-resize items-center rounded-none outline-none"
                         >
                           <span
