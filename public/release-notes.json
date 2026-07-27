@@ -1,5 +1,18 @@
 [
   {
+    "version": "skills-chips",
+    "date": "2026-07-27",
+    "title": "Skills on an agent are chips now, and the field suggests as you type",
+    "summary": "Editing an agent's skills meant typing a comma-separated list into a box and getting the punctuation right yourself, with a row of quick-pick buttons underneath that only knew about the skill folders on the agensis host. Each skill is now a chip with an x to remove it, and typing filters a list of every skill the workspace actually knows — the ones your agents advertise, the ones already set on another agent, the ones agensis ships, and those host folders. Enter or a click adds the highlighted one, backspace on an empty field takes the last chip back off. A skill name nothing has heard of is still accepted as you type it, because that is how a new one gets into the system in the first place.",
+    "highlights": [
+      "Skills show as chips with a remove control, instead of a comma-separated string you had to punctuate",
+      "Typing suggests from everything the workspace knows, not just the folders on the agensis host",
+      "Enter adds the best match, backspace on an empty field removes the last chip, Escape closes the list",
+      "A brand-new skill name is still accepted exactly as typed",
+      "The same skill cannot be added twice, whatever case you type it in"
+]
+  },
+  {
     "version": "one-daemon-per-agent",
     "date": "2026-07-26",
     "title": "An agent appears once, on the machine actually doing the work",
