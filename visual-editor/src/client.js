@@ -489,7 +489,7 @@
   var crumbsBar = h('div', { class: 've', id: 'crumbs' });
   var statusTx = h('span', { id: 'statustx', text: 'idle' });
   var statusEl = h('span', { id: 'status' }, [h('span', { class: 'dotp' }), statusTx]);
-  var selectBtn = h('button', { title: 'Pick an element on the page (V)' }, [svgIcon('crosshair'), 'Select']);
+  var selectBtn = h('button', { title: 'Toggle select mode (V) — off lets the page respond to clicks. Hold Space to momentarily invert.' }, [svgIcon('crosshair'), 'Select']);
   var upBtn = h('button', { title: 'Move before previous sibling' }, [svgIcon('arrowUp')]);
   var downBtn = h('button', { title: 'Move after next sibling' }, [svgIcon('arrowDown')]);
   var delBtn = h('button', { title: 'Delete element (⌫)' }, [svgIcon('trash')]);
@@ -525,7 +525,8 @@
   // -------------------------------------------------------------------------
   var state = {
     selected: null,       // currently selected page element
-    selectMode: false,
+    selectMode: false,    // persistent toggle (toolbar button / V)
+    modeKeyHeld: false,   // Space held → momentarily inverts selectMode
     open: new WeakMap(),  // element → explicit expanded/collapsed (default: depth < 2)
     childLimit: new WeakMap(), // element → raised child render cap
     filter: '',
@@ -782,6 +783,31 @@
     ov.style.height = Math.max(0, height) + 'px';
   }
 
+  /** The visible canvas strip between the panels. When docked the page is
+   * pushed aside so overlays never overlap the panels — no clip needed. */
+  function canvasBounds() {
+    if (state.docked) return null;
+    return {
+      left: LEFT_W,
+      top: 0,
+      right: window.innerWidth - RIGHT_W,
+      bottom: window.innerHeight - BAR_H - CRUMB_H,
+    };
+  }
+
+  /** placeBox clipped to the canvas strip — overlays must never paint
+   * across the side panels / bottom bars. Returns false (and hides the
+   * overlay) when nothing of the box is visible. */
+  function placeBoxClipped(ov, left, top, width, height) {
+    var b = canvasBounds();
+    if (!b) { placeBox(ov, left, top, width, height); return true; }
+    var x1 = Math.max(left, b.left), y1 = Math.max(top, b.top);
+    var x2 = Math.min(left + width, b.right), y2 = Math.min(top + height, b.bottom);
+    if (x2 <= x1 || y2 <= y1) { ov.style.display = 'none'; return false; }
+    placeBox(ov, x1, y1, x2 - x1, y2 - y1);
+    return true;
+  }
+
   function placeLabel(labelOv, rect, text) {
     labelOv.style.display = 'block';
     labelOv.textContent = text;
@@ -789,7 +815,11 @@
     var minX = LEFT_W + 6, maxX = window.innerWidth - RIGHT_W - 140;
     labelOv.style.left = Math.min(Math.max(rect.left, minX), Math.max(minX, maxX)) + 'px';
     var top = rect.top - 22;
-    labelOv.style.top = (top < 2 ? rect.bottom + 4 : top) + 'px';
+    if (top < 2) top = rect.bottom + 4;
+    // …and above the breadcrumb/tool bars.
+    var maxY = window.innerHeight - BAR_H - CRUMB_H - 20;
+    if (top > maxY) top = Math.max(2, maxY);
+    labelOv.style.top = top + 'px';
   }
 
   function hideSelOverlays() {
@@ -806,15 +836,22 @@
     var pt = pxNum(cs.paddingTop), pr = pxNum(cs.paddingRight), pb = pxNum(cs.paddingBottom), pl = pxNum(cs.paddingLeft);
     var bt = pxNum(cs.borderTopWidth), br = pxNum(cs.borderRightWidth), bb = pxNum(cs.borderBottomWidth), bl = pxNum(cs.borderLeftWidth);
 
-    placeBox(ovSel, r.left, r.top, r.width, r.height);
+    if (!placeBoxClipped(ovSel, r.left, r.top, r.width, r.height)) {
+      // Fully behind the panels — keep the margin/padding rings hidden too.
+      ovMargin.style.display = 'none';
+      ovPadding.style.display = 'none';
+      placeLabel(ovLabel, r, elLabel(el, true));
+      updateDims();
+      return;
+    }
     // Margin ring: a border-drawn frame around the margin box.
     if (mt || mr || mb || ml) {
-      placeBox(ovMargin, r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb);
+      placeBoxClipped(ovMargin, r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb);
       ovMargin.style.borderWidth = mt + 'px ' + mr + 'px ' + mb + 'px ' + ml + 'px';
     } else ovMargin.style.display = 'none';
     // Padding ring: drawn inside the border box.
     if (pt || pr || pb || pl) {
-      placeBox(ovPadding, r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
+      placeBoxClipped(ovPadding, r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb);
       ovPadding.style.borderWidth = pt + 'px ' + pr + 'px ' + pb + 'px ' + pl + 'px';
     } else ovPadding.style.display = 'none';
     placeLabel(ovLabel, r, elLabel(el, true));
@@ -825,7 +862,10 @@
     if (!el || isOurs(el) || !el.getBoundingClientRect) { hoverClear(); return; }
     var r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) { hoverClear(); return; }
-    placeBox(ovHover, r.left, r.top, r.width, r.height);
+    if (!placeBoxClipped(ovHover, r.left, r.top, r.width, r.height)) {
+      ovHoverLabel.style.display = 'none';
+      return;
+    }
     placeLabel(ovHoverLabel, r, elLabel(el, true));
   }
   function hoverClear() { ovHover.style.display = 'none'; ovHoverLabel.style.display = 'none'; }
@@ -1824,7 +1864,7 @@
         svgIcon('crosshair'),
         h('div', {}, [
           'Nothing selected.', h('br'),
-          'Use ', h('kbd', { text: 'Select' }), ', double-click the page,', h('br'),
+          'Click anything on the page,', h('br'),
           'or pick from the Navigator.',
         ]),
       ]));
@@ -1900,24 +1940,52 @@
       ev.stopPropagation();
       return;
     }
-    if (!state.selectMode) return;
+    if (!selMode()) return;
     if (isOurs(ev.target)) return;
     ev.preventDefault();
     ev.stopPropagation();
-    setSelectMode(false);
+    // Select mode stays on: keep clicking to select other elements.
     select(ev.target);
   }
   function onDblClick(ev) {
-    if (isOurs(ev.target) || state.selectMode) return;
+    if (isOurs(ev.target) || selMode()) return;
     ev.preventDefault();
     ev.stopPropagation();
     select(ev.target);
   }
-  function setSelectMode(on) {
-    state.selectMode = on;
+  /** Effective mode: the persistent toggle, inverted while Space is held. */
+  function selMode() { return state.selectMode !== state.modeKeyHeld; }
+
+  function refreshModeUI() {
+    var on = selMode();
     selectBtn.className = on ? 'on' : '';
     document.documentElement.style.cursor = on ? 'crosshair' : '';
     if (!on) hoverClear();
+  }
+
+  function setSelectMode(on) {
+    state.selectMode = on;
+    refreshModeUI();
+  }
+
+  // Space is a momentary mode invert: hold to browse the page while editing,
+  // or hold to edit while browsing. Release returns to the toggled mode.
+  function onModeKeyDown(ev) {
+    if (ev.code !== 'Space' || ev.repeat || typingTarget()) return;
+    state.modeKeyHeld = true;
+    ev.preventDefault(); // don't scroll the page
+    refreshModeUI();
+  }
+  function onModeKeyUp(ev) {
+    if (ev.code !== 'Space' || !state.modeKeyHeld) return;
+    state.modeKeyHeld = false;
+    refreshModeUI();
+  }
+  // Losing focus mid-hold (alt-tab, devtools, …) must not stick the invert.
+  function onWindowBlur() {
+    if (!state.modeKeyHeld) return;
+    state.modeKeyHeld = false;
+    refreshModeUI();
   }
 
   // -------------------------------------------------------------------------
@@ -1999,12 +2067,14 @@
     if (typingTarget()) return;
     var el = state.selected;
     if (ev.key === 'Escape') {
-      if (state.selectMode) { setSelectMode(false); ev.preventDefault(); return; }
+      // Select mode is sticky: Esc clears the filter, then the selection,
+      // and only drops into browse mode when there is nothing left to clear.
       if (state.filter) {
         searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has');
         rebuildTree(); ev.preventDefault(); return;
       }
-      if (el) { deselect(); ev.preventDefault(); }
+      if (el) { deselect(); ev.preventDefault(); return; }
+      if (selMode()) { setSelectMode(false); ev.preventDefault(); }
       return;
     }
     if ((ev.key === 'v' || ev.key === 'V') && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
@@ -2328,10 +2398,11 @@
 
   // -- Pointer wiring -----------------------------------------------------------------
   function onPointerDown(ev) {
-    if (ev.button !== 0 || state.selectMode || isOurs(ev.target)) return;
+    if (ev.button !== 0 || isOurs(ev.target)) return;
     // Selection-first: pressing anywhere inside the already-selected element
     // (including on its children, which usually cover its whole surface)
-    // starts a page drag.
+    // starts a page drag. Works in select mode too: if the press never passes
+    // the drag threshold, the follow-up click simply selects as usual.
     if (state.selected && state.selected.contains(ev.target)) {
       startPotentialDrag(state.selected, ev.clientX, ev.clientY, false);
     }
@@ -2409,15 +2480,16 @@
   }
 
   // -- Text-selection suppression ---------------------------------------------
-  // Block selectstart whenever a drag is armed or active; block mousedown
-  // default on the selected element so press-drag never flashes a selection.
-  // Neither touches the page when no drag is involved.
+  // In select mode the page is inert: mousedown default is blocked for every
+  // page element so inputs never focus, buttons never arm, and text never
+  // selects — clicks themselves are swallowed by onClickCapture. Outside
+  // select mode, only block when a drag is armed or active.
   function onSelectStart(ev) {
-    if (drag && !isOurs(ev.target)) ev.preventDefault();
+    if ((drag || selMode()) && !isOurs(ev.target)) ev.preventDefault();
   }
   function onPageMouseDown(ev) {
     if (isOurs(ev.target)) return;
-    if (drag || (state.selected && state.selected.contains(ev.target))) {
+    if (selMode() || drag || (state.selected && state.selected.contains(ev.target))) {
       ev.preventDefault();
     }
   }
@@ -2437,6 +2509,8 @@
   document.addEventListener('keydown', onDragKey, true);
   document.addEventListener('keydown', onUndoKey, true);
   document.addEventListener('keydown', onNavKey, true);
+  document.addEventListener('keydown', onModeKeyDown, true);
+  document.addEventListener('keyup', onModeKeyUp, true);
   document.addEventListener('selectstart', onSelectStart, true);
   document.addEventListener('mousedown', onPageMouseDown, true);
 
@@ -2447,6 +2521,8 @@
     document.removeEventListener('keydown', onDragKey, true);
     document.removeEventListener('keydown', onUndoKey, true);
     document.removeEventListener('keydown', onNavKey, true);
+    document.removeEventListener('keydown', onModeKeyDown, true);
+    document.removeEventListener('keyup', onModeKeyUp, true);
     document.removeEventListener('selectstart', onSelectStart, true);
     document.removeEventListener('mousedown', onPageMouseDown, true);
     stopDragScroll();
@@ -2457,7 +2533,7 @@
   // -------------------------------------------------------------------------
   // Global listeners
   // -------------------------------------------------------------------------
-  function onMouseMove(ev) { if (state.selectMode) onHover(ev); }
+  function onMouseMove(ev) { if (selMode()) onHover(ev); }
   function onScroll() { refreshOverlays(); }
   function onResize() { refreshOverlays(); }
 
@@ -2466,6 +2542,7 @@
   document.addEventListener('dblclick', onDblClick, true);
   window.addEventListener('scroll', onScroll, true);
   window.addEventListener('resize', onResize);
+  window.addEventListener('blur', onWindowBlur);
 
   // -------------------------------------------------------------------------
   // Public API + teardown
@@ -2477,6 +2554,7 @@
       document.removeEventListener('dblclick', onDblClick, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('blur', onWindowBlur);
       removeDragListeners();
       setDocked(false);
       document.documentElement.style.cursor = '';
@@ -2487,7 +2565,10 @@
   };
   window.__visualEditor = api;
 
-  // Initial paint
+  // Initial paint — select mode is on from the start, so the page is inert
+  // (clicks select elements instead of activating links/buttons) until the
+  // user toggles browse mode with V / the Select button / Esc.
+  setSelectMode(true);
   rebuildTree();
   rebuildProps();
 })();

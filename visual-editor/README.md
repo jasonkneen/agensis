@@ -84,14 +84,20 @@ Tear the editor down at any time with `window.__visualEditor.disable()` or the
     content (leaf elements), arbitrary attributes, and raw inline CSS rows.
 - **Breadcrumbs** — a strip along the bottom of the canvas shows the ancestor
   chain of the selection; click to select, hover to highlight.
-- **Toolbar** — Select (crosshair pick, also the `V` key), Move up / Move
+- **Toolbar** — Select-mode toggle (also the `V` key), Move up / Move
   down, Delete, Undo, dock toggle (pushes the page aside via root margins
   instead of overlapping it — fixed-position page elements may not shift),
   animated save status, close.
-- **Selecting** — crosshair mode, double-click on the page, click a tree row,
-  a breadcrumb, or keyboard: ↑/↓ walk the visible tree, → expands / first
-  child, ← collapses / parent, Esc deselects, Delete/Backspace removes the
-  selected element (no confirm — undo covers it).
+- **Selecting** — the editor starts in select mode and stays in it: clicking
+  anything on the page selects it, and the page itself is inert (links,
+  buttons and inputs don't respond to clicks or focus). Click a tree row or
+  breadcrumb, or use the keyboard: ↑/↓ walk the visible tree, → expands /
+  first child, ← collapses / parent, Esc clears the filter then the
+  selection, Delete/Backspace removes the selected element (no confirm —
+  undo covers it). Toggle the mode off (`V`, the Select button, or Esc with
+  nothing selected) to browse the page normally again — or just **hold
+  Space** to momentarily invert the mode: hold to test the live page while
+  editing (or to edit while browsing), release and you're back.
 - **Drag-and-drop** — with an element selected, press on it and drag (4px
   threshold): a semi-transparent ghost of the element follows the pointer and
   a live insertion marker shows where it would land (2px line for
