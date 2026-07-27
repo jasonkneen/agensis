@@ -23,6 +23,16 @@
 //
 // It reports every source-text assertion that mentions any of the given
 // symbols, so the move and the test update land in the SAME commit.
+//
+// PASS ROUTE PATHS TOO, NOT JUST FUNCTION NAMES. Moving a route block was the
+// case this was first used wrongly on: tests/feedback.test.cjs asserts
+// /app\.post\('\/backend\/feedback', requireAuth,/ against index.cjs's text, and
+// checking only the handler's helper names reported CLEAN. Four tests went red.
+// For a route module, run it over the URL prefix as well:
+//
+//   node scripts/refactor-preflight.cjs /backend/feedback feedbackRateLimiter …
+//
+// Matching here is plain substring, so a path works exactly like a symbol.
 
 const fs = require('fs');
 const path = require('path');
