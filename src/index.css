@@ -38,8 +38,12 @@
  --chat-panel-width: 380px;
  --agensis-ui-font-family: 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
  --agensis-ui-font-size: 15px;
- --agensis-panel-alpha: 76%;
- --agensis-sidebar-alpha: 76%;
+ /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
+    INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
+    src/lib/settings.ts so the panels do not visibly change opacity a frame
+    after load. */
+ --agensis-panel-alpha: 88%;
+ --agensis-sidebar-alpha: 88%;
  --agensis-glass-blur: 16px;
 
  --radius-sm: 6px;
@@ -319,8 +323,14 @@
  /* Hard offset scale — colour resolves from --neo-shadow-ink (per scheme).
      Shadow ink is decoupled from the border ink so dark mode keeps a crisp
      bright border but a quieter, recessive shadow instead of white glare. */
- --agensis-panel-alpha: 84%;
- --agensis-sidebar-alpha: 82%;
+ /* NOTE: these two are currently INERT. applyUiAppearanceSettings() sets both
+    tokens as an inline style on :root, and an inline declaration beats any
+    stylesheet rule, so a per-theme value here never reaches the page once
+    settings have applied. Raised to stay honest about intent rather than left
+    at stale numbers; neo gets its opacity from its explicit opaque-surface
+    rules instead, which is why nobody noticed. */
+ --agensis-panel-alpha: 92%;
+ --agensis-sidebar-alpha: 92%;
  --agensis-glass-blur: 10px;
  --neo-shadow-xs: 1.5px 1.5px 0 var(--neo-shadow-ink);
  /* chips, list items  */
@@ -1130,7 +1140,7 @@
  border-color: color-mix(in srgb, var(--border) 62%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
-  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 74%), transparent) !important;
+  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent) !important;
  box-shadow: none;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
@@ -2138,7 +2148,7 @@
 }
 
 [data-window-surface] {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
@@ -2183,16 +2193,16 @@
 /* Single shared glass surface — same frosting for every floating panel:
    search/command dialog, presence popover, mention pickers, composer. */
 .agensis-glass-panel {
- background: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
 }
 
 :root[data-ui-theme="tinyworld"],
 :root[data-ui-theme="neo"] {
- --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent);
- --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 76%), transparent);
- --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 76%) - 18%), transparent);
+ --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent);
+ --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent);
+ --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 88%) - 18%), transparent);
 }
 
 :root[data-ui-theme="tinyworld"] [data-window-surface],
@@ -3982,14 +3992,14 @@ select {
 }
 
 .home-workspace-composer {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  border-color: color-mix(in srgb, var(--border-strong) 82%, transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
 }
 
 .home-suggestion-pill {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  border-color: color-mix(in srgb, var(--border) 82%, transparent) !important;
 }
 
@@ -4259,10 +4269,10 @@ select {
 
 /* Final glass binding: panel translucency slider must affect every major panel. */
 .channel-shell {
- --channel-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-header: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-composer: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-side: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ --channel-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-header: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-composer: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-side: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
 }
 
 .channel-shell,
@@ -4295,7 +4305,7 @@ select {
 [data-slot="popover-content"],
 [data-slot="dropdown-menu-content"],
 [data-slot="card"] {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
 }
 
 /* Touch: canvas objects and their resize handles are dragged directly, so the
