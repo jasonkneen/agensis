@@ -87,6 +87,12 @@ import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { LinkPreviewCards } from '../chat/LinkPreviewCards';
+import { MessageAttachmentList } from '../chat/MessageAttachments';
+import {
+  buildMessageAttachments,
+  parseMessageAttachments,
+  stripUploadedFileLinesFromDisplay,
+} from '../../lib/messageAttachments';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
 import { buildTranscriptRows } from '../chat/toolSteps';
 import { isBroadcastFromThread } from '../chat/channelView';
@@ -109,6 +115,7 @@ import type {
   Document,
   MemoryFact,
   Message as ChatMessage,
+  MessageAttachment,
   AgentConnection,
   UploadedFile,
   WorkspaceAgent,
@@ -224,7 +231,10 @@ interface ChatWindowContentProps {
   canvasObjects?: CanvasObject[];
   // May resolve `{ delivered: false }` — the message was rejected and rolled
   // back, so the composer restores the draft instead of eating it.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void | Promise<SendOutcome | void>;
+  // `attachments` are structured references to uploaded_files rows, for
+  // rendering. They are IN ADDITION to the "[Linked files]" text that
+  // buildFileContext folds into `content` for the agent — not a replacement.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
@@ -535,7 +545,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setLinkedFiles([]);
     inputRef.current?.focus();
 
-    const outcome = await onSendMessage(content, selectedModel, memoryFacts, draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined);
+    // Structured attachment references for the uploaded files, so the bubble can
+    // draw a real thumbnail/chip. The "[Linked files]" text built above STAYS in
+    // `content` — that is still the only way the agent learns a file came with
+    // the turn. Project files contribute text only; there is nothing to fetch.
+    const attachments = buildMessageAttachments(draft.linkedFiles);
+    const outcome = await onSendMessage(
+      content,
+      selectedModel,
+      memoryFacts,
+      draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined,
+      attachments.length > 0 ? attachments : undefined,
+    );
     if (outcome && outcome.delivered === false) {
       setInput(draft.input);
       setLinkedDocs(draft.linkedDocs);
@@ -2643,8 +2664,15 @@ function ChatMessageBubble({
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
-  const artifact = rawContent ? extractHtmlArtifact(rawContent) : null;
-  const displayContent = artifact ? artifact.remainingText : rawContent;
+  const attachments = parseMessageAttachments(msg.attachments);
+  // The "[Linked files]" bullet list stays in the stored content for the agent.
+  // Once there are chips standing in for the uploaded lines, showing both is the
+  // duplication this feature removes — so strip for display, and ONLY when there
+  // is something to strip it in favour of. Messages written before this column
+  // existed render exactly as they always did.
+  const contentForDisplay = attachments.length > 0 ? stripUploadedFileLinesFromDisplay(rawContent) : rawContent;
+  const artifact = contentForDisplay ? extractHtmlArtifact(contentForDisplay) : null;
+  const displayContent = artifact ? artifact.remainingText : contentForDisplay;
   const isThinkingPlaceholder = isActivityPlaceholderMessage(msg);
   const placeholderText = isThinkingPlaceholder ? activityLine(extractActivityVerb(rawContent), rawContent) : '';
   const unavailableMessage = msg.role === 'assistant' ? EMPTY_STREAM_RESPONSE : 'Message content is unavailable.';
@@ -2742,10 +2770,16 @@ function ChatMessageBubble({
               <MarkdownContent content={displayContent} streaming={isStreaming} onMentionClick={onAgentProfile} />
             ) : isStreaming ? (
               <ThinkingIndicator />
+            ) : attachments.length > 0 ? (
+              // A message that is only files. Its content was the "[Linked
+              // files]" stub and the chips below now say the same thing, so
+              // "Message content is unavailable" would be a lie.
+              null
             ) : (
               <span className="text-muted-foreground">{unavailableMessage}</span>
             )}
             {artifact && <ChatArtifact artifact={artifact} />}
+            <MessageAttachmentList attachments={attachments} />
             {/* Link cards, once the message has settled. Deliberately NOT while
                 streaming: the URL is still being typed a token at a time, so
                 unfurling mid-stream would fire a request for a half-written link
@@ -3110,12 +3144,23 @@ function ChannelSidePanel({
         ) : isPins ? (
           pinnedMessages.length > 0 ? (
             <div className="space-y-2">
-              {pinnedMessages.map(message => (
-                <div key={message.id} className="rounded-md border bg-muted/40 p-2 text-sm">
-                  <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'Assistant')}</div>
-                  <MarkdownContent content={safeMessageText(message.content)} compact />
-                </div>
-              ))}
+              {pinnedMessages.map(message => {
+                // Same two-part read as the transcript bubble: chips for the
+                // uploaded files, and the text stub stripped only because a chip
+                // is standing in for it.
+                const pinnedAttachments = parseMessageAttachments(message.attachments);
+                const pinnedText = safeMessageText(message.content);
+                return (
+                  <div key={message.id} className="rounded-md border bg-muted/40 p-2 text-sm">
+                    <div className="mb-1 text-xs font-medium text-muted-foreground">{message.sender_name || (message.role === 'user' ? 'You' : 'Assistant')}</div>
+                    <MarkdownContent
+                      content={pinnedAttachments.length > 0 ? stripUploadedFileLinesFromDisplay(pinnedText) : pinnedText}
+                      compact
+                    />
+                    <MessageAttachmentList attachments={pinnedAttachments} />
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">No pinned messages yet.</p>

@@ -23,7 +23,7 @@ import { AppletDocWindowContent } from './AppletDocWindowContent';
 import { TasksWindowContent } from './TasksWindowContent';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
 import type { SendMessageResult } from '../../hooks/useChat';
-import type { ChatSession, Document, FloatingWindow, MemoryFact } from '../../types';
+import type { ChatSession, Document, FloatingWindow, MemoryFact, MessageAttachment } from '../../types';
 
 export type ChatWindowBodyProps = Omit<
   ComponentProps<typeof ChatWindowContent>,
@@ -40,6 +40,8 @@ export type ChatWindowBodyProps = Omit<
     targetSession?: ChatSession | null,
     // Thread composer's "Send to channel": also show this reply in the channel.
     broadcastToChannel?: boolean,
+    // Structured uploaded-file references for rendering (messages.attachments).
+    attachments?: MessageAttachment[],
     // `delivered: false` means the message was rolled back and is nowhere —
     // the composer has to put the draft back.
   ) => Promise<SendMessageResult>;
@@ -58,9 +60,9 @@ export function ChatWindowBody({
   const { memoryFacts, activeThreadId } = contentProps;
 
   const handleSendMessage = useCallback(
-    (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
+    (content: string, model: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      return onAppSendMessage(content, model, mf, docs, null, winSession || null);
+      return onAppSendMessage(content, model, mf, docs, null, winSession || null, undefined, attachments);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage],
   );

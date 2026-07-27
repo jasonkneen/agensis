@@ -46,6 +46,13 @@ export type LinkedFile = {
   path: string;
   sourceLabel: string;
   size: number;
+  // Set for kind 'uploaded' only. `id` above is prefixed (`uploaded:<id>`) for
+  // React keys and dedupe, so it cannot be used to address the file — these two
+  // carry the real uploaded_files.id and its MIME type, which is what a stored
+  // MessageAttachment needs (see lib/messageAttachments.ts). A 'project' file is
+  // a path on somebody's machine; there is nothing to fetch, so it has neither.
+  fileId?: string;
+  mimeType?: string;
 };
 
 export function linkedUploadedFile(file: UploadedFile): LinkedFile {
@@ -56,6 +63,8 @@ export function linkedUploadedFile(file: UploadedFile): LinkedFile {
     path: file.name,
     sourceLabel: 'Uploaded file',
     size: file.size || 0,
+    fileId: file.id,
+    mimeType: file.type,
   };
 }
 

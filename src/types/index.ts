@@ -141,7 +141,30 @@ export interface Message {
  // broadcast reply shows in BOTH views (see isChannelMessage in
  // components/chat/channelView.ts).
  broadcast_to_channel?: boolean | null;
+ // Structured REFERENCES to uploaded_files rows, for rendering: images inline,
+ // everything else as a download chip. Never file bytes — just the pointer plus
+ // the metadata needed to draw a chip before the file is fetched.
+ //
+ // This does NOT replace the human-readable "[Linked files]" block that
+ // buildFileContext folds into `content`: that text is how an AGENT learns a
+ // file was attached, and it stays. See lib/messageAttachments.ts.
+ //
+ // The three fields after `id` are CLIENT-SUPPLIED and therefore untrusted —
+ // parse every read through parseMessageAttachments rather than using the raw
+ // jsonb.
+ attachments?: MessageAttachment[] | null;
  created_at: string;
+}
+
+export interface MessageAttachment {
+ /** uploaded_files.id — the only field the server can act on. */
+ id: string;
+ /** Display name as the uploader's browser reported it. Untrusted. */
+ name: string;
+ /** MIME type as the uploader's browser reported it. Untrusted; render hint only. */
+ type: string;
+ /** Byte size as recorded at upload. Untrusted; display only. */
+ size: number;
 }
 
 export interface MemoryFact {

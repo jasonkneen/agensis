@@ -1,5 +1,18 @@
 [
   {
+    "version": "message-attachments",
+    "date": "2026-07-27",
+    "title": "Files you send now show up as files",
+    "summary": "Attaching a file to a message used to leave a line of text naming it. Now an image appears in the message as a picture you can actually see, and any other kind of file appears as a chip you can click to download. Agents still get the same file information they always did.",
+    "highlights": [
+      "Images attached to a message show inline, at a readable size",
+      "Everything else — PDFs, archives, spreadsheets — becomes a chip that downloads on click",
+      "Pinned messages show their attachments too",
+      "A file that has since been deleted says so, instead of showing a broken image",
+      "Files are still fetched through your signed-in session; nothing is served from a public link"
+    ]
+  },
+  {
     "version": "huddle-panel",
     "date": "2026-07-27",
     "title": "A huddle is its own panel now, and it follows you",
@@ -90,7 +103,7 @@
       "Dismiss any of them once and it stays dismissed, on every device you sign in from",
       "A message can never carry a link, and is only ever shown as plain text",
       "Nothing is emailed — these are in-app only"
-]
+    ]
   },
   {
     "version": "skills-chips",

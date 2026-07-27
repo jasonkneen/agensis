@@ -111,7 +111,7 @@ const JSON_COLUMNS_BY_TABLE = {
  agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
  activity_events: new Set(['metadata']),
- messages: new Set(['reactions']),
+ messages: new Set(['reactions', 'attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
 };
 

@@ -1089,6 +1089,13 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    -- Attachment REFERENCES (2026-07): [{id, name, type, size}] pointing at
+    -- uploaded_files rows, so a bubble can render a real thumbnail or a download
+    -- chip. Never file bytes. The human-readable "[Linked files]" block folded
+    -- into the content column stays exactly as it was -- that block is how an
+    -- AGENT learns a file came with the turn; this column is only how a BROWSER
+    -- draws it.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments jsonb DEFAULT '[]';
     -- Agent tool steps (2026-07): one row per tool call, rendered as a compact
     -- chip instead of a full chat bubble. message_kind='tool_step' is the
     -- discriminator; tool_name/tool_detail are the structured halves of the
