@@ -21,6 +21,7 @@ import {
  LayoutTemplate,
  LogOut,
  MessageSquare,
+ Minimize2,
  Sparkles,
  MoreHorizontal,
  Split,
@@ -235,6 +236,15 @@ interface SidebarProps {
  onSessionMerge?: (session: ChatSession) => void;
  onOpenInbox?: () => void;
  /**
+  * Put this desktop's open panels away (minimise, never close) so the wallpaper
+  * and the home composer are all that is left — and bring them back on the next
+  * press. Named for the gesture, not the noun: a *desktop* is a canvas layer you
+  * switch between, and this switches nothing. See src/lib/showDesktop.ts.
+  */
+ onShowDesktop?: () => void;
+ /** True while this desktop is bare because the row put its windows away. */
+ showingDesktop?: boolean;
+ /**
   * Open one message thread — the session it lives in, and the parent message
   * whose replies to show. The sidebar knows both; the app decides how to
   * present them (window, panel), which is why this is a prop and not a route.
@@ -296,6 +306,8 @@ export const Sidebar = React.memo(function Sidebar({
  onSessionSplit,
  onSessionMerge,
  onOpenInbox,
+ onShowDesktop,
+ showingDesktop = false,
  onOpenThread,
  onOpenMemory,
  onOpenSkills,
@@ -527,6 +539,7 @@ export const Sidebar = React.memo(function Sidebar({
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
+    {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Show desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
@@ -649,6 +662,19 @@ export const Sidebar = React.memo(function Sidebar({
         count={inboxUnreadCount}
         active={focusedWindowType === 'inbox'}
         onClick={onOpenInbox}
+       />
+      )}
+      {/* Directly under Inbox: the way back to a bare desktop — wallpaper and
+          the home composer, with the open panels minimised into the dock. Not
+          "Desktop": that word is already a canvas layer you switch between (the
+          workspace pill above does that), and this switches nothing. */}
+      {onShowDesktop && (
+       <ActionTile
+        icon={<Minimize2 />}
+        label="Show desktop"
+        active={showingDesktop}
+        pressed={showingDesktop}
+        onClick={onShowDesktop}
        />
       )}
       <SidebarSection
@@ -1324,11 +1350,14 @@ function SidebarRailButton({
  icon,
  title,
  count,
+ pressed,
  onClick,
 }: {
  icon: React.ReactNode;
  title: string;
  count?: number;
+ /** Set only on toggles — a plain launcher must NOT report a pressed state. */
+ pressed?: boolean;
  onClick: () => void;
 }) {
  return (
@@ -1338,6 +1367,8 @@ function SidebarRailButton({
    size="icon-sm"
    className="sidebar-rail-button relative"
    onClick={onClick}
+   aria-pressed={pressed}
+   data-active={pressed ? 'true' : undefined}
    aria-label={title}
    title={typeof count === 'number' && count > 0 ? `${title} (${count})` : title}
   >
@@ -1362,12 +1393,18 @@ function ActionTile({
  label,
  count,
  active = false,
+ pressed,
  onClick,
 }: {
  icon: React.ReactNode;
  label: string;
  count?: number;
  active?: boolean;
+ /**
+  * Set only on rows that are toggles. Left undefined everywhere else so a
+  * launcher is not announced as a pressed/unpressed control it isn't.
+  */
+ pressed?: boolean;
  onClick: () => void;
 }) {
  return (
@@ -1375,6 +1412,7 @@ function ActionTile({
    type="button"
    className="sidebar-action-row flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
    data-active={active ? 'true' : undefined}
+   aria-pressed={pressed}
    onClick={onClick}
   >
    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
