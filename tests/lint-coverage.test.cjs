@@ -95,6 +95,11 @@ const MUST_BE_LINTED = [
   // (git_root / local_path) and an fs read or `git -C` on this host. Default is
   // off; this file is what keeps it off. Extracted from server/index.cjs.
   'server/lib/project-fs.cjs',
+  // Spawns 12 CLI probes with a resolved absolute path and scans dot-directories
+  // in the user's home. It also decides which library types exist at all — the
+  // reason `config` is a type the skill-content reader refuses, since
+  // ~/.gemini/settings.json holds API keys. Extracted from server/index.cjs.
+  'server/lib/capabilities.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
