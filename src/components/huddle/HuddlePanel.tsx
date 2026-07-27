@@ -1,6 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Bot, Headphones, Radio, Send, User, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Bot, Send, User } from 'lucide-react';
 import {
   Empty,
   EmptyDescription,
@@ -28,13 +27,12 @@ import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS } f
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useHuddleRecord } from '@/hooks/useHuddle';
 import { useHuddleTranscript } from '@/hooks/useHuddleTranscript';
-import { huddleComposerPlaceholder, huddleSummaryLine, hasOwnTranscript } from '@/lib/huddleTranscript';
-import { huddleDuration, participantSummary } from '@/lib/huddleState';
+import { huddleComposerPlaceholder, hasOwnTranscript } from '@/lib/huddleTranscript';
 import { withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { isActivityPlaceholderMessage, extractActivityVerb } from '@/lib/activityStatus';
 import { EMPTY_STREAM_RESPONSE } from '@/lib/chatStream';
 import { useHuddleSession } from './HuddleSessionContext';
-import type { HuddleState, Message } from '@/types';
+import type { Message } from '@/types';
 
 // The huddle, as a place.
 //
@@ -61,7 +59,6 @@ interface HuddlePanelProps {
   agents?: HuddleAgentOption[];
   /** Which of them a typed message is addressed to. Mirrors the voice strip. */
   activeAgentId?: string;
-  onClose: () => void;
 }
 
 const NO_AGENTS: HuddleAgentOption[] = [];
@@ -71,7 +68,6 @@ export function HuddlePanel({
   huddleId = null,
   agents = NO_AGENTS,
   activeAgentId = '',
-  onClose,
 }: HuddlePanelProps) {
   const session = useHuddleSession();
   const current = session?.state ?? null;
@@ -117,40 +113,18 @@ export function HuddlePanel({
   };
 
   return (
+    // NO CHROME OF ITS OWN. This panel is only ever mounted inside HuddleDock
+    // (tests/unit/huddleSingleCall.test.ts pins that), and the dock already
+    // renders the title, the timer, the participant avatars and the close
+    // button. Rendering them here too gave one huddle two headers, two running
+    // timers and two close buttons stacked on top of each other, and pushed the
+    // transcript — the only thing here that is not repeated somewhere else —
+    // into the bottom third of the dock.
+    //
+    // The roster went with them: "1 in the huddle / God Emperor Jason / With
+    // Coder" is three lines of text restating the avatar row directly above it.
+    // The avatars carry each name in a title attribute.
     <div className="flex h-full min-w-0 flex-col text-card-foreground">
-      <div className="channel-header flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-        {state?.active ? (
-          <Radio className="size-4 shrink-0 text-emerald-500" aria-hidden />
-        ) : (
-          <Headphones className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        )}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">Huddle</span>
-        {state && <HuddleTimer state={state} />}
-        <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close huddle">
-          <X />
-        </Button>
-      </div>
-
-      {state && (
-        <div className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
-          <span className="block truncate">{huddleSummaryLine(state)}</span>
-          {state.participants.length > 0 && (
-            <span className="block truncate">{participantSummary(state.participants)}</span>
-          )}
-          {/* Agents are IN the call — they hear the transcript and speak — but
-              they never hold a LiveKit connection, so the webhook/event roster
-              cannot know them. Listed from the session roster instead; without
-              this they haunted the channel list while the huddle showed nobody,
-              which read as ghosts. */}
-          {agents.length > 0 && state.active && (
-            <span className="block truncate">
-              {'With '}
-              {agents.map(agent => agent.name).join(', ')}
-            </span>
-          )}
-        </div>
-      )}
-
       <MessageScrollerProvider autoScroll>
         <MessageScroller className="channel-message-surface flex-1">
           <MessageScrollerViewport>
@@ -256,19 +230,6 @@ function PanelNotice({ title, body }: { title: string; body: string }) {
       </EmptyHeader>
     </Empty>
   );
-}
-
-// A leaf so the 1s tick re-renders four characters, not the transcript.
-function HuddleTimer({ state }: { state: HuddleState }) {
-  const [now, setNow] = useState(() => Date.now());
-  React.useEffect(() => {
-    if (!state.active) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [state.active]);
-  const label = huddleDuration(state, now);
-  if (!label) return null;
-  return <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{label}</span>;
 }
 
 function HuddleBubble({ msg }: { msg: Message }) {

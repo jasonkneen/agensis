@@ -25,16 +25,49 @@ export interface ThreadInboxItem {
   unread: boolean;
 }
 
-/** What the row is called. A thread is named by the message that started it. */
-export function threadRowTitle(item: Pick<ThreadInboxItem, 'parentPreview' | 'sessionTitle'>): string {
+/**
+ * A parent message that is ONLY an attachment manifest is not a title.
+ *
+ * `buildFileContext` (ComposerAddContent) writes uploads into the message as
+ * "[Linked files]" followed by one "- name (source): path" line per file, and
+ * that text stays in the message on purpose — it is what the agent reads. As a
+ * thread NAME it is worthless: four uploads in a row produce four sidebar rows
+ * that all read "[Linked files] - Screenshot 2026-07-27 at …", truncated, and
+ * a list whose rows cannot be told apart is not a list.
+ */
+const ATTACHMENT_ONLY_PREVIEW = /^\[(linked files|image|images|attachment|attachments|file|files)\]/i;
+
+/**
+ * What the row is called.
+ *
+ * A thread is named by the message that started it — unless that message says
+ * nothing a reader can use, which is the common case for a thread hung off an
+ * upload or a tool step. Then the most useful name available is what the thread
+ * is ABOUT, i.e. its latest reply; the session is the last resort. Order is
+ * deliberate: the reply distinguishes rows from each other, the session name
+ * does not (every thread in one channel would get the same title).
+ */
+export function threadRowTitle(
+  item: Pick<ThreadInboxItem, 'parentPreview' | 'sessionTitle'> & Partial<Pick<ThreadInboxItem, 'lastReplyPreview'>>,
+): string {
   const preview = item.parentPreview.replace(/\s+/g, ' ').trim();
   // An empty parent is real: a message can be an attachment, an image, or a
-  // tool step with no text. Falling back to the session keeps the row
-  // identifiable instead of rendering a blank line the user cannot click with
-  // any confidence.
-  if (preview) return preview;
+  // tool step with no text.
+  if (preview && !ATTACHMENT_ONLY_PREVIEW.test(preview)) return preview;
+  const lastReply = (item.lastReplyPreview || '').replace(/\s+/g, ' ').trim();
+  if (lastReply) return lastReply;
   const session = item.sessionTitle.trim();
   return session ? `Thread in ${session}` : 'Thread';
+}
+
+/**
+ * Where the thread lives, for the row's leading icon. The sidebar's other lists
+ * all lead with one, and a thread's SOURCE is the one fact that separates
+ * otherwise-similar rows — so the icon carries information rather than
+ * decorating the row.
+ */
+export function threadRowSource(item: Pick<ThreadInboxItem, 'sessionFolder'>): 'dm' | 'channel' {
+  return item.sessionFolder.trim().toLowerCase() === 'direct messages' ? 'dm' : 'channel';
 }
 
 /** "3 replies" / "1 reply". The count is the point of the row. */
