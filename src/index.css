@@ -959,11 +959,9 @@
  box-sizing: border-box;
  width: calc(100% - 5px) !important;
  max-width: calc(100% - 5px) !important;
- /* Reduced with the base row (2.55 -> 2.2rem). neo draws these as bordered
-    cards so it stays chunkier than the glass themes on purpose — but it has to
-    move too, or "reduce the spacing" would silently do nothing in the one
-    theme that needed it most. */
- min-height: 2.2rem;
+ /* NO min-height here. The height comes from --sidebar-action-row-h plus this
+    theme's --sidebar-row-frame (see the rhythm block above). A restated height
+    is what made the base-scope reduction a no-op in this theme. */
  /* Unselected rows are plain list text, not cards — the hard border + offset
     shadow is reserved for the active row below. Keep border-width so nothing
     shifts by 2px when a row becomes selected. */
@@ -973,7 +971,7 @@
  box-shadow: none !important;
  border-radius: 10px !important;
  margin-right: 5px;
- margin-bottom: 6px;
+ margin-bottom: var(--sidebar-row-clearance);
  font-size: 0.82rem !important;
 }
 
@@ -1068,10 +1066,9 @@
  outline: 0 !important;
  border-radius: 10px !important;
  color: var(--text-secondary) !important;
- min-height: 34px;
+ /* Height comes from --sidebar-item-row-h + --sidebar-row-frame, not a literal. */
  justify-content: flex-start;
  padding-inline: 10px;
- margin-block: 1px;
 }
 
 :root[data-ui-theme="neo"] .sidebar-section-content {
@@ -1448,7 +1445,7 @@
 }
 
 .sidebar-folder-trigger {
- min-height: 1.7rem;
+ min-height: calc(var(--sidebar-folder-trigger-h) + var(--sidebar-row-frame));
 }
 
 /* A SECTION NAME IS A LABEL, NOT A ROW.
@@ -1458,7 +1455,7 @@
    reads as a heading, which is what stops a sidebar looking like one long
    undifferentiated list of buttons. */
 .sidebar-section-trigger {
- min-height: 1.35rem;
+ min-height: calc(var(--sidebar-section-trigger-h) + var(--sidebar-row-frame));
  /* TWO STEPS BELOW THE UI FONT, measured on the app's own (Tailwind) type
     scale: base 1rem -> sm 0.875rem -> xs 0.75rem.
 
@@ -1636,13 +1633,56 @@
  background: var(--border);
 }
 
+/* ============================================================================
+   SIDEBAR VERTICAL RHYTHM — ONE SOURCE, and the reason it has to be one.
+
+   Every row height in this column used to be restated per theme: neo carried
+   its own `min-height` for the action row (2.2rem), the item row (34px), the
+   session row (30px), the document row (34px) and the section header (2rem),
+   and tinyworld its own for the header. So a base-scope density change reached
+   exactly one theme — which is what happened when `.sidebar-action-row` went
+   1.8rem -> 1.55rem and the sidebar the owner actually looks at did not move a
+   pixel. Measured in the compiled CSS at a 15px UI font, neo's row pitch was
+   40.8px against the base's 25.1px, and its section-header pitch 122px against
+   80.7px: a sidebar 1.6x taller than the one the numbers were tuned on.
+
+   A family may now adjust the two variables that describe what IT adds and
+   MUST NOT restate a height:
+     --sidebar-row-frame     the border a row draws, both edges, since these
+                             boxes are border-box and a 2px frame eats 4px of
+                             the text's room
+     --sidebar-row-clearance the room a hard OFFSET shadow needs below a row so
+                             the scroll viewport does not clip it
+   Change a height here and every theme moves together. That is the point.
+   ============================================================================ */
+:root {
+ --sidebar-row-frame: 0px;
+ --sidebar-row-clearance: 0px;
+ --sidebar-action-row-h: 1.55rem;
+ --sidebar-item-row-h: 1.5rem;
+ --sidebar-section-trigger-h: 1.35rem;
+ --sidebar-folder-trigger-h: 1.7rem;
+ --sidebar-agent-row-h: 2.1rem;
+}
+
+:root[data-ui-theme="neo"] {
+ /* 2px of ink top and bottom on a border-box row. */
+ --sidebar-row-frame: 4px;
+ /* The selected row's offset shadow is --neo-shadow-sm (2px 2px). The column's
+    own `gap-0.5` already covers the gap BETWEEN rows; this is what keeps the
+    last row's shadow off the viewport edge. It was 6px, which is three times
+    the shadow it was clearing and, times fourteen rows, most of the extra
+    height. */
+ --sidebar-row-clearance: 2px;
+}
+
 .sidebar-action-row {
  /* 1.8rem, down from 2.15. These rows are most of the sidebar, so their height
     IS the sidebar's vertical rhythm — trimming anything else first would have
     moved almost nothing. ~29px still clears a comfortable pointer target. */
  /* 1.55, not 1.8: with ten of these stacked the extra 0.25rem each is most of
     a screenful of empty nav. The icon is 1rem, so this still clears it. */
- min-height: 1.55rem;
+ min-height: calc(var(--sidebar-action-row-h) + var(--sidebar-row-frame));
  gap: 0.6rem;
  justify-content: flex-start !important;
  padding-inline: 0.75rem;
@@ -1661,7 +1701,7 @@
 }
 
 .sidebar-item-row {
- min-height: 1.5rem;
+ min-height: calc(var(--sidebar-item-row-h) + var(--sidebar-row-frame));
  gap: 0.45rem;
  justify-content: flex-start !important;
  padding-inline: 0.45rem 0.55rem;
@@ -1687,7 +1727,7 @@
  align-items: center;
  /* ONE line. 3.25rem was sized for a stacked name-over-handle row, which wraps
     the moment a name is long and makes the DM list twice the height it needs. */
- min-height: 2.1rem;
+ min-height: calc(var(--sidebar-agent-row-h) + var(--sidebar-row-frame));
  overflow: hidden;
  padding: 0.2rem 0.35rem;
 }
@@ -1884,12 +1924,18 @@
  color: var(--text-primary) !important;
 }
 
-/* The one row a person actually has open reads as the "selected" card —
-   same treatment as the top-level nav's active state — while every other
-   row in the list (and the section/folder headers above them) stays flat
-   text. Covers channels/threads (.sidebar-item-row, .sidebar-session-row)
-   and DMs (.sidebar-agent-row). */
-:root[data-ui-theme="neo"] .sidebar-item-row[data-active="true"] {
+/* THE SELECTED ROW — ONE RULE, every row type.
+   The one row a person actually has open reads as the "selected" card, while
+   every other row in the list (and the section/folder headers above them) stays
+   flat text. Listing all five row types here rather than in a block each is the
+   point: "which row am I on" must not look like a different thing depending on
+   which list it is in, and three near-identical blocks is how that drifted.
+   Add a new row type to THIS list — do not start a sixth block. */
+:root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"],
+:root[data-ui-theme="neo"] .sidebar-item-row[data-active="true"],
+:root[data-ui-theme="neo"] .sidebar-session-row[data-active="true"],
+:root[data-ui-theme="neo"] .sidebar-agent-row[data-active="true"],
+:root[data-ui-theme="neo"] .sidebar-folder-trigger[data-active="true"] {
  border-width: 2px !important;
  border-style: solid !important;
  border-color: var(--border) !important;
@@ -1898,22 +1944,30 @@
  color: var(--text-primary) !important;
 }
 
-:root[data-ui-theme="neo"] .sidebar-session-row[data-active="true"],
-:root[data-ui-theme="neo"] .sidebar-agent-row[data-active="true"] {
+/* ONE frame, not two. The DM row is the only selected row with a nested button
+   (`.sidebar-agent-primary` holds the avatar and name; the "..." menu is its
+   sibling), and that button carries Tailwind's `focus-visible:ring-2`. Once the
+   row was clicked the button keeps focus, so the next keypress that promotes
+   :focus-visible paints a second ink box INSIDE the selected row's box, ending
+   short of the menu — the double frame in the report. The fix is not to delete
+   the focus ring: focus indication moves UP to the row, which is the box a
+   reader already understands, so keyboard focus is still shown and there is
+   still only ever one frame. */
+:root[data-ui-theme="neo"] .sidebar-agent-row:focus-within {
  border-width: 2px !important;
  border-style: solid !important;
- border-color: var(--border) !important;
- background: var(--card) !important;
- box-shadow: var(--neo-shadow-sm) !important;
- color: var(--text-primary) !important;
+ border-color: var(--ring) !important;
+}
+
+:root[data-ui-theme="neo"] .sidebar-agent-row .sidebar-agent-primary:focus-visible {
+ box-shadow: none !important;
+ outline: none !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-item-row-session {
- min-height: 30px;
 }
 
 :root[data-ui-theme="neo"] .sidebar-item-row-document {
- min-height: 34px;
 }
 
 :root[data-ui-theme="neo"] .settings-nav-row {
@@ -2071,16 +2125,40 @@
    Scoped to the chat composer only — the shared InputGroup component (used by
    search bars, command palettes, etc.) is untouched. */
 .channel-composer [data-slot="input-group"] {
- /* Stand the input well off the composer panel: fully opaque card + a hair of
-    foreground tint so it reads as an ACTIVE field, not a disabled/see-through
-    one. A slightly stronger border + soft inset shadow add the well depth. */
- background: color-mix(in srgb, var(--card) 92%, var(--foreground) 8%) !important;
- border-color: color-mix(in srgb, var(--border) 70%, var(--foreground) 30%) !important;
+ /* Soft inset shadow for the well's depth. This one stays at THIS specificity
+     (0,2,0) rather than moving into the :not() rule below: tinyworld gives every
+     control its own inset highlight from a (0,3,0) selector, and hoisting this
+     to (0,4,0) silently outranked it and flattened the world's controls. */
  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--foreground) 8%, transparent);
  /* The well is rounded-lg, but its inner children (textarea + bottom button
      row) render square corners that poke past the rounded edge now that the
-     well is opaque. Clip them to the well's radius. */
+     well is opaque. Clip them to the well's radius. Every theme wants this. */
  overflow: hidden;
+}
+
+/* The tint is a GLASS-FAMILY treatment, so it is scoped away from neo. It exists
+   because the well stacks on a translucent composer over the window glass and
+   would otherwise read as see-through; neo has no translucency to stand off, it
+   has a real 2px ink border. Left unscoped, its `!important` beat
+   `:root[data-ui-theme="neo"] [data-slot="input-group"]` (which is NOT
+   important, so it loses on origin, not specificity) and painted the biggest
+   surface in the brutal composer 8% toward the ink — the blue-grey the owner
+   screenshotted. */
+:root:not([data-ui-theme="neo"]) .channel-composer [data-slot="input-group"] {
+ /* Stand the input well off the composer panel: fully opaque card + a hair of
+    foreground tint so it reads as an ACTIVE field, not a disabled/see-through
+    one, plus a slightly stronger border. */
+ background: color-mix(in srgb, var(--card) 92%, var(--foreground) 8%) !important;
+ border-color: color-mix(in srgb, var(--border) 70%, var(--foreground) 30%) !important;
+}
+
+/* Brutal: the well is a RAISED WHITE card with an ink edge and a hard offset
+   shadow — the treatment the owner pointed at on `.sidebar-search`. Fill and
+   border already come from the theme's generic [data-slot="input-group"] rule;
+   only the elevation is per-surface, because the generic rule carries the glass
+   `--shadow-sm` and a brutal control's shadow is a hard offset. */
+:root[data-ui-theme="neo"] .channel-composer [data-slot="input-group"] {
+ box-shadow: var(--neo-shadow-sm);
 }
 
 .channel-composer [data-slot="input-group"] [data-slot="button"][data-variant="ghost"] {
@@ -2141,6 +2219,26 @@
 
 .channel-side-panel {
  background: var(--channel-side) !important;
+}
+
+/* THE TWO HEADERS EITHER SIDE OF A SIDE PANEL ARE ONE BAR, so they must be the
+   same height with their rules on the same line. They were not, and the cause
+   is where the rule sits relative to the h-11 row, not a missing pixel:
+
+   - The main channel header (ChatWindowContent) is a WRAPPER carrying
+     `border-b` around an `h-11` row — the wrapper can hold a second row — so
+     that bar is 2.75rem PLUS the rule: 42.25px, rule at 41.25.
+   - Every side-panel header (thread, sub-thread, files/pins, agent profile) IS
+     the `h-11` row with `border-b` on it, and these boxes are border-box, so
+     the rule is drawn INSIDE the 2.75rem: 41.25px, rule at 39.25.
+
+   1px shorter, rule 2px higher — the step where a side panel's header meets the
+   panel beside it and the window's own close control. Sizing the side-panel
+   header's height as content means its rule is added to the bar rather than
+   carved out of it, which is the same arithmetic the main header already does.
+   No literal: if 2.75rem or the rule's weight changes, both still agree. */
+.channel-side-panel .channel-header {
+ box-sizing: content-box;
 }
 
 .channel-message-surface,
@@ -4224,12 +4322,19 @@ select {
 :root[data-ui-theme="neo"] .sidebar-search,
 :root[data-ui-theme="neo"] .sidebar-section-trigger,
 :root[data-ui-theme="neo"] .sidebar-folder-trigger,
-:root[data-ui-theme="neo"] .sidebar-item-row {
+:root[data-ui-theme="neo"] .sidebar-item-row,
+/* The DM row belongs in this list too, and being left out of it is why the
+   SELECTED DM row was the one row clipped at the panel's right edge: every
+   other row reserves 6px for its 2px offset shadow, the DM row ran the full
+   width, and [data-sidebar-panel]'s `overflow: hidden` cut its border and
+   shadow off mid-edge. Measured: item row right edge 245.5px, DM row 251.5px,
+   in a 260px sidebar. */
+:root[data-ui-theme="neo"] .sidebar-agent-row {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-left: 0 !important;
  margin-right: 6px !important;
- margin-bottom: 6px !important;
+ margin-bottom: var(--sidebar-row-clearance) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-search {
@@ -4272,17 +4377,23 @@ select {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-right: 6px !important;
- margin-bottom: 4px !important;
- border-width: 2px !important;
+ margin-bottom: var(--sidebar-row-clearance) !important;
+ /* border-width 0, not 2px-transparent. This heading never becomes a card —
+    the rule three lines down is the whole treatment, a flat label with a hover
+    wash — so a transparent frame here bought nothing and cost 4px of height on
+    every section, on a border-box element. */
+ border-width: 0 !important;
  border-style: solid !important;
  border-color: transparent !important;
  border-radius: 9px !important;
  background: transparent !important;
  box-shadow: none !important;
- /* 2rem, down from 2.55. neo keeps the card frame — that is the theme's
-    identity — but the thing inside it is now a small label, and 2.55rem was
-    sized for the row it used to be. */
- min-height: 2rem;
+ /* NO min-height. This is a LABEL, and its height is the label's — the shared
+    --sidebar-section-trigger-h on the trigger inside it. 2.55rem, then 2rem,
+    were both sized for the bordered CONTROL this used to be; the frame went
+    (border-color is transparent three lines up) and the height it was sized
+    for stayed behind, which is most of the 122px between section names that
+    the owner screenshotted. */
  padding-inline: 0.3rem 0.2rem !important;
 }
 
@@ -4292,6 +4403,11 @@ select {
 
 /* Trigger inside header owns no border/shadow — the header card does */
 :root[data-ui-theme="neo"] .sidebar-section-header .sidebar-section-trigger {
+ /* This trigger draws NO border (see `border: none` below), so it must not take
+    the theme's --sidebar-row-frame allowance — that allowance exists to give a
+    bordered box back the room its frame eats, and taking it here made every
+    section heading 4px taller than the label it contains. */
+ min-height: var(--sidebar-section-trigger-h) !important;
  width: auto !important;
  max-width: none !important;
  margin-right: 0 !important;
@@ -4352,7 +4468,9 @@ select {
  border-style: solid !important;
  border-color: transparent !important;
  border-radius: 10px !important;
- min-height: 2rem;
+ /* No min-height, for the same reason as neo above: `border-width: 0` took the
+    control frame off this heading, and a heading does not need the height that
+    frame was sized for. */
  color: var(--text-secondary) !important;
  background: transparent !important;
  box-shadow: none !important;
@@ -4666,7 +4784,7 @@ select {
    right exactly as before. */
 :root[data-ui-theme="neo"] [data-window-titlebar] {
  background: var(--canvas-raised) !important;
- border-bottom: 2.5px solid var(--neo-edge) !important;
+ border-bottom: var(--neo-band-divider) solid var(--neo-edge) !important;
  font-family: var(--neo-mono);
 }
 
@@ -4687,18 +4805,43 @@ select {
  letter-spacing: 0.02em;
 }
 
+/* The top chrome band. The sidebar's workspace header and the first window's
+   title bar to its right are meant to read as ONE band across the top of the
+   shell, so both must start their content on the same line and end on the same
+   line. `--neo-chrome-band-top` is where that line is, measured from the shell's
+   top edge: WORKSPACE_CHROME_GAP (8px, the canvas column's padding) +
+   [data-floating-window]'s 2px frame + the window surface's 1px border.
+
+   The sidebar is flush to the shell's top edge, so whatever it spends on its OWN
+   top border comes out of that budget — which is why the header's padding is
+   `band-top - sidebar-frame` and not a literal. The two numbers HAVE to come
+   from one place: the previous fix wrote the border as 2.5px and then subtracted
+   2.5px in the padding, but a fractional border-width is snapped to a whole
+   pixel, so the border occupies 2px and the band came out 0.5px high — the
+   remaining step, and a 0.5px offset between the two dividers. Whole pixels
+   here, one token, and the arithmetic below can no longer drift from it. */
+:root[data-ui-theme="neo"] {
+ --neo-chrome-band-top: 11px;
+ --neo-sidebar-frame: 2px;
+ /* The rule under BOTH header bars, and the amount the band's inner content has
+    to stop short of its own bottom edge. One token so the two bars cannot end up
+    with rules of different weights, and so the pill below can be sized against
+    the same number instead of overhanging it. */
+ --neo-band-divider: 2px;
+}
+
 /* sidebar header matches window titlebar treatment */
 :root[data-ui-theme="neo"] [data-sidebar-panel] {
  /* Full-height flush-left rail: square all corners so the right edge is a clean
      divider (matching the base theme's rounded-none), not a floating-card curve. */
  border-radius: 0 !important;
- border-top: 2.5px solid var(--neo-edge) !important;
- border-left: 2.5px solid var(--neo-edge) !important;
+ border-top: var(--neo-sidebar-frame) solid var(--neo-edge) !important;
+ border-left: var(--neo-sidebar-frame) solid var(--neo-edge) !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] {
  background: var(--canvas-raised) !important;
- border-bottom: 2.5px solid var(--neo-edge) !important;
+ border-bottom: var(--neo-band-divider) solid var(--neo-edge) !important;
  font-family: var(--neo-mono);
  border-radius: 0 !important;
  padding: 0 !important;
@@ -4706,19 +4849,22 @@ select {
  padding-left: var(--sidebar-titlebar-inset, 0px) !important;
  /* `padding: 0` above wiped the base header's 8px top pad (pt-2), and this is
      also what puts the header on the SAME line as the first window's title bar
-     to its right — the two are meant to read as one chrome band across the top
-     of the shell. That bar is h-10 (2.5rem, with its own 2.5px divider inside
-     it) and its box starts 11px down: WORKSPACE_CHROME_GAP (8px, the canvas
-     column's padding) + [data-floating-window]'s 2px frame + the window
-     surface's 1px border. The sidebar is flush to the shell's top edge, so
-     2.5px of that 11px is already spent on [data-sidebar-panel]'s own top
-     border above — which is why this is 8.5px and not 8px, and why a plain 8px
-     left the two bars stepped by 1.75px where they meet. Height is pinned for
-     the same reason: the header's own content must be 2.5rem tall (divider
-     included) so both bars end on one line. */
+     to its right. See --neo-chrome-band-top above for where that line is and why
+     the sidebar's own frame is subtracted from it rather than written out as a
+     literal. The window bar is h-10 (2.5rem, divider included), so pinning this
+     one to 2.5rem + the same offset makes both bands END on one line too — the
+     header's own content is then exactly as tall as the window bar's. */
  box-sizing: border-box !important;
- padding-top: 8.5px !important;
- height: calc(2.5rem + 8.5px) !important;
+ padding-top: calc(var(--neo-chrome-band-top) - var(--neo-sidebar-frame)) !important;
+ height: calc(2.5rem + var(--neo-chrome-band-top) - var(--neo-sidebar-frame)) !important;
+ /* Centre the row in the band the way the window bar centres its title (that bar
+     is `flex items-center`). Without this the pill is a block laid out from the
+     top of the content box, and since its own content — 2rem icon buttons inside
+     0.25rem padding — is 2px TALLER than the band's inner height, the workspace
+     name sat a pixel below the window title even with both bands aligned. Same
+     box, same centring rule, both names on one line. */
+ display: flex !important;
+ align-items: center !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
@@ -4729,8 +4875,14 @@ select {
  padding: 0.25rem 0.5rem !important;
  /* Fill the band the header just pinned, so the workspace name is centred on
      the same axis as the window title beside it rather than a pixel above it —
-     the pill's own 2.1rem min-height is shorter than the band. */
- min-height: 100% !important;
+     the pill's own 2.1rem min-height is shorter than the band. Sized against the
+     band, NOT `100%`: a percentage min-height here resolves against the header's
+     height minus its padding but NOT minus its bottom border, so the pill came
+     out 2px too tall, hung over the divider, and carried the workspace name 1px
+     below the window title's centre line even once the two bands lined up. The
+     window bar centres its title in ITS content box (h-10 minus the same rule),
+     so this is the same box, expressed the same way. */
+ min-height: calc(2.5rem - var(--neo-band-divider)) !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-switch {
@@ -4770,20 +4922,6 @@ select {
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="card"],
 :root[data-ui-theme="neo"] [data-sidebar-panel],
-/* The workspace rail belongs in this list too. It carries `bg-card/85` for the
-   glass families, and left out of here it stayed 85% translucent while the
-   sidebar directly beside it went fully opaque — two adjacent chrome columns
-   disagreeing about whether the wallpaper shows through, which is exactly the
-   seam you see first. Brutal is flat ink on flat colour; a translucent rail is
-   a different design language sharing an edge with this one. */
-:root[data-ui-theme="neo"] [data-workspace-rail] {
- /* One flat colour for the whole rail rather than the page background showing
-    through it. The rail is a distinct column of chrome; sharing the canvas
-    colour made it read as part of the page it sits beside. */
- background: var(--secondary) !important;
-}
-
-:root[data-ui-theme="neo"] [data-workspace-rail],
 /* `.agensis-glass-panel` is the SHARED floating-panel surface (the command
    palette, the mention pickers, the composer, and the presence popover — the
    "Shared users and agents" panel). Every one of those is chrome, but the class
@@ -4795,6 +4933,29 @@ select {
    what stops the next shared-glass panel arriving translucent again. */
 :root[data-ui-theme="neo"] .agensis-glass-panel {
  background: var(--card) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+
+/* !! DO NOT open a new rule immediately below the selector list above. Every
+   line up there ends in a comma, so a rule written straight after one of them
+   does not START a new rule — it TERMINATES that list, and its declarations
+   silently become the declarations of all fifteen selectors. That is exactly
+   what happened to this rail rule: written directly under `[data-sidebar-panel],`
+   it handed `background: var(--secondary)` to the composer, the agent profile
+   side panel, the channel header, every dialog, popover, dropdown and card, and
+   it took the `backdrop-filter: none` away from all of them, so neo's chrome
+   went a translucent blue-grey and the anti-glass rule above stopped applying
+   to anything but the rail. Keep this rule separated by a blank line, and keep
+   its own selector list self-contained. */
+
+/* The rail is the ONE chrome column that is deliberately not `--card`. One flat
+   colour for the whole rail rather than the page background showing through it:
+   the rail is a distinct column of chrome, and sharing the canvas colour made it
+   read as part of the page it sits beside. It follows the list above so it wins
+   for the rail alone. */
+:root[data-ui-theme="neo"] [data-workspace-rail] {
+ background: var(--secondary) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
 }
