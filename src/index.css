@@ -2125,14 +2125,34 @@
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
 
-/* Thread widgets have NO FRAME. They used to be bordered, filled, rounded cards
-   with a --shadow-md (and a 2px ink border under [data-ui-theme="neo"], to match
-   [data-slot="card"]). The owner asked for the boxed treatment to go: the
-   widgets are sections of the rail, not three floating panels. What separates
-   one from the next is now a heading, a hairline under it and the grid's
-   gap-y-4 — all in ThreadWidgetRail.tsx. Nothing here re-adds a card, in ANY
-   theme scope, which is the point: a per-theme frame rule would put the box
-   back for exactly the people who chose that theme. */
+/* Thread widgets have NO FRAME by default. They used to be bordered, filled,
+   rounded cards with a --shadow-md (and a 2px ink border under
+   [data-ui-theme="neo"], to match [data-slot="card"]). The owner asked for the
+   boxed treatment to go: the widgets are sections of the rail, not three
+   floating panels. What separates one from the next is now a heading, a
+   hairline under it and the grid's gap-y-4 — all in ThreadWidgetRail.tsx.
+   Nothing here re-adds a card in the normal themes — a per-theme frame rule
+   would put the box back for exactly the people who chose that theme.
+
+   BRUTAL IS THE EXCEPTION (below): every other bordered surface in that theme
+   — cards, dialogs, popovers, tables — wears a hard 2px ink edge, so a
+   frameless rail there reads as unstyled/broken rather than "intentionally
+   quiet". Re-add the edge, scoped to [data-ui-theme="neo"] only. */
+:root[data-ui-theme="neo"] .thread-widget-card {
+ border: 2px solid var(--neo-edge);
+ border-radius: var(--radius-md);
+ background: var(--card);
+ box-shadow: var(--neo-shadow-xs);
+}
+
+/* The header's hairline (border-border/60 in the TSX) is a soft separator by
+   design for the frameless themes; inside a bordered brutal card it should
+   read as a divider as hard as the frame around it, not a washed-out ghost of
+   it. */
+:root[data-ui-theme="neo"] .thread-widget-card > div:first-child {
+ border-bottom-width: 2px;
+ border-bottom-color: var(--neo-edge);
+}
 
 /* Too narrow to seat the rail beside the conversation (see
    RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
