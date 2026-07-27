@@ -1,4 +1,4 @@
-import { Activity, Bot, Brain, Clock, FileText, ListTodo, Menu, MessageSquare, Sparkles, Users, X, type LucideIcon } from 'lucide-react';
+import { Activity, Bot, Brain, Clock, FileText, Inbox, ListTodo, Menu, MessageSquare, Sparkles, Users, X, type LucideIcon } from 'lucide-react';
 import type { FloatingWindow, FloatingWindowType } from '../../types';
 import { cn } from '@/lib/utils';
 
@@ -12,6 +12,7 @@ const TYPE_ICON: Record<FloatingWindowType, LucideIcon> = {
   agents: Bot,
   users: Users,
   schedules: Clock,
+  inbox: Inbox,
 };
 
 interface MobileWindowSwitcherProps {
@@ -33,13 +34,13 @@ export function MobileWindowSwitcher({ windows, activeWindowId, onFocus, onClose
   return (
     <div
       data-mobile-window-switcher
-      className="pointer-events-auto absolute inset-x-0 bottom-0 z-[11500] flex items-center gap-1.5 overflow-x-auto border-t border-border bg-card/85 px-2 py-1.5 backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="pointer-events-auto absolute inset-x-0 bottom-0 z-[var(--z-app-dock)] flex items-center gap-1.5 overflow-x-auto border-t border-border bg-card/85 px-2 py-1.5 backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
     >
       <button
         type="button"
         onClick={onOpenMenu}
-        className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background/60 text-muted-foreground hover:text-foreground"
+        className="control-outer-ring flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-background/60 text-muted-foreground hover:text-foreground"
         aria-label="Open menu"
       >
         <Menu size={16} />
@@ -52,7 +53,7 @@ export function MobileWindowSwitcher({ windows, activeWindowId, onFocus, onClose
           <div
             key={win.id}
             className={cn(
-              'group flex h-8 shrink-0 items-center gap-1.5 rounded-lg border pl-2 pr-1 text-xs transition-colors',
+              'control-outer-ring group flex h-8 shrink-0 items-center gap-1.5 rounded-lg border pl-2 pr-1 text-xs transition-colors',
               isActive
                 ? 'border-primary/70 bg-primary/15 text-foreground'
                 : 'border-border bg-background/60 text-muted-foreground',

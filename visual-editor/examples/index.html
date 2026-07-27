@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>visual-dev-editor — demo site</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <nav class="nav container">
+      <a class="logo" href="/">Acme<span>Studio</span></a>
+      <ul class="nav-links">
+        <li><a href="#services">Services</a></li>
+        <li><a href="#work">Work</a></li>
+        <li><a href="#contact">Contact</a></li>
+        <li><a href="about.html">About</a></li>
+      </ul>
+    </nav>
+  </header>
+
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p>© 2026 AcmeStudio. Built with too much coffee.</p>
+      <ul class="footer-links">
+        <li><a href="#">Twitter</a></li>
+        <li><a href="#">Dribbble</a></li>
+        <li><a href="#">GitHub</a></li>
+      </ul>
+    </div>
+  </footer>
+  <main>
+    <section class="hero">
+      <div class="container hero-inner" style="display: grid; justify-items: start">
+        <div class="hero-copy">
+          <p class="eyebrow">Design &amp; build studio</p>
+          <h1 style="display: block">We make websites people remember.</h1>
+          <p class="lede">A small team with a big obsession for craft. Brand, web,
+            and product design — from first sketch to shipped site.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#contact">Start a project</a>
+            <a class="btn btn-ghost" href="#work">See our work</a>
+          </div>
+        </div>
+        <div class="hero-card">
+          <p>Every pixel earns its place.</p>
+          <svg viewBox="0 0 200 200" role="img" aria-label="Abstract artwork">
+            <circle cx="100" cy="100" r="80" fill="#5b8cff" opacity="0.9"/>
+            <rect x="60" y="60" width="80" height="80" rx="12" fill="#ffd166" transform="rotate(15 100 100)"/>
+            <circle cx="140" cy="70" r="24" fill="#ef476f"/>
+          </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="work" class="section container">
+      <h2 style="margin-bottom: -2px">Selected work</h2>
+      <p class="section-lede">A few recent projects we're proud of.</p>
+      <div class="card-grid">
+        <article class="card">
+          <div class="card-thumb thumb-a"></div>
+          <h3>Nimbus Bank</h3>
+          <p>Rebrand and marketing site for a challenger bank. Conversion up 34%.</p>
+          <a href="#work" class="card-link">Case study →</a>
+        </article>
+        <article class="card">
+          <div class="card-thumb thumb-b"></div>
+          <h3>Fern &amp; Field</h3>
+          <p>E-commerce for a plant studio, with a hand-drawn illustration system.</p>
+          <a href="#work" class="card-link">Case study →</a>
+        </article>
+        <article class="card">
+          <div class="card-thumb thumb-c"></div>
+          <h3>Pulse FM</h3>
+          <p>Live-streaming radio platform with a Webflow-lite show scheduler.</p>
+          <a href="#work" class="card-link">Case study →</a>
+        </article>
+      </div>
+    </section>
+
+    <section id="services" class="section section-alt">
+      <div class="container">
+        <h2>What we do</h2>
+        <ul class="service-list">
+          <li><strong>Web design</strong> — marketing sites, landing pages, blogs.</li>
+          <li><strong>Brand identity</strong> — naming, logo, voice, guidelines.</li>
+          <li><strong>Product design</strong> — flows, prototypes, design systems.</li>
+          <li><strong>Build</strong> — fast, accessible, hand-coded front-ends.</li>
+        </ul>
+        <table class="price-table">
+          <thead>
+            <tr><th>Package</th><th>Timeline</th><th>From</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Landing page</td><td>2 weeks</td><td>$4,500</td></tr>
+            <tr><td>Marketing site</td><td>4–6 weeks</td><td>$12,000</td></tr>
+            <tr><td>Full rebrand + site</td><td>8–10 weeks</td><td>$30,000</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="contact" class="section container">
+      <h2>Say hello</h2>
+      <form class="contact-form" action="#" method="get">
+        <label>
+          Name
+          <input type="text" name="name" placeholder="Ada Lovelace">
+        </label>
+        <label>
+          Email
+          <input type="email" name="email" placeholder="ada@example.com">
+        </label>
+        <label>
+          Budget
+          <select name="budget">
+            <option>Under $5k</option>
+            <option>$5k – $15k</option>
+            <option>$15k+</option>
+          </select>
+        </label>
+        <label>
+          Project details
+          <textarea name="details" rows="4" placeholder="Tell us about it…"></textarea>
+        </label>
+        <button class="btn btn-primary" type="submit">Send message</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

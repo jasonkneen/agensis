@@ -1,7 +1,8 @@
 # agensis — Architecture
 
 > One workspace, many agents, run anywhere, behave as one team.
-> Diagram + layer map grounded in the actual repo (`server/`, `agent/agensis-cli/`, `src/`, `database/`).
+> Diagram + layer map grounded in the closed app repo plus the public sibling
+> [`agensis-agent`](https://github.com/jasonkneen/agensis-agent) repo.
 
 ## System diagram
 
@@ -33,7 +34,7 @@ flowchart TB
 
     subgraph agents["🤖  AGENT RUNTIMES  (run_mode)"]
         direction TB
-        daemon["Local daemon  (run_mode='daemon')<br/>agent/agensis-cli — agensis.mjs · queue.mjs · state.mjs · memory.mjs<br/>spawns  claude -p --model  → USER'S OWN Claude sub<br/>heartbeat 15s · ~/.agensis/&lt;ws&gt;/&lt;agent&gt;/ state mirror"]
+        daemon["Local daemon  (run_mode='daemon')<br/>public agensis-agent repo<br/>spawns Claude Code or Codex on the user's host<br/>heartbeat 15s · ~/.agensis/&lt;ws&gt;/&lt;agent&gt;/ state mirror"]
         builtin["Server-managed  (run_mode='builtin')<br/>runs inside the hub via platform/workspace key"]
         external["External MCP  (run_mode='external')<br/>any MCP client backs an agent via join token"]
     end
@@ -90,7 +91,7 @@ flowchart TB
 | **Orchestration** | Dispatches turns (`continueConversation`), auto-interject picks one agent to reply in `auto` channels, burst-job liveness prevents phantom-job wedges, thread split/merge, comment→DM mention dispatch. | `server/index.cjs` |
 | **Data** | Neon Postgres (serverless, scale-to-zero). Stores everything except file bytes: workspaces, agents, chat_sessions, messages, `agent_jobs`, `agent_connections`, `thread_items`, `workspace_secrets`, memory. | Neon, `database/neon-schema.sql` |
 | **File storage** | Upload bytes on local disk (`.agensis_uploads`), served via `fs.createReadStream`; only metadata + `content_sha256` (dedupe) in Neon. ⚠️ Fly volume not mounted → uploads are ephemeral across deploys. | `server/index.cjs` |
-| **Agent runtimes** | Three `run_mode`s: **daemon** (local CLI, spawns `claude -p` on the user's own Claude sub — $0 inference), **builtin** (runs in the hub on the platform/workspace key), **external** (any MCP client backs an agent via a join token). | `agent/agensis-cli/src/` |
+| **Agent runtimes** | Three `run_mode`s: **daemon** (open-source local CLI using the user's coding CLI), **builtin** (runs in the hub on the platform/workspace key), **external** (any MCP client backs an agent via a join token). | `jasonkneen/agensis-agent` |
 | **Inference** | Daemon path → Anthropic on the user's tokens (free to platform). Managed path → `getAnthropicApiKey` resolves a workspace secret, else the platform key. Planned: rotating **OpenRouter free models** for the managed path; frontier stays BYO-key. | `resolveSecret` / `getAnthropicApiKey` in `server/index.cjs` |
 | **Billing (planned)** | Stripe Billing; entitlement gate goes server-side at `getAnthropicApiKey` / dispatch (where money is spent), not in React. | `docs/pricing/` |
 
@@ -101,7 +102,7 @@ flowchart TB
 
 ## Realtime & liveness spine
 
-- Daemons hold a persistent socket to `/backend/ws` and **heartbeat every 15s**, now carrying `capabilitiesHash` + `memoryHash` so skills/tools/memory drift is detected and re-synced.
+- Daemons hold a persistent socket to `/backend/ws` and **heartbeat every 15s**, carrying `capabilitiesHash` plus a `memoryHash`. Claude memory upload is off by default in the public daemon; hosts that explicitly launch with `--sync-memory` use the hash to detect and re-sync memory drift.
 - Each daemon mirrors state to `~/.agensis/<ws>/<agent>/` (`heartbeat.json`, `soul.md`, `status.json`) and can write its own status back.
 - `agent_jobs` liveness ties a job's validity to its connection; phantom (NULL/dead-connection) jobs are finalized instead of wedging a session.
 

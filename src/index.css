@@ -38,8 +38,12 @@
  --chat-panel-width: 380px;
  --agensis-ui-font-family: 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
  --agensis-ui-font-size: 15px;
- --agensis-panel-alpha: 76%;
- --agensis-sidebar-alpha: 76%;
+ /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
+    INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
+    src/lib/settings.ts so the panels do not visibly change opacity a frame
+    after load. */
+ --agensis-panel-alpha: 88%;
+ --agensis-sidebar-alpha: 88%;
  --agensis-glass-blur: 16px;
 
  --radius-sm: 6px;
@@ -50,6 +54,33 @@
  --transition-fast: 120ms ease;
  --transition-base: 200ms ease;
  --transition-slow: 350ms ease;
+
+ /* Chrome depth ladder — the CSS mirror of CHROME_DEPTH in
+    src/lib/chromeDepth.ts, which carries the full explanation of what each rung
+    is for and why the three shell columns stack the way they do. The two are
+    asserted equal by tests/unit/chromeDepth.test.ts; edit both or neither.
+    Short version: the sidebar is the recess, the canvas column and the
+    workspace rail are raised out of it, and nothing here may reach --z-overlay
+    (50) or Radix portals start opening behind panels. */
+ --z-backdrop: 0;
+ --z-sidebar: 10;
+ --z-content: 20;
+ --z-sidebar-flyout: 30;
+ --z-workspace-rail: 40;
+ --z-overlay: 50;
+ --z-agent-feed: 9500;
+ --z-cursors: 9999;
+ --z-app-dock: 11500;
+ --z-huddle-panel: 11600;
+ --z-modal-scrim: 11990;
+ --z-drawer-scrim: 11999;
+ --z-modal: 12000;
+ --z-drawer: 12000;
+ --z-context-menu: 12010;
+ --z-menu: 12050;
+ --z-nested-modal: 12060;
+ --z-picker: 12080;
+ --z-picker-hud: 12090;
  --background: oklch(1 0 0);
  --foreground: oklch(0.145 0 0);
  --card: oklch(1 0 0);
@@ -119,6 +150,21 @@
      bleeding far down the viewport and from compounding into a muddy pool where
      windows overlap, while still reading as clear depth. */
  --shadow-window: 0 10px 24px -14px rgba(0, 0, 0, 0.7);
+ /* Lateral elevation for the chrome. Every other shadow token here offsets
+     DOWNWARD, which on a full-height column casts nothing anyone can see —
+     the workspace rail needs to throw its shadow SIDEWAYS, onto the sidebar it
+     sits above. Two layers: a hairline contact line right at the edge, and a
+     short soft falloff. Deliberately short — a long one just muddies the first
+     40px of sidebar content. */
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.45), 8px 0 18px -8px rgba(0, 0, 0, 0.75);
+ /* The same cast, thrown LEFT. The canvas column sits above the sidebar too, so
+    it has to land on the sidebar's right edge exactly as the rail lands on its
+    left — otherwise the sidebar reads as recessed on one side and flush on the
+    other, which is not a shape any light source makes. */
+ /* NO contact hairline on this one, unlike --chrome-cast. The sidebar already
+    draws its own right border, so a 1px line here lands directly beside it and
+    reads as a double rule down the seam. Falloff only. */
+ --chrome-cast-left: -8px 0 18px -8px rgba(0, 0, 0, 0.75);
  --home-bg-image-opacity: 0.42;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.04) 72%, var(--canvas-base) 100%);
  /* Always-on radial vignette that darkens the edges and lifts the focal
@@ -159,6 +205,10 @@
  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.15);
  --shadow-window: 0 10px 24px -14px rgba(0, 0, 0, 0.18);
+ /* Sideways chrome elevation — see the dark-scheme note. Lighter and one step
+     tighter here: on a pale sidebar the same falloff reads as a smudge. */
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.10), 7px 0 14px -8px rgba(0, 0, 0, 0.22);
+ --chrome-cast-left: -7px 0 14px -8px rgba(0, 0, 0, 0.22);
  --home-bg-image-opacity: 0.34;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.08) 72%, var(--canvas-base) 100%);
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30, 24, 12, 0.10) 76%, rgba(20, 16, 8, 0.20) 100%);
@@ -274,8 +324,14 @@
  /* Hard offset scale — colour resolves from --neo-shadow-ink (per scheme).
      Shadow ink is decoupled from the border ink so dark mode keeps a crisp
      bright border but a quieter, recessive shadow instead of white glare. */
- --agensis-panel-alpha: 84%;
- --agensis-sidebar-alpha: 82%;
+ /* NOTE: these two are currently INERT. applyUiAppearanceSettings() sets both
+    tokens as an inline style on :root, and an inline declaration beats any
+    stylesheet rule, so a per-theme value here never reaches the page once
+    settings have applied. Raised to stay honest about intent rather than left
+    at stale numbers; neo gets its opacity from its explicit opaque-surface
+    rules instead, which is why nobody noticed. */
+ --agensis-panel-alpha: 92%;
+ --agensis-sidebar-alpha: 92%;
  --agensis-glass-blur: 10px;
  --neo-shadow-xs: 1.5px 1.5px 0 var(--neo-shadow-ink);
  /* chips, list items  */
@@ -606,7 +662,9 @@
  pointer-events: none;
 }
 
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger,
+/* .knowledge-context-trigger used to be a header button here; the Knowledge
+   control is now a submenu row inside the channel overflow menu and must not
+   pick up the gold button skin. */
 :root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
  border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
  color: var(--tw-gold-outline) !important;
@@ -617,12 +675,6 @@
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
   var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="tinyworld"] .knowledge-context-trigger [data-slot="badge"] {
- border-color: transparent !important;
- background: color-mix(in srgb, var(--tw-gold-outline) 18%, transparent) !important;
- box-shadow: none !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
@@ -885,7 +937,11 @@
  box-sizing: border-box;
  width: calc(100% - 5px) !important;
  max-width: calc(100% - 5px) !important;
- min-height: 2.55rem;
+ /* Reduced with the base row (2.55 -> 2.2rem). neo draws these as bordered
+    cards so it stays chunkier than the glass themes on purpose — but it has to
+    move too, or "reduce the spacing" would silently do nothing in the one
+    theme that needed it most. */
+ min-height: 2.2rem;
  border-width: 2px !important;
  border-color: var(--border) !important;
  background: var(--card) !important;
@@ -1068,26 +1124,121 @@
  line-height: 1;
 }
 
+/* The sidebar is the BOTTOM of the three shell columns — see the ladder in
+   src/lib/chromeDepth.ts. It used to sit at z-index 40, above both the workspace
+   rail and the canvas column, and carried the heaviest shadow stack in the app
+   (--shadow-md + --shadow-xl). Between them the seam read inside out: the panel
+   that should look recessed was the one throwing shadow over its neighbours.
+   It now sits under both and casts nothing outward; its right border does the
+   separating, the canvas column casts back onto it from the right, and its
+   floating windows carry their own elevation above it. (The rail used to cast
+   onto it from the left too; that shadow is gone — the rail is at the window's
+   edge with nothing behind it, so the cast described no surface and read as a
+   smudge.) */
 [data-sidebar-panel] {
  position: relative;
- z-index: 40;
+ z-index: var(--z-sidebar);
  border-color: color-mix(in srgb, var(--border) 62%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
-  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 74%), transparent) !important;
- box-shadow:
-  var(--shadow-md),
-  var(--shadow-xl);
+  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent) !important;
+ box-shadow: none;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  contain: layout paint;
 }
 
+/* The collapsed icon rail is the one exception to "sidebar is lowest", and the
+   `overflow: visible` below is why: each button's hover label (.sidebar-rail-label)
+   flies out to the RIGHT, across the canvas column. Left on the sidebar rung
+   those labels would paint behind whatever window sits under them — which, on a
+   collapsed sidebar, is the normal case. `contain: layout` makes this panel a
+   stacking context regardless, so the labels cannot escape it; the rung is the
+   only lever. It stays below --z-workspace-rail, which it never overlaps. */
 [data-sidebar-panel].sidebar-collapsed-panel {
+ z-index: var(--z-sidebar-flyout);
  contain: layout;
  overflow: visible !important;
 }
 
+/* The workspace switcher is the TOP of the three columns: the outermost frame of
+   the app, raised over the sidebar it borders. --chrome-cast is the only
+   sideways shadow token in the theme — every other one offsets downward, which
+   on a full-height column is invisible. */
+[data-workspace-rail] {
+ z-index: var(--z-workspace-rail);
+ /* No cast shadow. The rail sits at the far edge of the window with nothing
+    behind it to fall onto, so the shadow had no surface to describe — it read
+    as a smudge down the sidebar's left edge rather than as depth. The
+    z-index stays: the rail is still above the sidebar for stacking, it just
+    does not advertise it. The viewport keeps its cast (below), which is the
+    one that does real work — it makes the sidebar read as recessed between
+    two raised columns instead of tilted. */
+}
+
+/* The canvas column is above the sidebar as well, so it casts back onto it.
+   Both raised columns now throw onto the recessed one between them, which is
+   the whole point of putting the sidebar at the bottom of the ladder — without
+   this the sidebar had a shadow on its left edge and nothing on its right, and
+   read as tilted rather than recessed. `overflow` is left alone: a box-shadow
+   paints outside the box and does not need the clip relaxing. */
+[data-workspace-viewport] {
+ position: relative;
+ z-index: var(--z-content);
+ box-shadow: var(--chrome-cast-left);
+}
+
+/* Accent wash — a soft bleed of the active theme's accent in from the sidebar's
+   top-left corner, so the accent lives in the chrome and not only on controls.
+   Rendered by Sidebar.tsx as its own aria-hidden element (not a background
+   layer on the panel) for two reasons:
+     1. Per-theme rules repaint the panel's `background` outright — neo sets
+        `background: var(--card) !important` — which would wipe out any extra
+        background layer added to [data-sidebar-panel] itself.
+     2. It must stay INSIDE the sidebar's stacking context. [data-window-surface]
+        is a backdrop-filter surface; anything painted at the app root behind the
+        windows gets sampled by that blur and smeared across window *content*.
+        Scoped here, it can only ever tint the sidebar's own frame.
+   z-index -1 puts it above the panel's own background/blur but below every
+   child, so it tints the surface without touching text, icons or rows. The
+   panel already establishes a stacking context and an abspos containing block
+   (position:relative + contain, plus backdrop-filter on the non-neo families),
+   so the negative index cannot escape behind the panel.
+   Colour comes from --accent, which every family defines for both schemes:
+   classic/base sets it literally, neo + tinyworld + normal map it to the
+   per-theme --primary (see expand() in showcase/neoThemes.ts). */
+/* The @supports guard is load-bearing, not decoration: Lightning CSS compiles a
+   plain-colour fallback for every color-mix() it sees, and for a gradient that
+   fallback is the *opaque* accent — i.e. a solid slab of brand colour over the
+   whole sidebar on any engine without color-mix. Behind the guard, such an
+   engine simply gets no wash, which is the right degradation for a purely
+   decorative layer. */
+@supports (color: color-mix(in srgb, red, red)) {
+ .sidebar-accent-wash {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(
+   125% 80% at 0% 0%,
+   color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+   color-mix(in srgb, var(--accent) 6%, transparent) 38%,
+   transparent 72%
+  );
+ }
+
+ /* Light schemes sit on near-white chrome where the dark-mode strength reads as
+     a muddy stain rather than a wash, so halve it. */
+ :root[data-theme="light"] .sidebar-accent-wash {
+  background: radial-gradient(
+   125% 80% at 0% 0%,
+   color-mix(in srgb, var(--accent) 7%, transparent) 0%,
+   color-mix(in srgb, var(--accent) 3%, transparent) 38%,
+   transparent 72%
+  );
+ }
+}
 
 .sidebar-workspace-pill {
  min-height: 34px;
@@ -1208,6 +1359,17 @@
  width: 100%;
 }
 
+/* One line, always. When an agent starts working its elapsed chip appears
+   between the name and the "..." menu, and without this the menu drops to a
+   second line and the whole row grows — the list jumps every time any agent
+   starts or stops. Stated here rather than left to a utility class so it cannot
+   be lost to ordering: the row's job is to stay the same height whatever is
+   mounted inside it. The name truncates to make room; that is what
+   .sidebar-agent-primary's flex-basis:0 is for. */
+.sidebar-agent-row {
+ flex-wrap: nowrap !important;
+}
+
 .sidebar-section-trigger>span:not(.sidebar-section-count),
 .sidebar-folder-trigger>span:not(.sidebar-section-count),
 .sidebar-action-row>span:not(.sidebar-action-count),
@@ -1255,9 +1417,90 @@
  padding-right: 4.25rem !important;
 }
 
-.sidebar-section-trigger,
 .sidebar-folder-trigger {
- min-height: 2rem;
+ min-height: 1.7rem;
+}
+
+/* A SECTION NAME IS A LABEL, NOT A ROW.
+   It names the group beneath it ("Documents", then the documents), so it is
+   set small, uppercase and tracked, and it does not carry the height, weight
+   or hover fill of the items it introduces. Those still look clickable; this
+   reads as a heading, which is what stops a sidebar looking like one long
+   undifferentiated list of buttons. */
+.sidebar-section-trigger {
+ min-height: 1.35rem;
+ /* TWO STEPS BELOW THE UI FONT, measured on the app's own (Tailwind) type
+    scale: base 1rem -> sm 0.875rem -> xs 0.75rem.
+
+    Deliberately a rem, never a px. `html` is set to
+    `font-size: var(--agensis-ui-font-size)` (see the html rule near the end of
+    this file), so 1rem IS the size chosen in Settings -> Appearance -> UI font
+    size, clamped 12-18px. A rem therefore tracks that setting for free; a px
+    would only look right at the default.
+
+    That keeps the label a constant two steps under the base and one step under
+    the item rows it introduces (which are text-sm): 9px vs 10.5px at a 12px
+    setting, 11.25 vs 13.13 at 15, 13.5 vs 15.75 at 18 — smaller at every point
+    in the range.
+
+    Supersedes 0.8125rem, which was within a hair of the rows and so read as a
+    row rather than as their heading. Case, weight and colour still do most of
+    the separating; the size is what stops it competing. */
+ font-size: 0.75rem;
+ /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
+    heavier than the rows below it. The weight is what makes a small quiet
+    label still parse as a HEADING rather than as smaller text. */
+ font-weight: 700;
+ letter-spacing: 0.07em;
+ text-transform: uppercase;
+ /* Mixed toward --card, NOT toward transparent, and this is the whole point:
+    the sidebar paints bg-card/45, so it is already 45% card over the
+    wallpaper. Alpha text on top of that stacked a SECOND transparency, and the
+    wallpaper showed through the glyphs themselves — which is why these read as
+    dimmed-to-disabled on some themes while staying fine on others. Mixing
+    toward the surface keeps the label sitting back from the item rows without
+    ever letting the image behind it into the letterforms, so contrast no
+    longer depends on which wallpaper is loaded.
+
+    72%, not 62%: a section name is a BUTTON — it collapses the section — and
+    interactive text has to clear a readable contrast in its own right. It
+    still sits below the item rows (82%), which is what keeps a label reading
+    as a heading rather than as another row. */
+ color: color-mix(in srgb, var(--foreground) 72%, var(--card));
+}
+
+.sidebar-section-trigger:hover {
+ background: transparent !important;
+ color: var(--foreground);
+}
+
+/* The chevron is an affordance, not decoration: quiet until the section is
+   hovered, but never invisible — a collapsible with no visible handle is a
+   feature nobody finds. */
+.sidebar-section-chevron {
+ /* 0.5 was the same mistake one element over: opacity composites the wallpaper
+    through the handle. 0.7 keeps it quiet while staying findable — a
+    collapsible whose handle vanishes on a busy wallpaper is a feature nobody
+    finds. */
+ opacity: 0.7;
+ transition: opacity 120ms ease;
+}
+
+.sidebar-section-trigger:hover .sidebar-section-chevron {
+ opacity: 1;
+}
+
+/* A filled primary pill next to a quiet label reads as an alert, and every
+   section has one, so the sidebar became a column of badges all shouting
+   equally. At section level the count is reference information: plain tracked
+   numerals in the label's own colour. Item- and folder-level counts keep the
+   pill, where a number genuinely is news. */
+.sidebar-section-header .sidebar-section-trigger .sidebar-section-count {
+ background: transparent;
+ color: inherit;
+ font-weight: 600;
+ font-size: 0.6875rem !important;
+ opacity: 0.75;
 }
 
 /* All count badges share one absolute column (left of the menu gutter) so they
@@ -1317,24 +1560,57 @@
  min-width: 0;
 }
 
+/* No guide line under a section any more. It existed to tie children back to
+   a header that looked like a row; with a label above them the grouping is
+   already legible, and at the new shallow indent the line would run straight
+   through the item rows instead of beside them. Folder groups nested INSIDE a
+   section still indent, which is where hierarchy actually needs showing. */
 .sidebar-section-content::before {
- content: "";
- position: absolute;
- top: 0.25rem;
- bottom: 0.35rem;
- left: 0.7rem;
- width: 1px;
- background: color-mix(in srgb, var(--border) 70%, transparent);
+ content: none;
 }
 
-/* Neo uses bold ink for --border; soften the dense section guide-line so
-   it reads as a divider, not a hard rule. */
-:root[data-ui-theme="neo"] .sidebar-section-content::before {
- background: var(--border-subtle);
+/* (The neo softening of that guide line went with the line itself.) */
+
+/* ── Rules that bracket the collapsible sections (Slack's pattern) ───────────
+   A hairline with room either side. Used TWICE, so the five collapsible
+   sections read as one band: once below the fixed top block (Inbox, Desktop,
+   Tasks, Memory) and once below ARCHIVE, above the remaining standalone rows
+   (Skills, Activity, Agents, Users, Schedules, Applets). Those standalone rows
+   belong to no section; sitting flush under the ARCHIVE header they read as
+   Archive's contents, which is what was reported. See the placement note at the
+   lower element in Sidebar.tsx for why it is a sibling of the Archive
+   collapsible rather than pinned to its header.
+
+   A border TOKEN mixed toward transparent, never a literal colour: the sidebar
+   paints bg-card/45 over the user's wallpaper, so anything fixed would either
+   vanish on a light image or scratch a dark one. --border already tracks every
+   theme and both light/dark, and 60% keeps this a separation cue rather than a
+   line you read. flex-basis is stated because the sidebar list is a flex
+   column — without it a 1px child is the first thing to get squeezed. */
+.sidebar-group-divider {
+ flex: 0 0 1px;
+ height: 1px;
+ margin: 0.5rem 0.35rem 0.45rem;
+ background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* The brutalist themes draw hard 2px edges everywhere else, so a 60% hairline
+   reads as a rendering artefact beside them. They also inset every sidebar row
+   6px on the right for offset-shadow clearance (see the width rules below), so
+   the rule ends where the rows do instead of overhanging them. */
+:root[data-ui-theme="neo"] .sidebar-group-divider,
+:root[data-ui-theme="tinyworld"] .sidebar-group-divider {
+ flex-basis: 2px;
+ height: 2px;
+ margin-inline: 0 6px;
+ background: var(--border);
 }
 
 .sidebar-action-row {
- min-height: 2.15rem;
+ /* 1.8rem, down from 2.15. These rows are most of the sidebar, so their height
+    IS the sidebar's vertical rhythm — trimming anything else first would have
+    moved almost nothing. ~29px still clears a comfortable pointer target. */
+ min-height: 1.8rem;
  gap: 0.6rem;
  justify-content: flex-start !important;
  padding-inline: 0.75rem;
@@ -1353,7 +1629,7 @@
 }
 
 .sidebar-item-row {
- min-height: 1.7rem;
+ min-height: 1.5rem;
  gap: 0.45rem;
  justify-content: flex-start !important;
  padding-inline: 0.45rem 0.55rem;
@@ -1378,7 +1654,12 @@
  grid-template-columns: 1.75rem minmax(0, 1fr);
  align-items: center;
  gap: 0.55rem;
- width: 100%;
+ /* Share the row rather than claiming it. `width: 100%` made this button take the
+    full width of its flex parent, pushing the elapsed badge and the "..." menu
+    onto a second line. flex-basis 0 + min-width 0 lets the name truncate instead,
+    so the badge sits further left and the menu stays on the same row. */
+ flex: 1 1 0%;
+ min-width: 0;
  overflow: hidden;
 }
 
@@ -1802,40 +2083,37 @@
 }
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
-/* Floating thread widgets — macOS-style: hairline edge + a single soft,
-   theme-aware shadow. Kept deliberately tight (not the big --shadow-xl) so
-   stacked cards don't wash the gutter grey in light themes. */
-.thread-widget-card {
- box-shadow: var(--shadow-md);
-}
 
-.thread-widget-card:hover {
- box-shadow: var(--shadow-lg);
-}
+/* Thread widgets have NO FRAME. They used to be bordered, filled, rounded cards
+   with a --shadow-md (and a 2px ink border under [data-ui-theme="neo"], to match
+   [data-slot="card"]). The owner asked for the boxed treatment to go: the
+   widgets are sections of the rail, not three floating panels. What separates
+   one from the next is now a heading, a hairline under it and the grid's
+   gap-y-4 — all in ThreadWidgetRail.tsx. Nothing here re-adds a card, in ANY
+   theme scope, which is the point: a per-theme frame rule would put the box
+   back for exactly the people who chose that theme. */
 
-/* Neo/brutal: match the 2px ink border every other card surface gets
-   ([data-slot="card"], line ~638). These cards aren't data-slot cards, so
-   without this they stayed at Tailwind's 1px .border while the shadow already
-   resolved to the hard --neo-shadow-md offset — thin edge, heavy shadow. */
-:root[data-ui-theme="neo"] .thread-widget-card {
- border-width: 2px;
-}
+/* Too narrow to seat the rail beside the conversation (see
+   RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
+   squeezing the message column, the widgets float ON TOP of it. The wash below
+   is what tells the eye they're above the text.
 
-.chat-msg-jump-highlight {
- animation: chat-msg-jump 1.6s ease-out;
- border-radius: 0.5rem;
-}
-
-@keyframes chat-msg-jump {
-
- 0%,
- 30% {
-  background: color-mix(in srgb, var(--primary) 22%, transparent);
- }
-
- 100% {
-  background: transparent;
- }
+   It is now FULLY OPAQUE (it was 88%, over cards that each carried their own
+   bg-card). With the frames gone the wash is the only thing between a to-do and
+   the sentence underneath it, so a translucent one would show message text
+   through the widget. It still fades in from the left over 28px, so it reads as
+   a panel laid over the conversation rather than a hard vertical cut through
+   it. */
+.thread-widget-overlay[data-rail-layout="overlay"]::before {
+ content: '';
+ position: absolute;
+ inset: 0;
+ pointer-events: none;
+ background: linear-gradient(to right,
+   transparent,
+   var(--channel-surface, var(--card)) 28px);
+ backdrop-filter: blur(3px);
+ -webkit-backdrop-filter: blur(3px);
 }
 
 .chat-message-row[data-agent-message="true"] .chat-message-avatar,
@@ -1843,6 +2121,40 @@
  border: 1px solid color-mix(in srgb, var(--agent-accent) 62%, var(--border));
  background: color-mix(in srgb, var(--agent-accent) 16%, var(--muted));
  color: var(--agent-accent);
+}
+
+/* Huddle agent switcher: the avatars you click (or ⌘1…⌘9) to choose who your
+   voice goes to. The active chip wears the SAME accent recipe as that agent's
+   avatar in the transcript above, so "this one is listening" reads as the same
+   person rather than as a new piece of UI. Mixing against --border/--muted is
+   what makes one rule correct in light, dark and neo. */
+.huddle-agent-chip {
+ border: 1px solid transparent;
+ transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+/* Dimmed enough to read as secondary, not so far that the 10px shortcut digit
+   stops being legible — the number is the whole point of showing it. */
+.huddle-agent-chip[data-active="false"] {
+ opacity: 0.75;
+}
+
+.huddle-agent-chip[data-active="false"]:hover,
+.huddle-agent-chip[data-active="false"]:focus-visible {
+ opacity: 1;
+ background: var(--muted);
+}
+
+.huddle-agent-chip[data-active="true"] {
+ border-color: color-mix(in srgb, var(--agent-accent) 62%, var(--border));
+ background: color-mix(in srgb, var(--agent-accent) 16%, var(--muted));
+ color: var(--agent-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .huddle-agent-chip {
+  transition: none;
+ }
 }
 
 :root[data-theme="dark"] .channel-shell {
@@ -1874,7 +2186,7 @@
 }
 
 [data-window-surface] {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
@@ -1919,16 +2231,16 @@
 /* Single shared glass surface — same frosting for every floating panel:
    search/command dialog, presence popover, mention pickers, composer. */
 .agensis-glass-panel {
- background: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
 }
 
 :root[data-ui-theme="tinyworld"],
 :root[data-ui-theme="neo"] {
- --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent);
- --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 76%), transparent);
- --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 76%) - 18%), transparent);
+ --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent);
+ --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent);
+ --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 88%) - 18%), transparent);
 }
 
 :root[data-ui-theme="tinyworld"] [data-window-surface],
@@ -2469,6 +2781,15 @@ button[data-slot="badge"][data-variant="default"]:hover {
  font-size: 0.78rem !important;
 }
 
+/* Section labels take the same two-steps-down 0.75rem as every other theme.
+   Split out because the rule above is shared with folder triggers and item rows
+   — moving that one would resize the whole neo sidebar — and it carries
+   !important, so nothing less wins here. Still clearly under neo's own rows
+   (0.78rem), which is the point. */
+:root[data-ui-theme="neo"] .sidebar-section-trigger {
+ font-size: 0.75rem !important;
+}
+
 .file-tree {
  display: grid;
  gap: 0.55rem;
@@ -2585,6 +2906,17 @@ button[data-slot="badge"][data-variant="default"]:hover {
 .chat-mention-link:focus-visible {
  text-decoration: underline;
  outline: none;
+}
+
+/* @channel — a mention of the room. Reads as a mention, but there is no profile
+   behind it to open, so it takes the colour and weight without the affordance. */
+.chat-mention-everyone {
+ cursor: default;
+}
+
+.chat-mention-everyone:hover,
+.chat-mention-everyone:focus-visible {
+ text-decoration: none;
 }
 
 .chat-markdown {
@@ -3448,6 +3780,31 @@ body {
  }
 }
 
+/* ---- dark-mode outer ring on light-lined controls -------------------------
+   Lifted from the presence/avatar cluster, which is the only place that
+   already reads right on a mid-tone panel: an avatar carries a light 1px
+   INNER line (avatar.tsx — `after:border after:border-border`) *and* a dark
+   OUTER ring (`ring-2 ring-background` on AvatarGroup / AvatarBadge). The
+   outer ring is what stops the control dissolving into the surface behind it.
+
+   One token + one utility instead of a per-site box-shadow. The ring is the
+   page colour, held slightly translucent so it composites over whatever
+   surface the control happens to sit on. It resolves sensibly for every
+   theme: each dark seed's `paper` becomes --background, and every derived
+   surface (card / raised / muted / popover) is paper lifted toward primary —
+   see expand() in showcase/neoThemes.ts — so --background is always the
+   darkest colour in a dark palette, never lighter than the control's fill.
+
+   Light mode is deliberately untouched: the utility only emits inside
+   [data-theme="dark"], so in light mode the class is inert. */
+:root[data-theme="dark"] {
+ --control-outer-ring: color-mix(in srgb, var(--background) 82%, transparent);
+}
+
+@utility control-outer-ring {
+ @apply dark:ring-1 dark:ring-[color:var(--control-outer-ring)];
+}
+
 .presence-avatar-group {
  gap: 0;
  isolation: isolate;
@@ -3653,7 +4010,12 @@ select {
  font-family: var(--agensis-ui-font-family, 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
 }
 
-.sidebar-section-trigger,
+/* .sidebar-section-trigger is deliberately NOT in this list any more. This rule
+   lifts INTERACTIVE text to stay legible over glass; a section name is a label
+   and wants to sit back from the items it introduces, so it owns its colour in
+   the base block above. Left here it would have won on !important and made
+   every section name as loud as the rows beneath it — the exact flattening the
+   label treatment exists to undo. */
 .sidebar-action-row,
 .sidebar-search,
 .home-workspace-composer textarea,
@@ -3662,7 +4024,6 @@ select {
  color: color-mix(in srgb, var(--foreground) 82%, transparent) !important;
 }
 
-.sidebar-section-trigger:hover,
 .sidebar-action-row:hover,
 .sidebar-action-row[data-active="true"],
 .home-suggestion-pill:hover {
@@ -3670,14 +4031,14 @@ select {
 }
 
 .home-workspace-composer {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  border-color: color-mix(in srgb, var(--border-strong) 82%, transparent) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
 }
 
 .home-suggestion-pill {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
  border-color: color-mix(in srgb, var(--border) 82%, transparent) !important;
 }
 
@@ -3767,14 +4128,17 @@ select {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-right: 6px !important;
- margin-bottom: 6px !important;
+ margin-bottom: 4px !important;
  border-width: 2px !important;
  border-style: solid !important;
  border-color: var(--border) !important;
  border-radius: 9px !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- min-height: 2.55rem;
+ /* 2rem, down from 2.55. neo keeps the card frame — that is the theme's
+    identity — but the thing inside it is now a small label, and 2.55rem was
+    sized for the row it used to be. */
+ min-height: 2rem;
  padding-inline: 0.3rem 0.2rem !important;
 }
 
@@ -3792,7 +4156,16 @@ select {
  background: transparent !important;
  border: none !important;
  box-shadow: none !important;
- font-size: 0.82rem !important;
+ /* Matches the base label scale. Neo keeps its card FRAME around the header —
+    that is the theme's identity and worth preserving — but the text inside it
+    is the same tracked label as everywhere else, so section names read at one
+    size across every theme. Kept in step with the base rule: this selector is
+    more specific AND !important, so whatever it says is what neo actually
+    renders — if the base .sidebar-section-trigger size moves, move this too or
+    neo silently keeps the old one. It was 0.82rem once, which left neo with
+    section names larger than its own items. */
+ font-size: 0.75rem !important;
+ letter-spacing: 0.07em;
 }
 
 :root[data-ui-theme="neo"] .sidebar-section-header .sidebar-section-trigger:hover {
@@ -3807,7 +4180,10 @@ select {
  border-color: var(--border) !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- min-height: 2.3rem !important;
+ /* Reduced with the base rows. Every theme that overrides a sidebar height
+    has to move, or the setting only appears to work on whichever theme the
+    person changing it happened to be using. */
+ min-height: 2rem !important;
  font-size: 0.82rem !important;
 }
 
@@ -3829,7 +4205,7 @@ select {
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
  border-radius: 10px !important;
- min-height: 2.4rem;
+ min-height: 2rem;
  color: var(--text-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
@@ -3899,7 +4275,7 @@ select {
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 var(--tw-control-bevel),
   var(--tw-control-shadow) !important;
- min-height: 2.15rem !important;
+ min-height: 1.9rem !important;
 }
 
 :root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger {
@@ -3933,10 +4309,10 @@ select {
 
 /* Final glass binding: panel translucency slider must affect every major panel. */
 .channel-shell {
- --channel-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-header: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-composer: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
- --channel-side: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ --channel-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-header: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-composer: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
+ --channel-side: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
 }
 
 .channel-shell,
@@ -3969,7 +4345,7 @@ select {
 [data-slot="popover-content"],
 [data-slot="dropdown-menu-content"],
 [data-slot="card"] {
- background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 76%), transparent) !important;
+ background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
 }
 
 /* Touch: canvas objects and their resize handles are dragged directly, so the
@@ -4002,14 +4378,28 @@ select {
  font-weight: 700 !important;
  border-width: 2px !important;
  border-color: var(--neo-edge) !important;
- box-shadow: var(--neo-shadow-xs) !important;
+ /* Every neo badge rule below has to win with !important, which would otherwise
+    wipe out the shared `control-outer-ring` utility — Tailwind v4 paints ring-*
+    through box-shadow, so an !important box-shadow drops the ring instead of
+    layering with it. Compose it in as the first layer of the neo shadow: the
+    default is an invisible zero-spread shadow, and only badges that opted into
+    the utility (the `outline` variant, see badge.tsx) get a real ring. */
+ --neo-badge-ring: 0 0 0 0 transparent;
+ box-shadow: var(--neo-badge-ring), var(--neo-shadow-xs) !important;
+}
+
+/* The ring is a dark-mode-only treatment (see --control-outer-ring above), and
+   this selector must out-specify the default set on the base rule. */
+:root[data-ui-theme="neo"][data-theme="dark"] [data-slot="badge"].control-outer-ring:not([data-variant="ghost"]):not([data-variant="link"]) {
+ --neo-badge-ring: 0 0 0 1px var(--control-outer-ring);
 }
 
 /* profile flavours — square + airy for editorial/terminal, chunkier for the
    loud profiles. (No rotation here: badges sit inline in dense UI.) */
 :root[data-ui-theme="neo"][data-neo-style="editorial"] [data-slot="badge"] {
  border-radius: 0 !important;
- box-shadow: none !important;
+ /* No neo drop shadow in this flavour, but keep the outer ring layer. */
+ box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent) !important;
  letter-spacing: 0.12em;
 }
 
@@ -4020,7 +4410,7 @@ select {
 
 :root[data-ui-theme="neo"][data-neo-style="heavy"] [data-slot="badge"],
 :root[data-ui-theme="neo"][data-neo-style="sticker"] [data-slot="badge"] {
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent), var(--neo-shadow-sm) !important;
 }
 
 /* ---- pill switch with a bordered circular knob (skill signature) ----------- */
@@ -4172,11 +4562,21 @@ select {
  padding: 0 !important;
  /* Desktop only: push the pill past the macOS traffic lights (0px on web). */
  padding-left: var(--sidebar-titlebar-inset, 0px) !important;
- /* `padding: 0` above wiped the base header's 8px top pad (pt-2). Native
-     traffic lights are fixed by the titlebar style and can't be repositioned
-     per-theme, so restore the 8px here: it drops the brutal header content down
-     8px, which reads as the traffic lights sitting ~8px higher against it. */
- padding-top: 8px !important;
+ /* `padding: 0` above wiped the base header's 8px top pad (pt-2), and this is
+     also what puts the header on the SAME line as the first window's title bar
+     to its right — the two are meant to read as one chrome band across the top
+     of the shell. That bar is h-10 (2.5rem, with its own 2.5px divider inside
+     it) and its box starts 11px down: WORKSPACE_CHROME_GAP (8px, the canvas
+     column's padding) + [data-floating-window]'s 2px frame + the window
+     surface's 1px border. The sidebar is flush to the shell's top edge, so
+     2.5px of that 11px is already spent on [data-sidebar-panel]'s own top
+     border above — which is why this is 8.5px and not 8px, and why a plain 8px
+     left the two bars stepped by 1.75px where they meet. Height is pinned for
+     the same reason: the header's own content must be 2.5rem tall (divider
+     included) so both bars end on one line. */
+ box-sizing: border-box !important;
+ padding-top: 8.5px !important;
+ height: calc(2.5rem + 8.5px) !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-pill {
@@ -4185,6 +4585,10 @@ select {
  box-shadow: none !important;
  border-radius: 0 !important;
  padding: 0.25rem 0.5rem !important;
+ /* Fill the band the header just pinned, so the workspace name is centred on
+     the same axis as the window title beside it rather than a pixel above it —
+     the pill's own 2.1rem min-height is shorter than the band. */
+ min-height: 100% !important;
 }
 
 :root[data-ui-theme="neo"] [data-sidebar-titlebar] .sidebar-workspace-switch {
@@ -4223,7 +4627,24 @@ select {
 :root[data-ui-theme="neo"] [data-slot="popover-content"],
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="card"],
-:root[data-ui-theme="neo"] [data-sidebar-panel] {
+:root[data-ui-theme="neo"] [data-sidebar-panel],
+/* The workspace rail belongs in this list too. It carries `bg-card/85` for the
+   glass families, and left out of here it stayed 85% translucent while the
+   sidebar directly beside it went fully opaque — two adjacent chrome columns
+   disagreeing about whether the wallpaper shows through, which is exactly the
+   seam you see first. Brutal is flat ink on flat colour; a translucent rail is
+   a different design language sharing an edge with this one. */
+:root[data-ui-theme="neo"] [data-workspace-rail],
+/* `.agensis-glass-panel` is the SHARED floating-panel surface (the command
+   palette, the mention pickers, the composer, and the presence popover — the
+   "Shared users and agents" panel). Every one of those is chrome, but the class
+   only ever had the 76%-alpha + blur treatment, and a hand-rolled portal like
+   the presence popover carries no [data-slot="popover-content"] to be caught by
+   the entry three lines up — so it stayed glass while every panel around it went
+   opaque, and the wallpaper and the sidebar behind it read straight through the
+   panel body. Listing the class itself, rather than one more per-panel hook, is
+   what stops the next shared-glass panel arriving translucent again. */
+:root[data-ui-theme="neo"] .agensis-glass-panel {
  background: var(--card) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;

@@ -1,3 +1,12 @@
+import { clearAuthNotice, setAuthNotice } from './authNotice';
+import {
+  decideAuthResponse,
+  isUsableStoredSession,
+  SESSION_EXPIRED_MESSAGE,
+  sessionDiscardMessage,
+  sessionValidity,
+} from './authSession';
+
 const HOSTED_AGENSIS_BACKEND_BASE = 'https://agensis-backend.fly.dev';
 
 const BACKEND_BASE = (() => {
@@ -190,7 +199,10 @@ function getWsUrl() {
   return '/backend/ws';
 }
 
-function getStoredSession(): SessionLike | null {
+// The raw localStorage read, with NO validation. Only two callers should use
+// it: the validating reader below, and the "is there anything to clear?" guard
+// on the 401 path (which must not itself trigger a clear and recurse).
+function readRawStoredSession(): SessionLike | null {
   if (typeof localStorage === 'undefined') return null;
   try {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -200,12 +212,59 @@ function getStoredSession(): SessionLike | null {
   }
 }
 
+// The only session reader the app should use. A stored blob that is structurally
+// broken or past its TTL is DISCARDED rather than returned — returning it is what
+// produced the "zombie" state, where a fully-rendered workspace sat on top of a
+// token every request would reject.
+//
+// This cannot detect revocation or a bad signature (no secret in the browser);
+// those surface as a 401 and are handled by `noteBackendResponse` below.
+function getStoredSession(): SessionLike | null {
+  const stored = readRawStoredSession();
+  if (!stored) return null;
+  const validity = sessionValidity(stored);
+  if (validity === 'valid') return stored;
+  discardStoredSession(sessionDiscardMessage(validity));
+  return null;
+}
+
 function setStoredSession(session: SessionLike | null, event: string) {
   if (typeof localStorage !== 'undefined') {
     if (session) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
     else localStorage.removeItem(AUTH_STORAGE_KEY);
   }
+  // A new session supersedes whatever went wrong last time.
+  if (session) clearAuthNotice();
   authListeners.forEach((listener) => listener(event, session));
+}
+
+// Throw the stored session away and tell the app why. Idempotent by
+// construction: once storage is empty there is nothing to clear, so repeated
+// calls (e.g. from a burst of concurrent 401s) return immediately and the
+// notice/listener fan-out fires exactly once.
+function discardStoredSession(message: string) {
+  if (!readRawStoredSession()) return;
+  setAuthNotice(message);
+  setStoredSession(null, 'SIGNED_OUT');
+}
+
+// THE 401 choke point. Every backend response the client sees passes through
+// here — the helpers in this file call it directly, and the global fetch
+// interceptor installed at the bottom of this file covers the raw `fetch` +
+// `apiAuthHeaders()` call sites scattered across hooks and components.
+//
+// The decision itself is pure and unit-tested (see lib/authSession.ts); this
+// function only supplies the ambient facts and performs the effect.
+function noteBackendResponse(path: unknown, status: number, hadAuthHeader: boolean) {
+  if (status !== 401) return;
+  const decision = decideAuthResponse({
+    path,
+    status,
+    hadAuthHeader,
+    hasStoredSession: Boolean(readRawStoredSession()),
+  });
+  if (decision !== 'end-session') return;
+  discardStoredSession(SESSION_EXPIRED_MESSAGE);
 }
 
 function authHeaders(): Record<string, string> {
@@ -213,13 +272,39 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Shared tail of every "we just signed in" path. A sign-in that returns a user
+// but no usable token must FAIL, loudly — storing it would render a logged-in
+// shell whose every request 401s, which is the exact bug this file is fixing.
+// Applying the same predicate here as on the localStorage read keeps the two
+// from disagreeing (which would otherwise show up as a sign-in that
+// immediately bounces back to the login screen with no explanation).
+function storeMintedSession(
+  token: unknown,
+  user: SessionLike['user'],
+): { data: { user: SessionLike['user'] | null; session: SessionLike | null }; error: { message: string; code?: string | null } | null } {
+  const session = { access_token: token as string, user } as SessionLike;
+  if (!isUsableStoredSession(session)) {
+    return {
+      data: { user: null, session: null },
+      error: { message: 'Sign-in did not return a usable session. Please try again.', code: null },
+    };
+  }
+  setStoredSession(session, 'SIGNED_IN');
+  return {
+    data: { user: session.user, session },
+    error: null,
+  };
+}
+
 async function postJson<T = unknown>(path: string, body: unknown): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }> {
   try {
+    const headers = authHeaders();
     const response = await fetch(backendUrl(path), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body ?? {}),
     });
+    noteBackendResponse(path, response.status, Boolean(headers.Authorization));
 
     const payload = await response.json().catch(() => ({ data: null, error: { message: 'Invalid JSON response' } }));
     if (!response.ok) {
@@ -567,6 +652,30 @@ class RealtimeManager {
     this.ensureConnected();
   }
 
+  /**
+   * Raw binary onto the realtime socket — microphone audio for the huddle
+   * speech-to-text relay, and nothing else today.
+   *
+   * Deliberately NOT queued like `send`. A control frame is worth holding until
+   * the socket comes back; a 50ms slice of audio from ten seconds ago is not,
+   * and replaying a buffer of it into a live transcription would produce a
+   * garbled utterance the agent then answers. Dropped is correct.
+   */
+  sendBinary(data: ArrayBufferLike): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.socket.send(data);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Is the socket usable right now? Voice needs to know before it opens a mic. */
+  isOpen(): boolean {
+    return this.socket?.readyState === WebSocket.OPEN;
+  }
+
   private flushPending() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     while (this.pendingMessages.length > 0) {
@@ -737,6 +846,34 @@ export function onDeployPublished(callback: (payload: DeployPublishedPayload) =>
   });
 }
 
+// Huddle voice rides the realtime socket rather than opening one of its own.
+//
+// The Deepgram key must never reach a browser and the account cannot mint a
+// short-lived one (see shared/voice-core.cjs), so the server holds the key and
+// relays the audio. This socket is already authenticated, already open for the
+// length of the call, already pinged for liveness and already torn down on
+// close — a second connection would have to re-earn all four.
+export const voiceRealtime = {
+  /** Ask the server to open a Deepgram stream for this socket. */
+  start(sampleRate: number) {
+    realtimeManager.send({ action: 'voice_stt_start', sampleRate });
+  },
+  stop() {
+    realtimeManager.send({ action: 'voice_stt_stop' });
+  },
+  /** One slice of microphone PCM. Returns false when it was dropped. */
+  sendAudio(data: ArrayBufferLike): boolean {
+    return realtimeManager.sendBinary(data);
+  },
+  isOpen(): boolean {
+    return realtimeManager.isOpen();
+  },
+  /** Server -> client transcription events. Returns an unsubscribe function. */
+  onEvent(callback: (payload: unknown) => void): () => void {
+    return realtimeManager.onSystemEvent('voice_stt', callback);
+  },
+};
+
 export const backendClient: BackendClient = {
   from(table: string) {
     return new QueryBuilder(table);
@@ -774,15 +911,7 @@ export const backendClient: BackendClient = {
           error: result.error,
         };
       }
-      const session: SessionLike = {
-        access_token: result.data.token,
-        user: result.data.user,
-      };
-      setStoredSession(session, 'SIGNED_IN');
-      return {
-        data: { user: session.user, session },
-        error: null,
-      };
+      return storeMintedSession(result.data.token, result.data.user);
     },
     async signInWithPassword({ email, password }: { email: string; password: string }) {
       const result = await postJson<{ user: SessionLike['user']; token: string }>('/backend/auth/signin', { email, password });
@@ -792,15 +921,7 @@ export const backendClient: BackendClient = {
           error: result.error,
         };
       }
-      const session: SessionLike = {
-        access_token: result.data.token,
-        user: result.data.user,
-      };
-      setStoredSession(session, 'SIGNED_IN');
-      return {
-        data: { user: session.user, session },
-        error: null,
-      };
+      return storeMintedSession(result.data.token, result.data.user);
     },
     async signInWithOAuthSession() {
       // The OAuth callback must hit the Netlify function (same origin), not the
@@ -812,28 +933,26 @@ export const backendClient: BackendClient = {
       const oauthUrl = (typeof window !== 'undefined' && window.location.protocol.startsWith('http'))
         ? '/backend/auth/oauth'
         : backendUrl('/backend/auth/oauth');
+      const oauthHeaders = authHeaders();
       try {
         const response = await fetch(oauthUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          headers: { 'Content-Type': 'application/json', ...oauthHeaders },
           body: JSON.stringify({}),
         });
+        noteBackendResponse(oauthUrl, response.status, Boolean(oauthHeaders.Authorization));
         const payload = await response.json().catch(() => null);
+        // The success guard used to check only `payload.data.user`, then read
+        // `payload.data.token` regardless — a response carrying a user and no
+        // token stored `access_token: undefined` and reported success. Same
+        // zombie state, different door. Both are required now.
         if (!response.ok || !payload?.data?.user) {
           return {
             data: { user: null, session: null },
             error: payload?.error || { message: 'OAuth sign-in failed', code: null },
           };
         }
-        const session: SessionLike = {
-          access_token: payload.data.token,
-          user: payload.data.user,
-        };
-        setStoredSession(session, 'SIGNED_IN');
-        return {
-          data: { user: session.user, session },
-          error: null,
-        };
+        return storeMintedSession(payload.data.token, payload.data.user);
       } catch (error) {
         return {
           data: { user: null, session: null },
@@ -851,6 +970,10 @@ export const backendClient: BackendClient = {
       // { error } shape rather than throwing, so a flaky connection never blocks
       // the local sign-out from completing.
       await postJson('/backend/auth/signout', {});
+      // A deliberate sign-out is not a failure — drop any pending "session
+      // expired" / "social login failed" notice so it can't resurface on the
+      // login screen the user just asked for.
+      clearAuthNotice();
       setStoredSession(null, 'SIGNED_OUT');
       return { error: null };
     },
@@ -902,10 +1025,11 @@ export interface SystemCapabilities {
 // still has its client-side built-ins.
 export async function getSlashCommands(workspaceId?: string): Promise<import('./slashCommands').SlashItem[]> {
   if (!workspaceId) return [];
+  const path = `/backend/system/slash-commands?workspaceId=${encodeURIComponent(workspaceId)}`;
+  const headers = apiAuthHeaders();
   try {
-    const response = await fetch(apiUrl(`/backend/system/slash-commands?workspaceId=${encodeURIComponent(workspaceId)}`), {
-      headers: apiAuthHeaders(),
-    });
+    const response = await fetch(apiUrl(path), { headers });
+    noteBackendResponse(path, response.status, Boolean(headers.Authorization));
     const payload = await response.json().catch(() => null);
     if (!response.ok || payload?.error || !Array.isArray(payload?.data)) return [];
     return payload.data as import('./slashCommands').SlashItem[];
@@ -916,10 +1040,11 @@ export async function getSlashCommands(workspaceId?: string): Promise<import('./
 
 export async function getSystemCapabilities(workspacePath?: string): Promise<SystemCapabilities | null> {
   const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : '';
+  const path = `/backend/system/capabilities${query}`;
+  const headers = apiAuthHeaders();
   try {
-    const response = await fetch(apiUrl(`/backend/system/capabilities${query}`), {
-      headers: apiAuthHeaders(),
-    });
+    const response = await fetch(apiUrl(path), { headers });
+    noteBackendResponse(path, response.status, Boolean(headers.Authorization));
     const payload = await response.json().catch(() => null);
     if (!response.ok || payload?.error || !payload?.data) return null;
     return payload.data as SystemCapabilities;
@@ -927,3 +1052,69 @@ export async function getSystemCapabilities(workspacePath?: string): Promise<Sys
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Global fetch interceptor — the reason the 401 choke point is airtight.
+//
+// `postJson` covers the query builder and RPC, but ~60 raw `fetch(apiUrl(...),
+// { headers: apiAuthHeaders() })` call sites live across 32 other files (chat
+// streaming, settings, agents, inbox, vault, uploads…). `apiAuthHeaders()`
+// builds the request and then never sees the response, so it cannot be the
+// choke point. Rewriting every one of those call sites would be a large, easy-
+// to-get-wrong diff that still would not catch the next one somebody adds.
+//
+// Wrapping `fetch` once, here, catches all of them and every future one, in
+// ~25 lines. The wrapper is deliberately inert: it awaits the original, hands
+// the response straight back, and only *observes* the status. Every decision
+// about what a 401 means is delegated to the pure, unit-tested
+// `decideAuthResponse`, which ignores anything that is not a 401 on an
+// Authorization-bearing request to a non-login /backend/ path.
+// ---------------------------------------------------------------------------
+
+type InterceptedFetch = typeof fetch & { __agensisAuthInterceptor?: true };
+
+function requestPathOf(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (typeof URL !== 'undefined' && input instanceof URL) return input.toString();
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+  return '';
+}
+
+function headersHaveAuth(headers: HeadersInit | undefined): boolean | null {
+  if (!headers) return null;
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) return headers.has('authorization');
+  if (Array.isArray(headers)) return headers.some(([key]) => String(key).toLowerCase() === 'authorization');
+  if (typeof headers === 'object') {
+    return Object.keys(headers).some(key => key.toLowerCase() === 'authorization');
+  }
+  return null;
+}
+
+function requestHadAuthHeader(input: RequestInfo | URL, init?: RequestInit): boolean {
+  // `init.headers` wins over a Request's own headers per the fetch spec, so
+  // only fall back to the Request when init supplied none at all.
+  const fromInit = headersHaveAuth(init?.headers);
+  if (fromInit !== null) return fromInit;
+  if (typeof Request !== 'undefined' && input instanceof Request) return input.headers.has('authorization');
+  return false;
+}
+
+function installAuthResponseInterceptor() {
+  const current = globalThis.fetch as InterceptedFetch | undefined;
+  // No fetch (SSR/older test env) or already wrapped (HMR re-evaluates modules).
+  if (typeof current !== 'function' || current.__agensisAuthInterceptor) return;
+  const original = current.bind(globalThis) as typeof fetch;
+  const patched: InterceptedFetch = async (input, init) => {
+    const response = await original(input, init);
+    try {
+      noteBackendResponse(requestPathOf(input), response.status, requestHadAuthHeader(input, init));
+    } catch {
+      // Observing a response must never break the request that produced it.
+    }
+    return response;
+  };
+  patched.__agensisAuthInterceptor = true;
+  (globalThis as { fetch: typeof fetch }).fetch = patched;
+}
+
+installAuthResponseInterceptor();

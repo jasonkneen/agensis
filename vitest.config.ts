@@ -7,6 +7,10 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['tests/unit/**/*.test.ts'],
     globals: false,
+    // Same preload the node:test runner gets via `--require`: a test process
+    // sees a known environment, never the machine's `.env`. See the header of
+    // tests/helpers/test-env.cjs.
+    setupFiles: ['./tests/helpers/test-env.cjs'],
   },
   resolve: {
     alias: {

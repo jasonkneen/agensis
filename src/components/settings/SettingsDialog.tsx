@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Bell,
@@ -28,7 +29,9 @@ import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getSt
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import { WORKSPACE_UNAVAILABLE, describeWriteFailure } from '../../lib/writeFeedback';
 import { useWorkspaceVault } from '../../hooks/useWorkspaceVault';
+import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@/components/ui/badge';
@@ -84,7 +87,7 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
-  { id: 'secrets', label: 'Secret keys', icon: <KeyRound /> },
+  { id: 'secrets', label: 'Vault', icon: <KeyRound /> },
   { id: 'usage', label: 'Usage', icon: <Gauge /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
@@ -275,7 +278,7 @@ function GeneralPanel({
   return (
     <FieldGroup>
       <ReadOnlyValue label="Account" value={userEmail || 'Not signed in'} />
-      <ReadOnlyValue label="Active workspace" value={workspaceName || 'None'} />
+      <ReadOnlyValue label="Active desktop" value={workspaceName || 'None'} />
       <Field>
         <FieldLabel htmlFor="workspace-local-path">Project folder</FieldLabel>
         <InputGroup>
@@ -411,7 +414,7 @@ function AppearancePanel({
   onThemeChange: (mode: ThemeMode) => void;
 }) {
   const initialSettings = getSettings();
-  const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? 0.42) * 100));
+  const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
@@ -460,7 +463,7 @@ function AppearancePanel({
   ];
 
   useEffect(() => {
-    setBackgroundOpacity(Math.round((workspace?.background_opacity ?? 0.42) * 100));
+    setBackgroundOpacity(Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   }, [workspace?.id, workspace?.background_opacity]);
 
   const updateAppearanceSetting = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
@@ -838,7 +841,7 @@ function AppearancePanel({
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Workspace background</FieldLabel>
+          <FieldLabel>Desktop background</FieldLabel>
           <Button type="button" variant="outline" size="sm" onClick={() => updateBackgroundImage('')} disabled={!workspace || !backgroundImage}>
             Auto
           </Button>
@@ -884,11 +887,11 @@ function AppearancePanel({
             onChange={handleUploadBackground}
           />
         </div>
-        <FieldDescription>Pick a bundled workspace image or upload a local image for this workspace.</FieldDescription>
+        <FieldDescription>Pick a bundled image or upload a local one. Wallpaper belongs to this desktop, not to the whole workspace.</FieldDescription>
       </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Workspace background opacity</FieldLabel>
+          <FieldLabel>Desktop background opacity</FieldLabel>
           <Badge variant="secondary">{backgroundOpacity}%</Badge>
         </div>
         <Slider
@@ -902,9 +905,77 @@ function AppearancePanel({
             onUpdateWorkspace(workspace.id, { background_opacity: (value[0] ?? backgroundOpacity) / 100 });
           }}
         />
-        <FieldDescription>Stored on this workspace so every device opens it with the same background strength.</FieldDescription>
+        <FieldDescription>Stored on this desktop so every device opens it with the same background strength.</FieldDescription>
       </Field>
     </FieldGroup>
+  );
+}
+
+function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
+  const { gateways, createGateway, updateGateway, deleteGateway } = useGateways(workspaceId);
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [gwModel, setGwModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    if (!name.trim() || !baseUrl.trim() || busy) return;
+    setBusy(true);
+    try {
+      const created = await createGateway({ name: name.trim(), base_url: baseUrl.trim(), model: gwModel.trim(), api_key: apiKey });
+      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Field>
+      <FieldLabel>Inference gateways</FieldLabel>
+      <FieldDescription>
+        Route a chat through an external OpenAI-compatible endpoint. The API key is stored
+        encrypted and never shown again. Select a gateway from the model picker in any chat.
+      </FieldDescription>
+      {gateways.length > 0 && (
+        <div className="mt-2 space-y-1.5">
+          {gateways.map(gateway => (
+            <div key={gateway.id} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-sm">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{gateway.name}</div>
+                <div className="truncate text-xs text-muted-foreground" title={gateway.base_url}>
+                  {gateway.model || 'no model'} · {gateway.base_url}{gateway.has_key ? '' : ' · no key'}
+                </div>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => { const key = window.prompt(`New API key for ${gateway.name} (leave blank to keep current):`); if (key) void updateGateway(gateway.id, { api_key: key }); }}
+                aria-label={`Rotate key for ${gateway.name}`}
+                title="Rotate API key"
+              >
+                <KeyRound />
+              </Button>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => void deleteGateway(gateway.id)} aria-label={`Delete ${gateway.name}`}>
+                <Trash2 />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 grid gap-2">
+        <Input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. OpenRouter)" className="h-8" />
+        <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="Base URL (e.g. https://openrouter.ai/api/v1)" className="h-8 font-mono text-xs" />
+        <Input value={gwModel} onChange={e => setGwModel(e.target.value)} placeholder="Model id (e.g. openai/gpt-4o-mini)" className="h-8 font-mono text-xs" />
+        <div className="flex items-center gap-2">
+          <Input value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" placeholder="API key" className="h-8 flex-1 font-mono text-xs" />
+          <Button type="button" variant="secondary" size="sm" onClick={add} disabled={busy || !name.trim() || !baseUrl.trim()}>
+            <Plus data-icon="inline-start" /> Add
+          </Button>
+        </div>
+      </div>
+    </Field>
   );
 }
 
@@ -976,6 +1047,8 @@ function AIPanel({ workspaceId }: { workspaceId: string | null }) {
           </FieldDescription>
         </div>
       </Field>
+
+      <GatewaysManager workspaceId={workspaceId} />
     </FieldGroup>
   );
 }
@@ -1087,21 +1160,31 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
   const [flowsOpen, setFlowsOpen] = useState(false);
 
   const generate = async () => {
-    if (!workspaceId) return;
+    // No workspace id means the workspace list never loaded. The button used to
+    // be silently `disabled` in that state, so clicking it did nothing at all
+    // and nothing said why. Say why instead.
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     setBusy(true); setErr(null);
     try {
       const next = await generateMcpToken(workspaceId);
       setInfo(next);
       setAuto(next.autoApprove);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to generate token');
+      setErr(describeWriteFailure('generate a connection token', e).description);
     } finally { setBusy(false); }
   };
 
   const toggleAuto = async (next: boolean) => {
-    if (!workspaceId) return;
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     setAuto(next);
-    try { await setMcpAutoApprove(workspaceId, next); } catch { setAuto(!next); }
+    setErr(null);
+    try {
+      await setMcpAutoApprove(workspaceId, next);
+    } catch (e) {
+      // The switch snapping back on its own is not an explanation.
+      setAuto(!next);
+      setErr(describeWriteFailure('change auto-approve', e).description);
+    }
   };
 
   const copy = async (key: string, value: string) => {
@@ -1117,7 +1200,7 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
       </FieldDescription>
 
       {!info ? (
-        <Button type="button" onClick={generate} disabled={busy || !workspaceId}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
+        <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
       ) : (
         <div className="space-y-3 overflow-hidden">
           <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
@@ -1162,8 +1245,17 @@ function ConnectionRow({ label, value, secret, copied, onCopy }: { label: string
 interface SecretKeyInfo {
   key: string;
   configured: boolean;
-  preview: string;
   scope?: 'workspace' | 'app' | 'unset';
+  updated_at?: string | null;
+}
+
+// "Set 3 Jul" / "Never set". A vault entry gives up its STATE and nothing else, so
+// this line and the badge are the whole story a reader gets about a stored value.
+function describeLastSet(updatedAt: string | null | undefined): string {
+  if (!updatedAt) return '';
+  const at = new Date(updatedAt);
+  if (Number.isNaN(at.getTime())) return '';
+  return `Set ${at.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`;
 }
 
 function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
@@ -1240,9 +1332,11 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
   return (
     <FieldGroup>
       <FieldDescription>
-        Owner/admin only. Keys are stored for this workspace and never in the browser. Leave a field blank to keep the current value.
+        Owner/admin only. Everything here is stored encrypted for this workspace and is never sent back
+        to the browser — not even masked. Leave a field blank to keep the current value.
       </FieldDescription>
 
+      <div className="text-sm font-semibold">Platform keys</div>
       {keys.map(item => (
         <Field key={item.key}>
           <FieldLabel htmlFor={`secret-${item.key}`}>{labelFor(item.key)}</FieldLabel>
@@ -1266,7 +1360,7 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
             </InputGroupAddon>
           </InputGroup>
           <FieldDescription>
-            {item.configured ? `${scopeLabel(item.scope)} - ${item.preview}` : scopeLabel(item.scope)}
+            {[scopeLabel(item.scope), describeLastSet(item.updated_at)].filter(Boolean).join(' · ')}
           </FieldDescription>
         </Field>
       ))}
@@ -1286,15 +1380,124 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
         )}
       </div>
 
-      <SharedSecretsSection workspaceId={workspaceId} />
+      <VaultSections workspaceId={workspaceId} />
     </FieldGroup>
   );
 }
 
-// User-defined shared secrets (arbitrary keys), encrypted at rest server-side.
-// Values are write-only: the list shows a masked preview, never the full value.
-function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
-  const { secrets, setSecret, deleteSecret } = useWorkspaceVault(workspaceId);
+// ---------------------------------------------------------------------------
+// The vault surface.
+//
+// Every credential the workspace holds, in one place, grouped so a namespaced
+// entry reads as belonging to its provider or its orb rather than sitting loose in
+// a flat list. Each entry is WRITE-ONLY: set it, replace it, delete it. There is
+// no preview and no reveal, because the server has nothing to reveal — the list
+// route neither decrypts nor selects the secret columns.
+// ---------------------------------------------------------------------------
+
+// One row: what it is, whether it is set, when it was last set, and the actions
+// its write lane allows. Shared by all four groups so they read identically.
+function VaultEntryRow({
+  title,
+  subtitle,
+  configured,
+  updatedAt,
+  onSave,
+  onDelete,
+  placeholder,
+  note,
+}: {
+  title: string;
+  subtitle?: string;
+  configured: boolean;
+  updatedAt: string | null;
+  onSave?: (value: string) => Promise<string | null>;
+  onDelete?: () => Promise<void>;
+  placeholder?: string;
+  note?: string;
+}) {
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!onSave || !draft) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const failure = await onSave(draft);
+      if (failure) setErr(failure);
+      else setDraft('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const state = configured
+    ? [describeLastSet(updatedAt) || 'Configured'].filter(Boolean).join('')
+    : 'Not set';
+
+  return (
+    <div className="rounded-md border bg-card/50 px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{title}</div>
+          {subtitle && <div className="truncate font-mono text-xs text-muted-foreground">{subtitle}</div>}
+        </div>
+        <Badge variant={configured ? 'secondary' : 'outline'} className="shrink-0">
+          {configured ? <Check /> : null}
+          {state}
+        </Badge>
+        {onDelete && configured && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Delete ${title}`}
+            onClick={() => void onDelete()}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        )}
+      </div>
+
+      {onSave && (
+        <div className="mt-2 flex gap-2">
+          <Input
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            type="password"
+            autoComplete="off"
+            placeholder={placeholder ?? (configured ? 'Paste a new value to replace' : 'Paste the value')}
+            className="text-xs"
+          />
+          <Button type="button" size="sm" onClick={() => void save()} disabled={busy || !draft}>
+            {busy ? <Spinner data-icon="inline-start" /> : null}
+            {configured ? 'Replace' : 'Save'}
+          </Button>
+        </div>
+      )}
+      {note && <div className="mt-1.5 text-xs text-muted-foreground">{note}</div>}
+      {err && <div className="mt-1.5 text-xs text-destructive">{err}</div>}
+    </div>
+  );
+}
+
+// Exported for tests/unit/vaultPanelRender.test.ts: whether an orb row offers a
+// write it cannot perform, and whether a value ever reaches the DOM, are claims
+// only a mount can settle.
+export function VaultSections({ workspaceId }: { workspaceId: string | null }) {
+  const {
+    sections,
+    loading,
+    error,
+    setSharedSecret,
+    deleteSharedSecret,
+    setProviderCredential,
+    deleteProviderCredential,
+  } = useWorkspaceVault(workspaceId);
+
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
   const [newDesc, setNewDesc] = useState('');
@@ -1305,54 +1508,92 @@ function SharedSecretsSection({ workspaceId }: { workspaceId: string | null }) {
     const key = newKey.trim();
     if (!key || !newValue) return;
     if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) { setErr('Key: letters, digits, _ . - only (max 128)'); return; }
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
-      const ok = await setSecret(key, newValue, newDesc.trim() || undefined);
-      if (!ok) { setErr('Failed to save — owner/admin only'); return; }
+      const failure = await setSharedSecret(key, newValue, newDesc.trim() || undefined);
+      if (failure) { setErr(failure); return; }
       setNewKey(''); setNewValue(''); setNewDesc('');
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <div className="mt-4 border-t border-border pt-4">
-      <div className="mb-1 text-sm font-semibold">Shared secrets</div>
-      <FieldDescription className="mb-3">
-        Store API keys, tokens, and credentials your agents can use. Encrypted at rest; values are never shown again after saving.
-      </FieldDescription>
+  // The managed section is rendered by SecretsPanel above (it has its own route and
+  // its own app-fallback semantics), so it is skipped here.
+  const rendered = sections.filter(section => section.group !== 'managed');
 
-      {secrets.length > 0 && (
-        <div className="mb-3 flex flex-col gap-1.5">
-          {secrets.map(secret => (
-            <div key={secret.key} className="flex items-center gap-2 rounded-md border bg-card/50 px-2.5 py-1.5">
-              <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{secret.key}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {secret.preview}{secret.description ? ` · ${secret.description}` : ''}
-                </div>
-              </div>
-              <Button type="button" variant="ghost" size="icon-xs" aria-label={`Delete ${secret.key}`} onClick={() => void deleteSecret(secret.key)}>
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
-          ))}
+  return (
+    <div className="mt-4 flex flex-col gap-4 border-t border-border pt-4">
+      {loading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner /> Loading the vault
         </div>
       )}
+      {error && <FieldDescription className="text-destructive">{error}</FieldDescription>}
 
-      <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2.5">
-        <div className="flex gap-2">
-          <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="KEY_NAME" className="font-mono text-xs" />
-          <Input value={newValue} onChange={e => setNewValue(e.target.value)} type="password" placeholder="value" autoComplete="off" />
+      {rendered.map(section => (
+        <div key={section.group}>
+          <div className="mb-1 text-sm font-semibold">{section.title}</div>
+          <FieldDescription className="mb-2">
+            {section.group === 'provider' && 'Credentials your agents spend through agensis. An agent never receives the value — it names an operation and the server attaches the key.'}
+            {section.group === 'orb' && 'Owned by their orbs. Rotate one from that orb\'s own panel, where you can also re-register it with the provider.'}
+            {section.group === 'shared' && 'Loose secrets for this workspace.'}
+            {section.group === 'unknown' && 'Entries whose key does not match any known namespace.'}
+          </FieldDescription>
+
+          <div className="flex flex-col gap-2">
+            {section.owners.map(owner => (
+              <div key={`${section.group}:${owner.owner}`} className="flex flex-col gap-1.5">
+                {owner.ownerLabel && (
+                  <div className="text-xs font-medium text-muted-foreground">{owner.ownerLabel}</div>
+                )}
+                {owner.entries.map(entry => (
+                  <VaultEntryRow
+                    key={entry.key}
+                    title={entry.label}
+                    subtitle={entry.key}
+                    configured={entry.configured}
+                    updatedAt={entry.updated_at}
+                    note={[
+                      entry.description,
+                      entry.lane === 'none' ? 'Managed by its orb.' : '',
+                      entry.env ? `Falls back to ${entry.env} when the server runs locally.` : '',
+                      entry.legacy_plaintext ? 'Stored before encryption at rest — replace it to re-encrypt.' : '',
+                    ].filter(Boolean).join(' ') || undefined}
+                    onSave={entry.lane === 'provider'
+                      ? (value: string) => setProviderCredential(entry.provider, entry.credential, value)
+                      : entry.lane === 'shared'
+                        ? (value: string) => setSharedSecret(entry.key, value, entry.description || undefined)
+                        : undefined}
+                    onDelete={entry.lane === 'provider'
+                      ? () => deleteProviderCredential(entry.provider, entry.credential)
+                      : entry.lane === 'shared'
+                        ? () => deleteSharedSecret(entry.key)
+                        : undefined}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
-        <Input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Description (optional)" className="text-xs" />
-        {err && <div className="text-xs text-destructive">{err}</div>}
-        <div className="flex justify-end">
-          <Button type="button" size="sm" onClick={() => void add()} disabled={busy || !newKey.trim() || !newValue}>
-            <Plus data-icon="inline-start" />
-            Add secret
-          </Button>
+      ))}
+
+      <div>
+        <div className="mb-1 text-sm font-semibold">Add a shared secret</div>
+        <div className="flex flex-col gap-2 rounded-md border bg-muted/20 p-2.5">
+          <div className="flex gap-2">
+            <Input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="KEY_NAME" className="font-mono text-xs" />
+            <Input value={newValue} onChange={e => setNewValue(e.target.value)} type="password" placeholder="value" autoComplete="off" />
+          </div>
+          <Input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Description (optional)" className="text-xs" />
+          {err && <div className="text-xs text-destructive">{err}</div>}
+          <div className="flex justify-end">
+            <Button type="button" size="sm" onClick={() => void add()} disabled={busy || !newKey.trim() || !newValue}>
+              <Plus data-icon="inline-start" />
+              Add secret
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -1465,7 +1706,7 @@ function UsagePanel({ workspaceId, workspaceName }: { workspaceId: string | null
 function AboutPanel() {
   return (
     <FieldGroup>
-      <ReadOnlyValue label="agensis" value="AI-powered workspace for documents, chat, and memory" />
+      <ReadOnlyValue label="agensis" value="A shared workspace where AI agents work with you, your team, and each other." />
       <ReadOnlyValue label="Backend" value="Neon Postgres, local server on :3142" />
     </FieldGroup>
   );

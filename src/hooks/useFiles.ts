@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
-import { cachedFetch, offlineDelete } from '../lib/offlineBackend';
+import { cachedFetch } from '../lib/offlineBackend';
 import type { UploadedFile } from '../types';
 
 function fileToBase64(file: File): Promise<string> {
@@ -65,10 +65,17 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     return uploaded;
   }, [workspaceId]);
 
+  // M4: deleting through the generic /backend/db/delete dropped the uploaded_files
+  // row but left the blob on disk forever. The bespoke route removes both.
   const deleteFile = useCallback(async (id: string) => {
-    await offlineDelete('uploaded_files', id, `files_${workspaceId}`);
+    const response = await fetch(apiUrl(`/backend/files/${encodeURIComponent(id)}`), {
+      method: 'DELETE',
+      headers: apiAuthHeaders(),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(payload?.error?.message || `Delete file HTTP ${response.status}`);
     setFiles(prev => prev.filter(f => f.id !== id));
-  }, [workspaceId]);
+  }, []);
 
   return { files, loading, uploadFiles, deleteFile };
 }

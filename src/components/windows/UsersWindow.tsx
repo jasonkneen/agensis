@@ -12,12 +12,22 @@ interface UsersWindowProps {
 // render path stays free of prop drilling. The presentational UI is in
 // UsersWindowContent.
 export function UsersWindow({ workspaceId, workspaceName, currentUserId, currentUserEmail }: UsersWindowProps) {
-  const { members, invites, loading, createInvite, revokeInvite, removeMember, changeMemberRole } =
-    useWorkspaceUsers(workspaceId || null);
+  const {
+    members,
+    invites,
+    loading,
+    createInvite,
+    revokeInvite,
+    setInviteDismissed,
+    dismissSpentInvites,
+    removeMember,
+    changeMemberRole,
+  } = useWorkspaceUsers(workspaceId || null);
   const inviteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
 
   return (
     <UsersWindowContent
+      workspaceId={workspaceId || null}
       workspaceName={workspaceName}
       currentUserId={currentUserId}
       currentUserEmail={currentUserEmail}
@@ -27,6 +37,8 @@ export function UsersWindow({ workspaceId, workspaceName, currentUserId, current
       loading={loading}
       onCreateInvite={createInvite}
       onRevokeInvite={revokeInvite}
+      onSetInviteDismissed={setInviteDismissed}
+      onDismissSpentInvites={dismissSpentInvites}
       onRemoveMember={removeMember}
       onChangeMemberRole={changeMemberRole}
     />

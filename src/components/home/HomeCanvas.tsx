@@ -1,3 +1,4 @@
+import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
@@ -7,6 +8,7 @@ import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
 import { cn } from '@/lib/utils';
 import { WORKSPACE_BACKGROUND_IMAGES } from '@/lib/backgrounds';
+import { OwnerMessageBanner } from '../onboarding/OwnerMessageBanner';
 import { agentHandle } from '../../lib/agentAccent';
 import { getSlashCommands } from '../../lib/backendClient';
 import { matchSlashItems, slashInsertText, type SlashItem } from '../../lib/slashCommands';
@@ -16,7 +18,12 @@ interface HomeCanvasProps {
   agents?: WorkspaceAgent[];
   workspaceId?: string;
   memoryFacts: MemoryFact[];
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  /**
+   * Resolves false when the channel could not be created, so the draft can be
+   * put back. This composer has no transcript to fall back on: if the send
+   * fails there is nowhere at all for the typed text to reappear.
+   */
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void | Promise<boolean | void>;
   onOpenNewDocument: () => void;
   workspaceName: string;
   backgroundOpacity?: number;
@@ -38,7 +45,7 @@ export function HomeCanvas({
   memoryFacts,
   onSendMessage,
   workspaceName,
-  backgroundOpacity = 0.42,
+  backgroundOpacity = DEFAULT_BACKGROUND_OPACITY,
   backgroundImage,
   onOpenSchedules,
 }: HomeCanvasProps) {
@@ -52,6 +59,7 @@ export function HomeCanvas({
   };
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [mentionedAgents, setMentionedAgents] = useState<WorkspaceAgent[]>([]);
+  const [sending, setSending] = useState(false);
   // '@' opens the mention picker (agents + documents); '/' opens the command
   // picker (built-in actions + daemon-enumerated commands/skills).
   const [picker, setPicker] = useState<'mention' | 'slash' | null>(null);
@@ -131,18 +139,35 @@ export function HomeCanvas({
     setInput(before + after);
   };
 
-  const handleSend = () => {
-    if (!canSend) return;
+  const handleSend = async () => {
+    if (!canSend || sending) return;
     // Rebuild @handle tokens from the agent chips so the backend (which routes
     // agents by parsing @mentions in the text) still notifies + runs them.
     const mentionPrefix = mentionedAgents.map(a => `@${agentHandle(a)}`).join(' ');
     const body = input.trim();
     const content = [mentionPrefix, body].filter(Boolean).join(' ').trim();
     if (!content) return;
-    onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+
+    // Clear optimistically — this is the fast path and it is what makes the
+    // composer feel instant — but hold on to everything so a failed send can put
+    // it all back. Clearing and then losing it is the failure that costs the
+    // user actual work.
+    const draft = { input, linkedDocs, mentionedAgents };
     setInput('');
     setLinkedDocs([]);
     setMentionedAgents([]);
+    setSending(true);
+    try {
+      const sent = await onSendMessage(content, 'auto', memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+      if (sent === false) {
+        setInput(draft.input);
+        setLinkedDocs(draft.linkedDocs);
+        setMentionedAgents(draft.mentionedAgents);
+        inputRef.current?.focus();
+      }
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -250,7 +275,7 @@ export function HomeCanvas({
           regardless of the user's background-opacity setting. */}
       <div
         className="pointer-events-none absolute inset-0"
-        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,0.42) 100%))' }}
+        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,DEFAULT_BACKGROUND_OPACITY) 100%))' }}
       />
 
 
@@ -360,7 +385,7 @@ export function HomeCanvas({
               </div>
               <InputGroupButton
                 onClick={handleSend}
-                disabled={!canSend}
+                disabled={!canSend || sending}
                 title="Send"
                 size="icon-sm"
                 variant="default"
@@ -389,6 +414,12 @@ export function HomeCanvas({
             </Button>
           ))}
         </div>
+
+        {/* An owner broadcast sits ABOVE the daily-brief prompt: one is a
+            message somebody sent to this account, the other is a standing
+            suggestion the app makes to everybody. Renders nothing when there is
+            no message, so the slot costs nothing the rest of the time. */}
+        <OwnerMessageBanner />
 
         {onOpenSchedules && !briefDismissed && (
           <div className="pointer-events-auto relative flex w-full max-w-3xl items-center gap-3 rounded-xl border border-border bg-card/90 px-4 py-3 shadow-lg backdrop-blur">

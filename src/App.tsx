@@ -1,18 +1,28 @@
+import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, ChevronDown, Pencil, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Star, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, X } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
+import { WorkspaceRail } from './components/layout/WorkspaceRail';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
+import { computeGroupBounds, computeGroupRole } from './lib/windowGroups';
+import { tipSurfaceFor } from './lib/pageTips';
+import { DIRECT_MESSAGES_FOLDER } from './lib/onboardingChecklist';
+import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
 import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
+import { countOpenTasks } from './components/windows/taskSchedule';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
-import { GetStartedChecklist } from './components/onboarding/GetStartedChecklist';
+import { GetStartedPanel } from './components/onboarding/GetStartedPanel';
+import { OwnerMessageDialog } from './components/onboarding/OwnerMessageDialog';
+import { OwnerMessageProvider } from './components/onboarding/OwnerMessageProvider';
 import CommandPalette from './components/search/CommandPalette';
 import { AuthPage } from './components/auth/AuthPage';
 import { ShareDialog } from './components/sharing/ShareDialog';
@@ -23,6 +33,7 @@ import { CanvasSelectionLayer } from './components/canvas/CanvasSelectionLayer';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog, type SettingsTabId } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
+import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
@@ -52,12 +63,12 @@ import {
   ContextMenuTrigger,
 } from './components/ui/context-menu';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from './components/ui/dropdown-menu';
 import { Switch } from './components/ui/switch';
 import { ScrollArea } from './components/ui/scroll-area';
@@ -71,10 +82,34 @@ import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settin
 import { applyThemePreset } from './showcase/themePresets';
 import { applyNeoTheme } from './showcase/neoThemes';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
+import {
+  clampWorkspaceRailWidth,
+  pickInitialWorkspaceId,
+  readWorkspaceRailWidth,
+  WORKSPACE_RAIL_COLLAPSED_WIDTH,
+} from './lib/workspaceRail';
+import {
+  buildDesktopOverlay,
+  DESKTOP_TIER_EMPTY_MESSAGE,
+  DESKTOP_TIER_PENDING_MESSAGE,
+  type OverlayWorkspaceTile,
+} from './lib/desktopOverlay';
+import {
+  clearShowDesktopStash,
+  isDrawToolAvailable,
+  isShowingDesktop,
+  resolveShowDesktop,
+  type ShowDesktopStash,
+} from './lib/showDesktop';
+import { InlineRename } from './components/common/InlineRename';
+import { TenantsWindowContent } from './components/tenants/TenantsWindowContent';
+import { useTenantAccess } from './hooks/useTenants';
+import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
-import { useChat } from './hooks/useChat';
+import { channelMessages } from './components/chat/channelView';
+import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
@@ -83,6 +118,8 @@ import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { WindowManagerProvider, useWindowManager } from './providers/WindowManagerProvider';
+import { HuddleDockProvider } from './components/huddle/HuddleDockContext';
+import { HuddleDock } from './components/huddle/HuddleDock';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
 import { useSharing } from './hooks/useSharing';
@@ -90,6 +127,7 @@ import { useCanvasObjects } from './hooks/useCanvasObjects';
 import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
 import { useActivity } from './hooks/useActivity';
+import { useInbox } from './hooks/useInbox';
 import { useAgents, type CreateAgentInput } from './hooks/useAgents';
 import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
@@ -102,7 +140,7 @@ import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
 import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
-import type { ChannelParticipant, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { ChannelParticipant, Document, ChatSession, MemoryFact, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, OrbConfigInput, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -114,9 +152,12 @@ const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWi
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
 const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
+const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
+const ACTIVE_WORKSPACE_KEY = 'agensis_active_workspace';
+const WORKSPACE_RAIL_WIDTH_KEY = 'agensis_workspace_rail_width';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
@@ -447,25 +488,22 @@ function KnowledgeContextControl({
     });
   };
 
+  // Rendered as a SUBMENU of the chat window's channel overflow menu, not as a
+  // standalone header button — a nested <DropdownMenu> would dismiss the outer
+  // one, whereas Sub/SubTrigger share the parent menu's context.
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant={enabled ? 'secondary' : 'outline'}
-          size="sm"
-          className="knowledge-context-trigger h-8 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs"
-          title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
-        >
-          <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
-          <span>Knowledge</span>
-          <Badge variant="secondary" className="h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
-            {activeTotal}
-          </Badge>
-          <ChevronDown className="size-3" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72 p-0">
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        className="gap-2 px-2 py-1.5"
+        title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
+      >
+        <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
+        <span>Knowledge</span>
+        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
+          {activeTotal}
+        </Badge>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-72 p-0">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-sm font-semibold leading-none">Knowledge</span>
@@ -525,8 +563,8 @@ function KnowledgeContextControl({
             );
           })}
         </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 
@@ -560,21 +598,63 @@ Use this agensis iframe SDK contract:
 First ask one concise question if the applet idea is missing. If I provide a specific applet idea, build the first version directly.`;
 }
 
+// One place for "that write did not happen". Every create/send handler below
+// routes its failure through here so a rejected write can never again look like
+// a successful one — the reason the app read as a zombie was that these paths
+// all ended in a bare `return`.
+function reportWriteFailure(action: string, failure: WriteFailure | null) {
+  const notice = failure
+    ? writeFailureNotice(action, failure)
+    : writeFailureNotice(action, {
+      kind: 'unknown',
+      retryable: true,
+      reason: 'Something went wrong and nothing was saved.',
+      detail: null,
+    });
+  toast.error(notice.title, { description: notice.description });
+}
+
 export default function App() {
   return (
     <WindowManagerProvider>
-      <AppContent />
+      {/* Above AppContent, deliberately: the huddle session must outlive every
+          view AppContent renders, or navigating away drops the call — which is
+          exactly what it did while the session lived inside the channel. */}
+      <HuddleDockProvider>
+        <AppContent />
+      </HuddleDockProvider>
     </WindowManagerProvider>
   );
 }
 
 function AppContent() {
-  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth } = useAuth();
+  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth, authNotice, dismissAuthNotice } = useAuth();
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
+  // Seeded from the last workspace this browser was in, so a reload lands you
+  // back where you were instead of always on workspaces[0]. The stored id is a
+  // hint, not a promise — the effect below re-resolves it once the list arrives
+  // and falls back to the first workspace if it names one you no longer have.
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(
+    () => localStorage.getItem(ACTIVE_WORKSPACE_KEY) || '',
+  );
   const [showTour, setShowTour] = useState(false);
+  // The workspace rail is resizable, and its width is the canvas viewport's
+  // leading inset (Sidebar's `leadingInset`), so App owns it rather than the
+  // rail — a width kept private to the rail would leave every floating window
+  // positioned against the old one. The rail commits once per drag, on release.
+  const [workspaceRailWidth, setWorkspaceRailWidth] = useState(
+    () => readWorkspaceRailWidth(localStorage.getItem(WORKSPACE_RAIL_WIDTH_KEY)),
+  );
+  const handleWorkspaceRailWidthChange = useCallback((next: number) => {
+    const clamped = clampWorkspaceRailWidth(next);
+    setWorkspaceRailWidth(clamped);
+    localStorage.setItem(WORKSPACE_RAIL_WIDTH_KEY, String(clamped));
+  }, []);
   const isMobile = useIsMobile();
+  // Phone: the rail rides inside the off-canvas drawer beside a full-width
+  // sidebar, so it stays the icon strip whatever width was saved on desktop.
+  const renderedRailWidth = isMobile ? WORKSPACE_RAIL_COLLAPSED_WIDTH : workspaceRailWidth;
   // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
   // instead of an inline rail, so the workspace canvas gets the full screen width.
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -600,20 +680,39 @@ function AppContent() {
   const activeSceneRef = useRef<HTMLDivElement>(null);
   const setupCallbackInFlightRef = useRef(false);
 
-  const { workspaces, loading: wsLoading, createWorkspace } = useWorkspaces(user?.id);
-  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0] || null;
+  const { workspaces, loading: wsLoading, createWorkspace, updateWorkspace, readiness: workspaceReadiness, retryWorkspaceSetup } = useWorkspaces(user?.id);
+  // NOT simply workspaces[0]. The list is ordered by updated_at, so the newest
+  // workspace sorts first — and the System workspace (the feedback inbox) sorts
+  // first the moment it is created. Neither an empty starter pair nor the
+  // feedback inbox is somewhere you should LAND; they are places you go on
+  // purpose. Prefer a workspace that actually has something in it.
+  const defaultWorkspace = useMemo(
+    () => workspaces.find(w => !w.is_system) || workspaces[0] || null,
+    [workspaces],
+  );
+  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || defaultWorkspace;
 
   useEffect(() => {
-    if (!wsLoading && workspaces.length > 0 && !workspaces.find(w => w.id === activeWorkspaceId)) {
-      setActiveWorkspaceId(workspaces[0].id);
-    }
+    if (wsLoading || workspaces.length === 0) return;
+    // One picker, tested in workspaceRail.ts: keep the id you were in if it
+    // still exists, else the first NON-SYSTEM workspace. Two competing copies of
+    // this rule is how you get an app that disagrees with its own sidebar.
+    const resolved = pickInitialWorkspaceId(activeWorkspaceId, workspaces);
+    if (resolved && resolved !== activeWorkspaceId) setActiveWorkspaceId(resolved);
   }, [wsLoading, workspaces, activeWorkspaceId]);
+
+  // Remember the switch. Only writes ids that resolved to a real workspace —
+  // the '' bootstrap value would otherwise stomp a perfectly good stored id on
+  // every cold load, before the list has come back.
+  useEffect(() => {
+    if (activeWorkspaceId) localStorage.setItem(ACTIVE_WORKSPACE_KEY, activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   const { data: workspaceBootstrap } = useWorkspaceBootstrap(activeWorkspaceId || null);
 
   const {
     documents, recents,
-    createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite
+    createDocument, saveDocument, autoSave, deleteDocument, toggleFavorite, fetchDocumentContent
   } = useDocuments(activeWorkspaceId, (workspaceBootstrap?.documents as import('./types').Document[] | undefined) || null);
 
   const {
@@ -621,7 +720,7 @@ function AppContent() {
     hasMoreMessages, loadingEarlier, loadEarlierMessages,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
+    createSession, splitSession, updateSession, patchSessionLocal, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
   } = useChat(
     activeWorkspaceId,
     user?.email?.split('@')[0] || undefined,
@@ -633,7 +732,6 @@ function AppContent() {
     activeSubThread,
     subThreadMessages,
     subThreadStreaming,
-    createSubThread,
     openSubThread,
     closeSubThread,
     sendSubThreadMessage,
@@ -654,7 +752,28 @@ function AppContent() {
     // Seed the persisted neo theme so it's ready when the neo family activates.
     applyNeoTheme(settings.ui_neo_theme);
   }, []);
-  const { layers, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
+  const { layers, layersWorkspaceId, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
+
+  // The server answers whether this account may see Tenants. Never inferred
+  // from the signed-in email client-side — the browser can be told anything,
+  // and the routes re-check regardless. Keyed on the user id rather than a
+  // boolean, so switching account re-asks instead of carrying the previous
+  // answer over.
+  const { isOwner: isSystemOwner } = useTenantAccess(user?.id ?? null);
+  const [tenantsOpen, setTenantsOpen] = useState(false);
+
+  // Rename. Both return false on a rejected write so the inline editor stays
+  // open and says so, rather than closing over a change that never landed.
+  const handleRenameWorkspace = useCallback(async (id: string, name: string) => {
+    const { workspace } = await updateWorkspace(id, { name });
+    return Boolean(workspace);
+  }, [updateWorkspace]);
+
+  const handleRenameDesktop = useCallback((id: string, name: string) => {
+    updateLayer(id, { name });
+    return true;
+  }, [updateLayer]);
+
   const {
     windows,
     openWindow,
@@ -664,12 +783,18 @@ function AppContent() {
     focusWindow,
     updateWindow,
     minimizeWindow,
+    setWindowsMinimized,
     focusWindowGroup,
     minimizeWindowGroup,
     ungroupTiledWindows,
     viewMode,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
+
+  // Which windows the "Show desktop" sidebar row put away, per desktop. In
+  // memory alongside the windows themselves — a stash that outlived a reload
+  // would name ids that no longer exist. See src/lib/showDesktop.ts.
+  const [showDesktopStash, setShowDesktopStash] = useState<ShowDesktopStash>({});
 
   // The viewport clips floating panels to the 8px chrome gap by default. Only a
   // full-bleed candidate — a maximized window, or a tiled group that can fill the
@@ -700,6 +825,10 @@ function AppContent() {
     prevWorkspaceIdRef.current = activeWorkspaceId;
     if (prev && prev !== activeWorkspaceId) {
       closeAllWindows();
+      // Show desktop's stash is keyed by desktop id, and 'base' is every
+      // workspace's default — so ids stashed against the outgoing workspace
+      // would name the incoming one's desktop. Nothing survives the switch.
+      setShowDesktopStash(clearShowDesktopStash());
     }
   }, [activeWorkspaceId, closeAllWindows]);
   const { cursors } = useMultiplayerCursors(
@@ -721,6 +850,7 @@ function AppContent() {
     createAgent,
     updateAgent,
     deleteAgent,
+    disconnectAgent,
   } = useAgents(
     activeWorkspaceId || null,
     user?.id,
@@ -741,6 +871,17 @@ function AppContent() {
     agentConnections,
     agents,
   });
+  // The Agents window only needs to know whether to close its form; the toast
+  // carries the reason.
+  const handleCreateAgent = useCallback(async (input: CreateAgentInput): Promise<boolean> => {
+    const { agent, failure } = await createAgent(input);
+    if (!agent) {
+      reportWriteFailure('create the agent', failure);
+      return false;
+    }
+    return true;
+  }, [createAgent]);
+
   const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents, activeWorkspaceId || null);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
@@ -788,7 +929,6 @@ function AppContent() {
 
   const {
     tasks,
-    openTasks,
     createTask,
     updateTask,
     toggleTaskStatus,
@@ -804,10 +944,15 @@ function AppContent() {
     user?.id,
   );
 
+  // Sidebar badge only — the unfiltered count of things waiting on a human. The
+  // inbox window runs its own useInbox with the tab the user picked.
+  const { unreadCount: inboxUnreadCount } = useInbox(activeWorkspaceId || null, 'all');
+
   const {
     webhooks: agentWebhooks,
     createWebhook: createAgentWebhook,
     updateWebhook: updateAgentWebhook,
+    configureWebhook: configureAgentWebhook,
   } = useAgentWebhooks(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
@@ -853,7 +998,7 @@ function AppContent() {
   const viewedLayerId = focusedRemotePresence?.activeLayerId || activeLayerId;
   const viewedLayer = layers.find(layer => layer.id === viewedLayerId) || activeLayer;
   const workspaceBackdropImage = viewedLayer.background_image || activeWorkspace?.background_image || canvasGridBackground;
-  const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42));
+  const workspaceBackdropOpacity = Math.min(1, Math.max(0, viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY));
   const workspaceBackdropOverlayOpacity = Math.max(0, 1 - workspaceBackdropOpacity);
   const visibleCanvasObjects = useMemo(
     () => canvasObjects.filter(obj => (obj.layer_id || 'base') === viewedLayerId),
@@ -873,6 +1018,10 @@ function AppContent() {
       : windows;
     return exactWorkspaceWindows.filter(win => (win.canvasId || 'base') === viewedLayerId);
   }, [focusedRemotePresence, windows, viewedLayerId]);
+  // Draw belongs to the DESKTOP: it paints on the canvas behind the panels, so
+  // it is only offered when the desktop is what you are looking at. See
+  // isDrawToolAvailable in src/lib/showDesktop.ts.
+  const drawToolAvailable = isDrawToolAvailable(windows, activeLayerId, drawingActive);
   const { dockWindows, focusedDockWindow, dockEntries } = useMemo(() => {
     const dockWindows = windows.filter(win => (win.canvasId || 'base') === activeLayerId);
     const focusedDockWindow = dockWindows
@@ -883,6 +1032,19 @@ function AppContent() {
     const dockEntries = groupDockWindows(dockWindows);
     return { dockWindows, focusedDockWindow, dockEntries };
   }, [windows, activeLayerId]);
+  // Which surface the sidebar-footer panel gives advice about. This is a
+  // windowed desktop, so there is no route to read: the answer is the focused
+  // window, which is `focusedDockWindow` above — the top non-minimized window
+  // ON THE ACTIVE PROJECT, focus being encoded as zIndex. A window parked on
+  // another project is not on screen and must not claim the panel; nothing open
+  // means the canvas itself. Tenants is an overlay rather than a window, so it
+  // is passed separately and outranks whatever is behind it.
+  const tipSurface = useMemo(() => tipSurfaceFor({
+    overlay: tenantsOpen ? 'tenants' : null,
+    focusedWindowType: focusedDockWindow?.type ?? null,
+    isDirectMessage: focusedDockWindow?.type === 'chat'
+      && sessions.find(item => item.id === focusedDockWindow.sessionId)?.folder === DIRECT_MESSAGES_FOLDER,
+  }), [tenantsOpen, focusedDockWindow, sessions]);
   // macOS-style dock bounce: a chat window's icon bounces once when its agent
   // starts working (idle → busy). Derived purely from the realtime connection
   // status already in scope — no extra subscriptions.
@@ -924,7 +1086,7 @@ function AppContent() {
       project_kind: settingsLayer.project_kind ?? '',
       git_root: settingsLayer.git_root ?? '',
       git_remote: settingsLayer.git_remote ?? '',
-      background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? 0.42,
+      background_opacity: settingsLayer.background_opacity ?? activeWorkspace.background_opacity ?? DEFAULT_BACKGROUND_OPACITY,
       background_image: settingsLayer.background_image ?? activeWorkspace.background_image ?? '',
     };
   }, [activeWorkspace, settingsLayer]);
@@ -989,29 +1151,35 @@ function AppContent() {
   }, [topWindowId]);
 
   const handleNewChat = useCallback(async () => {
-    const session = await createSession();
-    if (session) {
-      openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      logEvent({
-        event_type: 'chat_created',
-        entity_type: 'chat',
-        entity_id: session.id,
-        title: `New chat: ${session.title || 'Untitled'}`,
-      });
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('create the channel', failure);
+      return;
     }
+    openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'chat_created',
+      entity_type: 'chat',
+      entity_id: session.id,
+      title: `New chat: ${session.title || 'Untitled'}`,
+    });
   }, [createSession, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
     const doc = await createDocument();
-    if (doc) {
-      openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      logEvent({
-        event_type: 'document_created',
-        entity_type: 'document',
-        entity_id: doc.id,
-        title: `New document: ${doc.title || 'Untitled'}`,
-      });
+    if (!doc) {
+      // createDocument has no error channel of its own; the honest thing to say
+      // is that it did not happen, not to silently do nothing.
+      reportWriteFailure('create the document', null);
+      return;
     }
+    openWindow('document', { title: doc.title || 'Untitled', documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'document_created',
+      entity_type: 'document',
+      entity_id: doc.id,
+      title: `New document: ${doc.title || 'Untitled'}`,
+    });
   }, [createDocument, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleOpenMemory = useCallback(() => {
@@ -1069,6 +1237,28 @@ function AppContent() {
     openWindow('agents', { title: 'AI Agents', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenInbox = useCallback(() => {
+    const existing = windows.find(w => w.type === 'inbox');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('inbox', { title: 'Inbox', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  // Show desktop: put this desktop's open panels away so the wallpaper and the
+  // home composer are all that's left, and bring them back on the next press.
+  // Minimise, never close — the windows stay in the dock with their state.
+  const handleShowDesktop = useCallback(() => {
+    const decision = resolveShowDesktop(windows, activeLayerId, showDesktopStash);
+    setShowDesktopStash(decision.stash);
+    if (decision.action === 'none') return;
+    setWindowsMinimized(decision.windowIds, decision.action === 'hide');
+  }, [windows, activeLayerId, showDesktopStash, setWindowsMinimized]);
+
+  const showingDesktop = isShowingDesktop(windows, activeLayerId, showDesktopStash);
+
   const handleOpenUsers = useCallback(() => {
     const existing = windows.find(w => w.type === 'users');
     if (existing) {
@@ -1088,6 +1278,37 @@ function AppContent() {
     }
     openWindow('schedules', { title: 'Schedules', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  // Farm device-code pairing: after sign-in, return to /integrations/farm?code=…
+  // (FarmIntegrationApproval stashes the path before redirecting here).
+  useEffect(() => {
+    if (!user || authLoading) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromQuery = params.get('redirect') || '';
+      const fromStore = sessionStorage.getItem('agensis.farm.approvalReturn') || '';
+      const candidate = fromQuery || fromStore;
+      if (!candidate) return;
+      // Only allow the farm approval surface — never open external URLs.
+      const path = candidate.startsWith('/')
+        ? candidate
+        : (() => {
+            try {
+              const url = new URL(candidate, window.location.origin);
+              if (url.origin !== window.location.origin) return '';
+              return `${url.pathname}${url.search}`;
+            } catch {
+              return '';
+            }
+          })();
+      if (!path.startsWith('/integrations/farm')) return;
+      sessionStorage.removeItem('agensis.farm.approvalReturn');
+      if (`${window.location.pathname}${window.location.search}` === path) return;
+      window.location.replace(path);
+    } catch {
+      /* ignore storage / navigation failures */
+    }
+  }, [user, authLoading]);
 
   // CursorBuddy and the Agensis CLI link unauthenticated users here. Once login
   // completes, CursorBuddy opens the agent surface; CLI setup additionally posts
@@ -1228,6 +1449,16 @@ function AppContent() {
     })();
   }, [user]);
 
+  // A channel edited its own row (title, icon, description, intent,
+  // participants). The window that saved it updates its own header, but the
+  // SIDEBAR reads this session list — so a rename showed in the header and
+  // nowhere else until a reload. updateSession already patches both the list
+  // and the active session; this just routes the save into it. No second write:
+  // the row is already saved, so only the local list is patched.
+  const handleSessionMetaSaved = useCallback((sessionId: string, patch: Record<string, unknown>) => {
+    patchSessionLocal(sessionId, patch as Partial<import('./types').ChatSession>);
+  }, [patchSessionLocal]);
+
   const handleOpenAgentProfile = useCallback((agentIdOrHandle?: string | null) => {
     if (agentIdOrHandle) setFocusedAgentKey(agentIdOrHandle);
     handleOpenAgents({ preserveFocus: true });
@@ -1327,6 +1558,23 @@ function AppContent() {
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
   }, [setActiveSession, openWindow, activeLayerId, user?.id]);
 
+  // Inbox rows carry a session id, not a session — resolve and open it so
+  // "go read it where it happened" is one click from the triage list.
+  const handleSessionOpenById = useCallback((sessionId: string) => {
+    const session = sessions.find(item => item.id === sessionId);
+    if (session) handleSessionOpen(session);
+  }, [sessions, handleSessionOpen]);
+
+  // A sidebar thread row: open the session it lives in, then focus the thread
+  // itself. Both steps are needed — opening only the session drops the person
+  // into a channel with the reply they came for somewhere up the scrollback.
+  const handleOpenThreadFromSidebar = useCallback((sessionId: string, parentMessageId: string) => {
+    const session = sessions.find(item => item.id === sessionId);
+    if (!session) return;
+    handleSessionOpen(session);
+    openThread(parentMessageId);
+  }, [sessions, handleSessionOpen, openThread]);
+
   const handleSplitThread = useCallback(async (source: ChatSession) => {
     const pending = toast.loading(`Splitting “${source.title || 'thread'}”…`);
     const forked = await splitSession(source);
@@ -1401,13 +1649,16 @@ function AppContent() {
       direct: true,
       added_at: new Date().toISOString(),
     };
-    const session = await createSession('auto', {
+    const { session, failure } = await createSession('auto', {
       title,
       folder: 'Direct messages',
       conversation_mode: 'auto',
       participants: [participant],
     });
-    if (!session) return;
+    if (!session) {
+      reportWriteFailure(`open a conversation with ${title}`, failure);
+      return;
+    }
     setActiveSession(session);
     openWindow('chat', { title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
     logEvent({
@@ -1435,8 +1686,9 @@ function AppContent() {
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
+    else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenInbox, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -1480,14 +1732,22 @@ function AppContent() {
     docs?: Document[],
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
+    // Thread composer's "Send to channel" switch (messages.broadcast_to_channel).
+    broadcastToChannel?: boolean,
   ) => {
     const snapshot = useWorkspaceCtx ? buildWorkspaceContext() : null;
-    await sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession);
+    // The result travels back to whichever composer called this: `delivered:
+    // false` means the row was rolled back, so that composer must put the
+    // user's text back instead of leaving them with an empty box.
+    return sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
   const handleCreateCustomApplet = useCallback(async () => {
-    const session = await createSession();
-    if (!session) return;
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('start the applet chat', failure);
+      return;
+    }
 
     const title = 'Create a canvas applet';
     await updateSession(session.id, { title });
@@ -1513,14 +1773,21 @@ function AppContent() {
     model: string,
     memFacts?: MemoryFact[],
     docs?: Document[]
-  ) => {
-    const session = await createSession();
-    if (session) {
-      openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
-      setTimeout(() => {
-        wrappedSendMessage(content, model, memFacts, docs, null, session);
-      }, 100);
+  ): Promise<boolean> => {
+    // The home composer has no transcript to fall back on: if the channel is
+    // never created there is nowhere for the message to appear, which is why
+    // this used to swallow the user's text whole. Report false and the composer
+    // keeps the draft.
+    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+    if (!session) {
+      reportWriteFailure('start the channel', failure);
+      return false;
     }
+    openWindow('chat', { title: content.slice(0, 30) || 'New Channel', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    setTimeout(() => {
+      wrappedSendMessage(content, model, memFacts, docs, null, session);
+    }, 100);
+    return true;
   }, [createSession, openWindow, wrappedSendMessage, activeLayerId, user?.id]);
 
   const handleCreateWorkspace = useCallback(() => {
@@ -1536,11 +1803,15 @@ function AppContent() {
     description: string;
     icon: string;
   }) => {
-    const ws = await createWorkspace(name.trim(), icon.trim() || '🗂️', description.trim());
-    if (ws) {
-      setActiveWorkspaceId(ws.id);
-      setCreateWorkspaceDialogOpen(false);
+    const { workspace, failure } = await createWorkspace(name.trim(), icon.trim() || '🗂️', description.trim());
+    if (!workspace) {
+      // Leave the dialog open with what was typed still in it. Closing it on a
+      // rejected insert is the version of this bug that loses the most work.
+      reportWriteFailure('create the workspace', failure);
+      return;
     }
+    setActiveWorkspaceId(workspace.id);
+    setCreateWorkspaceDialogOpen(false);
   }, [createWorkspace]);
 
   const handleCloseWindow = useCallback((winId: string) => {
@@ -1590,22 +1861,6 @@ function AppContent() {
 
   const handleOpenMobileMenu = useCallback(() => setMobileDrawerOpen(true), []);
   const handleToggleWorkspaceCtx = useCallback(() => setUseWorkspaceCtx(v => !v), []);
-  const handleCreateSubThreadFromScene = useCallback(async (messageId: string, agent: WorkspaceAgent, messageContent?: string) => {
-    const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-    const otherAgents = agents
-      .filter(a => a.enabled !== false && a.id !== agent.id)
-      .map(a => ({
-        id: a.id,
-        name: a.name,
-        handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
-      }));
-    await createSubThread(messageId, slug, agent.id, agent.name, {
-      contextMessage: messageContent,
-      additionalAgents: otherAgents,
-    });
-    // Background task — don't open the sub-thread panel; let it run autonomously.
-    // The user can view it from the Threads panel.
-  }, [agents, createSubThread]);
   const handleDeleteDocumentFromScene = useCallback(async (id: string) => {
     const doc = documents.find(d => d.id === id);
     await deleteDocument(id);
@@ -1651,35 +1906,78 @@ function AppContent() {
   }
 
   if (!user) {
-    return <AuthPage onSignIn={signIn} onSignUp={signUp} onOAuthSignIn={signInWithOAuth} />;
+    // Mount AppUpdateManager here too: SW registration + the update prompt live
+    // inside it, and logged-out visitors otherwise never register the service
+    // worker — an outdated SW (e.g. one predating the landing page) would serve
+    // the stale SPA shell forever with no update path to escape it.
+    return (
+      <>
+        <AuthPage
+          onSignIn={signIn}
+          onSignUp={signUp}
+          onOAuthSignIn={signInWithOAuth}
+          notice={authNotice}
+          onDismissNotice={dismissAuthNotice}
+        />
+        <AppUpdateManager />
+      </>
+    );
   }
 
   return (
     <TooltipProvider>
+      {/* Owner broadcasts: ONE fetch here, consumed by all three surfaces (the
+          sidebar-footer card, the dialog below, the home banner). Inside the
+          signed-in branch because the messages are addressed to this account —
+          there is nothing to fetch for a logged-out visitor. */}
+      <OwnerMessageProvider userId={user.id}>
       <div className="relative flex h-screen overflow-hidden bg-background">
         <img
           src={workspaceBackdropImage}
           alt=""
-          className="pointer-events-none absolute inset-0 z-0 size-full object-cover"
+          className="pointer-events-none absolute inset-0 z-[var(--z-backdrop)] size-full object-cover"
           style={{ opacity: workspaceBackdropOpacity }}
         />
-        <div className="pointer-events-none absolute inset-0 z-0 bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
+        <div className="pointer-events-none absolute inset-0 z-[var(--z-backdrop)] bg-[var(--home-bg-overlay)]" style={{ opacity: workspaceBackdropOverlayOpacity }} />
         <div
           className={cn(
             isMobile
               ? cn(
-                'fixed inset-y-0 left-0 z-[12000] flex transition-transform duration-200 ease-out',
+                'fixed inset-y-0 left-0 z-[var(--z-drawer)] flex transition-transform duration-200 ease-out',
                 mobileDrawerOpen ? 'translate-x-0' : 'pointer-events-none -translate-x-full',
               )
               : 'contents',
           )}
           style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
         >
+          {/* Workspace switcher, pinned outside the sidebar. On desktop the
+              wrapper is `contents`, so this is a direct flex child of the shell
+              row and lands at the far left; on phone it rides inside the
+              off-canvas drawer beside the sidebar rather than eating screen
+              width the canvas needs. */}
+          <WorkspaceRail
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSelectWorkspace={setActiveWorkspaceId}
+            onRenameWorkspace={handleRenameWorkspace}
+            onOpenTenants={isSystemOwner ? () => setTenantsOpen(true) : undefined}
+            onCreateWorkspace={handleCreateWorkspace}
+            titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+            // Phone: the rail rides inside the off-canvas drawer beside a
+            // full sidebar, so it stays the icon strip and is not resizable.
+            width={renderedRailWidth}
+            onWidthChange={handleWorkspaceRailWidthChange}
+            resizable={!isMobile}
+          />
           <Sidebar
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
             overlay={isMobile}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
+            // The rail sits left of the sidebar, so the canvas viewport's left
+            // inset is rail + sidebar, not sidebar alone. The rail is resizable,
+            // so this is its LIVE width, never the 52px collapsed constant.
+            leadingInset={isMobile ? 0 : renderedRailWidth}
             collapsed={isMobile ? false : sidebarCollapsed}
             onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
             onOpenCommandPalette={handleOpenCommandPalette}
@@ -1690,6 +1988,7 @@ function AppContent() {
             onCreateWorkspace={handleCreateWorkspace}
             onDocumentOpen={handleDocumentOpen}
             onDocumentUpdate={saveDocument}
+            onAddToCanvasApplet={handleCreateDocApp}
             onSessionOpen={handleSessionOpen}
             onSessionUpdate={updateSession}
             onSessionArchive={archiveSession}
@@ -1697,6 +1996,10 @@ function AppContent() {
             onDirectMessageDelete={handleDeleteDm}
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
+            onOpenInbox={handleOpenInbox}
+            onShowDesktop={handleShowDesktop}
+            showingDesktop={showingDesktop}
+            onOpenThread={handleOpenThreadFromSidebar}
             onOpenMemory={handleOpenMemory}
             onOpenSkills={handleOpenSkills}
             onOpenTasks={handleOpenTasks}
@@ -1707,7 +2010,20 @@ function AppContent() {
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
-            openTaskCount={openTasks.length}
+            openTaskCount={
+              // countOpenTasks, NOT useTasks' openTasks: that list includes
+              // subtasks, which are not rows in the Tasks window, so the badge
+              // counted work the list could not show. It also deliberately
+              // ignores the window's assignment filter (all/mine/others):
+              // usePersistedPreference reads storage once per mount and does
+              // not sync between components, so a badge wired to it would go
+              // stale the moment the filter changed in the window — the same
+              // disagreement in a harder-to-explain form. The badge is a "does
+              // this workspace need me" signal; the narrowed number is already
+              // shown next to the filter control that caused it.
+              countOpenTasks(tasks)
+            }
+            inboxUnreadCount={inboxUnreadCount}
             recents={recents}
             sessions={sessions}
             agents={agents}
@@ -1723,10 +2039,12 @@ function AppContent() {
             onSignOut={signOut}
             onOpenSettings={handleOpenSettingsFromSidebar}
             getStartedSlot={(
-              <GetStartedChecklist
+              <GetStartedPanel
+                workspaceId={activeWorkspaceId || null}
                 agents={agents}
                 sessions={sessions}
                 memberCount={members.length}
+                surface={tipSurface}
                 onCreateAgent={handleOpenAgents}
                 onStartRoom={handleNewChat}
                 onMessageAgent={handleOpenAgents}
@@ -1757,14 +2075,18 @@ function AppContent() {
         </div>
         {isMobile && mobileDrawerOpen && (
           <div
-            className="fixed inset-0 z-[11999] bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-[var(--z-drawer-scrim)] bg-black/50 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
             aria-hidden
           />
         )}
 
+        {/* Canvas column. Above the sidebar, below the workspace rail — see the
+            ladder in src/lib/chromeDepth.ts. Its rung is also the ceiling for
+            every floating window, which numbers itself from 100 up inside this
+            stacking context (useWindows.ts). */}
         <div
-          className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          className="relative z-[var(--z-content)] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           style={{
             // Canvas column sits to the RIGHT of the full-height sidebar, so the
             // macOS traffic lights (top-left, over the sidebar) never overlap it —
@@ -1843,17 +2165,20 @@ function AppContent() {
                   focusedAgentKey={focusedAgentKey}
                   systemCapabilities={systemCapabilities}
                   getPresenceMode={getPresenceMode}
-                  backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? 0.42}
+                  backgroundOpacity={viewedLayer.background_opacity ?? activeWorkspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY}
                   backgroundImage=""
                   contextCounts={contextCounts}
                   contextCountsTitle={contextCountsTitle}
                   onSelectAgent={setSelectedAgent}
                   onAgentProfile={handleOpenAgentProfile}
-                  onCreateAgent={createAgent}
+                  onSessionMetaSaved={handleSessionMetaSaved}
+                  onCreateAgent={handleCreateAgent}
                   onUpdateAgent={updateAgent}
                   onDeleteAgent={deleteAgent}
+                  onDisconnectAgent={disconnectAgent}
                   onCreateAgentWebhook={createAgentWebhook}
                   onUpdateAgentWebhook={updateAgentWebhook}
+                  onConfigureAgentWebhook={configureAgentWebhook}
                   onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
                   topLevelMessages={topLevelMessages}
                   threadMessages={threadMessages}
@@ -1867,7 +2192,6 @@ function AppContent() {
                   subThreadStreaming={subThreadStreaming}
                   onOpenSubThread={openSubThread}
                   onCloseSubThread={closeSubThread}
-                  onCreateSubThread={handleCreateSubThreadFromScene}
                   onSendSubThreadMessage={sendSubThreadMessage}
                   onSplitThread={handleSplitThread}
                   useWorkspaceCtx={useWorkspaceCtx}
@@ -1879,11 +2203,17 @@ function AppContent() {
                   onFocusWindow={focusWindow}
                   onUpdateWindow={updateWindow}
                   onMinimizeWindow={minimizeWindow}
+                  onMinimizeWindowGroup={minimizeWindowGroup}
+                  onUngroupTiledWindows={ungroupTiledWindows}
+                  onFocusWindowGroup={focusWindowGroup}
                   onShareWindow={handleShareWindow}
                   onSendMessage={wrappedSendMessage}
                   onSetActiveSession={setActiveSession}
+                  onOpenSessionById={handleSessionOpenById}
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
+                  onAddToCanvasApplet={handleCreateDocApp}
+                  fetchDocumentContent={fetchDocumentContent}
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
                   onUpdateFact={updateFact}
@@ -1920,18 +2250,41 @@ function AppContent() {
                 onFocusObjectHandled={() => setFocusCanvasObjectId(null)}
               />
 
+              {tenantsOpen && (
+                <div
+                  className="absolute inset-0 flex flex-col bg-background"
+                  style={{ zIndex: 'var(--z-modal)' }}
+                  role="dialog"
+                  aria-label="Tenants"
+                >
+                  <header className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+                    <h2 className="text-sm font-semibold">Tenants</h2>
+                    <Button type="button" variant="ghost" size="icon-sm" onClick={() => setTenantsOpen(false)} aria-label="Close tenants">
+                      <X className="size-4" />
+                    </Button>
+                  </header>
+                  <div className="min-h-0 flex-1"><TenantsWindowContent /></div>
+                </div>
+              )}
+
               {showCanvasGrid && (
-                <CanvasGridOverlay
+                <WorkspaceDesktopOverlay
+                  workspaces={workspaces}
+                  activeWorkspaceId={activeWorkspaceId}
                   layers={layers}
+                  layersWorkspaceId={layersWorkspaceId}
                   objects={canvasObjects}
                   windows={windows}
                   activeLayerId={activeLayerId}
                   backgroundImage={canvasGridBackground}
                   onClose={handleCloseCanvasGrid}
+                  onSelectWorkspace={setActiveWorkspaceId}
+                  onCreateWorkspace={handleCreateWorkspace}
                   onSelectLayer={handleSelectCanvasFromGrid}
                   onCreateLayer={handleCreateCanvasFromGrid}
                   onDeleteLayer={handleDeleteCanvasFromGrid}
                   onOpenSettings={(layerId) => openLayerSettings(layerId)}
+                  onRenameLayer={handleRenameDesktop}
                   baseLayerId={baseLayerId}
                 />
               )}
@@ -1945,6 +2298,13 @@ function AppContent() {
                 documents={documents}
               />
 
+              {/*
+                The dock renders only when it has something in it. Draw used to
+                be its permanent last button, so an empty dock was impossible;
+                now that Draw is desktop-only, full-expand mode would otherwise
+                leave an empty glass pill floating over a maximized window.
+              */}
+              {((!isFullExpandMode && dockEntries.length > 0) || drawToolAvailable) && (
               <div
                 className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
                 style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
@@ -1986,31 +2346,45 @@ function AppContent() {
                     </div>
                   );
                 })}
-                {!isFullExpandMode && dockWindows.length > 0 && (
+                {!isFullExpandMode && dockWindows.length > 0 && drawToolAvailable && (
                   <Separator orientation="vertical" className="mx-0.5 h-6" />
                 )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDrawingActive(prev => !prev)}
-                  className={cn(
-                    'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
-                    drawingActive && 'border-border/70 bg-background/80 text-foreground shadow-sm',
-                  )}
-                  title={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
-                  aria-label={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
-                  aria-pressed={drawingActive}
-                >
-                  <Pencil className="size-4" />
-                </Button>
+                {drawToolAvailable && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDrawingActive(prev => !prev)}
+                    className={cn(
+                      'relative size-8 rounded-xl border border-transparent text-foreground/90 transition-colors hover:bg-background/70 hover:text-foreground',
+                      drawingActive && 'border-border/70 bg-background/80 text-foreground shadow-sm',
+                    )}
+                    title={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                    aria-label={drawingActive ? 'Stop drawing' : 'Draw on canvas'}
+                    aria-pressed={drawingActive}
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                )}
               </div>
+              )}
 
             </CanvasDropZone>
           </main>
         </div>
 
-        {showTour && <OnboardingTour onComplete={handleTourComplete} />}
+        {showTour && (
+          <OnboardingTour
+            onComplete={handleTourComplete}
+            onInvite={handleOpenUsers}
+            workspaceId={activeWorkspaceId || null}
+            workspaceReadiness={workspaceReadiness}
+            onRetryWorkspaceSetup={retryWorkspaceSetup}
+            agents={agents}
+            connections={agentConnections}
+            createAgent={createAgent}
+          />
+        )}
 
         <CommandPalette
           open={commandPaletteOpen}
@@ -2090,8 +2464,18 @@ function AppContent() {
         </AlertDialog>
       </div>
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
+      <FeedbackButton
+        workspaceId={activeWorkspaceId || null}
+        userId={user.id}
+        contextLabel={viewedLayer.name || activeWorkspace?.name || ''}
+      />
+      <HuddleDock />
       <AppUpdateManager />
+      {/* Renders nothing unless an owner broadcast for the 'dialog' surface is
+          waiting; closing it is the server-side dismissal. */}
+      <OwnerMessageDialog />
       <Toaster />
+      </OwnerMessageProvider>
     </TooltipProvider>
   );
 }
@@ -2135,10 +2519,13 @@ function CanvasLayerScene({
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onDisconnectAgent,
   focusedAgentKey,
   onAgentProfile,
+  onSessionMetaSaved,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
+  onConfigureAgentWebhook,
   onOpenConnections,
   topLevelMessages,
   threadMessages,
@@ -2152,7 +2539,6 @@ function CanvasLayerScene({
   subThreadStreaming,
   onOpenSubThread,
   onCloseSubThread,
-  onCreateSubThread: onCreateSubThreadProp,
   onSendSubThreadMessage,
   onSplitThread,
   useWorkspaceCtx,
@@ -2164,11 +2550,17 @@ function CanvasLayerScene({
   onFocusWindow,
   onUpdateWindow,
   onMinimizeWindow,
+  onMinimizeWindowGroup,
+  onUngroupTiledWindows,
+  onFocusWindowGroup,
   onShareWindow,
   onSendMessage,
   onSetActiveSession,
+  onOpenSessionById,
   onDeleteDocument,
   onAutoSaveDocument,
+  onAddToCanvasApplet,
+  fetchDocumentContent,
   onToggleFavorite,
   onAddFact,
   onUpdateFact,
@@ -2219,13 +2611,16 @@ function CanvasLayerScene({
   contextCounts: WorkspaceContextCounts;
   contextCountsTitle: string;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onCreateAgent: (input: CreateAgentInput) => void;
+  onCreateAgent: (input: CreateAgentInput) => Promise<boolean>;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  onDisconnectAgent: (id: string) => Promise<unknown>;
   focusedAgentKey: string | null;
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  onConfigureAgentWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
   onOpenConnections: () => void;
   topLevelMessages: import('./types').Message[];
   threadMessages: import('./types').Message[];
@@ -2239,23 +2634,31 @@ function CanvasLayerScene({
   subThreadStreaming: boolean;
   onOpenSubThread: (session: import('./types').ChatSession) => void;
   onCloseSubThread: () => void;
-  onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
   onSplitThread: (source: import('./types').ChatSession) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
-  onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  // false = no channel was created, so the composer must keep the draft.
+  onHomeSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => Promise<boolean>;
   onNewDocument: () => void;
   onOpenSchedules: () => void;
   onCloseWindow: (winId: string) => void;
   onFocusWindow: (winId: string) => void;
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onMinimizeWindow: (id: string) => void;
+  onMinimizeWindowGroup: (groupId: string) => void;
+  onUngroupTiledWindows: (groupId: string) => void;
+  onFocusWindowGroup: (groupId: string, leadId: string) => void;
   onShareWindow: (title: string) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
+  // Resolves `{ delivered: false }` when the message was rejected and rolled
+  // back, so the composer that called it can restore the draft.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
+  onOpenSessionById: (sessionId: string) => void;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
+  onAddToCanvasApplet: (doc: Document) => void;
+  fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
@@ -2294,6 +2697,22 @@ function CanvasLayerScene({
     [windows],
   );
 
+  // One frame per visible group, drawn behind its members at their union box.
+  const groupFrames = useMemo(() => {
+    const ids = new Set(renderedWindows.map(w => w.groupId).filter(Boolean) as string[]);
+    return [...ids].map(groupId => {
+      const bounds = computeGroupBounds(groupId, renderedWindows);
+      if (!bounds) return null;
+      const members = renderedWindows.filter(w => w.groupId === groupId && !w.minimized);
+      return { groupId, bounds, members, baseZIndex: Math.min(...members.map(w => w.zIndex)) };
+    }).filter(Boolean) as Array<{ groupId: string; bounds: NonNullable<ReturnType<typeof computeGroupBounds>>; members: FloatingWindow[]; baseZIndex: number }>;
+  }, [renderedWindows]);
+
+  const groupRoleByWindowId = useMemo(
+    () => new Map(windows.map(w => [w.id, computeGroupRole(w, windows)])),
+    [windows],
+  );
+
   // Identical for every chat window — build once instead of per-window in the map.
   const contextControlsElement = useMemo(() => (
     <KnowledgeContextControl
@@ -2321,11 +2740,26 @@ function CanvasLayerScene({
 
       <CanvasSelectionLayer />
 
+      {groupFrames.map(frame => (
+        <WindowGroupFrame
+          key={`group-${frame.groupId}`}
+          groupId={frame.groupId}
+          bounds={frame.bounds}
+          members={frame.members}
+          baseZIndex={frame.baseZIndex}
+          onMinimizeGroup={onMinimizeWindowGroup}
+          onUngroup={onUngroupTiledWindows}
+          onCloseGroup={gid => renderedWindows.filter(w => w.groupId === gid).forEach(w => onCloseWindow(w.id))}
+          onFocusGroup={onFocusWindowGroup}
+        />
+      ))}
+
       {renderedWindows.map(win => {
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
         const adjacentEdges = adjacencyByWindowId.get(win.id);
+        const groupRole = groupRoleByWindowId.get(win.id);
 
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
@@ -2335,6 +2769,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2362,6 +2797,7 @@ function CanvasLayerScene({
                     selectedAgent={selectedAgent}
                     onSelectAgent={onSelectAgent}
                     onAgentProfile={onAgentProfile}
+                    onSessionMetaSaved={onSessionMetaSaved}
                     canvasGroups={canvasGroups}
                     canvasObjects={canvasObjects}
                     workspaceId={workspaceId}
@@ -2415,7 +2851,6 @@ function CanvasLayerScene({
                     subThreadStreaming={subThreadStreaming}
                     onOpenSubThread={onOpenSubThread}
                     onCloseSubThread={onCloseSubThread}
-                    onCreateSubThread={onCreateSubThreadProp}
                     onSendSubThreadMessage={onSendSubThreadMessage}
                     channelTitle={winSession?.title || win.title}
                     currentUserId={userId}
@@ -2448,6 +2883,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2468,6 +2904,8 @@ function CanvasLayerScene({
                 onCloseWindow={onCloseWindow}
                 onUpdateWindow={onUpdateWindow}
                 onRequestConfirm={onRequestConfirm}
+                onAddToCanvasApplet={onAddToCanvasApplet}
+                fetchDocumentContent={fetchDocumentContent}
                 document={doc}
                 workspaceId={workspaceId}
                 userId={userId}
@@ -2489,6 +2927,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2525,6 +2964,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2543,6 +2983,7 @@ function CanvasLayerScene({
                 agents={agents}
                 agentConnections={agentConnections}
                 systemCapabilities={systemCapabilities}
+                workspaceId={workspaceId}
               />
             </FloatingWindowShell>
           );
@@ -2555,6 +2996,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2584,6 +3026,7 @@ function CanvasLayerScene({
                 onToggleStatus={onToggleTaskStatus}
                 onDeleteTask={onDeleteTask}
                 onUpdateAgent={onUpdateAgent}
+                onOpenSession={onOpenSessionById}
                 focusTaskId={win.focusTaskId}
               />
             </FloatingWindowShell>
@@ -2597,6 +3040,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2615,6 +3059,8 @@ function CanvasLayerScene({
                 <ActivityWindowContent
                   events={activityEvents}
                   loading={activityLoading}
+                  workspaceId={workspaceId}
+                  currentUserId={userId}
                 />
               </Suspense>
             </FloatingWindowShell>
@@ -2628,6 +3074,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2647,14 +3094,52 @@ function CanvasLayerScene({
                   agents={agents}
                   webhooks={agentWebhooks}
                   connections={agentConnections}
+                  sessions={sessions}
+                  tasks={tasks}
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
                   currentUserId={userId}
                   focusedAgentKey={focusedAgentKey}
                   onCreateAgent={onCreateAgent}
                   onUpdateAgent={onUpdateAgent}
                   onDeleteAgent={onDeleteAgent}
+                  onDisconnectAgent={onDisconnectAgent}
                   onCreateWebhook={onCreateAgentWebhook}
                   onUpdateWebhook={onUpdateAgentWebhook}
+                  onConfigureWebhook={onConfigureAgentWebhook}
                   onOpenConnections={onOpenConnections}
+                />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'inbox') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Inbox size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <InboxWindowContent
+                  workspaceId={workspaceId}
+                  onOpenSession={onOpenSessionById}
                 />
               </Suspense>
             </FloatingWindowShell>
@@ -2668,6 +3153,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2701,6 +3187,7 @@ function CanvasLayerScene({
               window={win}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
               isMobile={isMobile}
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
@@ -2829,6 +3316,7 @@ function InactiveChatWindow({
   selectedAgent,
   onSelectAgent,
   onAgentProfile,
+  onSessionMetaSaved,
   canvasGroups,
   canvasObjects,
   workspaceId,
@@ -2851,6 +3339,8 @@ function InactiveChatWindow({
   selectedAgent: WorkspaceAgent | null;
   onSelectAgent: (agent: WorkspaceAgent | null) => void;
   onAgentProfile: (agentIdOrHandle?: string | null) => void;
+  /** Propagate a channel row edit to the app session list (sidebar). */
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   canvasGroups: CanvasGroup[];
   canvasObjects: CanvasObject[];
   workspaceId: string;
@@ -2860,11 +3350,16 @@ function InactiveChatWindow({
   systemCapabilities: SystemCapabilities | null;
   contextControls: React.ReactNode;
   onSetActiveSession: (session: ChatSession) => void;
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null) => void;
+  // Resolves `{ delivered: false }` when the message was rejected and rolled
+  // back, so the composer that called it can restore the draft.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean) => Promise<SendMessageResult>;
   onOpenThread: (messageId: string) => void;
 }) {
   const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
-  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
+  // Same channel view as useChat: top level PLUS broadcast thread replies. Agents
+  // work in threads now, so a top-level-only filter would show this window the
+  // humans' messages and no answers at all.
+  const topLevelMessages = useMemo(() => channelMessages(messages), [messages]);
   const threadReplyCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     messages.forEach(m => {
@@ -2877,7 +3372,7 @@ function InactiveChatWindow({
   const handleSendMessage = useCallback(
     (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
       onSetActiveSession(session);
-      onSendMessage(content, model, mf, docs, null, session);
+      return onSendMessage(content, model, mf, docs, null, session);
     },
     [onSetActiveSession, onSendMessage, session],
   );
@@ -2917,6 +3412,7 @@ function InactiveChatWindow({
       systemCapabilities={systemCapabilities}
       contextControls={contextControls}
       onSendMessage={handleSendMessage}
+      onSessionMetaSaved={onSessionMetaSaved}
       onOpenThread={handleOpenThread}
       channelTitle={session.title || windowTitle}
     />
@@ -2948,8 +3444,15 @@ function WorkspacePresenceAvatars({
 }) {
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // The trigger pill (measured anchor) and the portaled popover panel. The
+  // popover is portaled to document.body because the sidebar clips its own
+  // content (overflow-hidden for the rounded corners), so a w-96 panel wider
+  // than the sidebar would otherwise get cut off at the edge — same reason the
+  // agent status feed portals out (see AgentStatusFeedOverlay in Sidebar.tsx).
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
+  const [portalPos, setPortalPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
   const [inviteCopied, setInviteCopied] = useState(false);
-  const [alignLeft, setAlignLeft] = useState(false);
   const hoverCloseTimer = useRef<number | null>(null);
   const openOnHover = () => {
     if (hoverCloseTimer.current) {
@@ -2969,7 +3472,12 @@ function WorkspacePresenceAvatars({
   useEffect(() => {
     if (!expanded) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      // The popover is portaled out of panelRef, so check both the trigger
+      // wrapper and the portaled panel before treating a click as "outside".
+      const insideTrigger = panelRef.current?.contains(target);
+      const insidePopover = portalRef.current?.contains(target);
+      if (!insideTrigger && !insidePopover) {
         setExpanded(false);
       }
     };
@@ -2977,20 +3485,37 @@ function WorkspacePresenceAvatars({
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [expanded]);
 
-  // Flip the popover to open rightward when the trigger sits too close to the
-  // left edge for a right-anchored w-96 (384px) panel to fit. Measured before
-  // paint and on resize so it never flashes clipped.
+  // Position the portaled popover off the trigger pill's measured rect. The
+  // panel is fixed-positioned over document.body (it can't render inline — the
+  // sidebar clips it), anchored so its bottom sits just above the pill and it
+  // opens rightward over the canvas, where there's room. Measured before paint
+  // and on resize/scroll so it tracks the pill and never flashes clipped.
   useLayoutEffect(() => {
-    if (!expanded) return;
+    if (!expanded) {
+      setPortalPos(null);
+      return;
+    }
     const measure = () => {
-      const rect = panelRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      // Right-anchored panel would extend from rect.right leftward by 384px.
-      setAlignLeft(rect.right - 384 < 8);
+      const el = triggerRef.current;
+      if (!el) return;
+      const box = el.getBoundingClientRect();
+      const left = box.left;
+      // w-96 (384px), clamped so it never runs off the right of the viewport.
+      const width = Math.min(384, window.innerWidth - left - 16);
+      // Grow upward from just above the pill (8px gap, matching the old mb-2).
+      const bottom = window.innerHeight - box.top + 8;
+      setPortalPos({ left, bottom, width });
     };
     measure();
+    const observer = new ResizeObserver(measure);
+    if (triggerRef.current) observer.observe(triggerRef.current);
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
   }, [expanded]);
 
   if (users.length === 0) return null;
@@ -3014,8 +3539,15 @@ function WorkspacePresenceAvatars({
       onMouseEnter={openOnHover}
       onMouseLeave={closeOnHover}
     >
-      {expanded && (
-        <div className={cn('absolute bottom-full z-10 mb-2 w-96 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl', alignLeft ? 'left-0' : 'right-0')}>
+      {expanded && portalPos && createPortal(
+        <div
+          ref={portalRef}
+          data-presence-popover
+          className="fixed z-[9600] overflow-hidden rounded-lg border agensis-glass-panel text-popover-foreground shadow-xl"
+          style={{ left: portalPos.left, bottom: portalPos.bottom, width: portalPos.width }}
+          onMouseEnter={openOnHover}
+          onMouseLeave={closeOnHover}
+        >
           <div className="flex items-center justify-between border-b px-3 py-2">
             <div>
               <div className="text-sm font-semibold">Shared users and agents</div>
@@ -3168,9 +3700,10 @@ function WorkspacePresenceAvatars({
               );
             })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
-      <div className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
+      <div ref={triggerRef} className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-md backdrop-blur">
         <button
           type="button"
           onClick={() => setExpanded(prev => !prev)}
@@ -3246,31 +3779,115 @@ function WorkspacePresenceAvatars({
   );
 }
 
-function CanvasGridOverlay({
+/**
+ * The full-screen switcher: **workspaces** (projects) on top, the selected
+ * workspace's **desktops** below.
+ *
+ * It used to be one tier — a grid of `canvas_layers` under the heading "All
+ * workspaces" — so an account with three workspaces opened it and saw a single
+ * tile called "Workspace 1". Both tiers are now named for what they actually
+ * are, and the hierarchy (a workspace contains desktops) is on screen instead of
+ * being implied.
+ *
+ * Every decision about what a tile says, which one reads as current, and
+ * critically whether a desktop list may be shown under a given workspace's name
+ * lives in `src/lib/desktopOverlay.ts` and is unit-tested there. This is the
+ * painter. The props keep the code's `layer` vocabulary because App's state and
+ * handlers do — only what the user reads says "desktop".
+ *
+ * Selecting a workspace switches the app to it. That is a side effect beyond
+ * this overlay, and it is the deliberate choice: App loads desktops for the
+ * ACTIVE workspace only, so the alternative — fetching another workspace's
+ * desktops just to preview them — means the tier below can disagree with the
+ * tier above, which is the exact confusion this screen was built to remove. It
+ * is also what the user is asking for: you do not browse a workspace's desktops
+ * in order to stay where you are. The one frame where the loaded desktops still
+ * belong to the previous workspace is covered by the model's `pending` state.
+ */
+function WorkspaceDesktopOverlay({
+  workspaces,
+  activeWorkspaceId,
   layers,
+  layersWorkspaceId,
   objects,
   windows,
   activeLayerId,
   backgroundImage,
   onClose,
+  onSelectWorkspace,
+  onCreateWorkspace,
   onSelectLayer,
   onCreateLayer,
   onDeleteLayer,
   onOpenSettings,
+  onRenameLayer,
   baseLayerId,
 }: {
+  workspaces: Workspace[];
+  activeWorkspaceId: string;
   layers: CanvasLayer[];
+  /** The workspace `layers` was loaded for — NOT necessarily the active one. */
+  layersWorkspaceId: string | null;
   objects: CanvasObject[];
   windows: FloatingWindow[];
   activeLayerId: string;
   backgroundImage: string;
   onClose: () => void;
+  onSelectWorkspace: (id: string) => void;
+  onCreateWorkspace: () => void;
   onSelectLayer: (id: string) => void;
   onCreateLayer: () => void;
   onDeleteLayer: (id: string) => void;
   onOpenSettings: (id: string) => void;
+  onRenameLayer: (id: string, name: string) => Promise<boolean> | boolean;
   baseLayerId: string;
 }) {
+  const [renamingDesktopId, setRenamingDesktopId] = useState<string | null>(null);
+  const model = useMemo(
+    () => buildDesktopOverlay({
+      workspaces,
+      selectedWorkspaceId: activeWorkspaceId,
+      desktops: layers,
+      desktopsWorkspaceId: layersWorkspaceId,
+      activeDesktopId: activeLayerId,
+      baseDesktopId: baseLayerId,
+      objects,
+      windows,
+    }),
+    [workspaces, activeWorkspaceId, layers, layersWorkspaceId, activeLayerId, baseLayerId, objects, windows],
+  );
+
+  const renderWorkspaceTile = (tile: OverlayWorkspaceTile) => (
+    <button
+      key={tile.id}
+      type="button"
+      data-overlay-workspace={tile.id}
+      data-active={tile.active ? 'true' : undefined}
+      aria-current={tile.active ? 'true' : undefined}
+      onClick={() => onSelectWorkspace(tile.id)}
+      className={cn(
+        'flex min-w-0 items-center gap-2.5 rounded-xl border bg-card/80 p-2.5 text-left shadow-sm transition-colors',
+        'hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        tile.active && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
+      )}
+    >
+      {/* Initials on a solid colour, the same colour and letters the rail gives
+          this workspace. Never the `icon` column — see workspaceGlyph. */}
+      <span
+        aria-hidden="true"
+        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold tracking-tight text-white"
+        style={{ backgroundColor: tile.color }}
+      >
+        {tile.initials}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{tile.name}</span>
+      {tile.active && <Badge variant="secondary" className="shrink-0">Current</Badge>}
+      {!tile.active && tile.isSystem && (
+        <span className="shrink-0 text-xs text-muted-foreground">System</span>
+      )}
+    </button>
+  );
+
   return (
     <div
       onClick={onClose}
@@ -3281,106 +3898,159 @@ function CanvasGridOverlay({
       <div className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-md" />
       <div
         onClick={(e) => e.stopPropagation()}
-        className="relative flex max-h-full w-full max-w-6xl flex-col gap-5"
+        className="relative flex h-full max-h-full w-full max-w-6xl flex-col gap-4"
       >
-        <header className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">All workspaces</h2>
-            <p className="text-sm text-muted-foreground">Choose a workspace or create a new one</p>
+        <header className="flex shrink-0 items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-2xl font-bold text-foreground">Workspaces and desktops</h2>
+            <p className="text-sm text-muted-foreground">Pick a workspace, then a desktop inside it</p>
           </div>
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenSettings(activeLayerId)}>
               <Settings data-icon="inline-start" className="size-4" />
-              Workspace settings
+              Desktop settings
             </Button>
-            <Button type="button" onClick={onCreateLayer}>
+            <Button type="button" onClick={onCreateLayer} disabled={model.desktopTier === 'pending'}>
               <Layers3 data-icon="inline-start" className="size-4" />
-              New workspace
+              New desktop
             </Button>
           </div>
         </header>
 
-        <ScrollArea className="min-h-0">
-          <div className="grid grid-cols-1 gap-4 pb-1 sm:grid-cols-2 lg:grid-cols-4">
-            {layers.map(layer => {
-              const layerObjects = objects.filter(obj => (obj.layer_id || 'base') === layer.id);
-              const layerWindows = windows.filter(win => (win.canvasId || 'base') === layer.id && !win.minimized);
-              const isActive = layer.id === activeLayerId;
-              const previewCount = Math.min(layerObjects.length, 6);
-              return (
-                <Card
-                  key={layer.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectLayer(layer.id)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') onSelectLayer(layer.id);
-                  }}
-                  className={cn(
-                    'cursor-pointer shadow-lg transition-colors',
-                    isActive && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
-                  )}
-                >
-                  <CardContent className="flex flex-col gap-3 p-3">
-                    <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon-xs"
-                        className="absolute top-2 right-2 z-10 bg-popover/90"
-                        onClick={e => {
-                          e.stopPropagation();
-                          onOpenSettings(layer.id);
-                        }}
-                        title="Workspace settings"
-                        aria-label="Workspace settings"
-                      >
-                        <Settings />
-                      </Button>
-                      <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
-                      <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
-                        {Array.from({ length: previewCount }).map((_, index) => (
-                          <span
-                            key={index}
-                            className={cn(
-                              'self-center rounded-md bg-primary/70',
-                              index % 2 === 0 ? 'h-4' : 'h-2',
-                              index % 3 === 0 ? 'rounded-full' : 'rounded-md',
-                            )}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate text-sm font-bold text-foreground">{layer.name}</h3>
-                        <p className="text-xs text-muted-foreground">
-                          {layerObjects.length} items - {layerWindows.length} windows
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {isActive && <Badge variant="secondary">Current</Badge>}
-                        {layer.id !== baseLayerId && (
+        {/* The workspace tier. Capped at a third of the panel rather than given
+            a third: three workspaces in a strip that always reserves 300px
+            leaves a hole between the tiers that reads as a rendering fault. It
+            grows with the list and starts scrolling at the cap, so an account
+            with a dozen workspaces still cannot push the desktops off-screen. */}
+        <section aria-label="Workspaces" className="flex max-h-[33%] min-h-0 shrink-0 flex-col gap-2">
+          <h3 className="shrink-0 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Workspaces</h3>
+          <ScrollArea className="min-h-0">
+            <div className="grid grid-cols-1 gap-2 pb-1 pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {model.workspaces.map(renderWorkspaceTile)}
+              {model.systemWorkspaces.map(renderWorkspaceTile)}
+              <button
+                type="button"
+                onClick={onCreateWorkspace}
+                className="flex min-w-0 items-center gap-2.5 rounded-xl border border-dashed border-border p-2.5 text-left text-muted-foreground transition-colors hover:border-foreground/40 hover:bg-card/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span aria-hidden="true" className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-border">
+                  <Plus className="size-4" />
+                </span>
+                <span className="truncate text-sm font-semibold">New workspace</span>
+              </button>
+            </div>
+          </ScrollArea>
+        </section>
+
+        <div aria-hidden="true" className="h-px shrink-0 bg-border" />
+
+        <section aria-label="Desktops" className="flex min-h-0 flex-1 flex-col gap-2">
+          <h3 className="shrink-0 truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Desktops in {model.selectedWorkspaceName}
+          </h3>
+          {model.desktopTier !== 'ready' ? (
+            <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground">
+              {model.desktopTier === 'pending' ? DESKTOP_TIER_PENDING_MESSAGE : DESKTOP_TIER_EMPTY_MESSAGE}
+            </div>
+          ) : (
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="grid grid-cols-1 gap-4 pb-1 pr-1 sm:grid-cols-2 lg:grid-cols-4">
+                {model.desktops.map(tile => {
+                  const previewCount = Math.min(tile.itemCount, 6);
+                  return (
+                    <Card
+                      key={tile.id}
+                      role="button"
+                      tabIndex={0}
+                      data-overlay-desktop={tile.id}
+                      onClick={() => onSelectLayer(tile.id)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') onSelectLayer(tile.id);
+                      }}
+                      className={cn(
+                        'cursor-pointer shadow-lg transition-colors',
+                        tile.active && 'border-primary/40 bg-primary/10 ring-1 ring-primary/40',
+                      )}
+                    >
+                      <CardContent className="flex flex-col gap-3 p-3">
+                        <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl border bg-gradient-to-b from-card to-muted">
                           <Button
                             type="button"
-                            variant="destructive"
-                            size="xs"
+                            variant="secondary"
+                            size="icon-xs"
+                            className="absolute top-2 right-2 z-10 bg-popover/90"
                             onClick={e => {
                               e.stopPropagation();
-                              onDeleteLayer(layer.id);
+                              onOpenSettings(tile.id);
                             }}
+                            title="Desktop settings"
+                            aria-label="Desktop settings"
                           >
-                            Delete
+                            <Settings />
                           </Button>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </ScrollArea>
+                          <div className="absolute inset-3 rounded-lg border border-dashed border-border" />
+                          <div className="grid h-full grid-cols-3 grid-rows-2 gap-3 p-6">
+                            {Array.from({ length: previewCount }).map((_, index) => (
+                              <span
+                                key={index}
+                                className={cn(
+                                  'self-center rounded-md bg-primary/70',
+                                  index % 2 === 0 ? 'h-4' : 'h-2',
+                                  index % 3 === 0 ? 'rounded-full' : 'rounded-md',
+                                )}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            {renamingDesktopId === tile.id ? (
+                              <InlineRename
+                                value={tile.name}
+                                ariaLabel={`Rename ${tile.name}`}
+                                onCommit={(name: string) => onRenameLayer(tile.id, name)}
+                                onCancel={() => setRenamingDesktopId(null)}
+                              />
+                            ) : (
+                              <h3
+                                // Double-click, matching the rail: a single click
+                                // on a desktop tile switches to it.
+                                onDoubleClick={event => { event.preventDefault(); event.stopPropagation(); setRenamingDesktopId(tile.id); }}
+                                title="Double-click to rename"
+                                className="truncate text-sm font-bold text-foreground"
+                              >
+                                {tile.name}
+                              </h3>
+                            )}
+                            <p className="text-xs text-muted-foreground">
+                              {tile.itemCount} items - {tile.windowCount} windows
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {tile.active && <Badge variant="secondary">Current</Badge>}
+                            {tile.canDelete && (
+                              <Button
+                                type="button"
+                                variant="destructive"
+                                size="xs"
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  onDeleteLayer(tile.id);
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          )}
+        </section>
       </div>
     </div>
   );

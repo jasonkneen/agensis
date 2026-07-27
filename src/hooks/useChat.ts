@@ -4,6 +4,10 @@ import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiS
 import { computeThreadDivergence } from '../lib/threadMerge';
 import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
+import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
+import { channelMessages } from '../components/chat/channelView';
+import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
+import { isHuddleSession } from '../lib/huddleTranscript';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -15,10 +19,47 @@ import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 // what an agent sees.
 const MESSAGE_PAGE_SIZE = 200;
 
+/**
+ * What /backend/agents/dispatch decided.
+ *
+ * 'declined' exists because a bare boolean conflated "the channel chose not to
+ * wake anyone" with "dispatch broke", and the two want opposite handling: the
+ * first is the feature working, the second gets a fallback reply or a visible
+ * notice. See the reason constant below.
+ */
+type DispatchOutcome = 'dispatched' | 'declined' | 'failed';
+
+/** The server's reason for a deliberate non-dispatch. Must match server/index.cjs. */
+const DISPATCH_DECLINED_ON_MENTION_ONLY = 'channel_replies_on_mention_only';
+
+export interface CreateSessionResult {
+  session: ChatSession | null;
+  failure: WriteFailure | null;
+}
+
+export interface SendMessageResult {
+  /** The user's message reached the database. False means it is not saved. */
+  delivered: boolean;
+  failure: WriteFailure | null;
+}
+
+/**
+ * The sessions that are CHANNELS — the ones a person navigates between.
+ *
+ * Sub-threads are excluded by their parent_message_id, as they always were.
+ * Huddle transcripts have to be excluded explicitly: they carry no
+ * parent_message_id, so without this they are indistinguishable from a channel,
+ * and since the list is ordered by `updated_at` the app would open into the
+ * last voice call anybody held instead of into a real channel.
+ */
+function mainSessionsOf(sessions: ChatSession[]): ChatSession[] {
+  return sessions.filter(s => !s.parent_message_id && !s.deleted_at && !isHuddleSession(s));
+}
+
 export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     if (!seedSessions?.length) return [];
-    return seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+    return mainSessionsOf(seedSessions);
   });
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -40,7 +81,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
   useEffect(() => {
     if (!seedSessions) return;
-    const mainSessions = seedSessions.filter(s => !s.parent_message_id && !s.deleted_at);
+    const mainSessions = mainSessionsOf(seedSessions);
     setSessions(mainSessions);
     if (mainSessions.length > 0) {
       setActiveSession(prev => prev ?? mainSessions[0]);
@@ -58,13 +99,21 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       return data;
     });
     if (data) {
-      const mainSessions = data.filter(s => !s.parent_message_id && !s.deleted_at);
+      const mainSessions = mainSessionsOf(data);
       setSessions(mainSessions);
       if (mainSessions.length > 0) {
         setActiveSession(prev => prev ?? mainSessions[0]);
       }
     }
   }, [workspaceId]);
+
+  // Tracks the session currently on screen, synced DURING render so an in-flight
+  // fetchMessages from a previously-active session is ignored when its response
+  // lands, with no render→effect window (stale-response guard; mirrors
+  // useSessionMessages).
+  const activeSessionId = activeSession?.id ?? null;
+  const currentSessionRef = useRef<string | null>(activeSessionId);
+  currentSessionRef.current = activeSessionId;
 
   const fetchMessages = useCallback(async (sessionId: string) => {
     setLoading(true);
@@ -78,6 +127,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       const body = await res.json();
       return body?.data ?? { messages: [], hasMore: false };
     });
+    // Stale-response guard: the user may have switched sessions while this was
+    // in flight — painting it now would show this session's transcript under
+    // the new session's header/composer/thread panel. The newer fetch owns the
+    // loading flag from here on, so leave it alone too.
+    if (currentSessionRef.current !== sessionId) return;
     const rows = result?.messages ?? [];
     // Drop soft-deleted messages (a cleared/closed DM retains its rows in the DB
     // but they must never re-surface). The server already filters; this is belt.
@@ -130,13 +184,19 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     fetchSessions();
   }, [fetchSessions]);
 
+  // Depend on the session ID, not the session OBJECT: updateSession /
+  // autoTitleSession hand setActiveSession a fresh object for the SAME session,
+  // and re-running fetchMessages there replaces `messages` wholesale — wiping
+  // client-only rows such as the in-flight streaming assistant placeholder.
   useEffect(() => {
-    if (activeSession) fetchMessages(activeSession.id);
-    else setMessages([]);
-  }, [activeSession, fetchMessages]);
+    if (activeSessionId) fetchMessages(activeSessionId);
+    // No session to load: clear the transcript and release the loading flag,
+    // since the stale-response guard above leaves it to whoever loads next.
+    else { setMessages([]); setLoading(false); }
+  }, [activeSessionId, fetchMessages]);
 
   const messageDeduper = useRealtimeDeduper();
-  const sessionId = activeSession?.id ?? null;
+  const sessionId = activeSessionId;
   useTableSubscription<Message>(
     {
       enabled: !!sessionId,
@@ -170,15 +230,22 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     },
   );
 
-  const createSession = useCallback(async (model = 'auto', initial: Partial<ChatSession> = {}) => {
-    if (!workspaceId) return null;
-    if (!navigator.onLine) return null;
+  // Returns the failure as well as the row. Every caller of this opens a window
+  // or sends a message next; when the insert is rejected there is nothing to
+  // open, and each of them used to just `return` — which is exactly what the
+  // "+ makes no channel and says nothing" report was.
+  const createSession = useCallback(async (
+    model = 'auto',
+    initial: Partial<ChatSession> = {},
+  ): Promise<CreateSessionResult> => {
+    if (!workspaceId) return { session: null, failure: WORKSPACE_UNAVAILABLE };
+    if (!navigator.onLine) return { session: null, failure: classifyWriteFailure(null, { online: false }) };
     const initialFields: Record<string, unknown> = { ...initial };
     delete initialFields.id;
     delete initialFields.workspace_id;
     delete initialFields.created_at;
     delete initialFields.updated_at;
-    const { data } = await backendClient
+    const { data, error } = await backendClient
       .from('chat_sessions')
       .insert({
         workspace_id: workspaceId,
@@ -192,8 +259,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       setSessions(prev => [data, ...prev]);
       setActiveSession(data);
       setMessages([]);
+      return { session: data, failure: null };
     }
-    return data;
+    return { session: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, [workspaceId]);
 
   // Split a thread: clone the session as a new top-level thread and copy its
@@ -215,6 +283,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         model: source.model || 'auto',
         conversation_mode: source.conversation_mode ?? 'auto',
         folder: source.folder ?? null,
+        canvas_id: source.canvas_id ?? null,
         participants: source.participants ?? null,
         // Lineage: link the fork to its source so the sidebar can render it
         // indented under the parent, and merge can diff messages after the
@@ -238,8 +307,13 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // Copy only top-level messages (not in-session sub-thread replies). The
     // backendClient query builder has no `.is()`, so filter client-side exactly
     // like the main view does (see topLevelMessages below).
-    const topLevel = ((sourceMessages || []) as Message[]).filter(m => !m.thread_parent_id);
+    const topLevel = channelMessages((sourceMessages || []) as Message[]);
     if (topLevel.length > 0) {
+      // Every copy MUST carry the same keys: both backends derive the INSERT
+      // column list from the first row only, so a key that is absent from
+      // copies[0] is silently dropped for the whole batch — a channel that
+      // opens with a human message (no sender_*) would strip agent identity
+      // from every copied agent reply. Emit `?? null` instead of omitting.
       const copies = topLevel.map(m => {
         const row: Record<string, unknown> = {
           id: crypto.randomUUID(),
@@ -247,10 +321,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
           role: m.role,
           content: m.content,
           created_at: m.created_at,
+          sender_kind: m.sender_kind ?? null,
+          sender_id: m.sender_id ?? null,
+          sender_name: m.sender_name ?? null,
         };
-        if (m.sender_kind) row.sender_kind = m.sender_kind;
-        if (m.sender_id) row.sender_id = m.sender_id;
-        if (m.sender_name) row.sender_name = m.sender_name;
         return row;
       });
       await backendClient.from('messages').insert(copies);
@@ -277,12 +351,31 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     return data as ChatSession | null;
   }, []);
 
+  /**
+   * Patch a session already saved elsewhere into the local list.
+   *
+   * updateSession WRITES then patches; this only patches. The channel editor
+   * saves through its own validating route (which normalizes icon, intent and
+   * participants), so re-writing here would be a second write with a weaker
+   * shape — but the sidebar reads THIS list and has to be told, or a rename
+   * shows in the channel header and nowhere else until a reload.
+   */
+  const patchSessionLocal = useCallback((id: string, patch: Partial<ChatSession>) => {
+    if (!id) return;
+    setSessions(prev => prev.map(session => (session.id === id ? { ...session, ...patch } : session)));
+    setActiveSession(prev => (prev?.id === id ? { ...prev, ...patch } : prev));
+  }, []);
+
   const archiveSession = useCallback((id: string, archived = true) => {
     return updateSession(id, { archived_at: archived ? new Date().toISOString() : null });
   }, [updateSession]);
 
-  // Top-level messages (no thread parent)
-  const topLevelMessages = useMemo(() => messages.filter(m => !m.thread_parent_id), [messages]);
+  // What the CHANNEL shows: top-level messages PLUS thread replies explicitly
+  // broadcast to the channel. An agent works inside a thread now (placeholder,
+  // tool chips, intermediate blocks all stay there) and only its final answer is
+  // flagged, so filtering on thread_parent_id alone would leave the channel empty
+  // apart from the human's own messages. See components/chat/channelView.ts.
+  const topLevelMessages = useMemo(() => channelMessages(messages), [messages]);
 
   // Thread messages for the active thread
   const threadMessages = useMemo(() => activeThreadId
@@ -312,7 +405,13 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     session: ChatSession,
     content: string,
     threadParentId?: string | null,
-  ): Promise<Message> => {
+    broadcastToChannel?: boolean,
+  ): Promise<{ message: Message | null; error: { message: string; code?: string | null } | null }> => {
+    // "Send to channel" from the thread composer. Only meaningful for a reply that
+    // has a thread to be broadcast OUT of — a top-level message is already in the
+    // channel, and flagging it would just make it render its own "from a thread"
+    // affordance pointing nowhere.
+    const broadcast = Boolean(broadcastToChannel && threadParentId);
     const userMsg: Message = {
       id: crypto.randomUUID(),
       session_id: session.id,
@@ -320,6 +419,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       content,
       sender_name: currentUserName || null,
       thread_parent_id: threadParentId ?? null,
+      broadcast_to_channel: broadcast,
       created_at: new Date().toISOString(),
     };
 
@@ -333,9 +433,22 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     };
     if (currentUserName) insertPayload.sender_name = currentUserName;
     if (threadParentId) insertPayload.thread_parent_id = threadParentId;
-    await backendClient.from('messages').insert(insertPayload);
+    if (broadcast) insertPayload.broadcast_to_channel = true;
+    const { error } = await backendClient.from('messages').insert(insertPayload);
 
-    return userMsg;
+    // backendClient swallows HTTP failures into { error } instead of throwing,
+    // so an unchecked insert left a phantom message on screen after a 403
+    // (viewer role), 429 (rate limit) or 500 — and the caller then dispatched a
+    // messageId the server never stored. Roll the optimistic row back like the
+    // other optimistic mutations do (see handleTogglePin) and report the error.
+    // Offline sends are exempt: sendMessage's offline branch deliberately keeps
+    // the row and posts its own "will be sent when you reconnect" notice.
+    if (error && navigator.onLine) {
+      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+      return { message: null, error };
+    }
+
+    return { message: userMsg, error };
   }, [currentUserName]);
 
   const autoTitleSession = useCallback(async (
@@ -385,7 +498,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     docContext: string | null,
     workspaceContext?: WorkspaceContextSnapshot | null,
     threadParentId?: string | null,
-  ): Promise<boolean> => {
+  ): Promise<DispatchOutcome> => {
     const dispatchResponse = await fetch(apiUrl('/backend/agents/dispatch'), {
       method: 'POST',
       headers: {
@@ -418,14 +531,23 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         const next = normalizeMessage(dispatchPayload.data.message);
         return prev.some(message => message.id === next.id) ? prev : [...prev, next];
       });
-      return true;
+      return 'dispatched';
     }
 
     if (dispatchResponse?.ok && dispatchPayload?.data?.dispatched) {
-      return true;
+      return 'dispatched';
     }
 
-    return false;
+    // The channel is set to answer only when asked, and this post asked nobody.
+    // That is a decision, not a failure: no fallback reply, no "couldn't reach
+    // the agent" notice. Every OTHER dispatched:false reason keeps its previous
+    // meaning — 'serverless_dispatch_unavailable' in particular is how a
+    // Netlify-only deploy falls through to the direct-AI path.
+    if (dispatchResponse?.ok && dispatchPayload?.data?.reason === DISPATCH_DECLINED_ON_MENTION_ONLY) {
+      return 'declined';
+    }
+
+    return 'failed';
   }, [workspaceId]);
 
   const streamDirectAI = useCallback(async (
@@ -592,12 +714,15 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     agent?: WorkspaceAgent | null,
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
-  ) => {
+    broadcastToChannel?: boolean,
+  ): Promise<SendMessageResult> => {
     const session = targetSession ?? activeSession;
-    if (!session) return;
+    // No session to send into: the composer must keep the draft rather than
+    // clearing it into nothing.
+    if (!session) return { delivered: false, failure: WORKSPACE_UNAVAILABLE };
 
     if (!navigator.onLine) {
-      await insertUserMessage(session, content, threadParentId);
+      await insertUserMessage(session, content, threadParentId, broadcastToChannel);
       const offlineReply: Message = {
         id: crypto.randomUUID(),
         session_id: session.id,
@@ -607,10 +732,31 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         created_at: new Date().toISOString(),
       };
       setMessages(prev => [...prev, offlineReply]);
-      return;
+      // Deliberately reported as delivered: the offline branch keeps the row on
+      // screen and posts its own notice, so the user's words are still visible
+      // and the composer is free to clear.
+      return { delivered: true, failure: null };
     }
 
-    const userMsg = await insertUserMessage(session, content, threadParentId);
+    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel);
+    // The message never reached the DB (viewer role, rate limit, server error).
+    // The optimistic row is already rolled back; say why and abort before
+    // dispatch/stream run against a messageId the server has never seen.
+    if (!userMsg) {
+      if (activeSession?.id === session.id) {
+        setMessages(prev => [...prev, {
+          id: crypto.randomUUID(),
+          session_id: session.id,
+          role: 'assistant',
+          content: `Couldn't send your message — ${errorMessage(sendError)}`,
+          thread_parent_id: threadParentId ?? null,
+          created_at: new Date().toISOString(),
+        }]);
+      }
+      // Not delivered: the composer restores the draft so the words the user
+      // typed are not destroyed along with the send.
+      return { delivered: false, failure: classifyWriteFailure(sendError, { online: navigator.onLine }) };
+    }
     await autoTitleSession(session, content, threadParentId);
 
     // NET-05: the on-screen `messages` state is a PAGINATED window (newest page
@@ -630,12 +776,15 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     if (threadParentId) {
       contextMessages = sessionMessages.filter((m: Message) => m.thread_parent_id === threadParentId || m.id === threadParentId);
     } else {
-      contextMessages = sessionMessages.filter((m: Message) => !m.thread_parent_id);
+      // Mirror the server's channel-level context (loadChannelMessages): top-level
+      // plus broadcast thread replies. Without the broadcast half, a channel whose
+      // agents work in threads would look to the model like nobody ever answered.
+      contextMessages = channelMessages(sessionMessages);
     }
 
     const { memoryContext, docContext } = buildContextStrings(memoryFacts, linkedDocuments, contextMessages);
 
-    const hasMention = Boolean(firstAgentMention(content));
+    const hasMention = Boolean(firstAgentMention(content)) || mentionsChannel(content);
     const threadHasAgentTarget = Boolean(threadParentId && hasAgentTargetInThread(contextMessages));
     const directParticipant = directAgentParticipantRecord(session);
     const directAgentChannel = Boolean(directParticipant);
@@ -645,10 +794,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // would hit neither directAgentChannel nor autoChannel (autoChannel excludes
     // DMs) and silently never dispatch, so the agent never replies.
     const folderDm = session.folder === 'Direct messages';
-    // AUTO is always on for channels now (no per-channel toggle): any non-DM
-    // channel lets participant agents chime in on new messages. DMs route via
-    // their direct participant or the folder fallback above.
-    const autoChannel = session.folder !== 'Direct messages';
+    // A non-DM channel lets participant agents chime in on an un-addressed
+    // message — but only when the channel's own reply timing allows it. Same
+    // decision the server makes (shared/channelMentions.cjs), asked here so a
+    // 'mention'-timed channel makes no request at all rather than one that comes
+    // back refused. DMs route via their direct participant or the folder
+    // fallback above and are never governed by the mode.
+    const autoChannel = session.folder !== 'Direct messages'
+      && allowsUnpromptedReply({ conversationMode: session.conversation_mode });
     const sharedModelRoute = isSharedModelRoute(model);
     const shouldRouteToAgent = Boolean(!sharedModelRoute && workspaceId && (hasMention || threadHasAgentTarget || directAgentChannel || folderDm || autoChannel));
 
@@ -663,7 +816,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         workspaceContext,
         threadParentId,
       );
-      if (dispatched) return;
+      if (dispatched === 'dispatched') return { delivered: true, failure: null };
+      // The channel answers only when asked and nobody was asked. The message is
+      // posted and that is the whole intent — no fallback reply, no notice.
+      if (dispatched === 'declined') return { delivered: true, failure: null };
       // Dispatch failed. If there's a direct-AI fallback (agent/direct
       // participant) fall through to it; otherwise surface the failure instead
       // of returning silently and leaving the user's message looking sent (M6).
@@ -681,10 +837,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
             created_at: new Date().toISOString(),
           }]);
         }
-        return;
+        // The message itself IS saved — only the reply is missing — so the
+        // composer keeps its clear. The notice above owns the explanation.
+        return { delivered: true, failure: null };
       }
     } else if (!agent && !sharedModelRoute) {
-      return;
+      return { delivered: true, failure: null };
     }
 
     await streamDirectAI(
@@ -699,6 +857,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       directParticipant,
       threadParentId,
     );
+    return { delivered: true, failure: null };
   }, [activeSession, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
 
   // Merge a split fork back into its parent. "What changed" = the messages
@@ -726,8 +885,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       backendClient.from('messages').select('*').eq('session_id', parentId).order('created_at', { ascending: true }),
       backendClient.from('messages').select('*').eq('session_id', fork.id).order('created_at', { ascending: true }),
     ]);
-    const parentTop = (parentRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
-    const forkTop = (forkRes.data || []).filter((m: Message) => !m.thread_parent_id && !m.deleted_at);
+    // Channel view, not strictly top level: an agent's answer is now a BROADCAST
+    // thread reply, so a top-level-only diff would show the two branches' human
+    // prompts and none of the answers the merge is supposed to reconcile.
+    const parentTop = channelMessages((parentRes.data || []).filter((m: Message) => !m.deleted_at));
+    const forkTop = channelMessages((forkRes.data || []).filter((m: Message) => !m.deleted_at));
     // Divergence by set-difference of the shared (copied) history — clock-skew
     // safe (M7); see computeThreadDivergence.
     const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);
@@ -752,18 +914,28 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
     // Land on the parent so the synthesis renders in place, then dispatch.
     setActiveSession(parent);
-    const userMsg = await insertUserMessage(parent, prompt);
-    const dispatched = await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null);
+    const { message: userMsg } = await insertUserMessage(parent, prompt);
+    // A rejected insert leaves nothing for the agent to answer, so treat it
+    // exactly like a failed dispatch below: keep the fork, surface the failure.
+    const dispatched: DispatchOutcome = userMsg
+      ? await dispatchToAgent(parent, userMsg, prompt, parentTop, null, null)
+      : 'failed';
 
     // If the synthesis dispatch failed, keep the fork (do NOT soft-delete) so
     // the merge can be retried, and surface the failure instead of silently
-    // destroying the branch with no synthesis (M6).
-    if (!dispatched) {
+    // destroying the branch with no synthesis (M6). 'declined' counts as a
+    // failure HERE even though it is a success elsewhere: a merge exists to
+    // produce a synthesis, and a channel set to answer only when asked has not
+    // been asked — soft-deleting the fork would destroy the branch and leave
+    // nothing in its place.
+    if (dispatched !== 'dispatched') {
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         session_id: parent.id,
         role: 'assistant',
-        content: "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
+        content: dispatched === 'declined'
+          ? 'This channel is set so nobody has to answer unless asked, so no agent picked up the merge — the split branch has been kept. @mention the agent you want to synthesize it.'
+          : "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
         created_at: new Date().toISOString(),
       }]);
       return { status: 'error', parent };
@@ -827,6 +999,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     createSession,
     splitSession,
     updateSession,
+    patchSessionLocal,
     archiveSession,
     sendMessage,
     deleteSession,

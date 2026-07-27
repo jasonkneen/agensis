@@ -16,6 +16,12 @@
 // ============================================================================
 
 const crypto = require('node:crypto');
+const {
+ WORKSPACE_MAX_DEPTH,
+ wouldCreateCycle,
+ wouldExceedMaxDepth,
+ roleSetHasCapability,
+} = require('./workspace-tree.cjs');
 
 // ----------------------------------------------------------------------------
 // Allow-sets and role/capability tables — lifted VERBATIM from server/index.cjs.
@@ -32,6 +38,7 @@ const ALLOWED_TABLES = new Set([
  'uploaded_files',
  'workspace_members',
  'canvas_groups',
+ 'canvas_layers',
  'canvas_objects',
  'tasks',
  'document_comments',
@@ -46,6 +53,29 @@ const ALLOWED_TABLES = new Set([
  'agent_memory_files',
  'memory_file_comments',
  'thread_items',
+ 'activity_event_comments',
+ // Huddles are READ through the generic /db path (and, more importantly,
+ // subscribed to over realtime db_changes so the channel card is live). Every
+ // write goes through the dedicated /backend/workspaces/:id/.../huddle routes in
+ // server/huddles.cjs — see DB_TABLE_ACCESS below, which gates generic writes to
+ // 'manage' so the token-minting and webhook-authority paths cannot be bypassed.
+ 'huddles',
+ 'huddle_events',
+ // In-app feedback reports. READ through the generic /db path on purpose: that
+ // routes read authorization through enforceDbOperationAccess -> 'read' on the
+ // report's workspace, which is the System workspace — so "only members of the
+ // System workspace can read feedback" is enforced by the SAME membership gate
+ // as every other table, with no bespoke authorization path to get wrong.
+ // Every WRITE is gated to 'manage' below: reports are created only by the
+ // dedicated, rate-limited POST /backend/feedback route (any signed-in user),
+ // never by a browser reaching /backend/db/insert.
+ 'feedback_reports',
+ // Orb delivery ledger (plans/021). READ through the generic /db path so the
+ // delivery list is live over realtime db_changes; every write comes from the
+ // trigger route itself, and DB_TABLE_ACCESS gates generic writes to 'manage'
+ // so a client cannot forge or erase a delivery record. Same shape as
+ // agent_schedule_runs, for the same reason.
+ 'orb_deliveries',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -60,6 +90,7 @@ const VERSIONED_TABLES = new Set([
  'memory_facts',
  'uploaded_files',
  'canvas_groups',
+ 'canvas_layers',
  'canvas_objects',
  'tasks',
  'document_comments',
@@ -68,16 +99,20 @@ const VERSIONED_TABLES = new Set([
  'agent_webhooks',
  'agent_memory_files',
  'memory_file_comments',
+ 'activity_event_comments',
 ]);
 
 const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
- workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config']),
+ workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config', 'identity']),
+ agent_webhooks: new Set(['payload_fields']),
  agent_connections: new Set(['metadata', 'capabilities']),
+ agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
  activity_events: new Set(['metadata']),
  messages: new Set(['reactions']),
+ feedback_reports: new Set(['page', 'selections', 'diagnostics']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -111,12 +146,13 @@ function toPgArrayLiteral(value) {
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
- 'canvas_groups', 'canvas_objects', 'tasks', 'document_comments',
+ 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'document_comments',
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
- 'agent_schedules', 'agent_schedule_runs',
+ 'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
+ 'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -141,6 +177,9 @@ const DB_TABLE_ACCESS = {
  memory_facts: DEFAULT_TABLE_ACCESS,
  uploaded_files: DEFAULT_TABLE_ACCESS,
  canvas_groups: DEFAULT_TABLE_ACCESS,
+ // A layer is no more privileged than the objects drawn on it: same read/write
+ // capabilities as canvas_objects, so anyone who can draw can name a canvas.
+ canvas_layers: DEFAULT_TABLE_ACCESS,
  canvas_objects: DEFAULT_TABLE_ACCESS,
  tasks: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
@@ -162,9 +201,32 @@ const DB_TABLE_ACCESS = {
  // run_agents path can't bypass that validation; runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Orb deliveries are written ONLY by the trigger route (which is where the
+ // dedupe gate lives): a client-forged row would let an attacker pre-claim a
+ // delivery id and make the next real delivery look like a duplicate, and a
+ // client DELETE would erase the audit trail. Reads stay at 'read'.
+ orb_deliveries: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
+ activity_event_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
+ // Read-only to the client on purpose. Huddle rows are created/ended by the
+ // dedicated routes (which mint the LiveKit join token) and huddle_events is
+ // APPEND-ONLY, written only by those routes and by the signed LiveKit webhook.
+ // If a browser could insert a huddle_events row it could claim someone was in a
+ // call, which is exactly the server-side-authority property this feature has.
+ // 'manage' (not 'write') so an editor cannot reach these through /backend/db.
+ huddles: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ huddle_events: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // SELECT is the whole point: a member of the System workspace reads the
+ // reports filed against the product. 'read' means the generic gate resolves
+ // the row's workspace and demands membership of it, so one user can never see
+ // another user's report — the reporter is not a member and gets 403.
+ // INSERT is 'manage', NOT 'write': submitting must stay on the dedicated
+ // rate-limited route, which is the only place that resolves the System
+ // workspace server-side and runs the server's own redaction pass. A generic
+ // insert would let a client choose the workspace and skip both.
+ feedback_reports: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
@@ -181,7 +243,85 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'content_sha256',
   'type',
  ]),
+ // M6 (2026-07 review): the generic gate authorizes a workspaces UPDATE on the
+ // 'manage' capability, and 'admin' is an invitable role that HAS 'manage' — so
+ // without a column guard any admin could POST /backend/db/update
+ // {table:'workspaces', values:{user_id:'<their id>'}} and take ownership, or
+ // rewrite the MCP client credential. Ownership transfer and MCP credentials
+ // have their own dedicated routes; they are never a generic column write.
+ workspaces: new Set([
+  'user_id',
+  'mcp_token_hash',
+  'mcp_auto_approve',
+ ]),
 };
+
+// Columns a generic /backend/db write MAY still set, but only for a caller who
+// has 'manage' on the workspace. Unlike PRIVILEGED_DB_COLUMNS_BY_TABLE (which is
+// stripped outright), these back real product features whose ONLY writer is the
+// generic db route, so blocking them would break the feature:
+//
+//   workspace_agents.metadata carries `host_folders`, which dispatch forwards to
+//   the daemon and buildAgentCommand turns into `--add-dir <path>` for the coding
+//   CLI. A member with only 'write' could otherwise widen an agent's filesystem
+//   access to `/` or `~/.ssh` (H3, 2026-07 review). sandbox_provider /
+//   sandbox_config likewise choose where and how agent code executes.
+const MANAGE_ONLY_DB_COLUMNS_BY_TABLE = {
+ workspace_agents: new Set([
+  'metadata',
+  'sandbox_provider',
+  'sandbox_config',
+ ]),
+};
+
+// True when `values` actually SETS one of the manage-only columns. A key that is
+// absent, null, an empty string or an empty object does not count: the Agents
+// window sends `sandbox_provider: null` / `sandbox_config: {}` on every agent
+// create, and clearing a value is never an escalation. A JSON *string* payload
+// (the jsonb columns accept one) is treated as a real value.
+function setsManageOnlyDbColumn(table, values) {
+ const elevated = MANAGE_ONLY_DB_COLUMNS_BY_TABLE[table];
+ if (!elevated) return false;
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return false;
+ for (const key of elevated) {
+  if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+  const value = values[key];
+  if (value == null) continue;
+  if (typeof value === 'string' && value.trim() === '') continue;
+  if (typeof value === 'object' && Object.keys(value).length === 0) continue;
+  return true;
+ }
+ return false;
+}
+
+// Columns a generic /backend/db/select may return, per table. Tables with no
+// entry are unrestricted (unchanged behaviour). app_users is listed because the
+// gate below deliberately allows a self-scoped SELECT, and the select handlers
+// honour `columns: "*"` — which returned the caller's scrypt password_hash and
+// the token_version that gates session revocation straight to the browser
+// (M7, 2026-07 review).
+const SELECTABLE_COLUMNS_BY_TABLE = {
+ app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+};
+
+/**
+ * Project a select's requested columns down to what the table allows. Returns a
+ * comma-separated column list (the same shape both backends' normalizeColumns
+ * already accepts) so callers wrap it: normalizeColumns(safeSelectColumns(...)).
+ * Throws 403 when a column outside the allow-list is asked for by name, so the
+ * denial is visible rather than a silently missing field.
+ */
+function safeSelectColumns(table, columns) {
+ const allowed = SELECTABLE_COLUMNS_BY_TABLE[table];
+ if (!allowed) return columns;
+ if (!columns || columns === '*') return allowed.join(', ');
+ const requested = String(columns).split(',').map((column) => column.trim()).filter(Boolean);
+ if (requested.length === 0) return allowed.join(', ');
+ for (const column of requested) {
+  if (!allowed.includes(column)) throw forbidden(`Column ${table}.${column} is not selectable`);
+ }
+ return requested.join(', ');
+}
 
 function stripPrivilegedDbValues(table, values) {
  if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
@@ -416,7 +556,8 @@ async function resolveOperationWorkspace(table, { values, filters }, db) {
  return { unscoped: true };
 }
 
-// True if the user owns the workspace or is a member of it.
+// True if the user owns the workspace, is a member of it, or holds either in an
+// ANCESTOR (members inherit downward — see getInheritedWorkspaceRoles).
 async function userCanAccessWorkspace(userId, workspaceId, db) {
  if (!userId || !workspaceId) return false;
  const rows = await db(
@@ -426,15 +567,79 @@ async function userCanAccessWorkspace(userId, workspaceId, db) {
      limit 1`,
   [workspaceId, userId],
  );
- return rows.length > 0;
+ if (rows.length > 0) return true;
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ return inherited.length > 0;
 }
 
+// The role held DIRECTLY in this workspace, ignoring the hierarchy. This is the
+// role the UI shows on a workspace tile and the one `/backend/workspaces`
+// projects — deliberately not the effective role, so "you are a viewer here"
+// keeps meaning what it says. Authorization uses the effective set below.
 async function getWorkspaceRole(userId, workspaceId, db) {
  if (!userId || !workspaceId) return null;
  const ownerRows = await db('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
  if (ownerRows.length > 0) return 'owner';
  const memberRows = await db('select role from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, userId]);
  return memberRows[0]?.role || null;
+}
+
+// ----------------------------------------------------------------------------
+// Nested workspaces: inherited membership.
+//
+// THE RULE — a child inherits AGENTS and MEMBERS from its ancestors; CONTENT is
+// isolated. Access therefore flows strictly DOWNWARD:
+//
+//   member of `Work`      -> reaches Work AND every client workspace under it
+//   member of `Client A`  -> reaches Client A only. NOT its sibling Client B
+//                            (siblings share an ancestor, not membership) and
+//                            NOT its parent Work (there is no upward path).
+//
+// `depth > 0` in the query below is the one-way valve: it excludes the
+// workspace itself, so this returns ONLY inherited roles. The direct role is
+// still resolved by getWorkspaceRole, which means the common case (a direct
+// member acting in their own workspace) issues exactly the queries it always
+// did and this walk never runs.
+//
+// The recursion is capped at WORKSPACE_MAX_DEPTH so a cycle that somehow exists
+// in the data terminates instead of spinning to statement_timeout on every
+// request. The cycle should be impossible — a CHECK, a trigger and
+// assertWorkspaceParentChange all refuse to create one — but this is the path
+// where being wrong is a denial of service, so it does not rely on that.
+// ----------------------------------------------------------------------------
+const ANCESTOR_ROLES_SQL = `with recursive chain as (
+   select id, parent_id, 0 as depth from workspaces where id = $1
+   union all
+   select w.id, w.parent_id, c.depth + 1
+     from workspaces w join chain c on w.id = c.parent_id
+    where c.depth < $3
+ )
+ select distinct r.role from (
+   select 'owner'::text as role
+     from chain c join workspaces w on w.id = c.id
+    where c.depth > 0 and w.user_id = $2
+   union all
+   select wm.role
+     from chain c join workspace_members wm on wm.workspace_id = c.id and wm.user_id = $2
+    where c.depth > 0
+ ) r`;
+
+async function getInheritedWorkspaceRoles(userId, workspaceId, db) {
+ if (!userId || !workspaceId) return [];
+ const rows = await db(ANCESTOR_ROLES_SQL, [workspaceId, userId, WORKSPACE_MAX_DEPTH]);
+ return rows.map((row) => row.role).filter(Boolean);
+}
+
+// Direct role first, then every role inherited from an ancestor. Capabilities
+// are the UNION of all of them — this repo checks capability membership rather
+// than ranking roles, so "owner of the parent, viewer of the child" needs no
+// tie-break.
+async function getEffectiveWorkspaceRoles(userId, workspaceId, db) {
+ const direct = await getWorkspaceRole(userId, workspaceId, db);
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ const roles = direct ? [direct] : [];
+ for (const role of inherited) if (!roles.includes(role)) roles.push(role);
+ return roles;
 }
 
 function roleHasWorkspaceCapability(role, capability) {
@@ -454,13 +659,120 @@ function capabilityForDbOperation(table, action) {
 async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, mode, db }) {
  const need = capability || mode || minRole;
  const role = await getWorkspaceRole(userId, workspaceId, db);
- if (!role) throw forbidden('You do not have access to this workspace');
- if (!roleHasWorkspaceCapability(role, need)) {
-  if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
-  if (need === 'write') throw forbidden('You do not have permission to change this workspace');
-  if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
-  if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
-  throw forbidden('You do not have permission to access this workspace');
+ // Fast path, and the only path until a workspace actually has a parent: a
+ // direct role that already carries the capability costs exactly the queries it
+ // always did. The ancestor walk runs ONLY when the direct role falls short.
+ if (role && roleHasWorkspaceCapability(role, need)) return;
+
+ const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
+ if (roleSetHasCapability(inherited, need, WORKSPACE_ROLE_CAPABILITIES)) return;
+
+ if (!role && inherited.length === 0) throw forbidden('You do not have access to this workspace');
+ if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
+ if (need === 'write') throw forbidden('You do not have permission to change this workspace');
+ if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
+ if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
+ throw forbidden('You do not have permission to access this workspace');
+}
+
+// ----------------------------------------------------------------------------
+// Re-parenting: the write that creates the hierarchy, and the one that can
+// break it. Nothing in the product sets parent_id yet — the only reachable
+// writer is a generic POST /backend/db/update on `workspaces` — so this exists
+// so that the day a child is created it is already correct and already safe.
+// ----------------------------------------------------------------------------
+
+// Load the child -> parent edges along the ancestor chain above `startId`, as
+// the plain map shape shared/workspace-tree.cjs expects. A point-lookup loop
+// rather than a recursive CTE ON PURPOSE: it is bounded by `seen` even if the
+// stored data is already cyclic, so this diagnostic path can never be the thing
+// that hangs. Bounded at WORKSPACE_MAX_DEPTH + 2 lookups.
+async function loadAncestorEdges(startId, db) {
+ const edges = new Map();
+ const seen = new Set();
+ let current = startId == null ? null : String(startId);
+ let steps = 0;
+ while (current !== null && !seen.has(current) && steps <= WORKSPACE_MAX_DEPTH + 1) {
+  seen.add(current);
+  const rows = await db('select parent_id from workspaces where id = $1 limit 1', [current]);
+  if (rows.length === 0) break;
+  const parent = rows[0].parent_id == null ? null : String(rows[0].parent_id);
+  edges.set(current, parent);
+  current = parent;
+  steps += 1;
+ }
+ return edges;
+}
+
+// Every edge inside `rootId`'s subtree, so the depth rule can account for the
+// fact that a re-parented workspace drags its whole subtree down with it.
+async function loadSubtreeEdges(rootId, db) {
+ const edges = new Map();
+ if (rootId == null) return edges;
+ const rows = await db(
+  `with recursive sub as (
+      select id, parent_id, 0 as depth from workspaces where id = $1
+      union all
+      select w.id, w.parent_id, s.depth + 1
+        from workspaces w join sub s on w.parent_id = s.id
+       where s.depth < $2
+    )
+    select id, parent_id from sub`,
+  [rootId, WORKSPACE_MAX_DEPTH],
+ );
+ for (const row of rows) {
+  edges.set(String(row.id), row.parent_id == null ? null : String(row.parent_id));
+ }
+ return edges;
+}
+
+/**
+ * Authorize and validate a change to `workspaces.parent_id`.
+ *
+ * THE RULE:
+ *   - Attaching to a parent needs 'manage' on the PROPOSED PARENT. Without it,
+ *     anyone could graft their workspace under someone else's group and hand
+ *     that group's members a view of their content — and, once nesting is
+ *     visible, put an unwanted tile inside another org's rail.
+ *   - Moving or detaching an EXISTING workspace needs a DIRECT 'manage' on the
+ *     child, not an inherited one. An inherited manager (an agency admin acting
+ *     inside a client workspace) must not be able to detach that client from
+ *     the parent, which would strip every inherited member's access in one
+ *     write, themselves included.
+ *   - The result must be acyclic and within WORKSPACE_MAX_DEPTH.
+ *
+ * `isInsert` skips the child-side check: on INSERT the row does not exist yet
+ * and the creator is its owner.
+ */
+async function assertWorkspaceParentChange({ userId, workspaceId, parentId, db, isInsert = false }) {
+ const child = workspaceId == null ? null : String(workspaceId);
+ const parent = parentId == null || parentId === '' ? null : String(parentId);
+
+ if (!isInsert) {
+  const directRole = await getWorkspaceRole(userId, child, db);
+  if (!directRole || !roleHasWorkspaceCapability(directRole, 'manage')) {
+   throw forbidden('Only a direct manager of this workspace can change where it sits');
+  }
+ }
+
+ if (parent === null) return; // detaching to top level needs nothing further
+ if (child !== null && parent === child) throw badRequest('A workspace cannot be its own parent');
+
+ await assertWorkspaceRole({ userId, workspaceId: parent, capability: 'manage', db });
+
+ const exists = await db('select id from workspaces where id = $1 limit 1', [parent]);
+ if (exists.length === 0) throw badRequest('The parent workspace does not exist');
+
+ const edges = await loadAncestorEdges(parent, db);
+ if (child !== null && !isInsert) {
+  for (const [id, value] of await loadSubtreeEdges(child, db)) edges.set(id, value);
+ }
+
+ if (wouldCreateCycle(edges, child, parent)) {
+  throw badRequest('A workspace cannot be its own ancestor');
+ }
+ if (wouldExceedMaxDepth(edges, child, parent, WORKSPACE_MAX_DEPTH)) {
+  throw badRequest(`Workspaces cannot be nested more than ${WORKSPACE_MAX_DEPTH} levels deep`);
  }
 }
 
@@ -544,6 +856,12 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
     if (row && row.user_id && String(row.user_id) !== String(userId)) {
      throw forbidden('Cannot create a workspace for another user');
     }
+    // Creating a workspace already inside a group: needs 'manage' on the group.
+    if (row && row.parent_id != null && row.parent_id !== '') {
+     await assertWorkspaceParentChange({
+      userId, workspaceId: null, parentId: row.parent_id, db, isInsert: true,
+     });
+    }
    }
    return;
   }
@@ -551,6 +869,25 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    || await resolveWorkspaceRowById(findFilterValue(flt, 'workspace_id'), db);
   if (!workspaceId) throw badRequest('A workspace id filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db });
+
+  if (op === 'delete') {
+   // parent_id is ON DELETE RESTRICT, so Postgres would refuse this anyway —
+   // but as an opaque foreign-key violation surfaced as a 500. Ask first, so
+   // the caller is told what to do about it. Deleting a group must never be a
+   // way to silently destroy (CASCADE) or silently orphan (SET NULL) the client
+   // workspaces inside it.
+   const children = await db('select id from workspaces where parent_id = $1 limit 1', [workspaceId]);
+   if (children.length > 0) {
+    throw httpError(409, 'This workspace still has workspaces inside it — move or delete those first');
+   }
+   return;
+  }
+
+  if (op === 'update'
+   && values && typeof values === 'object' && !Array.isArray(values)
+   && Object.prototype.hasOwnProperty.call(values, 'parent_id')) {
+   await assertWorkspaceParentChange({ userId, workspaceId, parentId: values.parent_id, db });
+  }
   return;
  }
 
@@ -564,6 +901,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  // H3: setting a manage-only column (agent metadata/host_folders, sandbox
+  // config) needs 'manage' on top of the table's normal write capability.
+  if (setsManageOnlyDbColumn(table, values)) {
+   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
+  }
   await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
   return;
  }
@@ -573,6 +915,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { values: row }, db);
   if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  // H3: same elevation on INSERT — creating an agent that already carries
+  // host_folders (or a sandbox target) is the same escalation as setting them.
+  if (setsManageOnlyDbColumn(table, row)) {
+   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
+  }
   // H1-insert (F7 review): a child INSERT may carry a cross-tenant parent ref
   // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
   // reuse the UPDATE tenancy guard so the parent must live in this workspace.
@@ -794,6 +1141,575 @@ function evaluatePasswordServerSide(password) {
  return { valid, classesMet, longEnough, message };
 }
 
+// ----------------------------------------------------------------------------
+// Workspace secret vault (M5, 2026-07 review).
+//
+// Both backends write the SAME workspace_secrets rows in the SAME Neon DB, but
+// only server/index.cjs encrypted them: it stores AES-256-GCM ciphertext in
+// `secret_cipher` with `value = ''`, and PREFERS secret_cipher on read. The
+// Netlify mirror wrote the raw key into `value` and never touched
+// secret_cipher, so a key rotated through Netlify left plaintext-new next to
+// stale-cipher and Fly kept serving the OLD key. One implementation, here, so
+// the two can't drift again.
+//
+// The key material must match on both sides: a dedicated SECRETS_ENCRYPTION_KEY
+// if set (so secrets survive an AUTH_SECRET rotation), else the HMAC auth
+// secret — which AGENTS.md already requires to be identical on Fly and Netlify.
+// `getAuthSecret` is injected (sync or async) because each runtime resolves it
+// differently (env-only on Netlify, env-or-DB on Fly).
+// ----------------------------------------------------------------------------
+
+async function vaultSecretKey(getAuthSecret) {
+ const dedicated = String(process.env.SECRETS_ENCRYPTION_KEY || '').trim();
+ const material = dedicated || `auth-fallback:${await getAuthSecret()}`;
+ return crypto.createHash('sha256').update(`agensis-workspace-vault:${material}`).digest();
+}
+
+async function encryptVaultSecret(value, { getAuthSecret }) {
+ const iv = crypto.randomBytes(12);
+ const cipher = crypto.createCipheriv('aes-256-gcm', await vaultSecretKey(getAuthSecret), iv);
+ const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+ return [iv, cipher.getAuthTag(), encrypted].map((part) => part.toString('base64url')).join('.');
+}
+
+async function decryptVaultSecret(value, { getAuthSecret }) {
+ const [iv, tag, encrypted] = String(value || '').split('.').map((part) => Buffer.from(part, 'base64url'));
+ if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted vault secret');
+ const decipher = crypto.createDecipheriv('aes-256-gcm', await vaultSecretKey(getAuthSecret), iv);
+ decipher.setAuthTag(tag);
+ return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+async function getWorkspaceSecretValue(workspaceId, key, { db, getAuthSecret }) {
+ if (!workspaceId) return '';
+ const rows = await db(
+  'select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
+  [workspaceId, key],
+ );
+ if (!rows[0]) return '';
+ // Prefer the encrypted column; fall back to the legacy plaintext value for rows
+ // written before encryption-at-rest landed (they get re-encrypted on next write).
+ if (rows[0].secret_cipher) {
+  try { return await decryptVaultSecret(rows[0].secret_cipher, { getAuthSecret }); } catch { return ''; }
+ }
+ return rows[0].value || '';
+}
+
+async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSecret, userId = null, description = null }) {
+ const cipher = value ? await encryptVaultSecret(value, { getAuthSecret }) : '';
+ await db(
+  `insert into workspace_secrets (workspace_id, key, value, secret_cipher, description, updated_by, updated_at)
+     values ($1, $2, '', $3, coalesce($4, ''), $5, now())
+     on conflict (workspace_id, key)
+     do update set value = '', secret_cipher = excluded.secret_cipher,
+       description = coalesce($4, workspace_secrets.description),
+       updated_by = excluded.updated_by, updated_at = now()`,
+  [workspaceId, key, cipher, description ?? null, userId || null],
+ );
+}
+
+// ----------------------------------------------------------------------------
+// THE VAULT SURFACE (2026-07).
+//
+// One workspace vault, four namespaces, ONE classification — here, so the Fly
+// route and the Netlify mirror cannot disagree about what an entry IS.
+//
+// Why namespaces existed but were INVISIBLE: the vault list route excluded every
+// `orb:` and `sandbox:` key, because the flat "shared secrets" list it fed had no
+// way to say "this belongs to the Box provider skill" or "this is an orb's
+// signing secret" — an orb secret sitting loose in that list looks deletable, and
+// deleting it silently 503s every delivery. Excluding them made the list honest
+// and the entries unreachable: with no surface of its own, `sandbox:box:api_key`
+// could not be entered at all. This layer is that surface. Each entry says which
+// GROUP it belongs to, which THING owns it, and which write LANE owns it, so a
+// namespaced entry reads as part of its provider/orb instead of a loose row.
+//
+// Every entry here is WRITE-ONLY. `listWorkspaceVaultEntries` does not select
+// `value` or `secret_cipher` at all — not "selects and redacts": a route cannot
+// leak a column it never fetched. `configured` and `legacy_plaintext` are SQL
+// booleans computed in the database, so the plaintext never crosses the wire
+// from Postgres either.
+// ----------------------------------------------------------------------------
+
+// User-definable vault keys. The colon is deliberately excluded so a user key can
+// never collide with (or overwrite) a `sandbox:`/`orb:` namespaced entry through
+// the generic PUT/DELETE routes.
+const VAULT_KEY_RE = /^[A-Za-z0-9_.-]{1,128}$/;
+
+// The two namespace prefixes. Duplicated as literals rather than imported from
+// server/sandbox-skills.cjs because the Netlify function must not pull in the Fly
+// server's module graph; tests/workspace-vault.test.cjs asserts they agree.
+const SANDBOX_VAULT_PREFIX = 'sandbox:';
+const ORB_VAULT_PREFIX = 'orb:';
+
+// The columns that hold secret material. Used by the realtime strip and asserted
+// against every vault SELECT projection in tests.
+const VAULT_SECRET_COLUMNS = ['value', 'secret_cipher'];
+
+// group -> which route may write it. 'orb' has no vault write lane on purpose:
+// an orb's signing secret is rotated from the orb's own panel, where the operator
+// can also re-register it with the provider. Deleting it from a generic secrets
+// list would break every delivery with no hint why.
+const VAULT_WRITE_LANES = {
+ managed: 'managed',
+ provider: 'provider',
+ shared: 'shared',
+ orb: 'none',
+};
+
+function titleCaseSlug(value) {
+ return String(value || '')
+  .split(/[-_]/)
+  .filter(Boolean)
+  .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+}
+
+// 'api_key' -> 'API key'. Credential names are lowercase snake by construction
+// (sandboxCredentialKey enforces it), so this is presentation only.
+function credentialLabel(value) {
+ const slug = String(value || '').trim();
+ if (!slug) return 'Credential';
+ if (slug === 'api_key') return 'API key';
+ const words = slug.split('_').filter(Boolean);
+ return words.map((word, index) => (index === 0
+  ? word.charAt(0).toUpperCase() + word.slice(1)
+  : word)).join(' ');
+}
+
+/**
+ * What IS this vault key? Pure string work — no DB, no secret.
+ *
+ * `managedKeys` is the platform-managed list (ANTHROPIC_API_KEY and friends),
+ * passed in because each backend owns its own MANAGED_SECRET_KEYS constant.
+ */
+function classifyVaultKey(key, { managedKeys = [] } = {}) {
+ const raw = String(key || '');
+ if (managedKeys.includes(raw)) {
+  return {
+   key: raw,
+   group: 'managed',
+   lane: VAULT_WRITE_LANES.managed,
+   owner: '',
+   ownerLabel: 'Platform',
+   label: raw === 'ANTHROPIC_API_KEY' ? 'Anthropic API key' : raw,
+   provider: '',
+   credential: '',
+  };
+ }
+ if (raw.startsWith(SANDBOX_VAULT_PREFIX)) {
+  const [provider, credential, ...rest] = raw.slice(SANDBOX_VAULT_PREFIX.length).split(':');
+  // A malformed namespaced key (extra colons, empty halves) is reported as
+  // unknown rather than guessed at: it has no write lane and no owner, so the
+  // surface shows it as an orphan instead of offering to overwrite the wrong row.
+  if (!provider || !credential || rest.length > 0) {
+   return { key: raw, group: 'unknown', lane: 'none', owner: '', ownerLabel: '', label: raw, provider: '', credential: '' };
+  }
+  return {
+   key: raw,
+   group: 'provider',
+   lane: VAULT_WRITE_LANES.provider,
+   owner: provider,
+   ownerLabel: titleCaseSlug(provider),
+   label: credentialLabel(credential),
+   provider,
+   credential,
+  };
+ }
+ if (raw.startsWith(ORB_VAULT_PREFIX)) {
+  const orbId = raw.slice(ORB_VAULT_PREFIX.length);
+  return {
+   key: raw,
+   group: 'orb',
+   lane: VAULT_WRITE_LANES.orb,
+   owner: orbId,
+   ownerLabel: orbId ? `Orb ${orbId.slice(0, 8)}` : 'Orb',
+   label: 'Signing secret',
+   provider: '',
+   credential: '',
+  };
+ }
+ return {
+  key: raw,
+  group: 'shared',
+  lane: VAULT_WRITE_LANES.shared,
+  owner: '',
+  ownerLabel: '',
+  label: raw,
+  provider: '',
+  credential: '',
+ };
+}
+
+// The metadata projection. `value` and `secret_cipher` are NOT selected; whether
+// a value exists is answered by the database as a boolean. `legacy_plaintext`
+// marks a row written before encryption-at-rest landed — it is a state flag, not
+// a value, and drives the re-encryption backfill.
+const VAULT_META_SELECT = `select key, description, updated_at, updated_by,
+        (coalesce(secret_cipher, '') <> '' or coalesce(value, '') <> '') as configured,
+        (coalesce(value, '') <> '') as legacy_plaintext
+   from workspace_secrets where workspace_id = $1 order by key asc`;
+
+async function listWorkspaceSecretMeta(workspaceId, { db }) {
+ if (!workspaceId) return [];
+ const rows = await db(VAULT_META_SELECT, [String(workspaceId)]);
+ return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Every credential this workspace has stored, as write-only entries.
+ *
+ * Includes the namespaced ones. Orb entries are labelled with their orb's name
+ * (one extra indexed read) so the entry reads as belonging to that orb rather
+ * than as an opaque `orb:<uuid>`.
+ */
+async function listWorkspaceVaultEntries(workspaceId, { db, managedKeys = [] }) {
+ const rows = await listWorkspaceSecretMeta(workspaceId, { db });
+ const entries = rows.map((row) => ({
+  ...classifyVaultKey(row.key, { managedKeys }),
+  description: row.description || '',
+  configured: row.configured === true || row.configured === 't' || row.configured === 1,
+  legacy_plaintext: row.legacy_plaintext === true || row.legacy_plaintext === 't' || row.legacy_plaintext === 1,
+  updated_at: row.updated_at || null,
+ }));
+
+ const orbIds = entries.filter((entry) => entry.group === 'orb' && entry.owner).map((entry) => entry.owner);
+ if (orbIds.length > 0) {
+  // Names only, and only for orbs in THIS workspace — the id came from a row that
+  // is already workspace-scoped, and the where clause re-scopes it anyway.
+  const named = new Map();
+  try {
+   const orbRows = await db(
+    'select id, name from agent_webhooks where workspace_id = $1',
+    [String(workspaceId)],
+   );
+   for (const orb of Array.isArray(orbRows) ? orbRows : []) named.set(String(orb.id), orb.name || '');
+  } catch {
+   // A deployment whose schema predates orbs must still render the vault.
+  }
+  for (const entry of entries) {
+   if (entry.group !== 'orb') continue;
+   const name = named.get(entry.owner);
+   if (name) entry.ownerLabel = name;
+  }
+ }
+ return entries;
+}
+
+// ----------------------------------------------------------------------------
+// IN-APP FEEDBACK (System workspace).
+//
+// Shape of the feature, so the security properties are readable in one place:
+//
+//   SUBMIT  any authenticated user, rate limited, via POST /backend/feedback.
+//           The client never chooses the destination workspace — the server
+//           resolves the single System workspace itself. A report becomes an
+//           ordinary `tasks` row (source_type='feedback') plus a
+//           `feedback_reports` row holding the bulky diagnostics, so the
+//           existing task list, assignment and agent dispatch work on it for
+//           free and no parallel todo system exists.
+//
+//   READ    members of the System workspace only, through the generic /db
+//           gate (DB_TABLE_ACCESS.feedback_reports.select = 'read', and
+//           feedback_reports is workspace-scoped) — the same membership check
+//           every other table uses. The reporter is NOT a member, so they
+//           cannot read their own report back, and definitely not anyone
+//           else's.
+//
+// The System workspace is an ORDINARY workspace with `is_system = true`. It has
+// an owner, members, roles and invites like any other, so "add someone to it"
+// is the normal Users flow rather than something new.
+// ----------------------------------------------------------------------------
+
+const SYSTEM_WORKSPACE_NAME = 'System';
+const SYSTEM_WORKSPACE_ICON = '🛟';
+const SYSTEM_WORKSPACE_DESCRIPTION = 'Product feedback filed from inside the app.';
+
+const FEEDBACK_DESCRIPTION_MAX_CHARS = 4000;
+const FEEDBACK_MAX_SELECTIONS = 5;
+const FEEDBACK_MAX_CONSOLE_ENTRIES = 300;
+const FEEDBACK_CONSOLE_ENTRY_MAX_CHARS = 800;
+const FEEDBACK_MAX_ERROR_ENTRIES = 30;
+/** Hard ceiling on the stored diagnostics blob, enforced by dropping the OLDEST console lines. */
+const FEEDBACK_DIAGNOSTICS_MAX_BYTES = 256_000;
+
+// CJS twin of src/lib/feedbackRedaction.ts's REDACTION_PATTERNS.
+//
+// The client redacts before sending; this redacts again on arrival. Both are
+// needed for different reasons: the client one keeps secrets out of the network
+// request at all, this one is the version that still holds when the request did
+// NOT come from our client. A feedback endpoint that trusts the browser to have
+// scrubbed its own console is not a security control.
+//
+// tests/feedback-redaction-parity.test.cjs asserts the two lists carry the same
+// pattern NAMES, so adding a shape on one side and forgetting the other fails
+// the suite instead of silently halving the protection.
+const REDACTED_PLACEHOLDER = '[redacted]';
+
+const FEEDBACK_REDACTION_PATTERNS = [
+ { name: 'agensis-session-token', pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.\d+\.\d+\.[A-Za-z0-9_-]{16,}/gi, replacement: REDACTED_PLACEHOLDER },
+ { name: 'agensis-agent-token', pattern: /\baga_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'bearer-header', pattern: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED_PLACEHOLDER}` },
+ { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'anthropic-key', pattern: /\bsk-ant-[A-Za-z0-9_-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'openai-style-key', pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'github-token', pattern: /\b(?:gh[posur]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'npm-token', pattern: /\bnpm_[A-Za-z0-9]{20,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'slack-token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'aws-access-key-id', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'google-api-key', pattern: /\bAIza[0-9A-Za-z_-]{30,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'connection-string-credentials', pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, replacement: `$1${REDACTED_PLACEHOLDER}@` },
+ { name: 'secret-assignment', pattern: /(["']?\b(?:api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|auth[-_]?token|id[-_]?token|session[-_]?token|connect[-_]?token|client[-_]?secret|private[-_]?key|secret|password|passwd|pwd|authorization|cookie|set-cookie)\b["']?\s*[:=]\s*)(["']?)([^\s"',;)}\]&]{3,})\2/gi, replacement: `$1$2${REDACTED_PLACEHOLDER}$2` },
+];
+
+// Matched against the key with separators stripped, so `accessToken`,
+// `access_token` and `access-token` all hit the same rule. Deliberately omits
+// bare `auth` (matches `author`) and bare `session` (matches `sessionId`, not a
+// credential and genuinely useful in a bug report) — both are covered by their
+// compound forms. Mirrors SENSITIVE_KEY_WORDS in src/lib/feedbackRedaction.ts.
+const FEEDBACK_SENSITIVE_KEY_WORDS = /token|secret|password|passwd|pwd|authorization|cookie|credential|apikey|privatekey/;
+
+function isFeedbackSensitiveKey(key) {
+ return FEEDBACK_SENSITIVE_KEY_WORDS.test(String(key).replace(/[-_.\s]/g, '').toLowerCase());
+}
+
+function redactSecretsText(value) {
+ let text = typeof value === 'string' ? value : String(value == null ? '' : value);
+ for (const { pattern, replacement } of FEEDBACK_REDACTION_PATTERNS) {
+  pattern.lastIndex = 0;
+  text = text.replace(pattern, replacement);
+ }
+ return text;
+}
+
+function redactSecretsDeep(value, depth = 6) {
+ if (depth <= 0) return REDACTED_PLACEHOLDER;
+ if (typeof value === 'string') return redactSecretsText(value);
+ if (value === null || typeof value !== 'object') return value;
+ if (Array.isArray(value)) return value.map((item) => redactSecretsDeep(item, depth - 1));
+ const out = {};
+ for (const [key, entry] of Object.entries(value)) {
+  out[key] = isFeedbackSensitiveKey(key) ? REDACTED_PLACEHOLDER : redactSecretsDeep(entry, depth - 1);
+ }
+ return out;
+}
+
+function clampString(value, max) {
+ return redactSecretsText(String(value == null ? '' : value)).slice(0, max);
+}
+
+/**
+ * Validate + clamp + redact a submitted report. Throws 400 when there is no
+ * usable description. Everything else degrades to a safe default rather than
+ * rejecting — a bug report is worth having even if its diagnostics were
+ * malformed.
+ */
+function normalizeFeedbackSubmission(body) {
+ const raw = body && typeof body === 'object' ? body : {};
+ const description = clampString(raw.description, FEEDBACK_DESCRIPTION_MAX_CHARS).trim();
+ if (description.length < 3) throw badRequest('Please describe the problem before submitting');
+
+ const page = raw.page && typeof raw.page === 'object' ? raw.page : {};
+ const normalizedPage = {
+  path: clampString(page.path, 400),
+  hash: clampString(page.hash, 200),
+  label: clampString(page.label, 200),
+ };
+
+ const selections = (Array.isArray(raw.selections) ? raw.selections : [])
+  .slice(0, FEEDBACK_MAX_SELECTIONS)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => {
+   const rect = entry.rect && typeof entry.rect === 'object' ? entry.rect : {};
+   const num = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0);
+   return {
+    selector: clampString(entry.selector, 500),
+    tag: clampString(entry.tag, 40),
+    role: clampString(entry.role, 40),
+    text: clampString(entry.text, 200),
+    rect: { x: num(rect.x), y: num(rect.y), width: num(rect.width), height: num(rect.height) },
+   };
+  });
+
+ const diagnostics = normalizeFeedbackDiagnostics(raw.diagnostics);
+
+ return { description, page: normalizedPage, selections, diagnostics };
+}
+
+function normalizeFeedbackDiagnostics(input) {
+ if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+ const viewport = input.viewport && typeof input.viewport === 'object' ? input.viewport : {};
+ const dimension = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.min(Math.round(n), 100_000) : 0;
+ };
+
+ const consoleEntries = (Array.isArray(input.console) ? input.console : [])
+  .slice(-FEEDBACK_MAX_CONSOLE_ENTRIES)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => ({
+   level: clampString(entry.level, 10) || 'log',
+   message: clampString(entry.message, FEEDBACK_CONSOLE_ENTRY_MAX_CHARS),
+   at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : 0,
+  }));
+
+ const errors = (Array.isArray(input.errors) ? input.errors : [])
+  .slice(-FEEDBACK_MAX_ERROR_ENTRIES)
+  .filter((entry) => entry && typeof entry === 'object')
+  .map((entry) => ({
+   kind: clampString(entry.kind, 30) || 'error',
+   message: clampString(entry.message, FEEDBACK_CONSOLE_ENTRY_MAX_CHARS),
+   source: clampString(entry.source, 300),
+   at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : 0,
+  }));
+
+ const diagnostics = {
+  buildId: clampString(input.buildId, 120),
+  userAgent: clampString(input.userAgent, 400),
+  url: clampString(input.url, 600),
+  language: clampString(input.language, 40),
+  capturedAt: clampString(input.capturedAt, 40),
+  viewport: { width: dimension(viewport.width), height: dimension(viewport.height) },
+  console: consoleEntries,
+  errors,
+  truncated: Boolean(input.truncated),
+ };
+
+ // Size ceiling. Drop from the OLDEST console line inward — the lines nearest
+ // the moment the user hit "report" are the ones that explain the bug.
+ while (
+  diagnostics.console.length > 0
+  && JSON.stringify(diagnostics).length > FEEDBACK_DIAGNOSTICS_MAX_BYTES
+ ) {
+  diagnostics.console.shift();
+  diagnostics.truncated = true;
+ }
+
+ return diagnostics;
+}
+
+/** First line of the description, as the task title. Falls back to a generic label. */
+function feedbackTaskTitle(description) {
+ const firstLine = String(description || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
+ if (!firstLine) return 'Feedback report';
+ return firstLine.length <= 90 ? firstLine : `${firstLine.slice(0, 89)}…`;
+}
+
+/**
+ * Resolve (creating on first use) the single System workspace.
+ *
+ * Auto-creating means the feature has no manual setup step, and the partial
+ * unique index `uq_workspaces_system` makes it race-safe: two concurrent first
+ * submissions cannot produce two System workspaces, the loser just re-reads.
+ *
+ * Owner selection: AGENSIS_SYSTEM_OWNER_EMAIL when set, else the oldest account
+ * (on a single-owner deployment that is the person who installed it). Ownership
+ * is a normal `workspaces.user_id`, so it can be transferred with the existing
+ * flow if that guess is wrong.
+ */
+async function ensureSystemWorkspace(db) {
+ const existing = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
+ if (existing[0]) return existing[0].id;
+
+ const configuredEmail = String(process.env.AGENSIS_SYSTEM_OWNER_EMAIL || '').trim().toLowerCase();
+ let ownerId = null;
+ if (configuredEmail) {
+  const rows = await db('select id from app_users where lower(email) = $1 limit 1', [configuredEmail]);
+  ownerId = rows[0]?.id || null;
+ }
+ if (!ownerId) {
+  const rows = await db('select id from app_users order by created_at asc limit 1', []);
+  ownerId = rows[0]?.id || null;
+ }
+
+ await db(
+  `insert into workspaces (name, description, icon, user_id, is_system)
+     values ($1, $2, $3, $4, true)
+     on conflict do nothing`,
+  [SYSTEM_WORKSPACE_NAME, SYSTEM_WORKSPACE_DESCRIPTION, SYSTEM_WORKSPACE_ICON, ownerId],
+ );
+
+ const created = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
+ if (!created[0]) throw httpError(500, 'Could not resolve the System workspace');
+ return created[0].id;
+}
+
+/**
+ * Persist one report: a `tasks` row (the reviewable, assignable artifact) and a
+ * `feedback_reports` row (the payload). Returns { taskId, reportId }.
+ *
+ * `jsonParam` is the ONLY thing the two backends must supply differently, and
+ * it is the trap this repo has been bitten by before. Verified against the live
+ * Neon database, 2026-07-26:
+ *
+ *   postgres.js (Fly)          bind object -> jsonb object     JSON.stringify -> jsonb STRING (wrong)
+ *   @netlify/database (Neon)   bind object -> jsonb object     JSON.stringify -> jsonb object
+ *                              bind ARRAY  -> ERROR            JSON.stringify -> jsonb array (right)
+ *
+ * So Fly passes identity and Netlify passes JSON.stringify; that combination is
+ * the only one correct for BOTH objects and arrays on BOTH drivers. Get it
+ * backwards and Fly silently stores `"{\"console\":[...]}"` as a jsonb string
+ * scalar — every `diagnostics->>'buildId'` then returns NULL and nothing errors.
+ */
+async function insertFeedbackReport({ db, jsonParam, userId, sourceWorkspaceId, submission }) {
+ if (typeof db !== 'function') throw new Error('insertFeedbackReport requires a db function');
+ if (typeof jsonParam !== 'function') throw new Error('insertFeedbackReport requires a jsonParam binder');
+
+ const systemWorkspaceId = await ensureSystemWorkspace(db);
+ const title = feedbackTaskTitle(submission.description);
+
+ const pageRef = [submission.page.path, submission.page.hash].filter(Boolean).join('');
+ const descriptionLines = [
+  submission.description,
+  '',
+  `Page: ${pageRef || '(unknown)'}${submission.page.label ? ` — ${submission.page.label}` : ''}`,
+ ];
+ if (submission.selections.length > 0) {
+  descriptionLines.push('', 'Elements:');
+  for (const selection of submission.selections) {
+   descriptionLines.push(`- \`${selection.selector}\`${selection.text ? ` — "${selection.text}"` : ''}`);
+  }
+ }
+
+ const taskRows = await db(
+  `insert into tasks (workspace_id, created_by, title, description, status, priority, source_type, source_id)
+     values ($1, $2, $3, $4, 'todo', 'normal', 'feedback', null)
+     returning id`,
+  [systemWorkspaceId, userId || null, title, descriptionLines.join('\n')],
+ );
+ const taskId = taskRows[0]?.id;
+ if (!taskId) throw httpError(500, 'Could not record the feedback task');
+
+ const reportRows = await db(
+  `insert into feedback_reports
+       (workspace_id, task_id, reporter_id, source_workspace_id, description, page, selections, diagnostics, build_id, user_agent)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10)
+     returning id`,
+  [
+   systemWorkspaceId,
+   taskId,
+   userId || null,
+   sourceWorkspaceId || null,
+   submission.description,
+   jsonParam(submission.page),
+   jsonParam(submission.selections),
+   submission.diagnostics ? jsonParam(submission.diagnostics) : null,
+   submission.diagnostics?.buildId || '',
+   submission.diagnostics?.userAgent || '',
+  ],
+ );
+ const reportId = reportRows[0]?.id;
+
+ // source_id points back at the report so the task row alone is enough to find
+ // the diagnostics. Written as a follow-up UPDATE because the report id is only
+ // known after its insert, and the task must exist first for the FK.
+ if (reportId) {
+  await db('update tasks set source_id = $1, updated_at = now() where id = $2', [String(reportId), taskId]);
+ }
+
+ return { taskId, reportId: reportId || null, systemWorkspaceId };
+}
+
 module.exports = {
  verifyAuthToken,
  issueAuthToken,
@@ -811,7 +1727,26 @@ module.exports = {
  WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS,
  PRIVILEGED_DB_COLUMNS_BY_TABLE,
+ MANAGE_ONLY_DB_COLUMNS_BY_TABLE,
+ setsManageOnlyDbColumn,
+ SELECTABLE_COLUMNS_BY_TABLE,
+ safeSelectColumns,
  stripPrivilegedDbValues,
+ encryptVaultSecret,
+ decryptVaultSecret,
+ getWorkspaceSecretValue,
+ setWorkspaceSecretValue,
+ // The vault surface. One classification for both backends.
+ VAULT_KEY_RE,
+ VAULT_SECRET_COLUMNS,
+ VAULT_META_SELECT,
+ VAULT_WRITE_LANES,
+ SANDBOX_VAULT_PREFIX,
+ ORB_VAULT_PREFIX,
+ classifyVaultKey,
+ credentialLabel,
+ listWorkspaceSecretMeta,
+ listWorkspaceVaultEntries,
  storagePathBelongsToWorkspace,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
@@ -823,6 +1758,11 @@ module.exports = {
  resolveOperationWorkspace,
  userCanAccessWorkspace,
  getWorkspaceRole,
+ // Nested workspaces (shared/workspace-tree.cjs holds the pure rules).
+ getInheritedWorkspaceRoles,
+ getEffectiveWorkspaceRoles,
+ assertWorkspaceParentChange,
+ WORKSPACE_MAX_DEPTH,
  roleHasWorkspaceCapability,
  assertUpdateKeepsTenancy,
  httpError,
@@ -831,4 +1771,20 @@ module.exports = {
  badRequest,
  PASSWORD_MIN_LENGTH,
  PASSWORD_MIN_CLASSES,
+ // In-app feedback / System workspace
+ SYSTEM_WORKSPACE_NAME,
+ SYSTEM_WORKSPACE_ICON,
+ SYSTEM_WORKSPACE_DESCRIPTION,
+ FEEDBACK_REDACTION_PATTERNS,
+ FEEDBACK_DESCRIPTION_MAX_CHARS,
+ FEEDBACK_MAX_SELECTIONS,
+ FEEDBACK_MAX_CONSOLE_ENTRIES,
+ FEEDBACK_DIAGNOSTICS_MAX_BYTES,
+ redactSecretsText,
+ redactSecretsDeep,
+ normalizeFeedbackSubmission,
+ normalizeFeedbackDiagnostics,
+ feedbackTaskTitle,
+ ensureSystemWorkspace,
+ insertFeedbackReport,
 };

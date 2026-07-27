@@ -56,17 +56,36 @@ describe('computeFullBleed', () => {
     expect(result.bleedEdges).toEqual(edges('left', 'right', 'top', 'bottom'));
   });
 
-  it('makes tiles of a panel-filling split full bleed, bleeding only their free (flush) edges', () => {
-    // Left tile of a vertical split: shares its right edge, flush on the other three.
+  it('keeps a tile of a panel-filling split ROUNDED — tiled panes are never full bleed', () => {
+    // Left tile of a vertical split: shares its right edge, flush on the other
+    // three. This used to be full bleed + square, so a split read as one welded
+    // surface. It is deliberately not, now: the wrapper (shadow, neo border) and
+    // the surface (glass) carry the radius on different boxes, so a squared seam
+    // left a square shadow "ear" past the rounded glass. Tiled panes are rounded
+    // cards separated by GROUP_GUTTER instead. Do not "restore" this to true
+    // without also solving the two-box radius problem.
     const left = computeFullBleed({
       isMobile: false,
       isMaximized: false,
       adjacentEdges: edges('right'),
       flushEdges: edges('left', 'top', 'bottom'),
     });
-    expect(left.isFullBleed).toBe(true);
-    expect(left.squareCorners).toBe(true);
-    expect(left.bleedEdges).toEqual(edges('left', 'top', 'bottom')); // never the shared right edge
+    expect(left.isFullBleed).toBe(false);
+    expect(left.squareCorners).toBe(false);
+    expect(left.bleedEdges.size).toBe(0);
+  });
+
+  it('still full-bleeds a MAXIMIZED window even if it reports a shared edge', () => {
+    // Maximize wins over grouping: a maximized window is one surface covering
+    // the panel, whatever stale adjacency was measured before it maximized.
+    const result = computeFullBleed({
+      isMobile: false,
+      isMaximized: true,
+      adjacentEdges: edges('right'),
+      flushEdges: edges('left', 'top', 'bottom', 'right'),
+    });
+    expect(result.isFullBleed).toBe(true);
+    expect(result.squareCorners).toBe(true);
   });
 
   it('keeps a smaller floating window rounded with no bleed', () => {

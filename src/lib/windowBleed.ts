@@ -67,6 +67,23 @@ export function computeFullBleed(params: {
   }
 
   const shared = adjacentEdges ?? new Set<WindowEdge>();
+
+  // A TILED pane is never full bleed any more, even when the group together
+  // fills the panel. This reverses the original rule on purpose: panel-filling
+  // tiles used to go flush and square so a split read as one welded surface,
+  // but the radius lives on two different boxes (the outer wrapper draws the
+  // elevation shadow and, under neo, a real 2px border; the inner surface draws
+  // the glass), so every squared seam left a square shadow "ear" poking past
+  // the rounded glass. Jason chose the other resolution: keep each pane a
+  // rounded card and separate them with a visible gutter, so the join is
+  // deliberate rather than an artifact. A single window filling the panel, and
+  // a maximized window, are unchanged — those genuinely are one surface.
+  // Maximize wins over grouping: a maximized window covers the panel as one
+  // surface whatever adjacency was measured before it maximized.
+  if (!isMaximized && shared.size > 0) {
+    return { isFullBleed: false, bleedEdges: new Set(), squareCorners: false };
+  }
+
   const freeEdges = ALL_WINDOW_EDGES.filter(edge => !shared.has(edge));
   const everyFreeEdgeFlush = freeEdges.length > 0 && freeEdges.every(edge => flushEdges.has(edge));
   const isFullBleed = isMaximized || everyFreeEdgeFlush;

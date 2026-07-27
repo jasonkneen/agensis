@@ -7,11 +7,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Install production dependencies only (express, ws, cors, postgres, ...).
-# `npm install` (not `npm ci`) tolerates lockfile drift in the monorepo.
-# agensis-cli is a file: devDependency; copy it so install can resolve the
-# package.json entry even though --omit=dev skips installing it.
+# `npm install` (not `npm ci`) tolerates lockfile drift in the app repository.
 COPY package.json package-lock.json ./
-COPY agent/agensis-cli ./agent/agensis-cli
 RUN npm install --omit=dev --no-audit --no-fund
 
 # Backend source + the SQL the runtime schema / migrations reference.

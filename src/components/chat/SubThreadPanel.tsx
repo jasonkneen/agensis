@@ -2,6 +2,8 @@ import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Bot, MessageSquare, Mic, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
+import { ToolStepGroup } from './ToolStepGroup';
+import { buildTranscriptRows } from './toolSteps';
 import {
   ComposerAddContent,
   FileChip,
@@ -15,7 +17,11 @@ import {
 } from './ComposerAddContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import { extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import {
+  extractActivityVerb,
+  isActivityPlaceholderMessage,
+  isLiveActivityPlaceholder,
+} from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -46,13 +52,18 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
+import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { SUB_THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
+import { useComposerAutosize } from '../../hooks/useComposerAutosize';
+import type { SendOutcome } from '../../lib/writeFeedback';
 
 interface SubThreadPanelProps {
   session: ChatSession;
   messages: ChatMessage[];
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
-  onSendMessage: (content: string) => void;
+  // May resolve `{ delivered: false }` — the message was rejected and rolled back.
+  onSendMessage: (content: string) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -97,10 +108,17 @@ export function SubThreadPanel({
 
   const participants = Array.isArray(session.participants) ? session.participants : [];
   const agentParticipants = participants.filter(p => p.kind === 'agent');
+  // Consecutive tool steps — and the live "Thinking …" placeholder between them —
+  // collapse into one chip row here too: same rules as the channel transcript, just
+  // the compact spacing of a side panel.
+  const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
+  useComposerAutosize(inputRef, mentions.input);
+  // Same rule as the channel's status line: a placeholder stranded by a job that
+  // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of messages) {
-      if (!isActivityPlaceholderMessage(m)) continue;
+      if (!isLiveActivityPlaceholder(m)) continue;
       const name = (m.sender_name || 'Agent').trim();
       const activity = extractActivityVerb(safeText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
@@ -149,7 +167,7 @@ export function SubThreadPanel({
     }
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (streaming) return;
     let content = mentions.buildContent();
     if (!content) return;
@@ -158,12 +176,26 @@ export function SubThreadPanel({
       const groupContext = linkedGroups.map(g => `[Canvas Group "${g.name}"]`).join('\n');
       content = `${groupContext}\n\n${content}`;
     }
-    onSendMessage(content);
+    // Clear now, restore if the write is rejected — the sub-thread composer had
+    // the same "typed text disappears into nothing" hole as the others.
+    const draft = mentions.snapshot();
+    const previousFiles = linkedFiles;
+    const previousDocs = linkedDocs;
+    const previousGroups = linkedGroups;
     mentions.clear();
     setLinkedFiles([]);
     setLinkedDocs([]);
     setLinkedGroups([]);
     inputRef.current?.focus();
+
+    const outcome = await onSendMessage(content);
+    if (outcome && outcome.delivered === false) {
+      mentions.restore(draft);
+      setLinkedFiles(previousFiles);
+      setLinkedDocs(previousDocs);
+      setLinkedGroups(previousGroups);
+      inputRef.current?.focus();
+    }
   };
 
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
@@ -244,16 +276,26 @@ export function SubThreadPanel({
                 </Empty>
               ) : (
                 <div className="flex min-w-0 flex-col gap-1">
-                  {messages.map((msg, idx) => (
-                    <MessageScrollerItem key={msg.id} scrollAnchor={idx === messages.length - 1}>
-                      <SubThreadBubble
-                        msg={msg}
-                        accent={resolveMessageAccent?.(msg)}
-                        onAgentProfile={onAgentProfile}
-                        isStreaming={streaming && idx === messages.length - 1 && msg.role === 'assistant'}
-                      />
-                    </MessageScrollerItem>
-                  ))}
+                  {messageRows.map(row => {
+                    const isLastRow = row.index === messages.length - 1;
+                    if (row.kind === 'steps') {
+                      return (
+                        <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
+                          <ToolStepGroup row={row} compact />
+                        </MessageScrollerItem>
+                      );
+                    }
+                    return (
+                      <MessageScrollerItem key={row.message.id} scrollAnchor={isLastRow}>
+                        <SubThreadBubble
+                          msg={row.message}
+                          accent={resolveMessageAccent?.(row.message)}
+                          onAgentProfile={onAgentProfile}
+                          isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                        />
+                      </MessageScrollerItem>
+                    );
+                  })}
                 </div>
               )}
             </MessageScrollerContent>
@@ -282,7 +324,7 @@ export function SubThreadPanel({
         </div>
       )}
 
-      <div className="channel-composer shrink-0 border-t border-border p-2">
+      <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
         {hasAttachments && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {linkedFiles.map(file => (
@@ -329,17 +371,13 @@ export function SubThreadPanel({
                   handleSend();
                 }
               }}
-              placeholder="Message in sub-thread..."
+              placeholder={SUB_THREAD_COMPOSER_PLACEHOLDER}
               disabled={streaming}
               rows={1}
-              className="max-h-24 min-h-12"
-              onInput={e => {
-                const el = e.currentTarget;
-                el.style.height = 'auto';
-                el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
-              }}
+              className={COMPOSER_TEXTAREA_CLASS}
+              onInput={e => autosizeComposer(e.currentTarget)}
             />
-            <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+            <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex items-center gap-1">
                 <Popover open={addContextOpen} onOpenChange={setAddContextOpen}>
                   <PopoverTrigger asChild>
@@ -486,14 +524,14 @@ function SubThreadBubble({
           )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
         </div>
-        <div className="mt-0.5 text-xs leading-relaxed text-foreground">
+        <div className="mt-0.5 text-sm leading-relaxed text-foreground">
           {isActivityPlaceholder ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
               {placeholderLabel}
             </span>
           ) : displayContent ? (
-            <MarkdownContent content={displayContent} compact />
+            <MarkdownContent content={displayContent} />
           ) : isStreaming ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />

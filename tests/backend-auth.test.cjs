@@ -170,6 +170,10 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
         return workspaceId ? [{ workspace_id: workspaceId }] : [];
       }
 
+      // Nested workspaces: the inherited-role ancestor walk, reached whenever a
+      // direct role does not carry the capability. Flat fixtures inherit nothing.
+      if (normalized.includes('with recursive chain as')) return [];
+
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };
@@ -473,17 +477,22 @@ test('falls back to DB-persisted secret when no env secret is configured', async
   }
 });
 
-test('settings secrets route requires authentication and supports app-level secrets', async () => {
-  installDb({ authSecret: 'fixed-test-secret' });
+test('settings secrets route requires authentication and refuses app-level reads', async () => {
+  installDb({ authSecret: 'fixed-test-secret', roles: { 'ws-1:user-1': 'owner' } });
 
   await withServer(async (baseUrl) => {
     const unauthenticated = await fetch(`${baseUrl}/backend/settings/secrets?workspaceId=ws-1`);
     assert.equal(unauthenticated.status, 401);
 
     const token = await __test.issueToken('user-1', '1');
+    // Omitting workspaceId used to skip authorization entirely and leak a masked
+    // preview of the platform ANTHROPIC_API_KEY. It must now 403, like the POST.
     const appLevel = await authedFetch(baseUrl, token, '/backend/settings/secrets');
-    const body = await appLevel.json();
-    assert.equal(appLevel.status, 200);
+    assert.equal(appLevel.status, 403);
+
+    const scoped = await authedFetch(baseUrl, token, '/backend/settings/secrets?workspaceId=ws-1');
+    const body = await scoped.json();
+    assert.equal(scoped.status, 200);
     assert.equal(Array.isArray(body.data.keys), true);
     assert.equal(body.data.keys[0].key, 'ANTHROPIC_API_KEY');
   });
@@ -512,7 +521,14 @@ test('settings secrets route is owner/admin only', async () => {
     assert.equal(adminResponse.status, 200);
     assert.equal(adminBody.data.keys[0].configured, true);
     assert.equal(adminBody.data.keys[0].scope, 'workspace');
-    assert.match(adminBody.data.keys[0].preview, /^sk-w/);
+    // WRITE-ONLY: state and nothing more. The masked preview this route used to
+    // return was of the PLATFORM key whenever the workspace had none of its own,
+    // so every workspace owner was shown four characters of it.
+    assert.equal('preview' in adminBody.data.keys[0], false, 'a managed key must not carry a preview');
+    assert.ok(
+      !JSON.stringify(adminBody).includes('sk-w'),
+      'no part of the stored key may appear in the response',
+    );
   });
 });
 
@@ -533,8 +549,10 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
 
     assert.equal(response.status, 200);
     assert.equal(body.data.keys[0].scope, 'workspace');
-    // Round-trips through the read path (preview is masked from the decrypted value).
-    assert.match(body.data.keys[0].preview, /^sk-n/);
+    // The write is confirmed by STATE, not by echoing the value back.
+    assert.equal(body.data.keys[0].configured, true);
+    assert.ok(!JSON.stringify(body).includes('sk-new-workspace-key'), 'the written key must not be echoed');
+    assert.ok(!JSON.stringify(body).includes('sk-n'), 'not even a prefix of the written key');
     const insertCall = fakeDb.calls.find(call => String(call.sql).includes('insert into workspace_secrets'));
     assert.ok(insertCall, 'expected an insert into workspace_secrets');
     // Encryption-at-rest: the value column is a SQL literal '' (not a param), and
@@ -545,6 +563,25 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
     assert.ok(!insertCall.params.some(p => typeof p === 'string' && p.includes('sk-new-workspace-key')), 'plaintext secret must not appear in any DB parameter');
   });
 });
+
+/**
+ * Did a request write an APP-LEVEL SECRET into app_settings?
+ *
+ * Matches on the write's PARAMS, not merely on the table: the schema bootstrap
+ * also inserts into app_settings (the cost-metering epoch,
+ * `usage.metering_started_at`), and a bare "did anything touch app_settings"
+ * check would fail on that unrelated row while proving nothing about secrets.
+ * Naming the key is both narrower and a stronger assertion — it would still
+ * catch a secret written through some other statement shape.
+ */
+const APP_LEVEL_SECRET_KEYS = ['ANTHROPIC_API_KEY']; // mirrors MANAGED_SECRET_KEYS
+
+function appSettingsSecretWrites(fakeDb) {
+  return fakeDb.calls.some(call => {
+    if (!String(call.sql).includes('insert into app_settings')) return false;
+    return (call.params || []).some(param => APP_LEVEL_SECRET_KEYS.includes(String(param)));
+  });
+}
 
 test('settings secrets POST rejects app-level writes for ordinary authenticated users', async () => {
   const fakeDb = installDb({ authSecret: 'fixed-test-secret' });
@@ -561,7 +598,7 @@ test('settings secrets POST rejects app-level writes for ordinary authenticated 
     assert.equal(noWorkspace.status, 403);
     assert.match(noWorkspaceBody.error.message, /App-level secret management/i);
     assert.equal(
-      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      appSettingsSecretWrites(fakeDb),
       false,
     );
 
@@ -572,7 +609,7 @@ test('settings secrets POST rejects app-level writes for ordinary authenticated 
     });
     assert.equal(baseWorkspace.status, 403);
     assert.equal(
-      fakeDb.calls.some(call => String(call.sql).includes('insert into app_settings')),
+      appSettingsSecretWrites(fakeDb),
       false,
     );
   });
@@ -781,12 +818,13 @@ test('a token issued before a password change is rejected after the change; the 
   const fakeDb = installDb({
     authSecret: 'fixed-test-secret',
     users: { 'user-1': { password_hash: testPasswordHash('correct horse battery staple'), token_version: 1 } },
+    roles: { 'ws-1:user-1': 'owner' },
   });
 
   await withServer(async (baseUrl) => {
     const oldToken = await __test.issueToken('user-1', '1');
 
-    const before = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets');
+    const before = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(before.status, 200);
 
     const changeResponse = await authedFetch(baseUrl, oldToken, '/backend/users/me/change-password', {
@@ -802,12 +840,12 @@ test('a token issued before a password change is rejected after the change; the 
 
     // The token used BEFORE the change (still the same physical string used to
     // make the change-password call itself) must now be rejected.
-    const afterOldToken = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets');
+    const afterOldToken = await authedFetch(baseUrl, oldToken, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(afterOldToken.status, 401);
 
     // The fresh token returned in the response keeps the session alive (no
     // forced re-login) even though it embeds the bumped version.
-    const afterFreshToken = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets');
+    const afterFreshToken = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(afterFreshToken.status, 200);
 
     assert.equal(fakeDb.userRows['user-1'].token_version, '2');
@@ -815,14 +853,14 @@ test('a token issued before a password change is rejected after the change; the 
 });
 
 test('POST /backend/auth/signout requires auth and invalidates the calling token immediately', async () => {
-  installDb({ authSecret: 'fixed-test-secret' });
+  installDb({ authSecret: 'fixed-test-secret', roles: { 'ws-1:user-1': 'owner' } });
 
   await withServer(async (baseUrl) => {
     const unauthenticated = await fetch(`${baseUrl}/backend/auth/signout`, { method: 'POST' });
     assert.equal(unauthenticated.status, 401);
 
     const token = await __test.issueToken('user-1', '1');
-    const before = await authedFetch(baseUrl, token, '/backend/settings/secrets');
+    const before = await authedFetch(baseUrl, token, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(before.status, 200);
 
     const signOutResponse = await authedFetch(baseUrl, token, '/backend/auth/signout', {
@@ -837,12 +875,12 @@ test('POST /backend/auth/signout requires auth and invalidates the calling token
     // Reusing the same token right after sign-out must fail immediately — this
     // instance just wrote the bump itself, so there is no 10s cache window here
     // (that window only applies to OTHER instances in a multi-instance deploy).
-    const afterSignOut = await authedFetch(baseUrl, token, '/backend/settings/secrets');
+    const afterSignOut = await authedFetch(baseUrl, token, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(afterSignOut.status, 401);
 
     // A fresh sign-in (a newly issued token for the bumped version) works again.
     const freshToken = await __test.issueToken('user-1', '2');
-    const afterFresh = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets');
+    const afterFresh = await authedFetch(baseUrl, freshToken, '/backend/settings/secrets?workspaceId=ws-1');
     assert.equal(afterFresh.status, 200);
   });
 });

@@ -35,25 +35,113 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_kind text DEFAULT '',
   git_root text DEFAULT '',
   git_remote text DEFAULT '',
-  background_opacity numeric DEFAULT 0.42,
+  background_opacity numeric DEFAULT 0.7,
   background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
+  -- Groupable workspaces. A workspace with children renders as a group, one
+  -- without renders as a leaf; there is no separate folder entity and no new
+  -- tier. Children inherit AGENTS and MEMBERS from their ancestors; CONTENT
+  -- (channels, documents, tasks, memory) stays isolated to one workspace.
+  --
+  -- ON DELETE RESTRICT: CASCADE would silently destroy a client's whole
+  -- workspace when the agency parent is deleted, and SET NULL would silently
+  -- promote it to top level AND strip every member whose access was inherited.
+  -- RESTRICT forces the operator to re-parent or delete the children first.
+  parent_id uuid REFERENCES workspaces(id) ON DELETE RESTRICT,
+  CONSTRAINT workspaces_parent_id_not_self CHECK (parent_id IS NULL OR parent_id <> id),
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_user_id ON workspaces(user_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_parent_id ON workspaces(parent_id);
 
+-- The CHECK above rejects the 1-cycle (parent_id = id). Every longer cycle
+-- (A -> B -> A and deeper) needs a walk, so it is a trigger. This is enforced
+-- at the DB and not only at the API gate because a cycle makes the recursive
+-- ancestor walk in the AUTHORIZATION path spin until statement_timeout on every
+-- request touching that workspace — one bad row is a denial of service.
+CREATE OR REPLACE FUNCTION workspaces_reject_parent_cycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  cursor_id uuid := NEW.parent_id;
+  steps int := 0;
+BEGIN
+  WHILE cursor_id IS NOT NULL LOOP
+    IF cursor_id = NEW.id THEN
+      RAISE EXCEPTION 'workspace % cannot be its own ancestor', NEW.id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    steps := steps + 1;
+    IF steps > 10 THEN
+      RAISE EXCEPTION 'workspace nesting exceeds the maximum depth of 10'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    SELECT parent_id INTO cursor_id FROM workspaces WHERE id = cursor_id;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_workspaces_reject_parent_cycle ON workspaces;
+CREATE TRIGGER trg_workspaces_reject_parent_cycle
+  BEFORE INSERT OR UPDATE OF parent_id ON workspaces
+  FOR EACH ROW
+  WHEN (NEW.parent_id IS NOT NULL)
+  EXECUTE FUNCTION workspaces_reject_parent_cycle();
+
+-- THE WORKSPACE VAULT. One table, four namespaces: a platform-managed key
+-- (ANTHROPIC_API_KEY), `sandbox:<provider>:<credential>` for a provider skill's
+-- API key, `orb:<webhook id>` for an orb's signing secret, and anything else as a
+-- user-defined shared secret. Classification lives in shared/backend-core.cjs
+-- (classifyVaultKey) so both backends agree on what an entry is.
+--
+-- Deliberately NOT in the backendClient allowlists (ALLOWED_TABLES): the only
+-- doors are the dedicated manage-role routes, and none of them returns a value.
+-- The read path used by the UI is VAULT_META_SELECT, which does not select the
+-- secret columns at all.
 CREATE TABLE IF NOT EXISTS workspace_secrets (
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   key text NOT NULL,
+  -- Legacy plaintext column. Encrypted rows leave this empty and carry the
+  -- AES-256-GCM ciphertext in secret_cipher instead. Rows written before
+  -- encryption-at-rest landed still hold plaintext here; they are re-encrypted on
+  -- boot by reencryptLegacyPlaintextSecrets (server/index.cjs) rather than by a
+  -- migration, because the key is derived in the app from
+  -- SECRETS_ENCRYPTION_KEY/AUTH_SECRET and Postgres has no access to it.
   value text NOT NULL DEFAULT '',
+  secret_cipher text DEFAULT '',
+  description text DEFAULT '',
   updated_by uuid,
   updated_at timestamptz DEFAULT now(),
   PRIMARY KEY (workspace_id, key)
 );
 
+-- M10 (2026-07 review): secret_cipher/description were added ONLY by the runtime
+-- ALTERs in server/index.cjs, so a DB provisioned from this file (or from the
+-- migrations) had neither. Re-stated as idempotent ALTERs so re-pushing this file
+-- over an existing database backfills them too.
+ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
+ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
+
+CREATE TABLE IF NOT EXISTS gateway_configs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT 'Gateway',
+  base_url text NOT NULL DEFAULT '',
+  api_key_cipher text NOT NULL DEFAULT '',
+  model text NOT NULL DEFAULT '',
+  protocol text NOT NULL DEFAULT 'openai-chat',
+  headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_configs_workspace_id ON gateway_configs(workspace_id);
 
 CREATE TABLE IF NOT EXISTS documents (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -79,8 +167,21 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   title text NOT NULL DEFAULT 'New Chat',
   model text DEFAULT 'auto',
   folder text DEFAULT 'General',
+  description text NOT NULL DEFAULT '',
+  icon text NOT NULL DEFAULT '',
+  -- How people and AGENTS should behave here, in the owner's own words.
+  -- Injected into every agent turn in this channel.
+  intent text NOT NULL DEFAULT '',
   is_favorite boolean NOT NULL DEFAULT false,
   participants jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- How eagerly this channel answers a post that named nobody, on ONE axis:
+  --   'auto'    someone answers at once (the default, and every existing row)
+  --   'social'  someone answers, unhurried — replies are paced seconds apart and
+  --             at most two agents answer (shared/replyCadence.cjs)
+  --   'mention' nobody answers unless asked
+  -- Deliberately UNCONSTRAINED text, normalized in shared/channelMentions.cjs:
+  -- an unreadable value reads as 'auto', so a row written by a newer client can
+  -- never make a channel go silent. That is why adding 'social' needed no DDL.
   conversation_mode text NOT NULL DEFAULT 'auto',
   max_agent_turns integer NOT NULL DEFAULT 10,
   auto_rounds integer NOT NULL DEFAULT 3,
@@ -89,6 +190,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   split_at timestamptz,
   archived_at timestamptz,
   deleted_at timestamptz,
+  canvas_id text,
   version integer NOT NULL DEFAULT 1,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
@@ -98,12 +200,21 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace_id ON chat_sessions(works
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
 
+-- message_kind/tool_name/tool_detail carry agent tool steps: message_kind
+-- 'tool_step' marks a row the UI renders as a compact chip rather than a full
+-- chat bubble, and the two tool_* halves are the structured form of the
+-- human-readable `content` line, which stays populated as the fallback. All
+-- three default to '' so every pre-existing row stays valid.
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
   content text NOT NULL DEFAULT '',
+  message_kind text DEFAULT '',
+  tool_name text DEFAULT '',
+  tool_detail text DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 
@@ -135,6 +246,15 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+
+-- "Send to channel": an agent WORKS inside a thread and only its final answer is
+-- broadcast to the channel/DM. A broadcast reply KEEPS its thread_parent_id (it is
+-- still part of the thread) and is additionally shown in the channel view, so the
+-- channel reads as message → answer while every "Thinking …" placeholder,
+-- tool-step chip and intermediate text block stays in the thread. Humans get the
+-- same switch from the thread composer. Mirrors the runtime ALTER in
+-- server/index.cjs and supabase/migrations/20260725160000_*.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT NULL DEFAULT false;
 
 -- Tasks <-> subthread <-> comments loop: a task @mention runs the agent inside a
 -- per-task subthread; source_task_id ties the thread root back to its task.
@@ -220,6 +340,46 @@ CREATE TABLE IF NOT EXISTS memory_facts (
 
 CREATE INDEX IF NOT EXISTS idx_memory_facts_workspace_id ON memory_facts(workspace_id);
 
+-- Defined here (before agent_memory_files / memory_file_comments) because both
+-- of those FK it. psql runs this file top to bottom with ON_ERROR_STOP=1, so a
+-- forward REFERENCES aborts the whole push — keep referenced tables above their
+-- referrers.
+CREATE TABLE IF NOT EXISTS workspace_agents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  avatar text NOT NULL DEFAULT 'AI',
+  openpet_avatar_id text DEFAULT '',
+  accent_color text DEFAULT '#00a95c',
+  description text DEFAULT '',
+  system_prompt text NOT NULL DEFAULT '',
+  soul text DEFAULT '',
+  instructions text DEFAULT '',
+  tools jsonb DEFAULT '[]'::jsonb,
+  skills jsonb DEFAULT '[]'::jsonb,
+  -- How the agent presents itself, and who chose each part:
+  --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
+  -- `voice` stores a PREFERENCE (accent + a variant index + rate/pitch), never a
+  -- device voice name — getVoices() returns a different list on every machine.
+  -- `human_set` records which fields a person chose, so an agent's identity
+  -- declaration on reconnect can default the rest without overwriting them.
+  -- Separate from `metadata` because metadata is manage-only (host_folders).
+  identity jsonb NOT NULL DEFAULT '{}'::jsonb,
+  handle text DEFAULT '',
+  connect_token_hash text DEFAULT '',
+  model text NOT NULL DEFAULT 'auto',
+  run_mode text NOT NULL DEFAULT 'builtin',
+  memory_dir text DEFAULT '',
+  enabled boolean NOT NULL DEFAULT true,
+  permission_mode text NOT NULL DEFAULT 'default',
+  version integer NOT NULL DEFAULT 1,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
+
 -- Agent file-memory mirror: read-only snapshots of the memory files an agent's
 -- daemon enumerates from its palace dir. Pushed up by the daemon; never edited
 -- in-app in phase 1. UPSERTed by UNIQUE(agent_id, path) so re-syncs update rows
@@ -243,6 +403,32 @@ CREATE TABLE IF NOT EXISTS agent_memory_files (
 
 CREATE INDEX IF NOT EXISTS idx_agent_memory_files_workspace_id ON agent_memory_files(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_memory_files_agent_id ON agent_memory_files(agent_id);
+
+-- Agent skill documents: the BODY behind a skill name a daemon advertises.
+-- `agent_connections.capabilities.skills` carries names only, so the Skills
+-- browser had nothing to show for them; a daemon mirrors the real SKILL.md here
+-- via the `agent_skill_sync` push (same shape as the memory mirror above).
+-- Read-only in-app — the daemon is the only writer, and the browser reads it
+-- through /backend/system/skill-content, not the generic table API.
+CREATE TABLE IF NOT EXISTS agent_skill_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  skill text NOT NULL,
+  path text DEFAULT '',
+  summary text DEFAULT '',
+  content text DEFAULT '',
+  byte_size bigint DEFAULT 0,
+  truncated boolean NOT NULL DEFAULT false,
+  last_synced timestamptz DEFAULT now(),
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (agent_id, skill)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
 
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -271,6 +457,43 @@ CREATE TABLE IF NOT EXISTS workspace_members (
 CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace_id ON workspace_members(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id ON workspace_members(user_id);
 
+-- Invite links. This table existed ONLY in the runtime DDL (ensureRuntimeSchema,
+-- server/index.cjs) — a fresh `npm run db:neon:push` / `npm run migrate` DB never
+-- got it, so every invite route 500'd there. Restated here (and in
+-- supabase/migrations/20260726120000_*) to match the runtime bootstrap exactly.
+--
+-- `token` holds hashAgentToken(plaintext) for rows created after the L4
+-- hardening; the plaintext is returned once, at creation, and never again.
+--
+-- `dismissed_at` is a soft delete for the LIST only: a spent link (revoked,
+-- accepted, or past expires_at) can be cleared out of the Users window while the
+-- row survives — an accepted invite is the record of how a member got into the
+-- workspace. NULL = shown. The routes refuse to set it on a still-active link,
+-- because hiding a live invite would leave it granting access with nowhere left
+-- to see or revoke it.
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  token text NOT NULL UNIQUE,
+  email text DEFAULT '',
+  role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+  created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  accepted_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  accepted_at timestamptz,
+  expires_at timestamptz,
+  dismissed_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Idempotent so re-pushing this file over an existing database backfills the
+-- column on a table that predates it.
+ALTER TABLE workspace_invites ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
+
 CREATE TABLE IF NOT EXISTS canvas_groups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -282,6 +505,35 @@ CREATE TABLE IF NOT EXISTS canvas_groups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_canvas_groups_workspace_id ON canvas_groups(workspace_id);
+
+-- Canvas layers (the "projects"/canvases a workspace is split into). The shared
+-- definition — name and ordering — of each layer, so a canvas one member creates
+-- is visible to the rest of the workspace. `layer_id` is the client-generated
+-- text id that canvas_objects.layer_id stores ('base' for the default layer); the
+-- uuid `id` is the row's own key so every generic /backend/db row id stays
+-- globally unique (the RBAC gate resolves a row's workspace from a bare id
+-- filter). Which layer is active is per-browser and stays in localStorage.
+CREATE TABLE IF NOT EXISTS canvas_layers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  layer_id text NOT NULL,
+  name text NOT NULL DEFAULT 'Workspace',
+  sort_order double precision NOT NULL DEFAULT 0,
+  description text DEFAULT '',
+  icon text DEFAULT '',
+  local_path text DEFAULT '',
+  project_kind text DEFAULT '',
+  git_root text DEFAULT '',
+  git_remote text DEFAULT '',
+  background_opacity double precision DEFAULT 0.7,
+  background_image text DEFAULT '',
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, layer_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
 
 CREATE TABLE IF NOT EXISTS canvas_objects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -387,39 +639,18 @@ CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_
 CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
 CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
 
-CREATE TABLE IF NOT EXISTS workspace_agents (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  name text NOT NULL,
-  avatar text NOT NULL DEFAULT 'AI',
-  openpet_avatar_id text DEFAULT '',
-  accent_color text DEFAULT '#00a95c',
-  description text DEFAULT '',
-  system_prompt text NOT NULL DEFAULT '',
-  soul text DEFAULT '',
-  instructions text DEFAULT '',
-  tools jsonb DEFAULT '[]'::jsonb,
-  skills jsonb DEFAULT '[]'::jsonb,
-  handle text DEFAULT '',
-  connect_token_hash text DEFAULT '',
-  model text NOT NULL DEFAULT 'auto',
-  run_mode text NOT NULL DEFAULT 'builtin',
-  memory_dir text DEFAULT '',
-  enabled boolean NOT NULL DEFAULT true,
-  permission_mode text NOT NULL DEFAULT 'default',
-  version integer NOT NULL DEFAULT 1,
-  created_by uuid,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
-
 -- F10 (2026-07 review): `token` holds hashAgentToken(plaintext) for rows created
 -- after the hardening fix (server/index.cjs POST /backend/agent-webhooks) — the
 -- plaintext is only ever returned once, at creation. Legacy rows may still hold
 -- plaintext; the trigger route's dual-path lookup (inviteTokenLookupParams)
 -- matches either during the transition. No column/type change needed.
+-- Orbs (plans/021): the provider/prompt/payload_fields/routing/rate_limit and
+-- session/thread anchor columns turn a plain webhook into an "orb" — an agent
+-- woken by a verified external event. Defaults reproduce the pre-orb behaviour
+-- exactly (generic, unsigned, a fresh session per delivery). The signing secret
+-- is deliberately NOT a column here: this table is in the backendClient
+-- allowlists and the frontend does a literal select('*'), so anything stored
+-- here reaches the browser. It lives in the workspace vault as `orb:<id>`.
 CREATE TABLE IF NOT EXISTS agent_webhooks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -429,12 +660,50 @@ CREATE TABLE IF NOT EXISTS agent_webhooks (
   enabled boolean NOT NULL DEFAULT true,
   last_triggered_at timestamptz,
   version integer NOT NULL DEFAULT 1,
+  provider text NOT NULL DEFAULT 'generic',
+  prompt text NOT NULL DEFAULT '',
+  payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
+  routing text NOT NULL DEFAULT 'new',
+  rate_limit_per_hour integer NOT NULL DEFAULT 60,
+  -- Advisory UI hint ("is a signing secret configured"), never consulted by the
+  -- trigger route, which reads the vault entry itself.
+  has_signing_secret boolean NOT NULL DEFAULT false,
+  session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  thread_root_message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
+
+-- Inbound delivery ledger for orbs: the deduplication gate AND the delivery log.
+-- Dedupe is DB-level because a provider retry can land after a Fly restart or on
+-- another machine, which the process-local claimTaskDispatch map cannot see; this
+-- mirrors flow_webhook_deliveries' `on conflict do nothing` idempotency in the
+-- inbound direction. The unique index is PARTIAL so that rows with no
+-- provider-supplied delivery id (delivery_key IS NULL — including every
+-- rejected/throttled row) never claim the idempotency slot and never block a
+-- legitimate later retry.
+CREATE TABLE IF NOT EXISTS orb_deliveries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  webhook_id uuid NOT NULL REFERENCES agent_webhooks(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  delivery_key text,
+  body_hash text NOT NULL DEFAULT '',
+  event_type text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'accepted'
+    CHECK (status IN ('accepted', 'duplicate', 'rejected', 'throttled', 'failed')),
+  session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
+  message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+  detail text NOT NULL DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orb_deliveries_key
+  ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
+  ON orb_deliveries(webhook_id, created_at DESC);
 
 -- F6 (2026-07 review): agent_registrations existed ONLY in the runtime DDL —
 -- a fresh migrate DB never got it, breaking MCP register_agent/approval flows.
@@ -444,6 +713,10 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
   agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
   requested_handle text DEFAULT '',
   requested_name text DEFAULT '',
+  -- Identity declared in register_agent. Approval is asynchronous, so this has
+  -- to outlive the pending state or a new agent loses the avatar/voice it asked
+  -- for at the moment its workspace_agents row is created.
+  requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb,
   client_label text DEFAULT '',
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
   created_at timestamptz DEFAULT now(),
@@ -451,6 +724,33 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
   decided_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
+
+-- Link preview (unfurl) cache. Keyed by a hash of the normalized URL and
+-- deliberately NOT workspace-scoped: one outbound fetch per URL for the whole
+-- install, rather than one per workspace, per reader, per render. Nothing in a
+-- row is private — it is metadata a public page publishes about itself.
+--
+-- Absent from ALLOWED_TABLES on purpose, so it cannot be reached (or enumerated)
+-- through the generic /backend/db gate. Read only by POST /backend/link-previews.
+-- Mirrors the runtime bootstrap in server/index.cjs and
+-- supabase/migrations/20260726190000_link_previews.sql.
+CREATE TABLE IF NOT EXISTS link_previews (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  url_hash text NOT NULL UNIQUE,
+  url text NOT NULL,
+  final_url text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'ok'
+    CHECK (status IN ('ok', 'empty', 'failed', 'blocked')),
+  title text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  site_name text NOT NULL DEFAULT '',
+  image_url text NOT NULL DEFAULT '',
+  detail text NOT NULL DEFAULT '',
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  -- ok/empty rows last a week, failures an hour (see linkPreviewTtlMs).
+  expires_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_link_previews_expires ON link_previews(expires_at);
 
 CREATE TABLE IF NOT EXISTS agent_connections (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -575,6 +875,83 @@ CREATE TABLE IF NOT EXISTS activity_events (
 CREATE INDEX IF NOT EXISTS idx_activity_events_workspace_created ON activity_events(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_events_entity ON activity_events(entity_type, entity_id);
 
+-- Notes left on an activity log entry ("comment I can look at later"), anchored
+-- to the activity_events row itself. Mirrors memory_file_comments' shape.
+CREATE TABLE IF NOT EXISTS activity_event_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id uuid NOT NULL REFERENCES activity_events(id) ON DELETE CASCADE,
+  user_id uuid,
+  parent_id uuid REFERENCES activity_event_comments(id) ON DELETE CASCADE,
+  content text NOT NULL,
+  resolved boolean DEFAULT false,
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_event_comments(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
+CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
+
+-- Inbox read state: one MONOTONIC marker per (user, workspace, context_key).
+-- The inbox aggregates existing sources (blockers, comments, mentions, agent-job
+-- errors, activity) and owns no rows of its own — read/unread is entirely this
+-- table: an item is unread when its created_at is newer than the marker for its
+-- context_key, or when no marker exists. Markers only ever move FORWARD (the
+-- upsert in server/index.cjs carries a `read_at < excluded.read_at` guard) so a
+-- stale write from a second device cannot un-read something.
+--
+-- The primary key IS the read-path index: the inbox query looks markers up by
+-- the (user_id, workspace_id) prefix, which the PK btree covers. The extra
+-- workspace_id index only serves the ON DELETE CASCADE from workspaces.
+CREATE TABLE IF NOT EXISTS inbox_read_state (
+  user_id uuid NOT NULL,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  context_key text NOT NULL,
+  read_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  PRIMARY KEY (user_id, workspace_id, context_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
+
+-- Owner broadcasts (shared/tenant-campaigns.cjs). The only rows here addressed
+-- to ACCOUNTS rather than scoped to a workspace, which is why neither table is
+-- in the backendClient allowlists — the dedicated owner-gated routes are the
+-- only door. Mirrors ensureRuntimeSchema in server/index.cjs.
+--
+-- The campaign row IS the audit trail: who sent it (created_by, plus the email
+-- as it read at send time so a later rename cannot rewrite history), what it
+-- said, the segment and its plain-English summary, and how many accounts it
+-- reached.
+CREATE TABLE IF NOT EXISTS tenant_campaigns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title text NOT NULL DEFAULT '',
+  body text NOT NULL DEFAULT '',
+  surface text NOT NULL DEFAULT 'tip',
+  segment jsonb NOT NULL DEFAULT '{}'::jsonb,
+  segment_summary text NOT NULL DEFAULT '',
+  recipient_count integer NOT NULL DEFAULT 0,
+  created_by uuid,
+  created_by_email text NOT NULL DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_campaigns_created_at ON tenant_campaigns(created_at DESC);
+
+-- The FROZEN audience, written once at send time, and the per-user dismissal
+-- record. Both jobs in one table on purpose: a user can only dismiss a message
+-- that was actually sent to them, because the row they update is the row that
+-- made them a recipient. Server-side rather than a localStorage key so a
+-- dismissal survives a different browser and two accounts sharing one browser
+-- never share one dismissal. The composite PK is the delivery index.
+CREATE TABLE IF NOT EXISTS tenant_campaign_recipients (
+  campaign_id uuid NOT NULL REFERENCES tenant_campaigns(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  dismissed_at timestamptz,
+  PRIMARY KEY (user_id, campaign_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_campaign_recipients_campaign
+  ON tenant_campaign_recipients(campaign_id);
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.
@@ -615,3 +992,188 @@ DO $$ BEGIN
       CHECK (interval_seconds >= 60 AND interval_seconds <= 2592000);
   END IF;
 END $$;
+
+-- Huddles: ad-hoc voice calls inside a channel, carried by LiveKit. Mirrors the
+-- runtime bootstrap DDL in server/huddles.cjs (HUDDLES_SCHEMA_SQL) so a fresh
+-- neon-push has the tables too. room_name is namespaced 'agensis-<huddleId>'
+-- because the LiveKit project is shared with other apps.
+-- idx_huddles_one_live_per_session is load-bearing, not an optimisation: it is
+-- what makes two people pressing "Huddle" at the same moment land in ONE room.
+--
+-- TWO session links, meaning different things. session_id is the channel/DM the
+-- huddle was CALLED FROM. transcript_session_id is the huddle's OWN
+-- conversation — its own chat_sessions row (folder='huddle', participants and
+-- canvas_id copied from the host) where speech-to-text and the agents' replies
+-- land, so a live voice call is not dumped into the channel's permanent
+-- history. Nullable: huddles predating it have none, and every reader falls
+-- back to session_id, which is what those huddles actually did.
+CREATE TABLE IF NOT EXISTS huddles (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  room_name text NOT NULL UNIQUE,
+  started_by uuid,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz,
+  transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL
+);
+ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
+
+-- APPEND-ONLY. Participant state is folded from this log (foldHuddleState in
+-- server/huddles.cjs), never stored denormalised, so the card survives a
+-- reconnect and out-of-order webhook delivery with no reconciliation pass.
+-- Nothing may UPDATE or DELETE a row here. event_id is LiveKit's own event id;
+-- the partial unique index makes a redelivered webhook a no-op.
+CREATE TABLE IF NOT EXISTS huddle_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  huddle_id uuid NOT NULL REFERENCES huddles(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  kind text NOT NULL,
+  identity text NOT NULL DEFAULT '',
+  display_name text NOT NULL DEFAULT '',
+  event_id text NOT NULL DEFAULT '',
+  seq bigserial,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_huddle_events_huddle ON huddle_events(huddle_id, created_at, seq);
+CREATE INDEX IF NOT EXISTS idx_huddle_events_session ON huddle_events(session_id, created_at, seq);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_huddle_events_event_id ON huddle_events(event_id) WHERE event_id <> '';
+
+-- Liveness, and the ONE mutable table in the huddle surface.
+--
+-- A browser that crashes, loses power or is force-quit never posts its /leave,
+-- so presence has to EXPIRE rather than be deleted: a connected client refreshes
+-- last_seen_at/heartbeat_at every 30s and the server reaps anything that has
+-- gone quiet for 150s (2.5x the worst-case one-wake-per-minute clamp browsers
+-- apply to hidden tabs, so a backgrounded participant is never kicked out of a
+-- call they are still in).
+--
+-- Not part of huddle_events on purpose. That log is history and is never
+-- updated; "is this person still there" is a current value, and appending a row
+-- per participant per heartbeat would grow without bound for no gain.
+--
+-- heartbeat_at is NULL until the client's first beat, and the reaper keys on it
+-- ALONE: a client that confirms but never beats (an older frontend — Netlify and
+-- Fly deploy independently) is never expired, so the reaper cannot empty live
+-- huddles in the gap between the two deploys.
+CREATE TABLE IF NOT EXISTS huddle_presence (
+  huddle_id uuid NOT NULL REFERENCES huddles(id) ON DELETE CASCADE,
+  identity text NOT NULL,
+  connection_epoch text NOT NULL DEFAULT '',
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  heartbeat_at timestamptz,
+  reaped_at timestamptz,
+  PRIMARY KEY (huddle_id, identity)
+);
+
+-- The channel marker: ONE message per finished huddle, in the channel it was
+-- called from, saying it happened and pointing back at the transcript.
+-- Deliberately no foreign key — messages is created hundreds of lines above
+-- huddles, and a dangling huddle_id degrades to a plain sentence with a dead
+-- link, which is the same graceful path an old huddle with no transcript
+-- session already takes.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE huddle_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- In-app feedback -> the System workspace.
+--
+-- A feedback report is an ORDINARY task in an ORDINARY workspace: the only new
+-- concept is `workspaces.is_system`, a flag on one workspace that the app
+-- routes reports into. Members, roles, invites, assignment and agent dispatch
+-- all work on it unchanged, and there is no second todo system to keep in sync.
+--
+-- The PARTIAL unique index is what makes "the System workspace" singular, and
+-- what makes ensureSystemWorkspace (shared/backend-core.cjs) race-safe: two
+-- concurrent first-ever submissions cannot create two of them.
+-- ---------------------------------------------------------------------------
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
+
+-- 'feedback' provenance. Dropped and re-added because Postgres has no ALTER for
+-- a CHECK constraint; the name is deterministic (matching the inline column
+-- check above), so re-running this file is idempotent.
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
+ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
+  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+
+-- The bulky half of a report. Kept out of `tasks` deliberately: task rows are
+-- fanned out over realtime to every workspace client, and a few hundred console
+-- lines per row does not belong in that broadcast. `tasks.source_id` holds this
+-- row's id, so the task alone is enough to find the diagnostics.
+CREATE TABLE IF NOT EXISTS feedback_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  task_id uuid REFERENCES tasks(id) ON DELETE CASCADE,
+  reporter_id uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  -- The workspace the reporter was LOOKING AT, which is not the workspace the
+  -- report lands in. Nullable and ON DELETE SET NULL: reports outlive it.
+  source_workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  description text NOT NULL DEFAULT '',
+  page jsonb NOT NULL DEFAULT '{}'::jsonb,
+  selections jsonb NOT NULL DEFAULT '[]'::jsonb,
+  diagnostics jsonb,
+  build_id text DEFAULT '',
+  user_agent text DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_workspace_id ON feedback_reports(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_task_id ON feedback_reports(task_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);
+
+-- ---------------------------------------------------------------------------
+-- COST METERING
+--
+-- One row per paid provider call, recording COUNTS ONLY: tokens, characters or
+-- seconds (`unit` says which), plus the provider and the resource that was
+-- billed (the model id, the voice model, the room). NEVER a price — rates move,
+-- and a price written into a row on the day of the call becomes a lie that
+-- cannot be told apart from a current one. Money is computed at display time
+-- from shared/usage-rates.cjs, which is the single place a rate may be edited.
+--
+-- Every column is a scalar. There is deliberately no jsonb here: this table
+-- cannot then reproduce the bind bug where Fly needs an object and Netlify
+-- needs the string.
+--
+-- workspace_id is ON DELETE SET NULL rather than CASCADE — deleting a workspace
+-- must not delete the record of what it cost. Such a row leaves the per-account
+-- rollup (nothing to attribute it to) and stays in the deployment total.
+--
+-- There is NO historical data before this table existed and none can be
+-- invented, so app_settings.'usage.metering_started_at' stamps the epoch and
+-- every figure on the Tenants screen is labelled "since" that date.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usage_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  -- 'anthropic' | 'deepgram' | 'cartesia' | 'livekit' | 'sandbox'
+  provider text NOT NULL,
+  -- What was billed: a model id, a voice model, a room. Free text on purpose —
+  -- a new model must not need a migration to be metered.
+  resource text NOT NULL DEFAULT '',
+  -- Which code path spent it ('ai_chat', 'builtin_turn', 'auto_interject'…).
+  kind text NOT NULL DEFAULT '',
+  -- 'tokens' | 'characters' | 'seconds'
+  unit text NOT NULL DEFAULT 'tokens',
+  input_units bigint NOT NULL DEFAULT 0,
+  output_units bigint NOT NULL DEFAULT 0,
+  -- Kept apart from input_units because they are priced differently (a 5-minute
+  -- cache write is 1.25x base input, a read 0.1x). Summing them would
+  -- under-report writes and over-report reads.
+  cache_write_units bigint NOT NULL DEFAULT 0,
+  cache_read_units bigint NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_created ON usage_events(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created ON usage_events(provider, created_at DESC);
+
+INSERT INTO app_settings (key, value)
+     VALUES ('usage.metering_started_at', now()::text)
+ON CONFLICT (key) DO NOTHING;

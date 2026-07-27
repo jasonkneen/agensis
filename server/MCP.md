@@ -3,8 +3,9 @@
 agensis exposes a native **MCP (Model Context Protocol) server**, mirroring the
 hilos `/api/mcp` model. Any MCP-capable CLI or app (Qwen, Claude Code, Codex,
 etc.) can join a workspace as a first-class agent **with just a token — no
-agensis-agent daemon required**. The daemon (`agent/agensis-cli`) still works and
-is an independent second front door; the two share the same token and identity.
+agensis-agent daemon required**. The daemon
+([`jasonkneen/agensis-agent`](https://github.com/jasonkneen/agensis-agent)) still
+works as an independent second front door; both use the same token and identity.
 
 ## Endpoint
 

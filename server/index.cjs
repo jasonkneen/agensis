@@ -2,14 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
+const net = require('net');
 const os = require('os');
+const dns = require('dns').promises;
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const express = require('express');
 const cors = require('cors');
 const postgres = require('postgres');
 const { WebSocketServer } = require('ws');
-const { createMcpHandler } = require('./mcp.cjs');
+const { createMcpHandler, createBuiltinToolset } = require('./mcp.cjs');
 const { createInferenceBroker } = require('./inference-broker.cjs');
 const { createFarmIntegrationCore } = require('./farm-integration.cjs');
 const {
@@ -20,6 +22,71 @@ const {
 } = require('./flow-integration.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
+ PROVIDER_CALL_REDIRECT_NOTE,
+ SANDBOX_VAULT_PREFIX,
+ applyProviderCredential,
+ bundledCredentialEnvVar,
+ describeProviderCall,
+ envConfiguredCredentialKeys,
+ fenceProviderOutput,
+ parseSandboxCredentialKey,
+ providerCredentialSlots,
+ planProviderCall,
+ redactSandboxSecrets,
+ renderSandboxSkillPrompt,
+ sanitizeSandboxMeta,
+ sandboxCredentialKey,
+ sandboxCredentialKeysForSkills,
+ sandboxSkillsForAgent,
+ unknownProviderCallArgs,
+} = require('./sandbox-skills.cjs');
+const {
+ SKILL_CONTENT_MAX_BYTES,
+ fenceSkillContent,
+ findReadableLibrary,
+ listLibraryEntries,
+ listWorkspaceSkills,
+ loadSkillContent,
+ normalizeSkillDocuments,
+ readLibraryEntry,
+ unavailable: skillContentUnavailable,
+} = require('./skill-content.cjs');
+const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const { channelIntentNote } = require('../shared/channelIntent.cjs');
+const {
+ ORB_MAX_BODY_BYTES,
+ ORB_MAX_PAYLOAD_FIELDS,
+ ORB_PROVIDERS,
+ ORB_ROUTING_MODES,
+ composeOrbMessage,
+ normalizeOrbProvider,
+ normalizeOrbRateLimit,
+ normalizeOrbRouting,
+ orbDispatchRefusal,
+ parseOrbBody,
+ verifyOrbDelivery,
+} = require('./orbs.cjs');
+const {
+ THREAD_INBOX_DEFAULT_LIMIT,
+ buildThreadInboxSql,
+ toThreadInboxItem,
+} = require('./thread-inbox.cjs');
+const {
+ LINK_PREVIEW_MAX_DESCRIPTION_CHARS,
+ LINK_PREVIEW_MAX_PER_REQUEST,
+ LINK_PREVIEW_MAX_SITE_CHARS,
+ LINK_PREVIEW_MAX_TITLE_CHARS,
+ LINK_PREVIEW_MAX_URL_CHARS,
+ LINK_PREVIEW_STATUSES,
+ clampPreviewText,
+ fetchLinkPreview,
+ fetchPreviewImage,
+ linkPreviewCacheKey,
+ linkPreviewTtlMs,
+ normalizeUnfurlUrl,
+} = require('./link-preview.cjs');
+const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
+const {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
@@ -29,6 +96,7 @@ const {
  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
  stripPrivilegedDbValues,
+ safeSelectColumns,
  storagePathBelongsToWorkspace,
  issueAuthToken,
  verifyAuthToken,
@@ -38,7 +106,77 @@ const {
  createDbRateLimiter,
  evaluatePasswordServerSide,
  enforceDbOperationAccess: sharedEnforceDbOperationAccess,
+ normalizeFeedbackSubmission,
+ insertFeedbackReport,
+ assertWorkspaceRole: sharedAssertWorkspaceRole,
+ userCanAccessWorkspace: sharedUserCanAccessWorkspace,
+ // The vault surface — one classification, shared with the Netlify mirror.
+ VAULT_KEY_RE,
+ VAULT_SECRET_COLUMNS,
+ classifyVaultKey,
+ credentialLabel,
+ listWorkspaceVaultEntries,
+ listWorkspaceSecretMeta,
+ encryptVaultSecret: coreEncryptVaultSecret,
+ decryptVaultSecret: coreDecryptVaultSecret,
+ getWorkspaceSecretValue: coreGetWorkspaceSecretValue,
+ setWorkspaceSecretValue: coreSetWorkspaceSecretValue,
 } = require('../shared/backend-core.cjs');
+const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
+const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
+const {
+ applyIdentityDeclaration,
+ markHumanIdentityWrite,
+ identityWriteSql,
+ synthesizeHumanIdentityInsert,
+ repairStoredIdentity,
+ FIELD_LIMITS: IDENTITY_FIELD_LIMITS,
+ normalizeIdentityDeclaration,
+ normalizeVoicePreference,
+ resolveAgentVoice,
+ isCartesiaVoiceId,
+ CARTESIA_MODEL_ID,
+} = require('../shared/agentIdentity.cjs');
+const {
+ assertSystemOwner,
+ isReservedSignupEmail,
+ listTenantAccounts,
+ getTenantAccount,
+} = require('../shared/tenant-admin.cjs');
+// Cost metering. Every helper here is FAIL-OPEN by contract — see
+// shared/usage-metering.cjs. Call sites deliberately do not try/catch them: a
+// metering write must never be able to fail a turn somebody is paying for.
+const {
+ recordAnthropicUsage,
+ createAnthropicUsageAccumulator,
+} = require('../shared/usage-metering.cjs');
+const {
+ CAMPAIGN_CATEGORIES,
+ normalizeSegment,
+ normalizeCampaignInput,
+ assertSendable,
+ selectSegmentMatches,
+ describeSegment,
+ loadTenantFacts,
+ buildSegmentPreview,
+ createCampaign,
+ listCampaigns,
+ listUserCampaignMessages,
+ dismissCampaignMessage,
+} = require('../shared/tenant-campaigns.cjs');
+const {
+ CHANNEL_MENTION_HANDLE,
+ CHANNEL_MENTION_MAX_AGENTS,
+ agentMentionHandles,
+ allowsUnpromptedReply,
+ expandChannelMention,
+ isReservedAgentHandle,
+ mentionsChannel,
+ parseMentionHandles,
+ reservedAgentHandleMessage,
+ slugMentionHandle,
+} = require('../shared/channelMentions.cjs');
+const { replyCadencePlan } = require('../shared/replyCadence.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -89,6 +227,19 @@ function applyEnvFile(envPath) {
 
 function loadEnvFile() {
  if (envLoaded) return;
+
+ // A test process supplies its own environment (tests/helpers/test-env.cjs) and
+ // must never inherit a developer's `.env`. This is not a convenience: reading
+ // `.env` here silently rewrote what the suite was testing — a test that deletes
+ // BOX_API_KEY to exercise the "credential not configured" refusal got the real
+ // key handed back and took the configured path instead. It also repopulated
+ // DATABASE_URL, so a code path reaching getDb() without a test db would have
+ // opened a live production connection. Unset, getDb() throws instead.
+ if (process.env.AGENSIS_TEST === '1') {
+  envLoaded = true;
+  return;
+ }
+
  envLoaded = true;
 
  const candidates = [
@@ -106,12 +257,6 @@ function loadEnvFile() {
 // Secret keys that the settings dialog is allowed to read/write. Anything not
 // in this list is rejected so the endpoint can't write arbitrary settings.
 const MANAGED_SECRET_KEYS = ['ANTHROPIC_API_KEY'];
-
-function maskSecret(value) {
- if (!value) return '';
- if (value.length <= 8) return '••••••';
- return `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
 
 // Global settings are persisted in app_settings. Workspace-managed secrets live
 // in workspace_secrets so member roles can gate reads/writes per workspace.
@@ -138,7 +283,19 @@ async function resolveSecret(key, workspaceId = null) {
  return dbValue || process.env[key] || '';
 }
 
+// Managed-key STATE, never any part of a value.
+//
+// This used to return `preview: maskSecret(value)`, and when the workspace had no
+// key of its own that preview was of the PLATFORM key — so every workspace
+// owner was shown the first four and last four characters of the app-level
+// ANTHROPIC_API_KEY. `scope` already says which key is in play; the preview only
+// leaked. Same rule as every other vault entry now: configured, when, nothing else.
 async function listManagedSecrets(workspaceId = null) {
+ const meta = new Map();
+ if (workspaceId) {
+  const rows = await listWorkspaceSecretMeta(workspaceId, { db: dbUnsafe }).catch(() => []);
+  for (const row of rows) meta.set(row.key, row);
+ }
  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
   const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
   const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
@@ -146,8 +303,8 @@ async function listManagedSecrets(workspaceId = null) {
   return {
    key,
    configured: !!value,
-   preview: maskSecret(value),
    scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+   updated_at: meta.get(key)?.updated_at || null,
   };
  }));
 }
@@ -315,17 +472,11 @@ async function authorizeUserOrFarmWorkspace(req, workspaceId, userCapability) {
  await enforceWorkspaceRole(req.userId, workspaceId, userCapability);
 }
 
-// True if the user owns the workspace or is a member of it.
+// True if the user owns the workspace, is a member of it, or holds either in an
+// ANCESTOR. Single-sourced from shared/backend-core.cjs so Fly and Netlify apply
+// the same inheritance rule — members flow DOWN the workspace tree, never up.
 async function userCanAccessWorkspace(userId, workspaceId) {
- if (!userId || !workspaceId) return false;
- const rows = await getDb().unsafe(
-  `select 1 from workspaces where id = $1 and user_id = $2
-     union all
-     select 1 from workspace_members where workspace_id = $1 and user_id = $2
-     limit 1`,
-  [workspaceId, userId],
- );
- return rows.length > 0;
+ return sharedUserCanAccessWorkspace(userId, workspaceId, sharedDbAdapter);
 }
 
 // Tables whose rows are scoped to a workspace and therefore subject to
@@ -440,24 +591,12 @@ function badRequest(message) {
  return err;
 }
 
+// Single-sourced from shared/backend-core.cjs (same error messages, same
+// capability model) so the nested-workspace inheritance rule cannot be right on
+// one backend and wrong on the other. A role held in an ANCESTOR grants the
+// capability here; a role held in a CHILD grants nothing upward.
 async function enforceWorkspaceRole(userId, workspaceId, mode) {
- const role = await getWorkspaceRole(userId, workspaceId);
- if (!role) throw forbidden('You do not have access to this workspace');
- if (!roleHasWorkspaceCapability(role, mode)) {
-  if (mode === 'manage') {
-   throw forbidden('You do not have permission to manage this workspace');
-  }
-  if (mode === 'write') {
-   throw forbidden('You do not have permission to change this workspace');
-  }
-  if (mode === 'comment') {
-   throw forbidden('You do not have permission to comment in this workspace');
-  }
-  if (mode === 'run_agents') {
-   throw forbidden('You do not have permission to run agents in this workspace');
-  }
-  throw forbidden('You do not have permission to access this workspace');
- }
+ return sharedAssertWorkspaceRole({ userId, workspaceId, capability: mode, db: sharedDbAdapter });
 }
 
 // Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
@@ -488,6 +627,54 @@ function getAnthropicApiKey(workspaceId = null) {
  return resolveSecret('ANTHROPIC_API_KEY', workspaceId);
 }
 
+/**
+ * Encryption-at-rest backfill for the workspace vault.
+ *
+ * The write path has encrypted for a while (setWorkspaceSecretValue stores
+ * AES-256-GCM ciphertext in `secret_cipher` and writes `value = ''`), but rows
+ * created BEFORE that landed still hold plaintext in `value`, and the read path
+ * still falls back to it. Nothing re-encrypted them: a legacy row was only fixed
+ * if someone happened to re-enter that secret. This closes the gap on boot.
+ *
+ * A SQL migration cannot do this — the encryption key is derived in the app from
+ * SECRETS_ENCRYPTION_KEY/AUTH_SECRET, which Postgres has no access to. So it is
+ * runtime work, idempotent (the WHERE clause matches only unencrypted rows, and
+ * each row it fixes stops matching), and silent about content: the count is
+ * logged, never a key's value, and the plaintext is overwritten with '' in the
+ * same statement that stores the cipher.
+ */
+async function reencryptLegacyPlaintextSecrets(db) {
+ try {
+  const rows = await db.unsafe(
+   `select workspace_id, key, value from workspace_secrets
+      where coalesce(value, '') <> '' and coalesce(secret_cipher, '') = ''`,
+  );
+  if (rows.length === 0) return 0;
+  let fixed = 0;
+  for (const row of rows) {
+   try {
+    const cipher = await encryptVaultSecret(row.value);
+    await db.unsafe(
+     `update workspace_secrets set secret_cipher = $3, value = ''
+        where workspace_id = $1 and key = $2`,
+     [row.workspace_id, row.key, cipher],
+    );
+    fixed += 1;
+   } catch {
+    // One unencryptable row must not stop the rest, and must not print anything:
+    // the row's KEY is safe to name but its value is not, and an error object from
+    // this path could carry the input. A count is enough to act on.
+   }
+  }
+  console.log(`[vault] re-encrypted ${fixed} legacy plaintext secret row(s)`);
+  return fixed;
+ } catch {
+  // A schema that predates secret_cipher, or a DB that is not reachable yet, must
+  // not wedge boot. The read path still handles a plaintext row.
+  return 0;
+ }
+}
+
 async function ensureRuntimeSchema() {
  const db = getDb();
  await db.unsafe(`
@@ -499,7 +686,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS project_kind text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_root text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS git_remote text DEFAULT '';
-    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.42;
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_opacity numeric DEFAULT 0.7;
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS background_image text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
@@ -507,6 +694,19 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS is_favorite boolean NOT NULL DEFAULT false;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS participants jsonb NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS archived_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS icon text NOT NULL DEFAULT '';
+    -- How people and AGENTS should behave in this channel, in the owner's own
+    -- words. Injected into every agent turn here (see channelIntentNote), which
+    -- is why it is a channel property and not a per-agent one: the same agent
+    -- is expected to be playful in one channel and terse in another.
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS intent text NOT NULL DEFAULT '';
+    -- Reply eagerness for a post that named nobody: 'auto' (at once, the
+    -- default), 'social' (unhurried — see shared/replyCadence.cjs) or 'mention'
+    -- (not at all). UNCONSTRAINED text on purpose, normalized in
+    -- shared/channelMentions.cjs: an unreadable value reads as 'auto', so a row
+    -- written by a newer client cannot silence a channel — and so widening the
+    -- set of values needs no DDL and no migration in either backend.
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS conversation_mode text NOT NULL DEFAULT 'auto';
     ALTER TABLE chat_sessions ALTER COLUMN conversation_mode SET DEFAULT 'auto';
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS max_agent_turns integer NOT NULL DEFAULT 10;
@@ -516,6 +716,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_at timestamptz;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS canvas_id text;
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent_message ON chat_sessions(parent_message_id);
@@ -531,6 +733,14 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
+    -- How the agent presents itself, and who decided each part of it:
+    --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
+    -- Deliberately NOT a key in metadata: metadata is manage-only
+    -- (MANAGE_ONLY_DB_COLUMNS_BY_TABLE — it carries host_folders, which widens an
+    -- agent's filesystem access), and choosing an accent is not an escalation, so
+    -- putting the voice there would have locked editors out of it. See
+    -- shared/agentIdentity.cjs for the precedence rule human_set enforces.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
@@ -559,6 +769,93 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+    -- Orbs (plans/021): an agent_webhooks row becomes an "orb" — an agent woken
+    -- by a verified external event — once these are set. Defaults reproduce the
+    -- pre-orb behaviour EXACTLY (generic/unsigned, a fresh session per delivery)
+    -- so no existing row changes meaning. The signing secret is NOT stored here:
+    -- this table is in the backendClient allowlists and the frontend does a
+    -- literal select('*'), so any column added here ships to the browser. It
+    -- lives in the workspace vault under the key orb:<webhook id>.
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'generic';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS prompt text NOT NULL DEFAULT '';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS routing text NOT NULL DEFAULT 'new';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS rate_limit_per_hour integer NOT NULL DEFAULT 60;
+    -- ADVISORY UI hint only: "is a signing secret configured for this orb".
+    -- Safe to ship to the browser (it is a boolean, not key material) and it
+    -- survives a reload, which is why it is a column rather than a derived
+    -- response field. The trigger route NEVER consults it — it reads the vault
+    -- entry itself, so a drifted flag can weaken nothing.
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS has_signing_secret boolean NOT NULL DEFAULT false;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS thread_root_message_id uuid REFERENCES messages(id) ON DELETE SET NULL;
+
+    -- Inbound delivery ledger: the deduplication gate AND the delivery log.
+    --
+    -- Dedupe is DB-level on purpose. claimTaskDispatch is a process-local Map
+    -- with a 15s window — right for swallowing one human's double-click, useless
+    -- against a provider retry that lands minutes later, after a Fly restart, or
+    -- on a second machine. This mirrors flow_webhook_deliveries' idempotency
+    -- instead (UNIQUE plus an on-conflict-do-nothing insert), which is the same
+    -- problem solved in the outbound direction.
+    --
+    -- delivery_key is NULL when the provider supplies no delivery id, and the
+    -- unique index is PARTIAL so those rows never claim the idempotency slot:
+    -- a hard uniqueness constraint on body_hash would permanently swallow two
+    -- genuinely distinct byte-identical events. Rejected/throttled rows are also
+    -- written with a NULL key, so a delivery refused now is still accepted when
+    -- the provider retries it legitimately later.
+    CREATE TABLE IF NOT EXISTS orb_deliveries (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      webhook_id uuid NOT NULL REFERENCES agent_webhooks(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      delivery_key text,
+      body_hash text NOT NULL DEFAULT '',
+      event_type text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'accepted'
+        CHECK (status IN ('accepted', 'duplicate', 'rejected', 'throttled', 'failed')),
+      session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
+      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+      detail text NOT NULL DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_orb_deliveries_key
+      ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
+      ON orb_deliveries(webhook_id, created_at DESC);
+
+    -- Link preview (unfurl) cache. Keyed by a hash of the NORMALIZED url and
+    -- deliberately NOT workspace-scoped: the whole point is one outbound fetch
+    -- per URL for the whole install rather than one per workspace, per reader,
+    -- per render. Nothing in a row is private to a workspace — it is metadata a
+    -- public page publishes about itself.
+    --
+    -- The table is absent from ALLOWED_TABLES on purpose, so it is unreachable
+    -- through the generic /backend/db gate and cannot be enumerated. It is read
+    -- only by POST /backend/link-previews, which answers for URLs the caller
+    -- supplied and never lists. (A caller who already knows an exact URL can
+    -- still infer "somebody unfurled this in the last week" from the response
+    -- latency; that oracle is not worth duplicating every fetch per workspace.)
+    --
+    -- expires_at is the TTL: ok/empty rows last a week, failures an hour, so a
+    -- host that was down for one minute is not un-previewable until Tuesday.
+    CREATE TABLE IF NOT EXISTS link_previews (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      url_hash text NOT NULL UNIQUE,
+      url text NOT NULL,
+      final_url text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'ok'
+        CHECK (status IN ('ok', 'empty', 'failed', 'blocked')),
+      title text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '',
+      site_name text NOT NULL DEFAULT '',
+      image_url text NOT NULL DEFAULT '',
+      detail text NOT NULL DEFAULT '',
+      fetched_at timestamptz NOT NULL DEFAULT now(),
+      expires_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_previews_expires ON link_previews(expires_at);
 
     CREATE TABLE IF NOT EXISTS agent_connections (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -757,12 +1054,56 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_thread_items_session ON thread_items(session_id, kind, order_index);
     CREATE INDEX IF NOT EXISTS idx_thread_items_workspace ON thread_items(workspace_id);
 
+    -- Canvas layers (the "projects"/canvases a workspace is split into). Layer
+    -- definitions used to live only in each browser's localStorage while the
+    -- objects drawn on them lived in the shared canvas_objects table keyed by
+    -- that browser-generated layer id — so a canvas one member created was
+    -- invisible to everyone else. layer_id is that same text id
+    -- (canvas_objects.layer_id, 'base' for the default layer); the uuid id is
+    -- the row's own key so every generic /backend/db row id stays globally
+    -- unique. Active-layer state stays per-browser in localStorage.
+    CREATE TABLE IF NOT EXISTS canvas_layers (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      layer_id text NOT NULL,
+      name text NOT NULL DEFAULT 'Workspace',
+      sort_order double precision NOT NULL DEFAULT 0,
+      description text DEFAULT '',
+      icon text DEFAULT '',
+      local_path text DEFAULT '',
+      project_kind text DEFAULT '',
+      git_root text DEFAULT '',
+      git_remote text DEFAULT '',
+      background_opacity double precision DEFAULT 0.7,
+      background_image text DEFAULT '',
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, layer_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
+
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    -- Agent tool steps (2026-07): one row per tool call, rendered as a compact
+    -- chip instead of a full chat bubble. message_kind='tool_step' is the
+    -- discriminator; tool_name/tool_detail are the structured halves of the
+    -- human-readable content line, which stays populated as the fallback for
+    -- older clients and for rows written before these columns existed.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS message_kind text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_name text DEFAULT '';
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_detail text DEFAULT '';
+    -- "Send to channel" (2026-07): an agent WORKS inside a thread and only its
+    -- final answer is broadcast to the channel/DM. A broadcast reply KEEPS its
+    -- thread_parent_id (it is still part of the thread) and is additionally shown
+    -- in the channel view, so the channel reads as message → answer while every
+    -- "Thinking …" placeholder, tool-step chip and intermediate text block stays
+    -- in the thread. Humans get the same switch from the thread composer.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
     CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
     -- Trigram indexes so MCP search_messages / search_docs (leading-wildcard
@@ -780,6 +1121,12 @@ async function ensureRuntimeSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
+    -- Sub-tasks / nesting. The column shipped in database/neon-schema.sql only,
+    -- so a DB built from migrations + this bootstrap never got it; MCP now
+    -- writes parent_id, which would fail there. Idempotent, so a no-op on any
+    -- DB that already has it.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
@@ -812,6 +1159,29 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_memory_files_workspace_id ON agent_memory_files(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_memory_files_agent_id ON agent_memory_files(agent_id);
 
+    -- The BODY behind a skill NAME a daemon advertises. capabilities.skills is
+    -- names only, so the Skills browser had nothing to show for them; a daemon
+    -- mirrors the real SKILL.md here via agent_skill_sync, the same way it
+    -- mirrors its memory palace above. Daemon-write / browser-read only.
+    CREATE TABLE IF NOT EXISTS agent_skill_documents (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      skill text NOT NULL,
+      path text DEFAULT '',
+      summary text DEFAULT '',
+      content text DEFAULT '',
+      byte_size bigint DEFAULT 0,
+      truncated boolean NOT NULL DEFAULT false,
+      last_synced timestamptz DEFAULT now(),
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (agent_id, skill)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
     CREATE TABLE IF NOT EXISTS memory_file_comments (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -829,7 +1199,90 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_workspace_id ON memory_file_comments(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_agent_path ON memory_file_comments(agent_id, path);
     CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_comments(parent_id);
+
+    -- Notes on an activity log entry ("comment I can look at later"), anchored to
+    -- the activity_events row itself rather than the underlying entity, so a note
+    -- left on e.g. a "message sent" log line doesn't require the message to carry
+    -- comment support of its own. Mirrors memory_file_comments' shape so it drops
+    -- straight into the generic useRealtimeComments hook.
+    CREATE TABLE IF NOT EXISTS activity_event_comments (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      event_id uuid NOT NULL REFERENCES activity_events(id) ON DELETE CASCADE,
+      user_id uuid,
+      parent_id uuid REFERENCES activity_event_comments(id) ON DELETE CASCADE,
+      content text NOT NULL,
+      resolved boolean DEFAULT false,
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_workspace_id ON activity_event_comments(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_event_id ON activity_event_comments(event_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_event_comments_parent_id ON activity_event_comments(parent_id);
+
+    -- Inbox read state: one MONOTONIC marker per (user, workspace, context_key).
+    -- The inbox aggregates five existing sources (blockers, comments, mentions,
+    -- agent-job errors, activity) and has no rows of its own — read/unread is
+    -- entirely this table: an item is unread when its created_at is newer than
+    -- the marker for its context_key, or when no marker exists. Markers only
+    -- ever move FORWARD (the upsert carries a "read_at < excluded.read_at"
+    -- guard) so an out-of-order write from a second device cannot un-read
+    -- something. The primary key IS the read-path index: the inbox query looks
+    -- markers up by the (user_id, workspace_id) prefix, which the PK btree
+    -- covers, so no second index is created.
+    CREATE TABLE IF NOT EXISTS inbox_read_state (
+      user_id uuid NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      context_key text NOT NULL,
+      read_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      PRIMARY KEY (user_id, workspace_id, context_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
   `);
+ // Owner broadcasts (shared/tenant-campaigns.cjs). The only rows in this
+ // database addressed to ACCOUNTS rather than scoped to a workspace, which is why
+ // neither table is in the backendClient allowlists — the dedicated owner-gated
+ // routes are the only door.
+ //
+ // The campaign row IS the audit trail: who sent it (created_by plus the email as
+ // it read at send time, so a later rename cannot rewrite history), what it said,
+ // the segment and its plain-English summary, and how many accounts it reached.
+ //
+ // The comments stay OUT of the SQL string on purpose: several tests mock the DB
+ // and classify a bootstrap statement by its first keyword, so a block beginning
+ // with `--` reads as an unknown query rather than as DDL.
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS tenant_campaigns (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      title text NOT NULL DEFAULT '',
+      body text NOT NULL DEFAULT '',
+      surface text NOT NULL DEFAULT 'tip',
+      segment jsonb NOT NULL DEFAULT '{}'::jsonb,
+      segment_summary text NOT NULL DEFAULT '',
+      recipient_count integer NOT NULL DEFAULT 0,
+      created_by uuid,
+      created_by_email text NOT NULL DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenant_campaigns_created_at ON tenant_campaigns(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS tenant_campaign_recipients (
+      campaign_id uuid NOT NULL REFERENCES tenant_campaigns(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      dismissed_at timestamptz,
+      PRIMARY KEY (user_id, campaign_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenant_campaign_recipients_campaign
+      ON tenant_campaign_recipients(campaign_id);
+  `);
+ // tenant_campaign_recipients above is BOTH the frozen audience (written once at
+ // send time) and the per-user dismissal record. One table on purpose: a user can
+ // only dismiss a message that was actually sent to them, because the row they
+ // update is the row that made them a recipient. Server-side rather than a
+ // localStorage key so a dismissal survives a different browser and two accounts
+ // sharing one browser never share one. The composite PK is the delivery index.
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS workspace_secrets (
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -842,6 +1295,23 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
+  `);
+ await reencryptLegacyPlaintextSecrets(db);
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS gateway_configs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Gateway',
+      base_url text NOT NULL DEFAULT '',
+      api_key_cipher text NOT NULL DEFAULT '',
+      model text NOT NULL DEFAULT '',
+      protocol text NOT NULL DEFAULT 'openai-chat',
+      headers jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_gateway_configs_workspace_id ON gateway_configs(workspace_id);
   `);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS rate_limits (
@@ -890,9 +1360,16 @@ async function ensureRuntimeSchema() {
       accepted_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
       accepted_at timestamptz,
       expires_at timestamptz,
+      dismissed_at timestamptz,
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
+    -- Soft-dismiss: a SPENT invite link (revoked / accepted / already past
+    -- expires_at) can be cleared out of the Users window without destroying the
+    -- row — an accepted invite is the record of how a member got in. NULL =
+    -- shown. Never set for a still-active link: the routes carry the predicate
+    -- in SQL so a live link cannot vanish from the only place it can be seen.
+    ALTER TABLE workspace_invites ADD COLUMN IF NOT EXISTS dismissed_at timestamptz;
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
 
@@ -915,6 +1392,11 @@ async function ensureRuntimeSchema() {
       updated_at timestamptz DEFAULT now(),
       decided_at timestamptz
     );
+    -- The identity the client declared in register_agent. Approval is
+    -- asynchronous (pending -> a popup -> approved), so the declaration has to
+    -- survive the round trip or a brand new agent loses the avatar and voice it
+    -- asked for at the exact moment its row is created.
+    ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
   `);
  // C3 — make message-activity logging idempotent. A retried daemon finalization
@@ -962,6 +1444,192 @@ async function ensureRuntimeSchema() {
     `);
  } catch (error) {
   console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
+ }
+
+ // In-app feedback -> System workspace.
+ //
+ // The System workspace is an ORDINARY workspace carrying `is_system = true`, so
+ // membership, roles, invites and the whole task UI apply to it unchanged. The
+ // PARTIAL unique index is what makes "the System workspace" singular and makes
+ // ensureSystemWorkspace race-safe across Fly machines and Netlify lambdas: two
+ // concurrent first-ever submissions cannot create two of them.
+ //
+ // tasks.source_type gains 'feedback' because a report IS a task — reusing the
+ // existing table is what gives assignment and agent dispatch for free. The
+ // CHECK is dropped and re-added rather than altered (Postgres has no ALTER
+ // CONSTRAINT for CHECK); the name is deterministic for both an inline column
+ // check and this statement, so it stays idempotent across re-runs.
+ await db.unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
+
+    ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
+    ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
+      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+
+    CREATE TABLE IF NOT EXISTS feedback_reports (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      task_id uuid REFERENCES tasks(id) ON DELETE CASCADE,
+      reporter_id uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      source_workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      description text NOT NULL DEFAULT '',
+      page jsonb NOT NULL DEFAULT '{}'::jsonb,
+      selections jsonb NOT NULL DEFAULT '[]'::jsonb,
+      diagnostics jsonb,
+      build_id text DEFAULT '',
+      user_agent text DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_workspace_id ON feedback_reports(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_task_id ON feedback_reports(task_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);
+  `);
+
+ // --------------------------------------------------------------------------
+ // Groupable workspaces — workspaces.parent_id (foundation; no UI yet).
+ //
+ // A workspace is the Slack account; channels are the projects. Grouping is
+ // EMERGENT rather than a new tier: the same entity gains a nullable
+ // self-reference, so a workspace with children renders as a group and one
+ // without renders as a leaf. A parent may hold its own content as well as
+ // children — that is allowed, not a degenerate case.
+ //
+ // ON DELETE RESTRICT, deliberately. The three candidates:
+ //   CASCADE   — deleting the agency workspace silently destroys every client
+ //               workspace under it, and all their channels, tasks and memory.
+ //   SET NULL  — children survive but are silently PROMOTED to top level, and
+ //               because members inherit downward, everyone whose access came
+ //               only from the parent silently loses it. A workspace whose only
+ //               members were inherited would be left with nobody in it.
+ //   RESTRICT  — deleting a parent that still has children FAILS.
+ // RESTRICT is the only one that cannot lose or leak data behind the operator's
+ // back: re-parenting or deleting the children first is an explicit act. It
+ // costs nothing today (no user can create a child yet), and the shared gate
+ // turns the FK violation into a readable 409 rather than an opaque 500.
+ //
+ // Cycle prevention is BELT AND BRACES:
+ //   1. CHECK  — the 1-cycle (parent_id = id), declaratively.
+ //   2. TRIGGER — every longer cycle (A->B->A and deeper), at the DB, so it
+ //      holds for the daemon, the MCP server, migrations and psql alike.
+ //   3. shared/backend-core.cjs — the same rule at the API gate, with a 400 and
+ //      a message instead of a raised exception.
+ // The trigger is not redundant with (3): a cycle makes the `WITH RECURSIVE`
+ // ancestor walk in the AUTHORIZATION path spin to statement_timeout on every
+ // request touching that workspace, so one bad row is a denial of service. The
+ // readers are depth-capped too, but the row must never exist in the first place.
+ await db.unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS parent_id uuid;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_parent_id_fkey'
+      ) THEN
+        ALTER TABLE workspaces
+          ADD CONSTRAINT workspaces_parent_id_fkey
+          FOREIGN KEY (parent_id) REFERENCES workspaces(id) ON DELETE RESTRICT;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_parent_id_not_self'
+      ) THEN
+        ALTER TABLE workspaces
+          ADD CONSTRAINT workspaces_parent_id_not_self
+          CHECK (parent_id IS NULL OR parent_id <> id);
+      END IF;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS idx_workspaces_parent_id ON workspaces(parent_id);
+
+    CREATE OR REPLACE FUNCTION workspaces_reject_parent_cycle()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+      cursor_id uuid := NEW.parent_id;
+      steps int := 0;
+    BEGIN
+      WHILE cursor_id IS NOT NULL LOOP
+        IF cursor_id = NEW.id THEN
+          RAISE EXCEPTION 'workspace % cannot be its own ancestor', NEW.id
+            USING ERRCODE = 'check_violation';
+        END IF;
+        steps := steps + 1;
+        IF steps > ${WORKSPACE_MAX_DEPTH} THEN
+          RAISE EXCEPTION 'workspace nesting exceeds the maximum depth of ${WORKSPACE_MAX_DEPTH}'
+            USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT parent_id INTO cursor_id FROM workspaces WHERE id = cursor_id;
+      END LOOP;
+      RETURN NEW;
+    END $$;
+
+    DROP TRIGGER IF EXISTS trg_workspaces_reject_parent_cycle ON workspaces;
+    CREATE TRIGGER trg_workspaces_reject_parent_cycle
+      BEFORE INSERT OR UPDATE OF parent_id ON workspaces
+      FOR EACH ROW
+      WHEN (NEW.parent_id IS NOT NULL)
+      EXECUTE FUNCTION workspaces_reject_parent_cycle();
+  `);
+
+ // Huddle tables live in server/huddles.cjs so the LiveKit surface stays in one
+ // module, but the DDL runs HERE so the three-place rule holds and a fresh Fly
+ // boot provisions them like everything else.
+ try {
+  await ensureHuddlesSchema(getDb());
+ } catch (error) {
+  console.warn('[backend] huddles schema migration failed:', error.message || error);
+ }
+
+ // --- Cost metering -------------------------------------------------------
+ //
+ // The ledger behind the Tenants window's usage figures. One row per provider
+ // call, recording COUNTS ONLY — tokens/characters/seconds plus the provider
+ // and the resource. Never a price: rates move, and a stored price becomes a
+ // lie with no way to tell which rows are stale. Money is computed at display
+ // time from shared/usage-rates.cjs (see shared/usage-metering.cjs).
+ //
+ // Every column is a scalar. There is deliberately no jsonb here, so this
+ // table cannot reproduce the repo's most-repeated bind bug (an object bind
+ // that Fly needs and Netlify must have as a string).
+ //
+ // workspace_id is ON DELETE SET NULL, not CASCADE: deleting a workspace must
+ // not delete the record of what it cost. Such a row drops out of the
+ // per-account rollup (it can no longer be attributed) and stays in the
+ // deployment total, which is the honest place for it.
+ //
+ // NOT in the backendClient allowlists — there is no generic /backend/db route
+ // to this table. It is read only through the owner-gated tenant routes.
+ try {
+  await getDb().unsafe(`
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      provider text NOT NULL,
+      resource text NOT NULL DEFAULT '',
+      kind text NOT NULL DEFAULT '',
+      unit text NOT NULL DEFAULT 'tokens',
+      input_units bigint NOT NULL DEFAULT 0,
+      output_units bigint NOT NULL DEFAULT 0,
+      cache_write_units bigint NOT NULL DEFAULT 0,
+      cache_read_units bigint NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_created ON usage_events(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created ON usage_events(provider, created_at DESC);
+  `);
+  // The metering epoch, written ONCE. Every cost figure on the Tenants screen
+  // is labelled "since <this date>" because there is no usage history before
+  // it — no backfill is possible, and a total presented without this date
+  // would read as an all-time figure and be false.
+  await getDb().unsafe(
+   `insert into app_settings (key, value)
+         values ('usage.metering_started_at', now()::text)
+    on conflict (key) do nothing`,
+  );
+ } catch (error) {
+  console.warn('[backend] usage metering schema migration failed:', error.message || error);
  }
 }
 
@@ -1052,7 +1720,7 @@ function createPostgresFarmIntegrationStore() {
           denied_at = case when $9::bigint is null then null else to_timestamp($9 / 1000.0) end,
           consumed_at = case when $10::bigint is null then null else to_timestamp($10 / 1000.0) end,
           updated_at = now() where id = $1 returning *`,
-    [id, next.status, next.workspaceId || null, next.approvedBy || null, next.deniedBy || null, JSON.stringify(next.scopes || []), next.integrationId || null, next.approvedAt || null, next.deniedAt || null, next.consumedAt || null],
+    [id, next.status, next.workspaceId || null, next.approvedBy || null, next.deniedBy || null, next.scopes || [], next.integrationId || null, next.approvedAt || null, next.deniedAt || null, next.consumedAt || null],
    );
    return farmDeviceRecord(rows[0]);
   },
@@ -1061,7 +1729,7 @@ function createPostgresFarmIntegrationStore() {
     `insert into farm_integrations
          (id, workspace_id, name, token_hash, scopes, approved_by, created_at, updated_at)
          values ($1, $2, $3, $4, $5::jsonb, $6, to_timestamp($7 / 1000.0), now()) returning *`,
-    [record.id, record.workspaceId, record.name, record.tokenHash, JSON.stringify(record.scopes), record.approvedBy || null, record.createdAt],
+    [record.id, record.workspaceId, record.name, record.tokenHash, record.scopes, record.approvedBy || null, record.createdAt],
    );
    return farmIntegrationRecord(rows[0]);
   },
@@ -1079,7 +1747,7 @@ function createPostgresFarmIntegrationStore() {
          select $2, $3, $4, $5, $6::jsonb, $7, to_timestamp($8 / 1000.0), now()
            from claimed
          returning *`,
-    [id, integration.id, integration.workspaceId, integration.name, integration.tokenHash, JSON.stringify(integration.scopes), integration.approvedBy || null, consumedAt],
+    [id, integration.id, integration.workspaceId, integration.name, integration.tokenHash, integration.scopes, integration.approvedBy || null, consumedAt],
    );
    return farmIntegrationRecord(rows[0]);
   },
@@ -1128,59 +1796,51 @@ function flowConnectionRecord(row) {
   createdAt: Date.parse(row.created_at),
  };
 }
+// Both vault helpers delegate to shared/backend-core.cjs. They used to be a
+// second copy of the same SQL + the same AES-256-GCM derivation, which is how the
+// Netlify mirror once ended up writing plaintext next to a stale cipher. One
+// implementation, two callers. `loadEnvFile()` first because a locally-run server
+// reads SECRETS_ENCRYPTION_KEY out of `.env`, and the core reads only process.env.
 async function getWorkspaceSecretValue(workspaceId, key) {
- if (!workspaceId) return '';
- const rows = await getDb().unsafe(
-  'select value, secret_cipher from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
-  [workspaceId, key],
- );
- if (!rows[0]) return '';
- // Prefer the encrypted column; fall back to the legacy plaintext value for rows
- // written before encryption-at-rest landed (they get re-encrypted on next write).
- if (rows[0].secret_cipher) {
-  try { return await decryptVaultSecret(rows[0].secret_cipher); } catch { return ''; }
- }
- return rows[0].value || '';
+ loadEnvFile();
+ return coreGetWorkspaceSecretValue(workspaceId, key, { db: dbUnsafe, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId, description) {
- const cipher = value ? await encryptVaultSecret(value) : '';
- await getDb().unsafe(
-  `insert into workspace_secrets (workspace_id, key, value, secret_cipher, description, updated_by, updated_at)
-     values ($1, $2, '', $3, coalesce($4, ''), $5, now())
-     on conflict (workspace_id, key)
-     do update set value = '', secret_cipher = excluded.secret_cipher,
-       description = coalesce($4, workspace_secrets.description),
-       updated_by = excluded.updated_by, updated_at = now()`,
-  [workspaceId, key, cipher, description ?? null, userId || null],
- );
+ loadEnvFile();
+ await coreSetWorkspaceSecretValue(workspaceId, key, value, {
+  db: dbUnsafe,
+  getAuthSecret,
+  userId: userId || null,
+  description: description ?? null,
+ });
+}
+
+// The shared core takes a `db(sql, params)` function; this server holds a
+// postgres.js instance whose `.unsafe` has that shape.
+function dbUnsafe(sql, params) {
+ return getDb().unsafe(sql, params);
 }
 async function flowSecretKey() {
  const authSecret = await getAuthSecret();
  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
 }
-// Generic AES-256-GCM key for workspace vault secrets. Prefers a dedicated
-// SECRETS_ENCRYPTION_KEY so secrets survive an AUTH_SECRET rotation; falls back to
-// AUTH_SECRET only when unset. Rotating whichever key is in use re-locks stored
-// secrets, which must then be re-entered.
-async function vaultSecretKey() {
- loadEnvFile();
- const dedicated = String(process.env.SECRETS_ENCRYPTION_KEY || '').trim();
- const material = dedicated || `auth-fallback:${await getAuthSecret()}`;
- return crypto.createHash('sha256').update(`agensis-workspace-vault:${material}`).digest();
-}
+// AES-256-GCM at rest for the workspace vault (and for gateway api_key_cipher,
+// which shares the derivation). The derivation itself lives in the shared core:
+// it prefers a dedicated SECRETS_ENCRYPTION_KEY so secrets survive an AUTH_SECRET
+// rotation, and falls back to AUTH_SECRET only when unset. Both hosts must derive
+// the SAME key or a secret written on one is undecryptable on the other — the
+// Netlify write lane refuses rather than risk it (see backend.mjs).
+//
+// `loadEnvFile()` first: a locally-run server keeps SECRETS_ENCRYPTION_KEY in
+// `.env`, and the core reads only process.env.
 async function encryptVaultSecret(value) {
- const iv = crypto.randomBytes(12);
- const cipher = crypto.createCipheriv('aes-256-gcm', await vaultSecretKey(), iv);
- const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
- return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString('base64url')).join('.');
+ loadEnvFile();
+ return coreEncryptVaultSecret(value, { getAuthSecret });
 }
 async function decryptVaultSecret(value) {
- const [iv, tag, encrypted] = String(value || '').split('.').map(part => Buffer.from(part, 'base64url'));
- if (!iv || !tag || !encrypted) throw new Error('Invalid encrypted vault secret');
- const decipher = crypto.createDecipheriv('aes-256-gcm', await vaultSecretKey(), iv);
- decipher.setAuthTag(tag);
- return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+ loadEnvFile();
+ return coreDecryptVaultSecret(value, { getAuthSecret });
 }
 
 async function encryptFlowSecret(value) {
@@ -1215,8 +1875,8 @@ function createPostgresFlowConnectionStore() {
      record.tokenHash,
      await encryptFlowSecret(record.signingSecret),
      record.webhookUrl || null,
-     JSON.stringify(record.events || []),
-     JSON.stringify(record.scopes || []),
+     record.events || [],
+     record.scopes || [],
      record.createdBy || null,
      record.createdAt,
     ],
@@ -1290,17 +1950,42 @@ function invalidJsonValue(table, column) {
  return err;
 }
 
+// Bind the OBJECT, never a pre-stringified value. postgres.js resolves a
+// `$n::jsonb` placeholder to a jsonb parameter and JSON-serializes the JS value
+// itself — so a value that is ALREADY a JSON string gets serialized again and
+// lands as a jsonb STRING SCALAR. That is not a cosmetic difference: `||`
+// treats a scalar operand as an array element (identity.human_set rows became
+// literal arrays, one corrupted append per human edit) and `jsonb_set` on a
+// scalar errors, which is why voice saves failed live. String input is
+// parse-validated and bound as the PARSED value so both input shapes bind
+// identically. The Netlify copy of this function STRINGIFIES — correct for its
+// driver, which sends text params for the cast to parse. The two are
+// deliberately opposite; do not "sync" them.
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
+ // Return the PARSED OBJECT, never a JSON string. On this server's porsager
+ // driver a stringified bind — even under an explicit ::jsonb cast — arrives as
+ // a jsonb STRING SCALAR. Proved against the live database:
+ //
+ //   stringified ::jsonb -> 'string'   and  '{}'::jsonb || it -> [{}, "…"]
+ //   object      ::jsonb -> 'object'   and  '{}'::jsonb || it -> merged object
+ //
+ // The string form is what corrupted identity.human_set into an array (one
+ // bogus element per human edit) and made jsonb_set() on the voice write throw,
+ // so voice choices silently never saved. String input is parse-validated and
+ // returned AS THE OBJECT so both input shapes bind identically.
+ //
+ // The Netlify function has its own copy of this helper that DOES stringify —
+ // correct for @netlify/database, whose driver is the exact opposite. Do not
+ // "unify" them; the drivers disagree and each side matches its own.
  if (typeof value === 'string') {
   try {
-   JSON.parse(value);
-   return value;
+   return JSON.parse(value);
   } catch {
    throw invalidJsonValue(table, column);
   }
  }
- return JSON.stringify(value);
+ return value;
 }
 
 function bindDbParam(params, table, column, value) {
@@ -1391,6 +2076,16 @@ const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// A credentialed outbound call is not comparable to the DB reads the rest of the
+// MCP surface makes: it spends a provider's rate limit, it can provision billable
+// infrastructure, and a loop stuck on a 500 would hammer someone else's API with
+// our key attached. Keyed per-agent, and tighter than mcpRateLimiter on purpose —
+// the general MCP limiter still applies on top.
+const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// The voice preview spends real money per press, so it is capped harder than
+// anything else here. Twenty presses a minute is far more than auditioning
+// voices needs and far less than a stuck retry loop would cost.
+const ttsPreviewRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
@@ -1404,6 +2099,36 @@ const farmDeviceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below.
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// CSP violation reports are browser-generated and unauthenticated, so they are
+// keyed per-IP and kept cheap — a page in a redirect loop can emit a lot.
+const cspReportRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Tenants (the system-owner admin surface). Every request runs a DB lookup of
+// the caller's own email before it is refused, so the limiter is what stops an
+// authenticated non-owner turning the 403 into a free query loop. Keyed per
+// caller, and low: the owner browses a list, they do not poll it.
+const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// The DELIVERY side of owner broadcasts — read by EVERY signed-in session on
+// load, not by the operator. Separate budget from tenantsRateLimiter for that
+// reason: one operator browsing an admin list and every user in the deployment
+// asking "is there a message for me" are not the same traffic, and sharing a
+// bucket would let ordinary polling starve the admin surface (or vice versa).
+const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+// Voice: minting a Cartesia token and opening a Deepgram stream both cost money
+// at a provider we do not control, so both are bounded per user. 20/min is far
+// above a real huddle (one token per socket connect, one stream per mic unmute)
+// and far below anything worth farming a token from.
+const voiceTokenRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+const voiceStreamRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// Link previews: the only route in the app where a request from a browser makes
+// this machine fetch a URL that browser chose. The cache absorbs the normal case
+// (one fetch per URL for the whole install, for a week), so a caller hitting this
+// limit is a caller feeding it URLs nobody has posted — which is the abuse shape,
+// not the product. 30 requests x 8 URLs a minute is far above scrolling a channel.
+const linkPreviewRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// The image proxy re-fetches on every cache miss in the reader's browser, so its
+// budget is per-image rather than per-batch and sits higher.
+const linkPreviewImageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 
 // H4 follow-up — cross-instance layer. The in-memory limiters above bound a
 // single warm process (fast, and enough on single-machine Fly); these DB-backed
@@ -1414,6 +2139,17 @@ const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 const dbQuery = (sql, params) => getDb().unsafe(sql, params);
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'dispatch' });
+// Feedback: any signed-in user may submit, so this is the only thing standing
+// between one account and an unbounded write into the System workspace's task
+// list. Tight on purpose — nobody files five genuine bug reports a minute.
+const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
+const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'tenants' });
+const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'campaign-messages' });
+// Outbound fetches cost this machine's time and put its IP in someone else's
+// logs, so the unfurl budget is enforced across instances too, not only per warm
+// process.
+const linkPreviewDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'link-preview' });
+const linkPreviewImageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: dbQuery, namespace: 'link-preview-image' });
 
 // Async layered gate: returns true (and writes 429) when EITHER layer blocks.
 // Callers MUST `await` this — an un-awaited call returns a truthy Promise and
@@ -1506,13 +2242,13 @@ function formatElapsedMs(ms) {
  return `${seconds}s`;
 }
 
+// The canonical implementation now lives in shared/channelMentions.cjs, beside
+// the mention parser and the reserved-handle check that must agree with it — a
+// handle minted here has to be the same string the parser produces from an
+// @mention of it, and Netlify has to mint it identically. Kept as a wrapper
+// rather than renamed at ~40 call sites.
 function slugHandle(value) {
- return String(value || 'agent')
-  .toLowerCase()
-  .replace(/^@+/, '')
-  .replace(/[^a-z0-9_-]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 40) || 'agent';
+ return slugMentionHandle(value);
 }
 
 function hashAgentToken(token) {
@@ -1529,6 +2265,109 @@ function inviteTokenLookupParams(token) {
  const hashed = hashAgentToken(token);
  const legacy = /^[a-f0-9]{64}$/i.test(String(token || '')) ? hashed : token;
  return [hashed, legacy];
+}
+
+// An orb's signing secret lives in the workspace vault, NOT on agent_webhooks:
+// that table is in the backendClient allowlists and useAgentWebhooks does a
+// literal select('*'), so any column added to it ships to the browser (this is
+// why gateway_configs stays out of the allowlists entirely). The colon makes the
+// namespace uncollidable with user-defined vault keys, which the vault route
+// restricts to [A-Za-z0-9_.-] — so a user can neither read nor overwrite an orb
+// secret through /backend/workspaces/:id/vault/:key.
+function orbSecretKey(webhookId) {
+ return `orb:${String(webhookId || '')}`;
+}
+
+// Validate operator-supplied orb configuration.
+//
+// `fallback` is the existing row on an update, so an OMITTED field keeps its
+// current value instead of silently resetting to a default.
+//
+// Unknown provider/routing values are REJECTED rather than normalized. The pure
+// helpers in server/orbs.cjs coerce an unrecognised provider to 'generic' —
+// correct when reading a row back (fail soft on data), wrong at the API boundary,
+// because an operator who types "gitlab" would get 'generic', which means
+// UNSIGNED, and would never be told.
+//
+// payload_fields is bound as a JS ARRAY by the caller, never JSON.stringify'd:
+// on this server's porsager driver a stringified $n::jsonb bind lands as a jsonb
+// string scalar (see normalizeJsonParam). The Netlify copy stringifies; the two
+// are deliberately opposite.
+function normalizeOrbConfigInput(body = {}, fallback = null) {
+ let provider = normalizeOrbProvider(fallback?.provider);
+ if (body.provider !== undefined) {
+  const requested = String(body.provider || '').trim().toLowerCase();
+  if (!ORB_PROVIDERS.includes(requested)) {
+   throw badRequest(`Unknown orb provider "${requested}". Supported: ${ORB_PROVIDERS.join(', ')}`);
+  }
+  provider = requested;
+ }
+
+ let routing = normalizeOrbRouting(fallback?.routing);
+ if (body.routing !== undefined) {
+  const requested = String(body.routing || '').trim().toLowerCase();
+  if (!ORB_ROUTING_MODES.includes(requested)) {
+   throw badRequest(`Unknown orb routing "${requested}". Supported: ${ORB_ROUTING_MODES.join(', ')}`);
+  }
+  routing = requested;
+ }
+
+ let prompt = String(fallback?.prompt || '');
+ if (body.prompt !== undefined) {
+  if (typeof body.prompt !== 'string') throw badRequest('prompt must be a string');
+  prompt = body.prompt.slice(0, 4000);
+ }
+
+ let payloadFields = parseJsonArray(fallback?.payload_fields);
+ if (body.payload_fields !== undefined) {
+  const raw = Array.isArray(body.payload_fields)
+   ? body.payload_fields
+   : typeof body.payload_fields === 'string'
+    ? body.payload_fields.split(/[\n,]/)
+    : null;
+  if (!raw) throw badRequest('payload_fields must be an array of dot-paths, or a comma/newline separated string');
+  payloadFields = raw
+   .map((value) => String(value == null ? '' : value).trim())
+   .filter(Boolean)
+   .slice(0, ORB_MAX_PAYLOAD_FIELDS);
+  for (const path of payloadFields) {
+   if (!/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,199}$/.test(path)) {
+    throw badRequest(`"${path.slice(0, 60)}" is not a valid payload field path`);
+   }
+  }
+ }
+
+ const rateLimitPerHour = body.rate_limit_per_hour === undefined
+  ? normalizeOrbRateLimit(fallback?.rate_limit_per_hour)
+  : normalizeOrbRateLimit(body.rate_limit_per_hour);
+
+ return { provider, routing, prompt, payloadFields, rateLimitPerHour };
+}
+
+// Record a REFUSED orb delivery so the operator can see why nothing ran.
+//
+// Two deliberate properties. (1) delivery_key is NULL, so a refusal never claims
+// the idempotency slot — a delivery throttled or unverifiable now must still be
+// accepted when the provider retries it legitimately, which it would not be if
+// the refusal had consumed the unique (webhook_id, delivery_key) row.
+// (2) Coalesced to one row per orb per status per minute, so a flood of forged
+// requests cannot turn a read-only rejection into write amplification.
+async function logOrbRejection({ orb, status, bodyHash = '', eventType = '', detail = '' }) {
+ try {
+  const rows = await getDb().unsafe(
+   `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type, status, detail)
+      select $1, $2, null, $3, $4, $5, $6
+       where not exists (
+         select 1 from orb_deliveries
+          where webhook_id = $1 and status = $5 and created_at > now() - interval '60 seconds'
+       )
+      returning *`,
+   [orb.id, orb.workspace_id, bodyHash, eventType, status, String(detail || '').slice(0, 300)],
+  );
+  if (rows[0]) notifyDbSubscribers('orb_deliveries', 'INSERT', rows);
+ } catch (error) {
+  console.error('orb rejection log failed', error?.message || error);
+ }
 }
 
 function createAgentConnectToken() {
@@ -1582,6 +2421,18 @@ function publicWorkspace(row) {
   id: row.id,
   name: row.name,
   description: row.description || '',
+  // The workspace switcher rail paints `icon` (an emoji) on each tile and
+  // groups `is_system` apart. Both must survive this projection — the rail
+  // reads the list route, and a dropped column shows up as a wall of
+  // identical initials rather than as an error.
+  icon: row.icon || '',
+  is_system: row.is_system === true,
+  // Groupable workspaces: null = top level, otherwise the group this workspace
+  // sits inside. No UI reads it yet — it is here so the client already receives
+  // the shape, because `icon` and `is_system` were BOTH missing from this
+  // projection while the columns existed, and the rail silently degraded
+  // instead of erroring.
+  parent_id: row.parent_id || null,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -1656,9 +2507,9 @@ async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
    'You are CursorBuddy, a local-machine agent connected through Agensis. Route browser, desktop, and embedded-site context through the hub, use local source paths when authorized, and keep all actions logged.',
    normalizeAgentPermissionMode(claim.permissionMode || claim.permission_mode || 'default'),
    connectionKey.created_by || null,
-   JSON.stringify(['cursorbuddy']),
-   JSON.stringify(['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh']),
-   JSON.stringify({ cursorbuddyRuntime: metadata }),
+   ['cursorbuddy'],
+   ['cursorbuddy', 'local-source-edit', 'surface-routing', 'agent-mesh'],
+   { cursorbuddyRuntime: metadata },
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -1756,9 +2607,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
     label,
     'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
     'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
-    JSON.stringify(['cursorbuddy']),
-    JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
-    JSON.stringify({ ...parseJsonObject(existingRows[0].metadata), cursorbuddyProvider: mergedMetadata }),
+    ['cursorbuddy'],
+    ['cursorbuddy', 'surface-routing', 'agent-mesh'],
+    { ...parseJsonObject(existingRows[0].metadata), cursorbuddyProvider: mergedMetadata },
    ],
   );
   notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
@@ -1778,9 +2629,9 @@ async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }
    'Built-in CursorBuddy Provider agent for hosted Agensis inference.',
    'You are CursorBuddy Provider, a built-in Agensis agent for the CursorBuddy avatar. Use supplied browser, page, and site metadata to answer through the avatar. Prefer concise, directly useful guidance. Do not claim local machine access unless a local bridge is connected.',
    userId || null,
-   JSON.stringify(['cursorbuddy']),
-   JSON.stringify(['cursorbuddy', 'surface-routing', 'agent-mesh']),
-   JSON.stringify({ cursorbuddyProvider: metadata }),
+   ['cursorbuddy'],
+   ['cursorbuddy', 'surface-routing', 'agent-mesh'],
+   { cursorbuddyProvider: metadata },
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -1845,8 +2696,8 @@ async function ensurePrimaryDaemonAgent({ workspaceId, userId, handle, name, hos
    'You are the primary local Agensis daemon for this machine. Coordinate local CLIs, CursorBuddy surfaces, browser extensions, desktop clients, and subagents through Agensis. Keep actions logged and route source edits through the authorized local checkout.',
    normalizeAgentPermissionMode(permissionMode || 'default'),
    userId,
-   JSON.stringify([{ type: 'runtime', name: 'agensis-cli', metadata }]),
-   JSON.stringify(['primary-daemon', 'cursorbuddy', 'agent-mesh', 'local-source-edit']),
+   [{ type: 'runtime', name: 'agensis-cli', metadata }],
+   ['primary-daemon', 'cursorbuddy', 'agent-mesh', 'local-source-edit'],
   ],
  );
  notifyDbSubscribers('workspace_agents', 'INSERT', rows);
@@ -2064,7 +2915,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -2075,7 +2926,7 @@ async function verifyAgentConnectToken(token, req = null) {
   const { workspaceId, agentId } = agentIdsFromWsRequest(req);
   if (workspaceId && agentId) {
    const fallbackRows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -2295,15 +3146,82 @@ function isAgentEnabled(agent) {
  return agent?.enabled !== false;
 }
 
-async function disconnectAgentDaemons(agentId, workspaceId) {
+// Close-frame text per disconnect reason. The daemon logs BOTH this and the
+// `agent_disabled` reason it receives first, so an operator whose daemon was
+// dropped can see WHY in its own log instead of debugging a phantom network
+// fault. Keep these strings stable — the released daemon pattern-matches
+// 'Agent deactivated' on the close frame as its independent stop signal.
+//
+// The 'superseded' text deliberately does NOT match that pattern: what stops a
+// superseded daemon is the `agent_disabled` message, which the daemon treats as
+// terminal (agensis-cli: message 'agent_disabled' -> stop(), no reconnect). Do
+// not drop that send in favour of the close alone — the close frame's own text
+// would then have to lie about the reason to be terminal.
+const AGENT_DISCONNECT_CLOSE_MESSAGES = {
+ deactivated: 'Agent deactivated',
+ disconnected: 'Agent disconnected',
+ superseded: 'Replaced by a newer connection for this agent',
+};
+
+// Phase 1 of a daemon disconnect: take this agent's live connections OUT of the
+// map, synchronously, and hand them back for cleanup.
+//
+// Split from the cleanup so a caller that is about to claim the agent's slot
+// (registerAgentConnection) can do take → set with NO await in between. Two
+// registers racing inside the same tick therefore still leave exactly ONE live
+// entry: whichever set() runs last, and the other side is told why.
+//
+// Every stale entry for the agent is taken, INCLUDING one belonging to `keepWs`
+// (a socket that re-registers replaces its own earlier connection row — leaving
+// that entry behind would create exactly the duplicate this is here to prevent).
+// `keepWs` only decides whether the SOCKET is closed; see closeTakenAgentDaemons.
+function takeAgentDaemonConnections(agentId, workspaceId, keepWs = null) {
+ const taken = [];
  for (const [connectionId, entry] of [...connectedAgents.entries()]) {
   if (String(entry.agentId) !== String(agentId)) continue;
   if (String(entry.workspaceId) !== String(workspaceId)) continue;
-  sendWs(entry.ws, { type: 'agent_disabled', reason: 'deactivated' });
-  try { entry.ws.close(1008, 'Agent deactivated'); } catch { /* already closing */ }
   connectedAgents.delete(connectionId);
-  await markAgentConnectionOffline(entry.ws);
+  taken.push({ ...entry, keepSocket: Boolean(keepWs) && entry.ws === keepWs });
  }
+ return taken;
+}
+
+// Phase 2: tell each taken connection why it is going, then run the normal
+// offline bookkeeping (fail its in-flight jobs, settle its row).
+//
+// A connection marked `keepSocket` is the registering socket's own previous
+// registration: its row is retired, but the socket itself is NOT closed and is
+// told nothing — a daemon must never be able to disconnect itself by declaring
+// who it is a second time.
+async function closeTakenAgentDaemons(taken, reason) {
+ if (taken.length === 0) return taken;
+ const closeMessage = AGENT_DISCONNECT_CLOSE_MESSAGES[reason] || AGENT_DISCONNECT_CLOSE_MESSAGES.deactivated;
+ for (const entry of taken) {
+  if (entry.keepSocket) continue;
+  sendWs(entry.ws, { type: 'agent_disabled', reason });
+  try { entry.ws.close(1008, closeMessage); } catch { /* already closing */ }
+ }
+ for (const entry of taken) await markConnectionOffline(entry.connectionId);
+ // A superseded connection is not merely offline, it has been REPLACED, so its
+ // row goes now instead of sitting in the roster as a second copy of the same
+ // agent until pruneOfflineConnections catches up 120s later. The other reasons
+ // keep their existing behaviour (row stays, offline, and prunes on its own).
+ if (reason === 'superseded') {
+  try {
+   const rows = await getDb().unsafe(
+    `delete from agent_connections where id = any($1::uuid[]) returning *`,
+    [taken.map((entry) => entry.connectionId)],
+   );
+   if (rows.length > 0) notifyDbSubscribers('agent_connections', 'DELETE', rows.map(publicAgentConnection));
+  } catch {
+   // best effort — pruneOfflineConnections is the backstop
+  }
+ }
+ return taken;
+}
+
+async function disconnectAgentDaemons(agentId, workspaceId, reason = 'deactivated') {
+ return closeTakenAgentDaemons(takeAgentDaemonConnections(agentId, workspaceId), reason);
 }
 
 async function disableFarmIntegrationAgents(workspaceId, integrationId) {
@@ -2364,6 +3282,9 @@ function agentRuntimePayload(agent) {
   name: agent.name,
   avatar: agent.avatar || 'AI',
   openpet_avatar_id: agent.openpet_avatar_id || '',
+  // Selected by every agents query but previously dropped here, so a reload
+  // blanked the accent until a realtime row happened to restore it.
+  accent_color: agent.accent_color || '',
   handle: agent.handle || slugHandle(agent.name),
   description: agent.description || '',
   system_prompt: agent.system_prompt || '',
@@ -2372,6 +3293,11 @@ function agentRuntimePayload(agent) {
   tools: parseJsonArray(agent.tools),
   skills: parseJsonArray(agent.skills),
   metadata: parseJsonObject(agent.metadata),
+  // { voice, human_set } — see shared/agentIdentity.cjs. Every explicit
+  // workspace_agents select above lists `identity` too; a column left out of
+  // one of them reads blank in exactly one screen, which is how host_folders
+  // and canvas_id each got shipped broken.
+  identity: parseJsonObject(agent.identity),
   model: resolveAnthropicModel(agent.model),
   run_mode: agent.run_mode === 'daemon' ? 'daemon'
    : agent.run_mode === 'sandbox' ? 'sandbox'
@@ -2424,7 +3350,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -2432,7 +3358,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, title, model, folder, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, version, created_at, updated_at
+   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
        order by updated_at desc nulls last
@@ -2464,7 +3390,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId],
   ),
   db.unsafe(
-   `select id, workspace_id, agent_id, name, handle, host, cwd, status, last_seen_at, created_at, updated_at
+   `select id, workspace_id, agent_id, name, handle, host, cwd, status, last_seen_at, connected_at, updated_at
        from agent_connections
        where workspace_id = $1
        order by last_seen_at desc nulls last
@@ -2491,6 +3417,245 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
   connections: connectionRows.map(publicAgentConnection),
   memoryFacts: memoryRows,
   limits: BOOTSTRAP_LIMITS,
+ };
+}
+
+// --- Inbox (triage surface) --------------------------------------------------
+// The inbox aggregates five sources that ALREADY produce rows — it has no
+// producers of its own and writes nothing except read state. Categories:
+//
+//   blocker  thread_items.kind='blocker'  — an agent hit a decision it can't make
+//   comment  document_comments / task_comments / memory_file_comments
+//   mention  activity_events 'message_sent' whose message text @s the caller
+//   error    agent_jobs.status='error'
+//   activity activity_events, minus the message firehose
+//
+// VISIBILITY: this app's only ACL boundary is the workspace — every member can
+// already read every session, task, document and comment in it (see the
+// bootstrap + /backend/sessions/:id/messages routes, which gate on
+// enforceWorkspaceRole 'read' and nothing finer). So workspace membership IS the
+// correct scope for four of the five categories. The genuinely per-user surfaces
+// are (a) mentions, which are filtered to the caller's own @handle, and (b) read
+// state, which is keyed by user_id. Self-authored comments are dropped: you do
+// not need to triage your own comment.
+//
+// BOUNDEDNESS: every category is a separate LIMIT-ed subquery, the merged set is
+// capped again, and the two firehose-backed categories (mention, activity) plus
+// agent_jobs errors carry a lookback window. Worst case the endpoint returns
+// INBOX_CATEGORY_BRANCHES x INBOX_MAX_LIMIT rows. These tables grow without
+// bound, so an unbounded scan here would be a production hazard.
+const INBOX_DEFAULT_LIMIT = 50;
+const INBOX_MAX_LIMIT = 100;
+// Union branches in buildInboxSql (comment fans out over three tables), used to
+// cap the merged set at perCategory x branches.
+const INBOX_CATEGORY_BRANCHES = 7;
+const INBOX_LOOKBACK_DAYS = 30;
+const INBOX_TITLE_CHARS = 160;
+const INBOX_BODY_CHARS = 280;
+const INBOX_FILTERS = new Set(['all', 'blocker', 'comment', 'mention', 'error']);
+
+// The @handle a message would use to mention this user. Users have no handle
+// column, so it is derived the same way the composer renders them: display name
+// first, else the local part of the email. Returns '' when nothing usable
+// exists, which disables the mention category rather than matching everyone.
+function inboxMentionHandle(user) {
+ const source = String(user?.display_name || '').trim() || String(user?.email || '').split('@')[0] || '';
+ return source
+  .toLowerCase()
+  .replace(/^@+/, '')
+  .replace(/[^a-z0-9_-]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 40);
+}
+
+// POSIX pattern matching '@handle' on a word boundary, so @jane does not match
+// @janet. slugHandle-style output is [a-z0-9_-] only, so it needs no escaping.
+function inboxMentionPattern(handle) {
+ return handle ? `(^|[^a-z0-9_.-])@${handle}([^a-z0-9_.-]|$)` : '';
+}
+
+// One statement, five bounded branches, unread resolved by a left join onto the
+// per-user markers. $1 = workspace id, $2 = caller id, $3 = mention pattern.
+function buildInboxSql(perCategory) {
+ const cap = Number(perCategory);
+ const window = `now() - interval '${INBOX_LOOKBACK_DAYS} days'`;
+ const title = (expr) => `left(regexp_replace(coalesce(${expr}, ''), '\\s+', ' ', 'g'), ${INBOX_TITLE_CHARS})`;
+ const body = (expr) => `left(coalesce(${expr}, ''), ${INBOX_BODY_CHARS})`;
+ return `
+    with items as (
+      (
+        select 'blocker:' || ti.id::text as id,
+               'blocker'::text as category,
+               ${title('ti.content')} as title,
+               ${body('ti.response')} as body,
+               'blocker:' || ti.id::text as context_key,
+               ti.session_id::text as session_id,
+               'thread_item'::text as entity_type,
+               ti.id::text as entity_id,
+               coalesce(nullif(wa.name, ''), nullif(ti.created_by_agent, ''), '')::text as actor_name,
+               ti.created_at as created_at
+          from thread_items ti
+          join chat_sessions cs on cs.id = ti.session_id and cs.deleted_at is null
+          left join workspace_agents wa on wa.id::text = ti.created_by_agent
+         where ti.workspace_id = $1::uuid
+           and ti.kind = 'blocker'
+           and ti.status <> 'dismissed'
+         order by ti.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || dc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || coalesce(nullif(d.title, ''), 'document')`)},
+               ${body('dc.content')},
+               'comment:' || dc.id::text,
+               null::text,
+               'document'::text,
+               dc.document_id::text,
+               coalesce(nullif(u.display_name, ''), u.email, '')::text,
+               dc.created_at
+          from document_comments dc
+          join documents d on d.id = dc.document_id
+          left join app_users u on u.id = dc.user_id
+         where dc.workspace_id = $1::uuid
+           and dc.resolved is not true
+           and (dc.user_id is null or dc.user_id <> $2::uuid)
+         order by dc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || tc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || coalesce(nullif(t.title, ''), 'task')`)},
+               ${body('tc.content')},
+               'comment:' || tc.id::text,
+               null::text,
+               'task'::text,
+               tc.task_id::text,
+               coalesce(nullif(wa.name, ''), nullif(u.display_name, ''), u.email, '')::text,
+               tc.created_at
+          from task_comments tc
+          join tasks t on t.id = tc.task_id
+          left join app_users u on u.id = tc.user_id
+          left join workspace_agents wa on wa.id = tc.agent_id
+         where tc.workspace_id = $1::uuid
+           and tc.resolved is not true
+           and (tc.user_id is null or tc.user_id <> $2::uuid)
+         order by tc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'comment:' || mc.id::text,
+               'comment'::text,
+               ${title(`'Comment on ' || mc.path`)},
+               ${body('mc.content')},
+               'comment:' || mc.id::text,
+               null::text,
+               'memory_file'::text,
+               mc.agent_id::text,
+               coalesce(nullif(u.display_name, ''), u.email, '')::text,
+               mc.created_at
+          from memory_file_comments mc
+          left join app_users u on u.id = mc.user_id
+         where mc.workspace_id = $1::uuid
+           and mc.resolved is not true
+           and (mc.user_id is null or mc.user_id <> $2::uuid)
+         order by mc.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'mention:' || ae.id::text,
+               'mention'::text,
+               ${title('ae.title')},
+               ${body(`ae.metadata->>'content'`)},
+               'thread:' || coalesce(nullif(ae.metadata->>'session_id', ''), ae.id::text),
+               nullif(ae.metadata->>'session_id', ''),
+               'message'::text,
+               ae.entity_id,
+               coalesce(ae.metadata->>'sender_name', '')::text,
+               ae.created_at
+          from activity_events ae
+         where ae.workspace_id = $1::uuid
+           and ae.event_type = 'message_sent'
+           and ae.created_at > ${window}
+           and $3::text <> ''
+           and coalesce(ae.metadata->>'content', '') ~* $3::text
+           and (ae.user_id is null or ae.user_id <> $2::uuid)
+         order by ae.created_at desc
+         limit ${cap}
+      )
+      union all
+      (
+        select 'error:' || j.id::text,
+               'error'::text,
+               ${title(`coalesce(nullif(a.name, ''), 'Agent') || ' run failed'`)},
+               ${body('j.error')},
+               'agent_job:' || j.id::text,
+               j.session_id::text,
+               'agent_job'::text,
+               j.id::text,
+               coalesce(a.name, '')::text,
+               coalesce(j.finished_at, j.updated_at, j.created_at)
+          from agent_jobs j
+          left join workspace_agents a on a.id = j.agent_id
+         where j.workspace_id = $1::uuid
+           and j.status = 'error'
+           and coalesce(j.finished_at, j.updated_at, j.created_at) > ${window}
+         order by coalesce(j.finished_at, j.updated_at, j.created_at) desc
+         limit ${cap}
+      )
+      /* No activity branch, deliberately. Raw workspace events — "@scout
+         connected", "@coder disconnected", "Task created: …", "New document" —
+         are telemetry, not things addressed to a person. Including them drowned
+         the inbox: 44 of 50 rows were connection churn, and the one real blocker
+         sat under a wall of it. Activity has its own home in
+         ActivityWindowContent / useActivity; the inbox is only what needs YOU. */
+    )
+    select i.id, i.category, i.title, i.body, i.context_key, i.session_id,
+           i.entity_type, i.entity_id, i.actor_name, i.created_at,
+           /* MILLISECOND resolution, not microsecond — and this truncation is the
+              whole reason read state persists at all.
+
+              created_at is timestamptz (microseconds). The marker is not: it
+              round-trips through the client as an ISO-8601 string from
+              Date#toISOString(), which carries milliseconds. An item written at
+              …:04.638748 comes back as the marker …:04.638000, and comparing
+              those two raw calls it unread by 748µs — every time, forever.
+              Reading an item appeared to work and never survived a reload;
+              45 of 45 live markers were being defeated this way.
+
+              So compare at the coarsest precision the wire can represent. The
+              cost is that an item created in the SAME millisecond as the marker
+              reads as read — a sub-millisecond race, against a marker that could
+              not have addressed it either way. src/components/inbox/inboxModel.ts
+              (isUnreadAt) applies the identical rule client-side, so the
+              optimistic flip and the authoritative answer cannot diverge. */
+           (r.read_at is null or date_trunc('milliseconds', i.created_at) > r.read_at) as unread
+      from items i
+      left join inbox_read_state r
+        on r.user_id = $2::uuid and r.workspace_id = $1::uuid and r.context_key = i.context_key
+     order by i.created_at desc
+     limit ${cap * INBOX_CATEGORY_BRANCHES}`;
+}
+
+// Row -> the shared InboxItem wire shape (camelCase; both sides agree on this).
+function toInboxItem(row) {
+ return {
+  id: String(row.id || ''),
+  category: String(row.category || ''),
+  title: String(row.title || ''),
+  body: String(row.body || ''),
+  contextKey: String(row.context_key || ''),
+  sessionId: row.session_id ? String(row.session_id) : null,
+  entityType: row.entity_type ? String(row.entity_type) : null,
+  entityId: row.entity_id ? String(row.entity_id) : null,
+  actorName: String(row.actor_name || ''),
+  createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || ''),
+  unread: row.unread !== false,
  };
 }
 
@@ -2522,19 +3687,20 @@ function refreshConnectedAgentConfigs(eventType, rows) {
  }
 }
 
+// Handles naming an INDIVIDUAL agent. `@channel` is excluded here on purpose:
+// it is not a handle, it addresses the session's roster, and every caller of
+// this function looks its results up in a handle->agent map. Leaving it in would
+// mean a mention of everyone resolved to whichever agent happened to be slugged
+// `channel` — which is the hijack isReservedAgentHandle refuses at the door, and
+// this is the second lock on the same door for rows that predate it.
 function parseAgentMentions(content) {
- const out = [];
- const seen = new Set();
- const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
- let match;
- while ((match = re.exec(String(content || '')))) {
-  const handle = slugHandle(match[2]);
-  if (handle && !seen.has(handle)) {
-   seen.add(handle);
-   out.push(handle);
-  }
- }
- return out;
+ return agentMentionHandles(content);
+}
+
+// Every handle, `@channel` included. Only the dispatcher needs this; anything
+// resolving a handle to one agent wants parseAgentMentions.
+function parseAllMentions(content) {
+ return parseMentionHandles(content);
 }
 
 function firstAgentMention(content) {
@@ -2548,10 +3714,10 @@ function validUuid(value) {
 async function inferThreadAgentTarget(sessionId, threadParentId) {
  if (!sessionId || !threadParentId) return null;
  const rows = await getDb().unsafe(
-  `select id, sender_kind, sender_id, sender_name, content, created_at
+  `select id, sender_kind, sender_id, sender_name, content, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
      from messages
      where session_id = $1
-       and (id = $2 or thread_parent_id = $2)
+       and(id = $2 or thread_parent_id = $2)
      order by created_at desc`,
   [sessionId, threadParentId],
  );
@@ -2588,7 +3754,150 @@ function agentContextFromRow(agent, coParticipants = []) {
 // --- Multi-agent channel orchestration ---------------------------------------
 
 const CHANNEL_CONTEXT_LIMIT = 40;
+// This is deliberately a byte budget, not a character budget. A tokenizer can
+// emit up to roughly one fallback token per input byte, so staying below 8 KiB
+// also keeps conversation history below the daemon's 10 KiB complete-prompt cap.
+const CHANNEL_CONTEXT_MAX_BYTES = 8 * 1024;
 const conversationLocks = new Set();
+
+// --- reply cadence: the pending wakes ---------------------------------------
+//
+// A social channel's turn is HELD, never dropped: continueConversation returns
+// without dispatching and books a wake for itself here, keyed by the same
+// `sessionId::threadParentId` the conversation lock uses. On the wake it re-reads
+// the whole conversation and re-decides from scratch — which is why the wait is
+// derived from the message id rather than from Math.random (a fresh draw each
+// pass would compound or reset it), and why an agent that has been overtaken in
+// the meantime stands down naturally instead of needing to be cancelled.
+//
+// IN MEMORY, deliberately, with no persisted schedule:
+//   * The wait is at most replyCadence.MAX_DELAY_MS, and only in channels an
+//     operator explicitly set to 'social'.
+//   * A restart inside that window loses the automatic reply, never the message.
+//     The burst is unchanged in the database, so the very next @mention re-drives
+//     it and pickMentionNextAgent still picks the agent that was waiting.
+//   * A blind periodic sweep would be worse than the gap it closes: re-driving an
+//     un-addressed social post every tick means a paid relevance call every tick,
+//     forever, for a message everyone already declined.
+//   * A durable `next_reply_at` column would have to be cleared on every one of
+//     continueConversation's exits; one missed clear is a channel that re-answers
+//     an old message on a timer, which is a worse bug than the one it prevents.
+// Restarts already truncate an in-flight burst today (the finalize-to-continue
+// chain is in memory too, and reapStuckAgentJobs fails running jobs), so this
+// widens an existing window by seconds rather than adding a new kind of loss.
+const cadenceWakes = new Map();
+
+/**
+ * Book ONE wake for this conversation. Returns false when a wake is already
+ * pending — the earlier one is kept rather than pushed back, so a busy channel
+ * cannot starve a reply by repeatedly re-scheduling it.
+ */
+function scheduleCadenceWake(lockKey, delayMs, target) {
+ if (cadenceWakes.has(lockKey)) return false;
+ const timer = setTimeout(() => {
+  cadenceWakes.delete(lockKey);
+  void continueConversation(target).catch(
+   (error) => console.error('continueConversation (reply cadence) failed', error),
+  );
+ }, delayMs);
+ // Unref'd so a pending social reply never holds the process (or a test runner)
+ // open. On a clean exit the reply is deferred to the next thing that drives the
+ // channel, which is the same trade the note above accepts for a restart.
+ if (typeof timer.unref === 'function') timer.unref();
+ cadenceWakes.set(lockKey, timer);
+ return true;
+}
+
+/** Drop every pending wake. Called by resetTestState so suites do not bleed. */
+function clearCadenceWakes() {
+ for (const timer of cadenceWakes.values()) clearTimeout(timer);
+ cadenceWakes.clear();
+}
+
+/** Whole milliseconds since a timestamp column; 0 for anything unreadable. */
+function msSinceTimestamp(value) {
+ const at = value ? new Date(value).getTime() : Number.NaN;
+ if (!Number.isFinite(at)) return 0;
+ return Math.max(0, Date.now() - at);
+}
+
+/**
+ * Was this agent named by handle anywhere in the burst? `@channel` does NOT
+ * count — that is the whole distinction cadence turns on: being named is a
+ * question addressed to you, being included in a broadcast is not.
+ * parseAgentMentions already strips the reserved `channel` handle.
+ */
+function agentNamedInBurst(agent, burst) {
+ if (!agent) return false;
+ const selfHandles = new Set([slugHandle(agent.handle || agent.name), slugHandle(agent.name)]);
+ for (const row of burst || []) {
+  for (const handle of parseAgentMentions(row.content)) {
+   if (selfHandles.has(handle)) return true;
+  }
+ }
+ return false;
+}
+
+function agentContextBytes(messages) {
+ return (Array.isArray(messages) ? messages : []).reduce(
+  (total, message) => total
+   + Buffer.byteLength(String(message?.role || ''), 'utf8')
+   + Buffer.byteLength(String(message?.content || ''), 'utf8')
+   + 4,
+  0,
+ );
+}
+
+function truncateContextEnd(value, maxBytes) {
+ const text = String(value || '');
+ if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+ const marker = '\n\n[... message truncated at the agent context limit ...]';
+ const markerBytes = Buffer.byteLength(marker, 'utf8');
+ if (maxBytes <= markerBytes) return '';
+ const codepoints = [...text];
+ let low = 0;
+ let high = codepoints.length;
+ while (low < high) {
+  const keep = Math.ceil((low + high) / 2);
+  const candidate = codepoints.slice(0, keep).join('') + marker;
+  if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) low = keep;
+  else high = keep - 1;
+ }
+ return codepoints.slice(0, low).join('') + marker;
+}
+
+function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
+ const source = Array.isArray(messages) ? messages : [];
+ const budget = Math.max(256, Number(maxBytes) || CHANNEL_CONTEXT_MAX_BYTES);
+ const selected = [];
+ let used = 0;
+ for (let index = source.length - 1; index >= 0; index -= 1) {
+  const message = source[index];
+  const normalized = { role: message?.role === 'assistant' ? 'assistant' : 'user', content: String(message?.content || '') };
+  const fullBytes = agentContextBytes([normalized]);
+  if (used + fullBytes <= budget) {
+   selected.unshift(normalized);
+   used += fullBytes;
+   continue;
+  }
+  // Never rewrite an older boundary message: repeatedly changing that prefix
+  // destroys prompt-cache stability. Only an individually oversized newest
+  // message is clipped, and it carries an explicit marker so the model cannot
+  // mistake the fragment for the complete request.
+  if (selected.length === 0) {
+   const overhead = agentContextBytes([{ ...normalized, content: '' }]);
+   const available = budget - overhead;
+   const content = truncateContextEnd(normalized.content, available);
+   if (content) {
+    const truncated = { ...normalized, content };
+   selected.unshift(truncated);
+   }
+  }
+  break;
+ }
+ while (selected.length > 1 && selected[0].role !== 'user') selected.shift();
+ return selected;
+}
 
 // eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
 function clampInt(value, min, max, fallback) {
@@ -2630,8 +3939,8 @@ const COMMENT_MENTION_TABLES = {
   sourceTaskId: (row) => row.task_id || null,
   describe: async (row) => {
    const t = await getDb().unsafe('select title from tasks where id = $1 limit 1', [row.task_id]).catch(() => []);
-   const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)}`;
-   return { label: `task ${title}`, link: `agensis://task/${row.task_id}` };
+   const title = t[0]?.title ? `"${t[0].title}"` : `#${String(row.task_id).slice(0, 8)} `;
+   return { label: `task ${title} `, link: `agensis://task/${row.task_id}` };
   },
  },
  document_comments: {
@@ -2688,7 +3997,8 @@ async function findOrCreateDirectSession(workspaceId, agent) {
   `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants)
      values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb)
      returning *`,
-  [workspaceId, title, resolveAnthropicModel(agent.model), JSON.stringify([participant])],
+  // The ARRAY itself — see the note on the participants update above.
+  [workspaceId, title, resolveAnthropicModel(agent.model), [participant]],
  );
  if (created[0]) notifyDbSubscribers('chat_sessions', 'INSERT', created);
  return created[0] || null;
@@ -2802,7 +4112,8 @@ async function mirrorAgentReplyToTaskComment(messageRow) {
 // file), wake each mentioned agent in its DM with a message that quotes the comment
 // and links back to the source — so "you were tagged" turns into a real, visible
 // response in the DM instead of a silent flag the agent has to poll for.
-async function dispatchCommentMentions({ table, row, authorUserId }) {
+// `run` is a test seam; production always uses continueConversation.
+async function dispatchCommentMentions({ table, row, authorUserId, run = continueConversation }) {
  const config = COMMENT_MENTION_TABLES[table];
  if (!config || !row) return;
  // Never dispatch on an agent-authored comment (e.g. a reply this loop mirrored
@@ -2839,6 +4150,9 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
  }
 
  for (const handle of handles) {
+  // Released on every path that does NOT end in a running turn — the claim's job
+  // is to dedupe one human action, not to lock a task out of the queue.
+  let claim = null;
   try {
    const agent = await resolveWorkspaceAgentByHandle(workspaceId, handle);
    if (!agent) continue;
@@ -2854,26 +4168,96 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
 
    const taskId = config.sourceTaskId ? config.sourceTaskId(row) : null;
    if (taskId) {
+    // The same human action also writes assignee_id, which now dispatches on its
+    // own — claim the pair so the agent runs ONCE. The window is short (seconds),
+    // so a genuine second @mention comment still wakes the agent.
+    if (!claimTaskDispatch(String(taskId), String(agent.id), TASK_MENTION_CLAIM_MS)) continue;
+    claim = [String(taskId), String(agent.id)];
+    const handleSlug = slugHandle(agent.handle || agent.name);
+
+    // Read the row BEFORE writing anything: the busy check below has to be able to
+    // leave the task exactly as the human left it, and a rollback needs the
+    // provenance this dispatch would overwrite. task_comments.task_id is a
+    // cascading FK, so a comment cannot outlive its task — no row means the task
+    // just went away and there is nothing to dispatch onto.
+    const cur = await getDb().unsafe(
+     'select id, status, source_type, source_id from tasks where id = $1 limit 1',
+     [String(taskId)],
+    );
+    const task = cur[0];
+    if (!task) continue;
+    const priorStatus = String(task.status || 'todo');
+
+    // All of an agent's task work lands in ONE DM session, and agent_jobs carries a
+    // partial unique index (one active job per session+agent), so a turn started
+    // while the agent is mid-turn physically cannot create a job. Find that out
+    // BEFORE writing: record the assignment, so the agent's queue owns the task,
+    // but leave the status alone — 'todo' + assigned is exactly what
+    // drainAgentTaskQueue selects, and it is the state the human left it in. The
+    // old code flipped it to 'in_progress' and then dropped the refused turn, so
+    // an @mention while the agent was busy left a task that read as "being worked
+    // on" with no job attached and nothing that would ever pick it up.
+    if (await agentHasActiveJob(session.id, agent.id)) {
+     const queued = await getDb().unsafe(
+      'update tasks set assignee_id = $1, updated_at = now() where id = $2 returning *',
+      [String(agent.id), String(taskId)],
+     );
+     if (queued[0]) notifyDbSubscribers('tasks', 'UPDATE', queued);
+     const position = await taskQueuePosition(workspaceId, agent.id, taskId);
+     console.log(`[task-queue] queued task=${taskId} for @${handleSlug}: agent is mid-turn${position ? ` (queue position ${position})` : ''} (cause=mention)`);
+     continue;
+    }
+
     // Assign the task to the mentioned agent and move it into progress (never
     // clobbering a started/done/cancelled status), then run the agent inside
     // the task's own subthread so its reply mirrors back as a task comment.
-    try {
-     const cur = await getDb().unsafe('select status from tasks where id = $1 limit 1', [String(taskId)]);
-     const nextStatus = taskStatusOnDispatch(cur[0]?.status || 'todo');
-     const taskRows = await getDb().unsafe(
+    // Record the chat this task is now being worked in (see
+    // TASK_SOURCE_LINK_OVERWRITABLE) so the task can offer "Open chat".
+    const nextStatus = taskStatusOnDispatch(priorStatus);
+    const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+    const taskRows = stampSource
+     ? await getDb().unsafe(
+      "update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3, updated_at = now() where id = $4 returning *",
+      [String(agent.id), nextStatus, String(session.id), String(taskId)],
+     )
+     : await getDb().unsafe(
       'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
       [String(agent.id), nextStatus, String(taskId)],
      );
-     if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
-    } catch (error) {
-     console.error('assign task on mention failed', error);
-    }
-    const { threadParentId } = await postTaskSubthreadMention({
+    if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
+
+    const { threadParentId, messageRow } = await postTaskSubthreadMention({
      session, taskId, content, authorUserId, authorName,
     });
-    void continueConversation({ workspaceId, sessionId: session.id, threadParentId }).catch((error) =>
-     console.error('continueConversation (task subthread mention) failed', error),
-    );
+
+    // AWAITED, unlike the fire-and-forget it replaces: the turn can still be
+    // refused inside continueConversation (the agent won its own one-active-job
+    // slot in the window between the check above and the job insert, or the
+    // subthread's turn budget is spent). Nothing retried that, so the task sat
+    // 'in_progress' with no job attached, forever. Every caller is `void`-ed, so
+    // awaiting costs no request latency.
+    let outcome = null;
+    try {
+     outcome = await run({ workspaceId, sessionId: session.id, threadParentId });
+    } catch (error) {
+     console.error('continueConversation (task subthread mention) failed', error);
+     outcome = { started: false, reason: 'error' };
+    }
+    if (outcome && outcome.started === false) {
+     // Compare-and-swap rollback (see undoTaskDispatch): it restores only the
+     // status THIS dispatch wrote, so it can never re-open a task a human closed
+     // while the refused turn was in flight. The assignee stays, so the task is
+     // left as a plain 'todo' + assigned — which is what the drain picks up the
+     // moment the agent frees up.
+     await undoTaskDispatch({
+      task, priorStatus, wroteStatus: nextStatus, stampedSource: stampSource,
+      messageId: messageRow?.id || null, sessionId: session.id,
+     });
+     const busy = TASK_QUEUE_BUSY_RUN_REASONS.has(String(outcome.reason || ''));
+     console.log(`[task-queue] ${busy ? 'requeued' : 'could not start'} task=${taskId} for @${handleSlug}: run=${outcome.reason || 'unknown'} (cause=mention); status back to ${priorStatus}`);
+     continue;
+    }
+    claim = null; // a real turn is running; keep the claim so a re-post can't double-run it
    } else {
     const messageRows = await getDb().unsafe(
      `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
@@ -2882,30 +4266,388 @@ async function dispatchCommentMentions({ table, row, authorUserId }) {
      [session.id, content, String(authorUserId || ''), authorName],
     );
     notifyDbSubscribers('messages', 'INSERT', messageRows);
-    void continueConversation({ workspaceId, sessionId: session.id }).catch((error) =>
+    // No task, so no queue: a plain DM mention wakes the agent immediately, exactly
+    // as before. There is no task status to strand if the turn is refused.
+    void run({ workspaceId, sessionId: session.id }).catch((error) =>
      console.error('continueConversation (comment mention) failed', error),
     );
    }
   } catch (error) {
    console.error(`comment mention dispatch failed for @${handle}`, error);
+  } finally {
+   if (claim) releaseTaskDispatch(claim[0], claim[1]);
   }
  }
+}
+
+// One human action can reach dispatch twice: the task UI posts a comment that
+// @mentions an agent AND writes assignee_id, milliseconds apart. Each dispatch
+// path CLAIMS the (task, agent) pair first, so the second one is a no-op instead
+// of a second agent run (and a second bill). Process-local, like the other
+// in-memory maps here.
+const recentTaskDispatches = new Map(); // `${taskId}:${agentId}` -> ms
+const TASK_ASSIGN_CLAIM_MS = 15_000;
+const TASK_MENTION_CLAIM_MS = 5_000;
+function claimTaskDispatch(taskId, agentId, windowMs) {
+ const now = Date.now();
+ for (const [key, at] of recentTaskDispatches) {
+  if (now - at > TASK_ASSIGN_CLAIM_MS) recentTaskDispatches.delete(key);
+ }
+ const key = `${taskId}:${agentId}`;
+ const last = recentTaskDispatches.get(key);
+ if (last && (now - last) < windowMs) return false;
+ recentTaskDispatches.set(key, now);
+ return true;
+}
+
+// Hand the claim back when the dispatch did NOT happen. The window exists to
+// swallow a double-fire from ONE human click; it must never swallow a queue
+// drain minutes later. Without this, a task refused because the agent was busy
+// would keep its 15s claim and be refused again as a "duplicate" by the drain
+// that fires the moment the agent frees up — which is a second way to strand it.
+function releaseTaskDispatch(taskId, agentId) {
+ recentTaskDispatches.delete(`${taskId}:${agentId}`);
+}
+
+// source_type/source_id are the task's PROVENANCE, and source_id's meaning
+// depends on source_type ('ai' stores the authoring agent's id, 'canvas' the
+// canvas object's). Dispatch only claims the pair when there is no real
+// provenance to destroy — so an 'ai'/'canvas'/'document' task keeps its origin
+// and simply doesn't offer "Open chat".
+const TASK_SOURCE_LINK_OVERWRITABLE = new Set(['', 'manual', 'chat']);
+
+// --- the task queue ---------------------------------------------------------
+//
+// THE DB IS THE QUEUE. A task that is 'todo' AND assigned to an agent is waiting
+// for that agent; the oldest one is next. Nothing is held in memory, so a Fly
+// restart loses no work.
+//
+// Why no new 'queued' status: 'todo' + an agent assignee already encodes exactly
+// "assigned, waiting its turn", and it is the state the human left the task in.
+// A new status value would mean a CHECK-constraint change on tasks.status in all
+// three schema places, a new TaskStatus member, and a new column/label/filter in
+// every tasks view (List, Kanban, Gantt) — for no information the pair
+// (status, assignee_id) does not already carry. The invariant this file now
+// upholds is what makes the distinction readable: 'in_progress' means a job is
+// actually running, 'todo' + assignee means waiting. Before this, a dropped
+// dispatch left the task 'in_progress' with nothing working it, which is what
+// made "assignment doesn't work" indistinguishable from "it's being worked on".
+const TASK_QUEUE_SCAN_LIMIT = 5;
+const TASK_QUEUE_MAX_STRIKES = 3;
+// Per-process failure counter, keyed `${taskId}:${agentId}`. A task whose
+// dispatch keeps failing for a reason the queue cannot fix (agent misconfigured,
+// turn budget exhausted, DB error) is dropped from the drain after this many
+// tries, so it cannot burn a turn on every future job completion. A human touch
+// (re-assign) or a backend restart gives it a fresh chance.
+const taskQueueStrikes = new Map();
+// Re-entrancy guard, keyed `${workspaceId}:${agentId}`. Covers the DECISION only
+// (see drainAgentTaskQueue) — never the dispatch itself.
+const taskQueueSelecting = new Set();
+// A run outcome that means "the agent is busy, try again when it frees up".
+// These requeue the task with no strike.
+// 'cadence_*' cannot happen on the task path — task work lands in the agent's DM
+// (findOrCreateDirectSession) and replyCadencePlan answers immediately for a DM
+// before it reads the mode. Listed anyway so that if a task ever IS dispatched
+// into a social channel, the task is REQUEUED rather than reported as a failure:
+// a paced turn is one the agent will get to, which is exactly what 'busy' means
+// here. Silence on this list would have logged it as "could not start".
+const TASK_QUEUE_BUSY_RUN_REASONS = new Set(['agent_busy', 'locked', 'refused', 'cadence_deferred', 'cadence_stand_down']);
+// Dispatch refusals that are about THIS task, not the agent: move to the next
+// candidate. (The drain's own SQL already filters most of them out.)
+const TASK_QUEUE_SKIP_REASONS = new Set(['task_not_found', 'terminal', 'stale_assignee', 'not_an_agent', 'missing_input', 'no_workspace']);
+// Dispatch refusals that are about the AGENT: stop the whole drain, since no
+// task of this agent's could start either.
+const TASK_QUEUE_STOP_REASONS = new Set(['queued', 'duplicate', 'agent_disabled', 'not_permitted', 'rate_limited']);
+
+// 1-based position of a task in its agent's FIFO queue, for the log line. Ordered
+// exactly like drainAgentTaskQueue's SELECT, so the number a human reads is the
+// number of drains they have to wait through. Best-effort: 0 means "unknown".
+async function taskQueuePosition(workspaceId, agentId, taskId) {
+ const rows = await getDb().unsafe(
+  `select count(*)::int as ahead
+      from tasks t, tasks self
+     where self.id = $3
+       and t.workspace_id = $1 and t.assignee_id = $2 and t.status = 'todo'
+       and (t.created_at, t.id) < (self.created_at, self.id)`,
+  [String(workspaceId || ''), String(agentId), String(taskId)],
+ ).catch(() => []);
+ const ahead = Number(rows[0]?.ahead);
+ return Number.isFinite(ahead) ? ahead + 1 : 0;
+}
+
+// Put a task back exactly as the human left it after a dispatch that never
+// started. Restores the status (and the provenance stamp, if this dispatch wrote
+// it) and removes the seed message nobody is going to answer — so the next
+// dispatch nags once, not twice.
+//
+// Compare-and-swap on `wroteStatus`: if the human (or the agent) changed the
+// status while the refused turn was in flight, THAT wins — a rollback must never
+// re-open a task somebody just closed. Best-effort: never throws.
+async function undoTaskDispatch({ task, priorStatus, wroteStatus, stampedSource, messageId, sessionId }) {
+ try {
+  const restored = stampedSource
+   ? await getDb().unsafe(
+    'update tasks set status = $1, source_type = $2, source_id = $3, updated_at = now() where id = $4 and status = $5 returning *',
+    [priorStatus, task.source_type || null, task.source_id || null, String(task.id), wroteStatus],
+   )
+   : await getDb().unsafe(
+    'update tasks set status = $1, updated_at = now() where id = $2 and status = $3 returning *',
+    [priorStatus, String(task.id), wroteStatus],
+   );
+  if (restored[0]) notifyDbSubscribers('tasks', 'UPDATE', restored);
+  if (messageId) {
+   const removed = await getDb().unsafe(
+    'delete from messages where id = $1 and session_id = $2 returning *',
+    [String(messageId), sessionId],
+   );
+   if (removed.length > 0) notifyDbSubscribers('messages', 'DELETE', removed);
+  }
+ } catch (error) {
+  console.error('undoTaskDispatch failed', error);
+ }
+}
+
+// Assigning a task to an agent IS a dispatch: the agent wakes in its DM, inside
+// that task's own subthread, exactly as a task-comment @mention does — and the
+// task records the session so the UI can jump to that chat. Never throws, so
+// callers can stay fire-and-forget; returns a {dispatched, reason} descriptor.
+// `run` is a test seam; production always uses continueConversation.
+async function dispatchTaskAssignment({
+ workspaceId, taskId, agentId, actorUserId = null, actorName = null, cause = 'assigned', run = continueConversation,
+}) {
+ // Released on every path that does NOT end in a running turn — the claim's job
+ // is to dedupe one human click, not to lock a task out of the queue.
+ let claim = null;
+ try {
+  if (!taskId || !agentId) return { dispatched: false, reason: 'missing_input' };
+  const taskRows = await getDb().unsafe(
+   'select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks where id = $1 limit 1',
+   [String(taskId)],
+  );
+  const task = taskRows[0];
+  if (!task) return { dispatched: false, reason: 'task_not_found' };
+  const wsId = String(workspaceId || task.workspace_id || '');
+  if (!wsId) return { dispatched: false, reason: 'no_workspace' };
+  // A finished task must never be resurrected by an assignment.
+  if (task.status === 'done' || task.status === 'cancelled') return { dispatched: false, reason: 'terminal' };
+  // The row is read AFTER the write that triggered this, so a later update that
+  // re-assigned the task wins — never run an agent that is no longer the assignee.
+  if (String(task.assignee_id || '') !== String(agentId)) return { dispatched: false, reason: 'stale_assignee' };
+
+  // assignee_id has no FK: a human user id is a perfectly valid assignee, and a
+  // human being assigned must never run an agent.
+  const agentRows = await getDb().unsafe(
+   'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+   [String(agentId), wsId],
+  );
+  const agent = agentRows[0];
+  if (!agent) return { dispatched: false, reason: 'not_an_agent' };
+  // Mirrors the @mention path, which resolves through enabled agents only.
+  if (!isAgentEnabled(agent)) return { dispatched: false, reason: 'agent_disabled' };
+
+  // Running an agent is an agent-dispatch action, so it carries the same
+  // capability + throttle as the @mention path: a commenter/viewer who can edit
+  // a task still cannot run agents with it.
+  if (actorUserId) {
+   const role = await getWorkspaceRole(actorUserId, wsId);
+   if (!roleHasWorkspaceCapability(role, 'run_agents')) return { dispatched: false, reason: 'not_permitted' };
+   if (!dispatchRateLimiter.check(String(actorUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
+  }
+  if (!claimTaskDispatch(task.id, agent.id, TASK_ASSIGN_CLAIM_MS)) return { dispatched: false, reason: 'duplicate' };
+  claim = [task.id, agent.id];
+
+  const session = await findOrCreateDirectSession(wsId, agent);
+  if (!session) return { dispatched: false, reason: 'no_session' };
+
+  let who = actorName || '';
+  if (!who && actorUserId) {
+   const u = await getDb()
+    .unsafe('select display_name, email from app_users where id = $1 limit 1', [actorUserId])
+    .catch(() => []);
+   who = u[0]?.display_name || u[0]?.email || '';
+  }
+  who = who || 'A teammate';
+
+  const handle = slugHandle(agent.handle || agent.name);
+  const details = String(task.description || '').trim();
+  const content =
+   `@${handle} — ${who} assigned you the task "${task.title}".` +
+   (details ? `\n\n> ${details.replace(/\n/g, '\n> ')}` : '') +
+   '\n\nPick this up and reply here in your DM.' +
+   `\n\nSource: agensis://task/${task.id}`;
+
+  // All of an agent's task work lands in ONE DM session, and agent_jobs carries a
+  // partial unique index (one active job per session+agent), so a second dispatch
+  // while the agent is mid-turn physically cannot create a job. Find that out
+  // BEFORE writing anything: the task stays 'todo' + assigned, which is what
+  // "waiting its turn" looks like, and the drain picks it up when the agent frees
+  // up. The old code flipped it to 'in_progress' first and then dropped the turn.
+  if (await agentHasActiveJob(session.id, agent.id)) {
+   const position = await taskQueuePosition(wsId, agent.id, task.id);
+   console.log(`[task-queue] queued task=${task.id} ${JSON.stringify(String(task.title || ''))} for @${handle}: agent is mid-turn${position ? ` (queue position ${position})` : ''} (cause=${cause})`);
+   return { dispatched: false, reason: 'queued' };
+  }
+
+  // Move a fresh task into progress (never clobbering a started status) and stamp
+  // the chat this task is being worked in, so the UI can offer "Open chat".
+  const priorStatus = String(task.status || 'todo');
+  const nextStatus = taskStatusOnDispatch(priorStatus);
+  const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+  const updated = stampSource
+   ? await getDb().unsafe(
+    "update tasks set status = $1, source_type = 'chat', source_id = $2, updated_at = now() where id = $3 returning *",
+    [nextStatus, String(session.id), String(task.id)],
+   )
+   : await getDb().unsafe(
+    'update tasks set status = $1, updated_at = now() where id = $2 returning *',
+    [nextStatus, String(task.id)],
+   );
+  if (updated[0]) notifyDbSubscribers('tasks', 'UPDATE', updated);
+
+  const { threadParentId, messageRow } = await postTaskSubthreadMention({
+   session, taskId: task.id, content, authorUserId: actorUserId, authorName: who,
+  });
+
+  // AWAITED, unlike the fire-and-forget it replaces: the turn can still be
+  // refused inside continueConversation (the agent won its own one-active-job
+  // slot in the window between the check above and the job insert, or the turn
+  // budget is spent). Nothing retried that, so the task sat 'in_progress' with no
+  // job attached, forever. Callers are all `void`-ed, so awaiting costs no
+  // request latency. An older `run` seam that returns nothing still counts as
+  // started.
+  let outcome = null;
+  try {
+   outcome = await run({ workspaceId: wsId, sessionId: session.id, threadParentId });
+  } catch (error) {
+   console.error('continueConversation (task assignment) failed', error);
+   outcome = { started: false, reason: 'error' };
+  }
+  if (outcome && outcome.started === false) {
+   await undoTaskDispatch({
+    task, priorStatus, wroteStatus: nextStatus, stampedSource: stampSource,
+    messageId: messageRow?.id || null, sessionId: session.id,
+   });
+   const busy = TASK_QUEUE_BUSY_RUN_REASONS.has(String(outcome.reason || ''));
+   console.log(`[task-queue] ${busy ? 'requeued' : 'could not start'} task=${task.id} for @${handle}: run=${outcome.reason || 'unknown'} (cause=${cause}); status back to ${priorStatus}`);
+   return { dispatched: false, reason: busy ? 'queued' : 'not_started', runReason: String(outcome.reason || '') };
+  }
+
+  claim = null; // a real turn is running; keep the claim so a re-save can't double-run it
+  console.log(`[task-queue] dispatched task=${task.id} ${JSON.stringify(String(task.title || ''))} to @${handle} (cause=${cause}, session=${session.id})`);
+  return { dispatched: true, reason: 'dispatched', sessionId: session.id, threadParentId };
+ } catch (error) {
+  console.error('dispatchTaskAssignment failed', error);
+  return { dispatched: false, reason: 'error' };
+ } finally {
+  if (claim) releaseTaskDispatch(claim[0], claim[1]);
+ }
+}
+
+// Dispatch the OLDEST task still waiting on this agent — FIFO, so the order the
+// human assigned them is the order they run. Called from every terminal job
+// transition; at most ONE task is dispatched per call, so a backlog is walked one
+// completion at a time rather than fired off all at once.
+async function drainAgentTaskQueue({ workspaceId, agentId, cause = 'job_finished', run = continueConversation } = {}) {
+ const wsId = String(workspaceId || '');
+ const aId = String(agentId || '');
+ if (!wsId || !aId) return { dispatched: false, reason: 'missing_input' };
+ const key = `${wsId}:${aId}`;
+ let waiting = [];
+
+ // The guard covers only the decision — which task is next, and is the agent free
+ // — never the dispatch. Holding it across the dispatch would swallow the drain
+ // fired by that very job's completion, which is exactly how a builtin agent
+ // finishes: synchronously, inside the dispatch being awaited. Two drains racing
+ // past the guard are still safe: claimTaskDispatch, the session-scoped active-job
+ // check and the unique index each refuse the second one.
+ if (taskQueueSelecting.has(key)) return { dispatched: false, reason: 'reentrant' };
+ taskQueueSelecting.add(key);
+ try {
+  waiting = await getDb().unsafe(
+   `select id, title, workspace_id, created_at from tasks
+       where workspace_id = $1 and assignee_id = $2 and status = 'todo'
+       order by created_at asc, id asc
+       limit $3`,
+   [wsId, aId, TASK_QUEUE_SCAN_LIMIT],
+  );
+  if (!Array.isArray(waiting) || waiting.length === 0) return { dispatched: false, reason: 'empty' };
+  // Belt: the unique index is the braces. A drain that fires while the agent is
+  // still mid-turn somewhere must not spend a turn.
+  if (await agentHasAnyActiveJob(wsId, aId)) {
+   console.log(`[task-queue] hold ${waiting.length} task(s) for agent=${aId}: still mid-turn (cause=${cause})`);
+   return { dispatched: false, reason: 'busy' };
+  }
+ } catch (error) {
+  console.error('drainAgentTaskQueue lookup failed', error);
+  return { dispatched: false, reason: 'error' };
+ } finally {
+  taskQueueSelecting.delete(key);
+ }
+
+ for (const task of waiting) {
+  const strikeKey = `${task.id}:${aId}`;
+  const strikes = Number(taskQueueStrikes.get(strikeKey) || 0);
+  if (strikes >= TASK_QUEUE_MAX_STRIKES) {
+   console.log(`[task-queue] skipping task=${task.id} for agent=${aId}: ${strikes} failed dispatch attempts, needs a human`);
+   continue;
+  }
+  const out = await dispatchTaskAssignment({
+   workspaceId: wsId, taskId: task.id, agentId: aId, cause: `drain:${cause}`, run,
+  });
+  if (out.dispatched) {
+   taskQueueStrikes.delete(strikeKey);
+   return { dispatched: true, reason: 'dispatched', taskId: task.id, waiting: waiting.length };
+  }
+  if (TASK_QUEUE_STOP_REASONS.has(out.reason)) {
+   console.log(`[task-queue] drain stopped for agent=${aId} at task=${task.id}: ${out.reason} (cause=${cause})`);
+   return { dispatched: false, reason: out.reason };
+  }
+  if (TASK_QUEUE_SKIP_REASONS.has(out.reason)) {
+   // Task-level ineligibility, and costs nothing to skip past: try the next one.
+   console.log(`[task-queue] skipping task=${task.id} for agent=${aId}: ${out.reason}`);
+   continue;
+  }
+  // Anything else (turn budget spent, no session, DB error) is a real failed
+  // attempt. Strike it and STOP: these causes are agent/session-level, so the
+  // next task would fail identically, and one completed job must not turn into
+  // five failed attempts. After TASK_QUEUE_MAX_STRIKES this task is skipped
+  // instead, which is what stops a poisoned head-of-line blocking the queue.
+  taskQueueStrikes.set(strikeKey, strikes + 1);
+  console.log(`[task-queue] task=${task.id} did not start for agent=${aId} (${out.reason}${out.runReason ? `/${out.runReason}` : ''}); strike ${strikes + 1}/${TASK_QUEUE_MAX_STRIKES}`);
+  return { dispatched: false, reason: out.reason, taskId: task.id, strikes: strikes + 1 };
+ }
+ return { dispatched: false, reason: 'no_eligible' };
+}
+
+// Fire-and-forget wrapper. A drain must never be able to fail — or even slow —
+// the job-completion write that triggered it.
+function scheduleTaskQueueDrain(workspaceId, agentId, cause) {
+ if (!workspaceId || !agentId) return;
+ void drainAgentTaskQueue({ workspaceId, agentId, cause }).catch((error) =>
+  console.error('drainAgentTaskQueue failed', error),
+ );
 }
 
 async function loadChannelMessages(sessionId, threadParentId = null, limit = CHANNEL_CONTEXT_LIMIT) {
  const rows = threadParentId
   ? await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
          where session_id = $1 and (id = $2 or thread_parent_id = $2) and deleted_at is null
          order by created_at desc
          limit $3`,
    [sessionId, threadParentId, limit],
   )
+  // The CHANNEL level is "top level OR broadcast to the channel" — the same
+  // predicate the client's channel view uses. Since an agent now works inside a
+  // thread and only broadcasts its answer, a broadcast-only filter here would
+  // hide every reply from the channel-level context: buildAgentTurnContext would
+  // forget what was already answered, and continueConversation would count zero
+  // agent turns in the burst and dispatch the same turn again, forever.
   : await getDb().unsafe(
-   `select id, role, content, sender_kind, sender_id, sender_name, created_at
+   `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
-         where session_id = $1 and thread_parent_id is null and deleted_at is null
+         where session_id = $1 and (thread_parent_id is null or broadcast_to_channel) and deleted_at is null
          order by created_at desc
          limit $2`,
    [sessionId, limit],
@@ -2940,7 +4682,7 @@ async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = n
   else merged.push({ role: message.role, content: message.content });
  }
  while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
- return merged;
+ return boundAgentContextMessages(merged);
 }
 
 // Cross-session "shared brain": a short digest of what THIS agent has recently
@@ -2977,9 +4719,563 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
  }
 }
 
-function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '') {
+// Voice etiquette. A huddle turns every agent message into speech on the
+// human's machine, so LATENCY is the whole experience: a perfect paragraph that
+// lands six seconds later reads as a broken call, while "on it — checking the
+// logs now" in 400ms reads as a conversation. Segmented turns already give the
+// agent a way to say something first and keep going (each text block is its own
+// message, spoken as it lands); this note is what tells it to use them.
+//
+// Only added while a huddle is actually live for the session — a silent channel
+// must not be told to answer in half-sentences.
+const VOICE_HUDDLE_NOTE = [
+ 'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
+ 'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
+ // These three constraints are not style, they are the latency mechanism, and
+ // each one names a specific thing that made the first word late:
+ //   - the reader speaks a sentence the instant its FULL STOP arrives and cannot
+ //     speak an unterminated fragment (src/lib/voiceStream.ts), so a first
+ //     "sentence" that runs on for a paragraph is a paragraph of silence;
+ //   - a preamble or a restatement of the question delays the first terminator
+ //     by exactly its own length;
+ //   - reasoning before writing anything is silence the listener cannot tell
+ //     from a broken call. Answering first costs nothing: the work still happens,
+ //     in the messages that follow.
+ 'Your FIRST sentence must be at most a dozen words and must END IN A FULL STOP. Do not open with a preamble, a restatement of the question, or a heading — the first full stop is the moment your voice is heard.',
+ 'Do not reason at length before that first sentence. Say it, then think, then keep talking as you learn things.',
+ 'It may say what you are ABOUT to do. It must never say you have already done it.',
+ 'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
+ // The base system prompt (and, for daemon agents, the daemon's own prompt
+ // suffix) both ask for markdown structure. Spoken, a heading has no full stop
+ // and a bullet has no verb, so that instruction has to be cancelled here or the
+ // two fight and the listener hears the loser.
+ 'Ignore any instruction to prefer markdown, headings, bullets or tables while this huddle is live. Structure is for reading; you are being listened to.',
+ // Spoken aloud, tool narration is worse than useless: the human hears a
+ // minute of "I am calling the create_thread_item MCP tool" and then learns
+ // nothing was created. Announce the OUTCOME, never the mechanism, and never
+ // claim an action before it has actually succeeded.
+ 'Never narrate your tools or plumbing out loud. Do not name tools, MCP servers, function calls, schemas or integrations — the person cannot see any of that and does not need to. Say what you are doing in ordinary words.',
+ 'Do not say you have done something until it has actually succeeded. If a tool is unavailable or a call fails, say plainly in ONE sentence that you cannot do it and what you can do instead. Do not speculate aloud about why, do not describe your own configuration, and do not keep trying in front of the listener.',
+].join('\n');
+
+// Is a huddle running in this conversation right now? Answered from the huddles
+// table (idx_huddles_one_live_per_session covers exactly this predicate).
+// Fails CLOSED: any error means "no huddle", so a missing table or a slow
+// query can never break a turn — it only means the voice note is not added.
+// Is this session part of a live voice call — and therefore about to be read
+// aloud? Decides whether the agent gets VOICE_HUDDLE_NOTE.
+//
+// BOTH columns, and the second one is the load-bearing half. A huddle keeps its
+// conversation in its OWN session (huddles.transcript_session_id) rather than in
+// the channel, so the session an agent is answering in during a call is the
+// transcript one. Matching only `session_id` silently stopped adding the note
+// the moment transcripts moved out of the channel: every reply would come back
+// as one long block of prose, read out six seconds after the question, and
+// nothing would look broken.
+//
+// `session_id` still matches because a huddle that predates transcript sessions
+// really did run in its channel.
+async function sessionHasLiveHuddle(sessionId) {
+ if (!sessionId) return false;
+ try {
+  const rows = await getDb().unsafe(
+   `select 1 from huddles
+      where (session_id = $1 or transcript_session_id = $1) and ended_at is null
+      limit 1`,
+   [String(sessionId)],
+  );
+  return rows.length > 0;
+ } catch {
+  return false;
+ }
+}
+
+/**
+ * The channel's own house style, or '' when it has none.
+ *
+ * Read per turn rather than cached: an owner editing the intent expects the
+ * next reply to obey it, and a channel turn already costs a model call, so one
+ * more indexed lookup by primary key is not the expensive part.
+ */
+async function loadChannelIntentNote(sessionId) {
+ if (!sessionId) return '';
+ try {
+  const rows = await getDb().unsafe(
+   'select title, intent from chat_sessions where id = $1 limit 1',
+   [String(sessionId)],
+  );
+  if (rows.length === 0) return '';
+  return channelIntentNote(rows[0].intent, rows[0].title);
+ } catch {
+  // A deployment whose schema has not caught up must not lose its agents.
+  return '';
+ }
+}
+
+// Which of the sandbox credential vault keys actually HAVE a value.
+//
+// Keys only — the values are never read, let alone decrypted, on this path.
+// `secret_cipher` is written as '' when a key is cleared (setWorkspaceSecretValue),
+// so a non-empty cipher is exactly "configured" without touching the plaintext.
+// Deliberately a LIKE on the constant prefix rather than `key = any($2)`: binding
+// a raw JS array through `.unsafe` does not array-serialize (see AGENTS.md), and
+// the prefix is a literal, so there is nothing to bind.
+async function listConfiguredSandboxCredentialKeys(workspaceId, wanted = []) {
+ if (!workspaceId || wanted.length === 0) return [];
+ try {
+  const rows = await getDb().unsafe(
+   `select key, value, secret_cipher from workspace_secrets
+      where workspace_id = $1 and key like '${SANDBOX_VAULT_PREFIX}%'`,
+   [String(workspaceId)],
+  );
+  return rows
+   .filter((row) => wanted.includes(row.key) && Boolean(row.secret_cipher || row.value))
+   .map((row) => row.key);
+ } catch {
+  // Fail closed in the useful direction: the agent is told the credential is
+  // NOT configured, which makes it refuse and name the key, rather than call a
+  // provider API with nothing and report a 401 it cannot explain.
+  return [];
+ }
+}
+
+// Every agent-authored provider skill definition in the workspace, so the vault
+// surface can offer a credential slot for a provider this workspace added without
+// a release (metadata.sandbox_skills — the no-DDL route host_folders took).
+//
+// Definitions only; no credential is read here.
+async function workspaceAuthoredProviderSkills(workspaceId) {
+ if (!workspaceId) return [];
+ try {
+  const rows = await getDb().unsafe(
+   'select metadata from workspace_agents where workspace_id = $1',
+   [String(workspaceId)],
+  );
+  const out = [];
+  for (const row of rows) {
+   const metadata = row?.metadata && typeof row.metadata === 'object'
+    ? row.metadata
+    : (() => { try { return JSON.parse(row?.metadata || 'null'); } catch { return null; } })();
+   const authored = Array.isArray(metadata?.sandbox_skills) ? metadata.sandbox_skills : [];
+   for (const skill of authored) out.push(skill);
+  }
+  return out;
+ } catch {
+  // The bundled slots still render — an operator can always set a Box key.
+  return [];
+ }
+}
+
+// The sandbox skill layer as one prompt block, or '' for every agent that does
+// not carry it (which is every agent that exists today). Both lanes get the same
+// text — builtin through the system prompt, daemon through the daemon prompt —
+// exactly as the channel intent and voice notes do.
+async function loadSandboxSkillNote(workspaceId, agent) {
+ const resolved = sandboxSkillsForAgent(agent);
+ if (resolved.skills.length === 0) return '';
+ const vaultKeys = await listConfiguredSandboxCredentialKeys(
+  workspaceId,
+  sandboxCredentialKeysForSkills(resolved.skills),
+ );
+ // A locally-run server can resolve a credential from its own environment
+ // (callProviderOperation's documented fallback). Without counting those, the
+ // prompt would tell the agent the credential is missing while the proxy would in
+ // fact find it, and it would refuse work it can do. The vault still comes first
+ // everywhere it matters — this only affects what the agent is TOLD.
+ const envKeys = envConfiguredCredentialKeys(resolved.skills);
+ const configuredKeys = [...new Set([...vaultKeys, ...envKeys])];
+ return renderSandboxSkillPrompt({ ...resolved, configuredKeys });
+}
+
+// ---------------------------------------------------------------------------
+// What the Skills browser can show for one skill (GET /backend/system/skill-content)
+// ---------------------------------------------------------------------------
+
+// The resolution itself lives in server/skill-content.cjs so the browser route and the
+// AGENT tool loop (mcp.cjs `read_skill`) share ONE implementation — a pane and an agent
+// that disagree about what a skill says is the failure this feature exists to avoid.
+// The vault read stays here, injected, because this is the only module that knows it.
+function loadSkillContentForWorkspace(workspaceId, skill) {
+ return loadSkillContent({
+  db: getDb(),
+  workspaceId,
+  skill,
+  listConfiguredCredentialKeys: listConfiguredSandboxCredentialKeys,
+ });
+}
+
+async function skillContentPayload(workspaceId, skill) {
+ return { kind: 'skill', ...(await loadSkillContentForWorkspace(workspaceId, skill)) };
+}
+
+// A detected skill library's entries, or one entry's markdown.
+//
+// The library is looked up by ID in the list detectSkillLibraries produced — the caller
+// never names a path, because a proxy that takes a path from its caller is a file-read
+// primitive, and this process has a home directory. Reading is additionally gated on
+// AGENSIS_ALLOW_PROJECT_FS, the same flag inspectProjectPath uses: these libraries live on
+// the BACKEND HOST, which is the operator's machine when self-hosted and a shared machine
+// otherwise, and only the operator can say which of those it is.
+async function skillLibraryPayload(libraryId, entryName) {
+ if (!projectFsAllowed()) {
+  return { kind: 'library', library: libraryId, entries: [], ...skillContentUnavailable('host-fs-disabled') };
+ }
+ const library = findReadableLibrary(detectSkillLibraries(''), libraryId);
+ if (!library) {
+  return { kind: 'library', library: libraryId, entries: [], ...skillContentUnavailable('not-found') };
+ }
+ if (!entryName) {
+  return { kind: 'library', library: libraryId, path: library.path, entries: listLibraryEntries(library.path) };
+ }
+ return {
+  kind: 'library-entry',
+  library: libraryId,
+  entry: entryName,
+  maxBytes: SKILL_CONTENT_MAX_BYTES,
+  ...readLibraryEntry(library.path, entryName),
+ };
+}
+
+// ===========================================================================
+// The credential-injecting provider proxy
+// ---------------------------------------------------------------------------
+// An agent never receives a secret; it receives a CAPABILITY. It names a
+// provider skill id and one of that skill's operations; this function resolves
+// the destination FROM THE SKILL DEFINITION, attaches the workspace's stored
+// credential, makes the call, and hands back the response fenced as untrusted
+// data. See the "THE PROVIDER CALL" section of server/sandbox-skills.cjs for the
+// threat model — in one line: a proxy that takes a URL from its caller is a
+// credential-exfiltration primitive, so this one cannot be given a URL.
+//
+// Every DECISION is in the pure module (planProviderCall / describeProviderCall /
+// applyProviderCredential / unknownProviderCallArgs) so it is provable in a unit
+// test. What lives here is only the I/O: the vault read, the DNS-and-fetch, the
+// capped response read, and the audit row.
+//
+// The SSRF check on the resolved URL is assertSafeOutboundUrl — the same guard
+// the gateway base_url path uses, deliberately not a second implementation.
+// ===========================================================================
+
+const PROVIDER_CALL_TIMEOUT_MS = 30_000;
+// A provider response is read into memory before it is fenced, so it needs a
+// ceiling well below "whatever the provider felt like sending". The fence
+// truncates to 4 KiB of TEXT for the prompt; this is the transport-level cap that
+// stops a hostile 1 GB body from being read at all.
+const PROVIDER_CALL_MAX_RESPONSE_BYTES = 256 * 1024;
+
+// Read a response body with a hard byte ceiling. `response.text()` has none, and
+// a provider (or something impersonating one) that streams forever would hold the
+// request open until the timeout while growing the heap.
+async function readCappedResponseText(response, maxBytes) {
+ if (!response.body || typeof response.body.getReader !== 'function') {
+  const whole = await response.text().catch(() => '');
+  return { text: whole.slice(0, maxBytes), truncated: whole.length > maxBytes };
+ }
+ const reader = response.body.getReader();
+ const chunks = [];
+ let size = 0;
+ let truncated = false;
+ for (;;) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  if (!value) continue;
+  const remaining = maxBytes - size;
+  if (value.length >= remaining) {
+   chunks.push(value.subarray(0, Math.max(0, remaining)));
+   truncated = true;
+   await reader.cancel().catch(() => { });
+   break;
+  }
+  chunks.push(value);
+  size += value.length;
+ }
+ return { text: Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8'), truncated };
+}
+
+// Logs one activity_events row per credentialed outbound call, so a workspace
+// owner can read what was called on an agent's behalf.
+//
+// activity_events rather than a new table: it is already workspace-scoped, already
+// in the backendClient allowlists at select:'read', already fanned out over
+// realtime, and already the surface the owner reads. A dedicated table would be a
+// four-place schema change to reproduce all of that.
+//
+// WHAT IS RECORDED: the operation, the provider, the resolved URL, the HTTP
+// status, and how long it took. WHAT IS NOT: the request body, the response body,
+// and any header — the metadata blob is built from describeProviderCall, which
+// has no field that could carry a credential, and the whole title goes through
+// redactSandboxSecrets with the live secret as a known value as a last net.
+async function logProviderCallActivity({ workspaceId, agent, plan, status, outcome, detail = '', durationMs = 0, knownSecrets = [], credentialSource = '' }) {
+ try {
+  if (!workspaceId || !plan) return;
+  const described = describeProviderCall(plan);
+  const handle = slugHandle(agent?.handle || agent?.name || 'agent');
+  const statusText = status == null ? outcome : String(status);
+  const title = redactSandboxSecrets(
+   `@${handle} called ${described.provider} ${described.operation} (${statusText})`,
+   knownSecrets,
+  ).slice(0, 120);
+  const metadata = {
+   ...described,
+   agent_id: agent?.id ? String(agent.id) : '',
+   agent_handle: handle,
+   status: status == null ? null : Number(status),
+   outcome,
+   detail: redactSandboxSecrets(String(detail || ''), knownSecrets).slice(0, 300),
+   duration_ms: Math.max(0, Math.round(durationMs)),
+   // WHERE the credential came from — 'vault' or 'env' — so "why is it still using
+   // the old key" is answerable from the audit trail. A source, never a value and
+   // never the vault key.
+   credential_source: credentialSource === 'vault' || credentialSource === 'env' ? credentialSource : '',
+  };
+  const inserted = await getDb().unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, null, 'provider_call', 'agent', $2, $3, $4::jsonb, now())
+      returning *`,
+   [workspaceId, agent?.id != null ? String(agent.id) : null, title, metadata],
+  );
+  if (inserted.length > 0) notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  // An audit write must never turn a successful provisioning call into a failure
+  // the agent reports to the requester. It is logged loudly instead.
+  console.error('logProviderCallActivity failed', error);
+ }
+}
+
+// Logs the one refusal worth its own audit row: an agent that tried to name the
+// destination of a credentialed call. A well-behaved agent never sends a `url` or
+// a `headers` argument, so this is not noise — it is the signature of the threat
+// this whole design exists to refuse, and an owner should be able to see that it
+// happened and which agent did it. Ordinary validation errors (a typo'd operation,
+// a missing path parameter) are NOT logged: they are frequent, harmless, and would
+// bury this.
+//
+// The rejected VALUES are deliberately not recorded. A value here is an
+// attacker-chosen URL, and an activity_events row is fanned out over realtime to
+// every subscribed browser in the workspace.
+async function logProviderCallRefusal({ workspaceId, agent, keys = [] }) {
+ try {
+  if (!workspaceId || keys.length === 0) return;
+  const handle = slugHandle(agent?.handle || agent?.name || 'agent');
+  const named = keys.map((key) => sanitizeSandboxMeta(key, 40)).filter(Boolean).slice(0, 8);
+  const inserted = await getDb().unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, null, 'provider_call', 'agent', $2, $3, $4::jsonb, now())
+      returning *`,
+   [
+    workspaceId,
+    agent?.id != null ? String(agent.id) : null,
+    `@${handle} provider call refused: supplied ${named.join(', ')}`.slice(0, 120),
+    {
+     agent_id: agent?.id ? String(agent.id) : '',
+     agent_handle: handle,
+     outcome: 'refused_arguments',
+     status: null,
+     rejected_arguments: named,
+     detail: 'An agent may not name a URL, host or header on a credentialed call.',
+    },
+   ],
+  );
+  if (inserted.length > 0) notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  console.error('logProviderCallRefusal failed', error);
+ }
+}
+
+/**
+ * Make one credentialed call on an agent's behalf.
+ *
+ * `workspaceId` and `agentId` come from the caller's TOKEN, never from its
+ * arguments — that is what makes a cross-workspace read impossible rather than
+ * merely checked. The agent row is re-read here (bound on BOTH ids) instead of
+ * trusted from the token payload, because the token's cached `agent` payload
+ * deliberately omits nothing but is also a snapshot, and the skill layer is the
+ * authorization decision.
+ *
+ * Returns a plain object. It never throws for a caller error, and it never
+ * returns a header, a credential, or anything derived from one.
+ */
+async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
+ const refuse = (error) => ({ ok: false, error: String(error) });
+
+ // 1. Resolve the agent and its OWN skill layer. A provider skill the agent does
+ //    not carry is not callable by it, so one agent can never spend another
+ //    agent's provider credential. Both ids are BOUND, so a foreign workspace does
+ //    not return a row to check — it returns no row.
+ const rows = await getDb().unsafe(
+  'select id, workspace_id, name, handle, skills, metadata, enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+  [String(agentId || ''), String(workspaceId || '')],
+ );
+ const agent = rows[0];
+ if (!agent || !isAgentEnabled(agent)) return refuse('Agent not found in this workspace.');
+
+ // 2. The caller may name FOUR things. Anything else — url, base_url, host,
+ //    headers, authorization — is refused BY NAME rather than trimmed, and it is
+ //    AUDITED: a well-behaved agent never sends one, so an attempt is the single
+ //    highest-signal event an owner could read here. Only the key NAMES are
+ //    recorded — the value would be the attacker's URL, and this row fans out over
+ //    realtime to every subscribed browser.
+ const unknown = unknownProviderCallArgs(args);
+ if (unknown.length > 0) {
+  await logProviderCallRefusal({ workspaceId, agent, keys: unknown });
+  return refuse(`call_provider does not accept: ${unknown.join(', ')}. The destination and the credential come from the skill definition — you name an operation, not a URL. Allowed arguments: skill_id, operation, path_params, body.`);
+ }
+
+ const skillId = String(args.skill_id || '').trim().toLowerCase();
+ if (!skillId) return refuse('skill_id is required.');
+
+ const resolved = sandboxSkillsForAgent(agent);
+ const skill = resolved.providers.find((candidate) => candidate.id === skillId);
+ if (!skill) {
+  const available = resolved.providers.map((p) => `\`${p.id}\``);
+  return refuse(available.length > 0
+   ? `You do not carry a provider skill \`${skillId}\`. Yours are: ${available.join(', ')}.`
+   : 'You carry no provider skills, so there is nothing to call. Ask an operator to add one.');
+ }
+
+ // 3. Plan the call. Pure: this is where the URL is built from the definition.
+ const planned = planProviderCall({
+  skill,
+  operation: args.operation,
+  pathParams: args.path_params,
+  body: args.body,
+ });
+ if (!planned.ok) return refuse(planned.error);
+ const plan = planned.plan;
+
+ // 4. The credential. Read by the key the DEFINITION names, from the workspace the
+ //    TOKEN names. Not configured is the honest, actionable answer — and the one
+ //    the skill prompt already told the agent to expect.
+ //
+ //    THE VAULT WINS. The host env var is a fallback for a server run on someone's
+ //    own machine, where the key is already in `.env`; on Fly nothing sets it, so
+ //    the vault is the only source that exists there. An operator who rotates a key
+ //    in the vault must not keep getting a stale value out of the environment, so
+ //    the order is vault, then env — never the reverse.
+ //
+ //    The env NAME comes from the BUNDLED definition, not from `plan.credentialEnv`,
+ //    which an agent-authored skill can set to any env-var-shaped string. Trusting
+ //    the plan's name would let an agent that can write its own metadata name
+ //    `AUTH_SECRET` (or `DATABASE_URL`) and have the server attach that value as a
+ //    Bearer token to the definition's own base URL.
+ let secret = '';
+ let credentialSource = '';
+ if (plan.credentialKey) {
+  secret = await getWorkspaceSecretValue(workspaceId, plan.credentialKey).catch(() => '');
+  if (secret) credentialSource = 'vault';
+  if (!secret) {
+   const envName = bundledCredentialEnvVar(plan.credentialKey);
+   const fromEnv = envName ? String(process.env[envName] || '').trim() : '';
+   if (fromEnv) { secret = fromEnv; credentialSource = 'env'; }
+  }
+  if (!secret) {
+   // Names the VAULT, because that is where an operator fixes this. Naming an env
+   // var here would send them to edit a file the deployed server never reads.
+   return {
+    ok: false,
+    credential_configured: false,
+    call: describeProviderCall(plan),
+    error: `The \`${plan.provider}\` credential is not configured, so this call cannot be made. An operator adds it to the workspace vault as \`${plan.credentialKey}\` in Settings -> Vault, under ${plan.provider}. Report this, name that key, and stop; do not retry.`,
+   };
+  }
+ }
+ const knownSecrets = secret ? [secret] : [];
+
+ // 5. SSRF, on the RESOLVED url, with DNS resolution. isSafeProviderBaseUrl
+ //    already vetted the definition's host by NAME; only this can see a public
+ //    name whose A record is 169.254.169.254.
+ try {
+  await assertSafeOutboundUrl(plan.url, 'the provider URL');
+ } catch (error) {
+  const detail = String(error?.message || 'is not a safe outbound target');
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'blocked', detail, knownSecrets, credentialSource });
+  return { ok: false, call: describeProviderCall(plan), error: `Refused before calling: ${detail}. This is a problem with the provider skill definition, not with your request.` };
+ }
+
+ // 6. The call. `redirect: 'manual'` is load-bearing, not tidiness: following a
+ //    redirect re-sends the Authorization header to whatever host the redirect
+ //    names, and no per-hop validation can prevent that (a public host redirecting
+ //    to another public host passes every check). A 3xx is reported as a status.
+ const startedAt = Date.now();
+ let response;
+ try {
+  response = await fetch(plan.url, {
+   method: plan.method,
+   headers: applyProviderCredential(plan, secret),
+   body: plan.bodyText || undefined,
+   redirect: 'manual',
+   signal: AbortSignal.timeout(PROVIDER_CALL_TIMEOUT_MS),
+  });
+ } catch (error) {
+  const durationMs = Date.now() - startedAt;
+  // A transport error message can quote the URL; it should never be able to quote
+  // the header, but redact against the live secret anyway — the cost of being
+  // wrong here is the credential in a channel.
+  const detail = redactSandboxSecrets(String(error?.message || 'request failed'), knownSecrets).slice(0, 300);
+  await logProviderCallActivity({ workspaceId, agent, plan, status: null, outcome: 'error', detail, durationMs, knownSecrets, credentialSource });
+  return { ok: false, call: describeProviderCall(plan), error: `The provider could not be reached: ${detail}` };
+ }
+
+ const status = response.status;
+ const durationMs = Date.now() - startedAt;
+ const redirected = status >= 300 && status < 400;
+ let bodyText = '';
+ let truncated = false;
+ if (!redirected) {
+  const read = await readCappedResponseText(response, PROVIDER_CALL_MAX_RESPONSE_BYTES)
+   .catch(() => ({ text: '', truncated: false }));
+  bodyText = read.text;
+  truncated = read.truncated;
+ }
+
+ // 7. Everything the provider said is UNTRUSTED and arrives fenced, exactly as an
+ //    orb payload does — a box name, a cloned repo's README echoed into a build
+ //    log, or an error string are all attacker-influenced text. `knownSecrets`
+ //    means a provider echoing the Authorization header it received cannot put the
+ //    key back into the agent's context.
+ const fenced = fenceProviderOutput({
+  provider: plan.provider,
+  operation: plan.operation,
+  status,
+  body: redirected ? PROVIDER_CALL_REDIRECT_NOTE : bodyText,
+  knownSecrets,
+ });
+
+ await logProviderCallActivity({
+  workspaceId,
+  agent,
+  plan,
+  status,
+  outcome: redirected ? 'redirect_refused' : (response.ok ? 'ok' : 'provider_error'),
+  detail: truncated ? `response truncated at ${PROVIDER_CALL_MAX_RESPONSE_BYTES} bytes` : '',
+  durationMs,
+  knownSecrets,
+  credentialSource,
+ });
+
+ return {
+  ok: Boolean(response.ok) && !redirected,
+  status,
+  call: describeProviderCall(plan),
+  // The ONLY provider-derived text that leaves this function, and it is fenced.
+  response: fenced.content,
+  truncated,
+  ...(redirected ? { redirect_refused: true } : {}),
+ };
+}
+
+function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity = '', voiceHuddle = false, intentNote = '', sandboxSkillNote = '') {
  const selfHandle = slugHandle(agent.handle || agent.name);
  const lines = [];
+ // Ahead of the transcript: these are the agent's operating instructions for the
+ // whole turn, not context about the request.
+ if (sandboxSkillNote) lines.push(sandboxSkillNote, '');
+ // First, before the roster and the transcript: it changes HOW the agent answers,
+ // so it must be read before what it is answering.
+ // Before the voice note, the roster and the transcript: house style changes
+ // HOW every following line should be read.
+ if (intentNote) lines.push(intentNote, '');
+ if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
   lines.push(
    `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
@@ -3002,12 +5298,33 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  return lines.join('\n');
 }
 
-function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId) {
+// Who a row addresses, in the order the mentions appear. `@channel` expands to
+// `channelAgents` in roster order at the position it was written, so
+// "@scout then @channel" asks Scout first and everyone else after.
+function agentsAddressedByRow(row, byHandle, channelAgents) {
+ const out = [];
+ for (const handle of parseAllMentions(row.content)) {
+  if (handle === CHANNEL_MENTION_HANDLE) {
+   for (const agent of channelAgents) out.push(agent);
+   continue;
+  }
+  const agent = byHandle.get(handle);
+  if (agent) out.push(agent);
+ }
+ return out;
+}
+
+// The ONE agent to run next, or null. Deliberately one: a burst advances by a
+// single turn at a time, each next turn triggered when the previous job
+// finalizes (see the continueConversation call in finalizeAgentJobResult). That
+// is what keeps `@channel` from being a fan-out — N agents answer in sequence,
+// each one bounded by max_agent_turns, the one-active-job-per-(session, agent)
+// index and hasActiveBurstJob, exactly as N separate @mentions already were.
+function pickMentionNextAgent(burst, byHandle, latestAuthorAgentId, channelAgents = []) {
  for (let i = 0; i < burst.length; i++) {
   const row = burst[i];
   const authorAgentId = row.sender_kind === 'agent' ? String(row.sender_id || '') : '';
-  for (const handle of parseAgentMentions(row.content)) {
-   const agent = byHandle.get(handle);
+  for (const agent of agentsAddressedByRow(row, byHandle, channelAgents)) {
    if (!agent || !isAgentEnabled(agent)) continue;
    const agentId = String(agent.id);
    if (authorAgentId && agentId === authorAgentId) continue; // ignore self-mentions
@@ -3071,6 +5388,10 @@ async function pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLine
    workspaceContext: null,
    agentContext: null,
    workspaceId,
+   // Its own usage kind: this is a call the human never asked for, made on
+   // EVERY unaddressed message in an 'auto' channel. Small per call and easy to
+   // miss in a total — which is the argument for it having its own line.
+   usageKind: 'auto_interject',
   });
  } catch (error) {
   console.error('auto-interject relevance call failed', error?.message || error);
@@ -3101,8 +5422,17 @@ async function ensureMentionedParticipants(workspaceId, session, content) {
   const handles = parseAgentMentions(content);
   if (handles.length === 0) return 0;
   const existing = parseJsonArray(session.participants);
+  // Key on the agent's bare uuid whichever field carries it and whichever
+  // shape wrote it. Two writers produced `agent:<uuid>` and bare `<uuid>` rows
+  // for the SAME agent, and this set — keyed on agent_id alone — could not see
+  // one of them, so a mention re-appended an agent that was already present.
+  // continueConversation dispatches per agent row: the duplicate answered
+  // every turn twice, and a huddle read both replies aloud.
   const existingAgentIds = new Set(
-   existing.filter((p) => p && p.kind === 'agent' && p.agent_id).map((p) => String(p.agent_id)),
+   existing
+    .filter((p) => p && p.kind === 'agent')
+    .map((p) => String(p.agent_id || p.id || '').replace(/^agent:/, ''))
+    .filter(Boolean),
   );
   const agents = await getDb().unsafe(
    'select id, name, handle, enabled from workspace_agents where workspace_id = $1',
@@ -3138,8 +5468,12 @@ async function ensureMentionedParticipants(workspaceId, session, content) {
   if (additions.length === 0) return 0;
   const merged = [...existing, ...additions];
   const updated = await getDb().unsafe(
-   'update chat_sessions set participants = $1, updated_at = now() where id = $2 returning *',
-   [JSON.stringify(merged), session.id],
+   'update chat_sessions set participants = $1::jsonb, updated_at = now() where id = $2 returning *',
+   // Bind the ARRAY, never JSON.stringify it. A stringified bind into a jsonb
+   // column stores a jsonb STRING SCALAR, not an array — jsonb_typeof() reads
+   // 'string', Array.isArray() is false on the client, and every participant
+   // lookup silently finds nobody. 51 of 70 sessions were corrupted this way.
+   [merged, session.id],
   );
   if (updated.length > 0) notifyDbSubscribers('chat_sessions', 'UPDATE', updated);
   return additions.length;
@@ -3191,6 +5525,36 @@ function isAgentJobLive(job, agentId) {
  return job.connection_id ? isConnectionSocketOpen(job.connection_id) : false;
 }
 
+// Read-only "does this agent already have a live turn in flight?".
+//
+// Deliberately NOT hasActiveBurstJob: that one finalizes phantom jobs as a side
+// effect, and a queue drain must not be able to kill a turn it merely asked
+// about. Liveness still matters (a job whose worker vanished must not look
+// active forever) — the reaper, the socket-close sweep and startup reconcile are
+// what clear those, and each of them drains the queue afterwards.
+async function agentHasActiveJob(sessionId, agentId) {
+ const rows = await getDb().unsafe(
+  `select id, status, connection_id, metadata, started_at from agent_jobs
+      where session_id = $1 and agent_id = $2 and status in ('queued', 'running')`,
+  [sessionId, String(agentId)],
+ );
+ return rows.some((job) => isAgentJobLive(job, agentId));
+}
+
+// Same question, workspace-wide. The queue drain uses this rather than the
+// session-scoped check: an agent that is mid-turn anywhere (a channel, another
+// DM) is busy, and starting a task turn on top of it would run two turns at
+// once. Stricter than the unique index, and self-healing — every job completion
+// drains again.
+async function agentHasAnyActiveJob(workspaceId, agentId) {
+ const rows = await getDb().unsafe(
+  `select id, status, connection_id, metadata, started_at from agent_jobs
+      where workspace_id = $1 and agent_id = $2 and status in ('queued', 'running')`,
+  [String(workspaceId), String(agentId)],
+ );
+ return rows.some((job) => isAgentJobLive(job, agentId));
+}
+
 async function hasActiveBurstJob(sessionId, agentId) {
  // Include 'queued', not just 'running': an MCP-backed agent's job sits in
  // 'queued' until its client polls and claims it, so two rapid triggers for the
@@ -3221,7 +5585,285 @@ async function hasActiveBurstJob(sessionId, agentId) {
 // remote sandbox and supervises it — so only 'builtin' stays in-process.
 function resolveRunTarget(agent) {
  const m = agent && agent.run_mode;
- return m === 'daemon' || m === 'sandbox' ? 'daemon' : 'builtin';
+ if (m === 'daemon' || m === 'sandbox') return 'daemon';
+ // 'external' = an MCP client works AS this agent (register_agent). It is NOT
+ // builtin: answering such a turn with the workspace's own model would put words
+ // in the registered client's mouth, indistinguishable from the real thing.
+ return m === 'external' ? 'external' : 'builtin';
+}
+
+// "Send to channel": where an agent WORKS when the turn was seeded in the channel
+// itself — a thread hanging off the newest top-level human message, i.e. the one
+// that started this burst. Returns { parentId, broadcast }: broadcast=true means
+// "post the placeholder in that thread and flag the final answer for the channel".
+// A session with no such message has nothing to hang a thread off (the whole
+// transcript is threaded, or it is empty), so the turn falls back to exactly the
+// pre-feature behaviour: work at the top level, no broadcast flag.
+async function resolveWorkThreadParent(sessionId) {
+ const rows = await getDb().unsafe(
+  `select id from messages
+     where session_id = $1 and thread_parent_id is null and role = 'user' and deleted_at is null
+     order by created_at desc, id desc
+     limit 1`,
+  [sessionId],
+ );
+ const parentId = rows[0] ? String(rows[0].id) : null;
+ return parentId ? { parentId, broadcast: true } : { parentId: null, broadcast: false };
+}
+
+// Something a listener hears as the end of a spoken sentence.
+//
+// DELIBERATELY looser than the client's own sentence splitter
+// (src/lib/voiceStream.ts, which rules out decimals and initials): this only
+// decides WHEN the row is written, never what is said, and the two live in
+// different languages so a shared regex would be a copy either way. Firing on a
+// boundary the client then declines costs one extra UPDATE; missing one it would
+// have accepted costs up to BUILTIN_FLUSH_INTERVAL_MS of silence in a live call.
+const SPEAKABLE_BOUNDARY_RE = /[.!?…](\s|$)|[:;]\s/;
+// Floor between streamed content writes. Each one broadcasts to every subscriber
+// of the session, so this is a real cost — it is a floor, not a schedule.
+const BUILTIN_FLUSH_INTERVAL_MS = 250;
+
+/**
+ * Is it time to write the streamed reply to the database?
+ *
+ * The throttle exists because every write fans out over realtime. But in a voice
+ * huddle the write carrying a finished sentence is the one that gets SPOKEN —
+ * the browser hands Cartesia each sentence the moment its terminator arrives —
+ * so making that particular write wait out the remainder of a 250ms window is
+ * up to 250ms of silence on the very first thing the agent says. A completed
+ * sentence therefore jumps the queue; everything else still waits its turn.
+ *
+ * Pure, and exported, because "when does the first sentence reach the listener"
+ * is exactly the kind of timing claim that should be a test rather than a
+ * paragraph.
+ */
+function streamFlushDue({ text, written, lastFlushAt, now, minIntervalMs = BUILTIN_FLUSH_INTERVAL_MS }) {
+ const full = String(text || '');
+ const done = String(written || '');
+ if (!full || full === done) return false;
+ if (now - lastFlushAt >= minIntervalMs) return true;
+ // A rewrite (not a prefix) is tested whole: there is no meaningful "new tail",
+ // and a rewritten block is not the streaming case this shortcut serves.
+ const tail = full.startsWith(done) ? full.slice(done.length) : full;
+ return SPEAKABLE_BOUNDARY_RE.test(tail);
+}
+
+// =============================================================================
+// The built-in tool-use loop.
+//
+// A built-in agent used to be sent a bare completion — model, messages, system,
+// no `tools` — so it could only ever emit text. It would announce that it was
+// "calling the create_thread_item tool" and then not call anything, because there
+// was nothing to call. The tools were real the whole time; they were just behind
+// a door (MCP) that server-run turns never went through.
+//
+// This is that door, opened in-process. The tools and their authorization come
+// from server/mcp.cjs (createBuiltinToolset) — one list, one set of schemas, one
+// execution path — and the loop below is the only thing this side adds: run the
+// tools the model asked for, feed the results back, ask again, stop.
+// =============================================================================
+
+// Model calls per turn that may carry tools. Hitting it does NOT truncate the
+// turn: the loop makes ONE further call with the tools removed, so the model has
+// to answer with what it has. Worst case is therefore MAX_STEPS + 1 model calls.
+const BUILTIN_TOOL_LOOP_MAX_STEPS = 8;
+// Tool executions per turn, across all steps. A single response can carry several
+// tool_use blocks, so bounding steps alone does not bound the work. Further calls
+// are refused with a result the model can read, not dropped.
+const BUILTIN_TOOL_LOOP_MAX_CALLS = 24;
+// A tool result is model input, so it is charged for on every subsequent call of
+// the loop. Long results are truncated with a visible marker rather than silently
+// clipped, so the model knows it is not seeing everything.
+const BUILTIN_TOOL_RESULT_MAX_CHARS = 12_000;
+
+// Told to the model alongside the tools. This REINFORCES the voice-huddle rule
+// (VOICE_HUDDLE_NOTE) rather than competing with it: narration was the symptom of
+// having no tools, and the fix is to call them, still without describing them.
+const BUILTIN_TOOL_NOTE = [
+ 'You have real workspace tools on this turn. When you need one, MAKE THE TOOL CALL.',
+ 'Never write out a tool call, its arguments, or its result as prose and continue as though it happened — a described call has not run. If you have not called it, it has not happened.',
+ 'Never say you have created, posted, updated or fetched anything until a tool has actually returned success for it.',
+ `You get at most ${BUILTIN_TOOL_LOOP_MAX_STEPS} rounds of tool use in one turn. Work in as few as you can, and finish with a plain answer for the human.`,
+ 'If a tool returns an error, read it and either fix the arguments and retry once, or tell the human plainly what you could not do. Do not loop on the same failing call.',
+].join('\n');
+
+/** A tool result, rendered as the text the model reads. Bounded — see the cap. */
+function toolResultText(value) {
+ const text = typeof value === 'string' ? value : JSON.stringify(value ?? null, null, 2);
+ if (text.length <= BUILTIN_TOOL_RESULT_MAX_CHARS) return text;
+ return `${text.slice(0, BUILTIN_TOOL_RESULT_MAX_CHARS)}\n… [truncated: result was ${text.length} characters]`;
+}
+
+/**
+ * Drive a model/tool conversation to a text answer.
+ *
+ * Deliberately free of the database and of Anthropic: `callModel` and `callTool`
+ * are injected, which is what lets the cap, the termination rule and the
+ * error-recovery path be tested without a live API key or a live workspace.
+ *
+ *   callModel({ messages, tools })  -> { text, toolUses, stopReason }
+ *   callTool({ name, args, id })    -> { ok: true, value } | { ok: false, error }
+ *                                      (never throws — see runToolForIdentity)
+ *   onSegment(text)                 -> a finished text block, before its tools run
+ *   onToolStart({ name, args, id }) -> a handle passed back to onToolResult
+ *   onToolResult(handle, outcome)   -> the same call, now settled
+ *
+ * Returns `{ text, steps, toolCalls, hitCap }`.
+ */
+async function runToolUseLoop({
+ messages,
+ tools = [],
+ callModel,
+ callTool,
+ onSegment = null,
+ onToolStart = null,
+ onToolResult = null,
+ maxSteps = BUILTIN_TOOL_LOOP_MAX_STEPS,
+ maxToolCalls = BUILTIN_TOOL_LOOP_MAX_CALLS,
+}) {
+ const convo = Array.isArray(messages) ? messages.slice() : [];
+ const hasTools = Array.isArray(tools) && tools.length > 0;
+ let toolCalls = 0;
+ let steps = 0;
+ let text = '';
+
+ while (steps < maxSteps) {
+  steps += 1;
+  const turn = await callModel({ messages: convo, tools: hasTools ? tools : [] });
+  text = turn?.text || '';
+  const uses = Array.isArray(turn?.toolUses) ? turn.toolUses : [];
+  if (uses.length === 0) return { text, steps, toolCalls, hitCap: false };
+
+  // The text block came BEFORE the tool calls in the model's own output, so it is
+  // settled first — that ordering is what makes the transcript read
+  // message · chips · message instead of one bubble that grows.
+  if (text && onSegment) await onSegment(text);
+
+  convo.push({
+   role: 'assistant',
+   content: [
+    ...(text ? [{ type: 'text', text }] : []),
+    ...uses.map((use) => ({ type: 'tool_use', id: use.id, name: use.name, input: use.input || {} })),
+   ],
+  });
+
+  const results = [];
+  for (const use of uses) {
+   let outcome;
+   if (use.inputError) {
+    // The model's own arguments were unparseable. Nothing was called, so this is
+    // reported as a failed call rather than executed with a guess.
+    outcome = { ok: false, error: use.inputError };
+   } else if (toolCalls >= maxToolCalls) {
+    outcome = { ok: false, error: `Tool budget for this turn is used up (${maxToolCalls} calls). Answer with what you have.` };
+   } else {
+    toolCalls += 1;
+    const handle = onToolStart ? await onToolStart({ name: use.name, args: use.input || {}, id: use.id }) : null;
+    outcome = await callTool({ name: use.name, args: use.input || {}, id: use.id });
+    if (onToolResult) await onToolResult(handle, outcome);
+   }
+   results.push({
+    type: 'tool_result',
+    tool_use_id: use.id,
+    content: outcome.ok ? toolResultText(outcome.value) : String(outcome.error || 'Tool failed'),
+    is_error: !outcome.ok,
+   });
+  }
+  convo.push({ role: 'user', content: results });
+ }
+
+ // Out of steps and the model still wanted a tool. Ask once more with NO tools
+ // attached so it has to answer — a turn that ends here must still say something,
+ // not leave the human with a wall of chips and no reply.
+ const closing = await callModel({ messages: convo, tools: [] });
+ return { text: closing?.text || '', steps: steps + 1, toolCalls, hitCap: true };
+}
+
+// The backend capabilities every workspace tool is given, whichever door invoked
+// it. Single-sourced so the MCP endpoint and the builtin loop cannot end up
+// handing the same tool two different sets of primitives — the transport-only
+// deps (token verification, rate limiting) are added at the MCP call site.
+function mcpToolDeps() {
+ return {
+  getDb,
+  continueConversation,
+  notifyDbSubscribers,
+  slugHandle,
+  claimMcpJob,
+  submitMcpJobResult,
+  dispatchTaskAssignment,
+  resolveWorkspaceAgentByHandle,
+  registerAgentRequest,
+  getRegistrationStatus,
+  getAgentConnectionCommand: buildAgentConnectionCommand,
+  enforceWorkspaceRole,
+  roleHasWorkspaceCapability,
+  // The credential-injecting provider proxy. Passed in (rather than reached for)
+  // so mcp.cjs stays unit-testable with a mocked fetch and no live provider.
+  callProviderOperation,
+  providerCallRateLimiter,
+  // The skill layer, injected the same way and for the same reason. `list_skills`
+  // and `read_skill` share these with the browser route, so an agent and a human
+  // can never be shown different text for the same skill.
+  listWorkspaceSkills,
+  loadSkillContent: (db, workspaceId, skill) => loadSkillContent({
+   db,
+   workspaceId,
+   skill,
+   listConfiguredCredentialKeys: listConfiguredSandboxCredentialKeys,
+  }),
+  fenceSkillContent,
+ };
+}
+
+// Built once, on the first builtin turn — not at module load, where half these
+// functions are still hoisted-but-unusable and there is no DB yet.
+let builtinToolsetInstance = null;
+function getBuiltinToolset() {
+ if (!builtinToolsetInstance) builtinToolsetInstance = createBuiltinToolset(mcpToolDeps());
+ return builtinToolsetInstance;
+}
+
+/**
+ * The identity a builtin turn's tool calls run as, or NULL.
+ *
+ * Identical in shape to what `verifyAgentConnectToken` hands the MCP door, and
+ * built the same way: from the agent ROW. `workspaceId` is the agent's own
+ * column, never a value that travelled with the request — which is what makes
+ * cross-workspace access structurally impossible rather than merely checked.
+ *
+ * FAILS CLOSED, and that is the point. A row with no `workspace_id` (a select
+ * that forgot the column — this repo has shipped that exact bug more than once)
+ * or one that disagrees with the workspace the turn is running in returns null,
+ * and the caller runs the turn with NO tools rather than with tools pointed at a
+ * workspace nobody can name. Losing tools is a visibly worse answer; guessing a
+ * tenant is a breach.
+ */
+function builtinToolIdentity(agent, expectedWorkspaceId = null) {
+ const workspaceId = agent && agent.workspace_id ? String(agent.workspace_id) : '';
+ if (!workspaceId) return null;
+ if (expectedWorkspaceId && workspaceId !== String(expectedWorkspaceId)) return null;
+ return {
+  kind: 'agent',
+  agentId: agent.id,
+  workspaceId,
+  name: agent.name,
+  handle: agent.handle || slugHandle(agent.name),
+  agent: agentRuntimePayload(agent),
+ };
+}
+
+/** `read_channel · {"channel_id":"…"}`, bounded — the chip label for one call. */
+function builtinStepDetail(args) {
+ let text;
+ try {
+  text = JSON.stringify(args ?? {});
+ } catch {
+  text = '';
+ }
+ if (!text || text === '{}') return '';
+ return text.replace(/\s+/g, ' ').slice(0, 200);
 }
 
 async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
@@ -3229,10 +5871,43 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  const handle = slugHandle(agent.handle || agent.name);
  const runMode = resolveRunTarget(agent);
  const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
+ // The agent works in a thread and only broadcasts its answer. A turn seeded at
+ // channel level opens (or re-uses) the thread on the human message that started
+ // it, so the "Thinking …" placeholder, its tool chips and its intermediate text
+ // blocks all land there; the final answer is flagged broadcast_to_channel so
+ // that — and only that — surfaces in the channel view. A turn already running
+ // inside a thread keeps working there and broadcasts nothing, as before.
+ // ACCEPTED TRADEOFF: while the agent works, the channel shows only the human's
+ // message and its reply count. There is deliberately no channel-level
+ // "working…" row.
+ const workThread = threadParentId
+  ? { parentId: threadParentId, broadcast: false }
+  : await resolveWorkThreadParent(sessionId);
+ const workThreadParentId = workThread.parentId;
+ const broadcastToChannel = workThread.broadcast;
  const agentContext = agentContextFromRow(agent, coParticipants);
  const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
  if (recentActivity && agentContext) {
   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's DMs and channels. Recent activity elsewhere (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
+ }
+ // Someone is on a voice call in this conversation, so this turn will be spoken
+ // out loud. Every lane below gets the same note — builtin through the system
+ // prompt, daemon/MCP/external through the daemon prompt.
+ const voiceHuddle = await sessionHasLiveHuddle(sessionId);
+ if (voiceHuddle && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<voice_huddle>\n${VOICE_HUDDLE_NOTE}\n</voice_huddle>`.trim();
+ }
+ // The channel's house style, for every lane: builtin through the system
+ // prompt, daemon/MCP/external through the daemon prompt.
+ const intentNote = await loadChannelIntentNote(sessionId);
+ // The sandbox provisioning skill layer, for a Sandbox Agent. '' for every other
+ // agent, so this costs one pure array check per turn and no query.
+ const sandboxSkillNote = await loadSandboxSkillNote(workspaceId, agent);
+ if (sandboxSkillNote && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n${sandboxSkillNote}`.trim();
+ }
+ if (intentNote && agentContext) {
+  agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<channel_intent>\n${intentNote}\n</channel_intent>`.trim();
  }
 
  // If one or more MCP clients are working AS this agent (joined via the invite link and
@@ -3245,10 +5920,10 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
        values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
        returning *`,
-   [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+   [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', pendingRows);
-  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
+  const prompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
        values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
@@ -3258,7 +5933,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     // Pass the OBJECT (not JSON.stringify'd): postgres.js encodes it as a real jsonb
     // object, so `metadata->>'mode'` in claimMcpJob/reaper matches. JSON.stringify here
     // would double-encode into a jsonb STRING scalar and the SQL key lookup returns null.
-    { handle, threadParentId: threadParentId || null, responseMessageId, mode: 'mcp' },
+    //
+    // threadParentId stays the DISPATCH level (null for a channel turn) so
+    // continueConversation resumes where the human is talking; workThreadParentId
+    // is where the agent's own messages live, and broadcastToChannel tells
+    // finalizeAgentJobResult to flag the final answer for the channel view.
+    { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'mcp' },
    ],
    responseMessageId,
   );
@@ -3267,83 +5947,318 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   return { ok: true, pending: true }; // a polling client will claim it; conversation resumes on submit
  }
 
+ // An 'external' agent with no live MCP poller. Do NOT fall through to the
+ // builtin lane: that answers as the agent using the workspace's own model, and
+ // the reply is indistinguishable from the registered client — which reads as a
+ // working agent when nothing is attached. That is worse than silence, because
+ // the human acts on it. Queue the turn (a client that reconnects will claim it)
+ // and post a clearly-attributed stand-in notice instead of impersonating.
+ if (runMode === 'external') {
+  const jobRows = await insertActiveAgentJob(
+   `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, metadata)
+       values ($1, $2, $3, $4, $5, 'queued', $6::jsonb)
+       returning *`,
+   [
+    workspaceId, agent.id, sessionId, createdBy,
+    buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote),
+    { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
+   ],
+  );
+  if (jobRows) notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+  // "Nobody is attached" is not a working note — it is the answer the human has to
+  // act on, so it is broadcast rather than buried in the work thread. Same for
+  // every other stand-in notice below: silence in the channel would read as a
+  // working agent.
+  const noticeRows = await getDb().unsafe(
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6)
+       returning *`,
+   [
+    sessionId,
+    `_@${handle} is an MCP client and is not attached right now, so nobody has answered this yet._\n\nYour message is queued — it will be picked up when that client next connects. This notice is from agensis, not from @${handle}.`,
+    workThreadParentId,
+    String(agent.id),
+    agent.name,
+    broadcastToChannel,
+   ],
+  );
+  notifyDbSubscribers('messages', 'INSERT', noticeRows);
+  return { ok: true, pending: true };
+ }
+
  if (runMode === 'builtin') {
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, started_at, metadata)
        values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
        returning *`,
-   [workspaceId, agent.id, sessionId, createdBy, '', JSON.stringify({ handle, threadParentId: threadParentId || null, mode: 'builtin' })],
+   // Object, not JSON.stringify — same double-encode trap as the daemon insert below.
+   [workspaceId, agent.id, sessionId, createdBy, '', { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'builtin' }],
   );
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   // Insert a 'Thinking' placeholder first, then stream the built-in reply into it
-  // token-by-token (message UPDATE broadcasts) so it renders live in the channel
+  // token-by-token (message UPDATE broadcasts) so it renders live in the thread
   // like a daemon agent — instead of popping in complete when the call finishes.
   const responseMessageId = crypto.randomUUID();
   const placeholderRows = await getDb().unsafe(
    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
         values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
         returning *`,
-   [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+   [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
   );
   notifyDbSubscribers('messages', 'INSERT', placeholderRows);
+  // The turn's tools and the identity they run as. Built from the agent ROW, so
+  // every tool call is scoped to the agent's OWN workspace — see
+  // builtinToolIdentity. `specs` is a projection of the same list the MCP
+  // endpoint serves, filtered by the same `kinds`/scope rules.
+  const toolset = getBuiltinToolset();
+  const toolIdentity = builtinToolIdentity(agent, workspaceId);
+  if (!toolIdentity) {
+   console.warn('[agensis] builtin turn running without tools: agent row has no usable workspace', agent.id);
+  }
+  const toolSpecs = toolIdentity ? toolset.specs(toolIdentity) : [];
+  const turnStartedAt = Date.now();
+  // Only this lane gets the note — the daemon/MCP/external lanes build their
+  // prompt from buildDaemonPrompt and run their own tools, and this branch is
+  // reached after all of them, so agentContext cannot leak into one.
+  if (toolSpecs.length > 0 && agentContext) {
+   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<tools>\n${BUILTIN_TOOL_NOTE}\n</tools>`.trim();
+  }
   let writeChain = Promise.resolve();
   let writing = false;
+  // Declared out here with writeChain/writing because the catch below sets it:
+  // once the stream is over — successfully or not — the terminal write owns the
+  // row and no throttled partial may land behind it.
+  let finished = false;
+  // The row currently being streamed into. A turn with tools is really
+  // [text][tool][text][tool][text], so each finished text block is SEALED into
+  // its own message and the next block gets a fresh row — the same shape
+  // handleAgentJobSegment gives a daemon turn, for the same reason: one bubble
+  // that grows swallows five separate thoughts with no boundary a human can read.
+  //
+  // Null between blocks. The replacement row is created LAZILY, by the first
+  // delta that actually has text for it, so a long run of tool calls does not
+  // leave an empty "Thinking …" bubble parked in the thread.
+  //
+  // Out here with the rest because the FAILURE path needs it too: once a block
+  // has been sealed, the dispatch placeholder is a finished message, and writing
+  // the error over it would destroy something the agent actually said.
+  let currentMessageId = responseMessageId;
   try {
    // Throttle + serialize DB writes: at most one update in flight at a time and
    // no more than ~4x/sec, always writing the LATEST accumulated text. Because
    // each delta carries the full text so far, awaiting the in-flight write (in
    // both the success and error paths) prevents a late partial from clobbering
    // the final content.
+   //
+   // TWO exceptions to the throttle, both for voice (see streamFlushDue):
+   //   - a write that completes a SENTENCE goes immediately, because that is the
+   //     write a huddle speaks;
+   //   - a write skipped because another was in flight is retried when that one
+   //     settles, instead of waiting for a delta that may never come — the last
+   //     sentence of a reply used to sit unwritten until the stream ended.
    let latest = '';
+   let written = '';
    let lastFlush = 0;
+   let flushQueued = false;
+   // Set while a block is being sealed, so a queued flush cannot write into the
+   // row after it has become a finished message (or into a null id).
+   let sealing = false;
    const flush = () => {
-    if (writing) return;
-    const now = Date.now();
-    if (now - lastFlush < 250) return;
+    // Past the end of the stream the final write below is authoritative; a
+    // straggler here would overwrite it (and, on the error path, replace the
+    // error with a partial reply).
+    if (finished || sealing) return;
+    if (writing) { flushQueued = true; return; }
+    if (!streamFlushDue({ text: latest, written, lastFlushAt: lastFlush, now: Date.now() })) return;
     writing = true;
-    lastFlush = now;
-    writeChain = (async () => {
+    lastFlush = Date.now();
+    const target = latest;
+    const write = (async () => {
      try {
-      const rows = await getDb().unsafe(
-       `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-       [responseMessageId, latest || 'Thinking…', sessionId],
-      );
-      if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+      if (currentMessageId) {
+       const rows = await getDb().unsafe(
+        `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+        [currentMessageId, target || 'Thinking…', sessionId],
+       );
+       if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+      } else {
+       // Materialise the next block's row now that there is something to show.
+       const nextId = crypto.randomUUID();
+       const rows = await getDb().unsafe(
+        `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+             values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
+        [nextId, sessionId, target || 'Thinking…', workThreadParentId, String(agent.id), agent.name],
+       );
+       currentMessageId = nextId;
+       if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
+      }
+      // Only after the write landed: a failed one has not been written, and the
+      // next flush must still be allowed to try this text again.
+      written = target;
      } finally {
       writing = false;
+      if (flushQueued) {
+       flushQueued = false;
+       flush();
+      }
      }
     })();
+    // Absorbed here, not only at the awaits below: the finally above can replace
+    // `writeChain` with a fresh promise before this one settles, and a rejection
+    // nobody is holding becomes an unhandledRejection in a long-lived server. The
+    // awaits at the end of the turn are what order the writes; this only makes
+    // sure the error cannot escape. The terminal write is authoritative either way.
+    write.catch(() => { });
+    writeChain = write;
    };
-   const responseText = await runAnthropicCompletionStreaming({
-    model: resolveAnthropicModel(agent.model),
-    messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
-    memory: null,
-    documents: null,
-    workspaceContext: null,
-    agentContext,
-    workspaceId,
-   }, (partial) => { latest = partial; flush(); });
+
+   // A text block is finished (the model went on to call tools). Settle the row
+   // it was streaming into and hand the next block a clean slate.
+   const sealSegment = async (text) => {
+    sealing = true;
+    await writeChain.catch(() => { });
+    try {
+     if (currentMessageId) {
+      const rows = await getDb().unsafe(
+       `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+       [currentMessageId, text, sessionId],
+      );
+      if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+     } else {
+      const rows = await getDb().unsafe(
+       `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+            values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
+       [crypto.randomUUID(), sessionId, text, workThreadParentId, String(agent.id), agent.name],
+      );
+      if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
+     }
+    } finally {
+     currentMessageId = null;
+     latest = '';
+     written = '';
+     lastFlush = 0;
+     flushQueued = false;
+     sealing = false;
+    }
+   };
+
+   // One tool call, surfaced. These are the SAME `tool_step` rows a daemon turn
+   // writes (handleAgentJobStep) — same discriminator, same tool_name/tool_detail
+   // columns, same chip rendering — so a builtin turn shows its work in the UI
+   // that already exists rather than in a second style of its own.
+   //
+   // They hang off workThreadParentId, i.e. as SIBLINGS of the reply inside the
+   // work thread, exactly where the daemon path resolves them to. Falling back to
+   // the placeholder's own id keeps a session with no work thread behaving as
+   // before.
+   const stepParentId = workThreadParentId || responseMessageId;
+   const insertToolStep = async (rawName, rawDetail) => {
+    // Normalised through the same agentStepParts the daemon path uses, so the
+    // `content` fallback line and the two structured columns can never disagree.
+    const step = agentStepParts({ name: rawName, detail: rawDetail });
+    const rows = await getDb().unsafe(
+     `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
+          values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
+     [sessionId, agentStepContent(step), stepParentId, String(agent.id), agent.name, step.name, step.detail],
+    );
+    if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
+    return rows[0] ? rows[0].id : null;
+   };
+
+   const responseText = await (async () => {
+    const loop = await runToolUseLoop({
+     messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
+     tools: toolSpecs,
+     async callModel({ messages, tools }) {
+      return streamAnthropicTurn({
+       model: resolveAnthropicModel(agent.model),
+       messages,
+       memory: null,
+       documents: null,
+       workspaceContext: null,
+       agentContext,
+       tools,
+       workspaceId,
+      }, (partial) => { latest = partial; flush(); });
+     },
+     // runToolForIdentity never throws: a tool that blows up comes back as
+     // { ok: false, error } and the loop hands that to the model as a readable
+     // tool_result it can recover from, instead of killing the turn.
+     async callTool({ name, args }) {
+      return toolset.call({ name, args, identity: toolIdentity, db: getDb() });
+     },
+     onSegment: sealSegment,
+     async onToolStart({ name, args }) {
+      // Keep the placeholder's clock honest while a slow tool runs — but only
+      // while it still holds a status line. Never write over streamed text.
+      if (currentMessageId && !latest) {
+       const rows = await getDb().unsafe(
+        `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
+        [currentMessageId, `Thinking ${formatElapsedMs(Date.now() - turnStartedAt)}`, sessionId],
+       ).catch(() => []);
+       if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+      }
+      // The chip carries the tool's NAME and the agent's own arguments. It never
+      // carries a result: a tool result can be untrusted provider text, and the
+      // chip is chrome the human reads at a glance.
+      return { name, id: await insertToolStep(name, builtinStepDetail(args)) };
+     },
+     async onToolResult(handle, outcome) {
+      if (!handle || !handle.id || outcome.ok) return;
+      // A failed call says so on its own chip, so a turn that quietly gave up on
+      // a tool is visible rather than inferred from a vague reply. The error TEXT
+      // stays out of the chip and goes to the model only — a tool result can be
+      // untrusted provider output, and a chip is chrome the human reads at a glance.
+      const rows = await getDb().unsafe(
+       `update messages set content = $2, tool_detail = $3 where id = $1 and session_id = $4 returning *`,
+       [handle.id, agentStepContent({ name: handle.name, detail: 'failed' }), 'failed', sessionId],
+      ).catch(() => []);
+      if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+     },
+    });
+    return loop.text;
+   })();
+   // The stream is over, so the writes below own the row from here.
+   finished = true;
    const updatedRows = await getDb().unsafe(
     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
     [jobRows[0].id, responseText],
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+   // A builtin turn finalizes its own job here and never reaches
+   // finalizeAgentJobResult, so this is its own terminal hook for the task queue.
+   scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_done');
    // Wait for any in-flight throttled write to finish, THEN write the complete
    // text last so it can never be clobbered by a late-landing partial update.
    await writeChain.catch(() => { });
-   const messageRows = await getDb().unsafe(
-    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-    [responseMessageId, responseText || `@${handle} finished without output.`, sessionId],
-   );
+   // The turn is over: this row IS the answer, so it graduates out of the work
+   // thread into the channel view (it stays a thread message — the flag only adds
+   // it to the channel). The throttled partial writes above deliberately leave the
+   // flag alone, which is what keeps the channel quiet while the agent works.
+   const finalText = responseText || `@${handle} finished without output.`;
+   const messageRows = currentMessageId
+    ? await getDb().unsafe(
+     `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
+     [currentMessageId, finalText, sessionId, broadcastToChannel],
+    )
+    // Every block was sealed and the last round produced no delta to materialise
+    // a row — the answer still has to exist, and it is what gets broadcast.
+    : await getDb().unsafe(
+     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+          values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
+     [crypto.randomUUID(), sessionId, finalText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel],
+    );
    if (messageRows.length > 0) {
-    notifyDbSubscribers('messages', 'UPDATE', messageRows);
+    notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
     void logMessageActivity(messageRows);
     void mirrorAgentReplyToTaskComment(messageRows[0]);
    }
    return { ok: true, pending: false };
   } catch (error) {
-   // Let any in-flight partial write settle so it can't clobber the error text.
+   // Let any in-flight partial write settle so it can't clobber the error text —
+   // and stop any further one from being started behind it.
+   finished = true;
    await writeChain.catch(() => { });
    const errorText = error?.message || 'Built-in agent failed';
    const updatedRows = await getDb().unsafe(
@@ -3351,11 +6266,26 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
     [jobRows[0].id, errorText],
    );
    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
-   const messageRows = await getDb().unsafe(
-    `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
-    [responseMessageId, `@${handle} failed: ${errorText}`, sessionId],
-   );
-   if (messageRows.length > 0) notifyDbSubscribers('messages', 'UPDATE', messageRows);
+   scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
+   // A failure is the outcome of the turn, so it broadcasts too — a channel that
+   // silently shows nothing reads as "still working" forever.
+   //
+   // Written into the LIVE row, never blindly into the dispatch placeholder: once
+   // a text block has been sealed, that placeholder is a finished message the
+   // agent actually said, and overwriting it with the error would destroy it. With
+   // no live row the notice is a new message of its own.
+   const noticeText = `@${handle} failed: ${errorText}`;
+   const messageRows = currentMessageId
+    ? await getDb().unsafe(
+     `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
+     [currentMessageId, noticeText, sessionId, broadcastToChannel],
+    )
+    : await getDb().unsafe(
+     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+          values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
+     [crypto.randomUUID(), sessionId, noticeText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel],
+    );
+   if (messageRows.length > 0) notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
    return { ok: false, pending: false };
   }
  }
@@ -3363,15 +6293,16 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
  const connection = findConnectedAgent(workspaceId, agent.id, agent.handle || agent.name);
  if (!connection) {
   const assistantRows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5)
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6)
        returning *`,
    [
     sessionId,
     `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
-    threadParentId || null,
+    workThreadParentId,
     String(agent.id),
     agent.name,
+    broadcastToChannel,
    ],
   );
   notifyDbSubscribers('messages', 'INSERT', assistantRows);
@@ -3383,11 +6314,11 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
      values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
      returning *`,
-  [responseMessageId, sessionId, threadParentId || null, String(agent.id), agent.name],
+  [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
  );
  notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
- const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity);
+ const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
  const jobRows = await insertActiveAgentJob(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
      values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
@@ -3399,7 +6330,12 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
    sessionId,
    createdBy,
    daemonPrompt,
-   JSON.stringify({ handle, threadParentId: threadParentId || null, responseMessageId, mode: 'daemon' }),
+   // Pass the OBJECT (not JSON.stringify'd) — see the identical note on the MCP
+   // insert above. Stringifying binds a jsonb STRING scalar, so every delta's
+   // `metadata || ...` APPENDED instead of merging and metadata became an array;
+   // metadata->>'responseMessageId' then returned null and finalizeStuckJob could
+   // never clear the "Thinking …" placeholder, hanging the thread forever.
+   { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'daemon' },
   ],
   responseMessageId,
  );
@@ -3431,11 +6367,16 @@ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = nu
 // Seeded by the dispatch endpoint and resumed after every agent message lands.
 // Drains a queue of agent turns under one shared budget (max_agent_turns), one
 // agent at a time. Builtin turns loop here; daemon turns return and resume async.
+// Returns { started, reason }: `started` is true only if this call actually put an
+// agent turn in flight (or ran one to completion). Task dispatch reads it to tell
+// "the agent is on it" from "the turn was refused — put the task back in the
+// queue"; every other caller ignores it.
 async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
- if (!workspaceId || !sessionId) return;
+ if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
- if (conversationLocks.has(lockKey)) return;
+ if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
  conversationLocks.add(lockKey);
+ let started = false;
  try {
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -3444,20 +6385,20 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     [sessionId],
    );
    const session = sessionRows[0];
-   if (!session || String(session.workspace_id) !== String(workspaceId)) return;
+   if (!session || String(session.workspace_id) !== String(workspaceId)) return { started, reason: 'no_session' };
    const maxTurns = Number(session.max_agent_turns) > 0 ? Number(session.max_agent_turns) : 10;
    const directTarget = directAgentParticipantFromSession(session);
 
    const rows = await loadChannelMessages(sessionId, threadParentId);
-   if (rows.length === 0) return;
+   if (rows.length === 0) return { started, reason: 'no_messages' };
    let startIdx = -1;
    for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i].role === 'user') { startIdx = i; break; }
    }
-   if (startIdx === -1) return; // no human seed; nothing to do
+   if (startIdx === -1) return { started, reason: 'no_seed' }; // no human seed; nothing to do
    const burst = rows.slice(startIdx);
    const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
-   if (agentTurns >= maxTurns) return; // budget exhausted
+   if (agentTurns >= maxTurns) return { started, reason: 'budget_exhausted' }; // budget exhausted
 
    const latest = rows[rows.length - 1];
    const latestAuthorAgentId = latest.sender_kind === 'agent' ? String(latest.sender_id || '') : '';
@@ -3466,7 +6407,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     'select * from workspace_agents where workspace_id = $1 order by created_at asc',
     [workspaceId],
    );
-   if (agents.length === 0) return;
+   if (agents.length === 0) return { started, reason: 'no_agents' };
    const byHandle = new Map();
    for (const agent of agents) {
     if (!isAgentEnabled(agent)) continue;
@@ -3490,6 +6431,13 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    const isFolderDm = session.folder === 'Direct messages';
    const isDirectMessage = Boolean(directTarget && (directTarget.direct || isFolderDm)) || isFolderDm;
    let nextAgent = null;
+   // Was the agent we end up choosing NAMED, or merely included? Reply cadence
+   // turns on exactly this: an @mention, a DM and a reply inside an agent's own
+   // thread are questions put to that agent and are answered at once; `@channel`
+   // and an unprompted election are not, and in a social channel they are paced.
+   // Set by whichever branch below picks the agent, so a new branch that forgets
+   // it gets the cautious answer (paced) rather than the loud one.
+   let addressedIndividually = false;
    if (isDirectMessage) {
     if (agentTurns === 0) {
      // Prefer the explicit direct participant; fall back to matching the DM
@@ -3512,27 +6460,73 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
      }
     }
    } else {
-    nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId);
-    if (!nextAgent && agentTurns === 0 && directTarget) {
+    // `@channel` addresses the session's STORED agent roster — never workspace
+    // presence, never every agent in the workspace. Presence leaking into
+    // channel membership is a bug this repo has already shipped once
+    // (buildChannelRoster), and here it would spend a paid model turn per
+    // phantom member. Capped at CHANNEL_MENTION_MAX_AGENTS in roster order.
+    const channelAgents = expandChannelMention({
+     participantAgentIds: [...participantAgentIds],
+     agents,
+     isEnabled: isAgentEnabled,
+     limit: CHANNEL_MENTION_MAX_AGENTS,
+    });
+    nextAgent = pickMentionNextAgent(burst, byHandle, latestAuthorAgentId, channelAgents);
+    if (nextAgent) addressedIndividually = agentNamedInBurst(nextAgent, burst);
+    // A channel with exactly ONE agent participant has a directTarget even
+    // though it is not a DM (directAgentParticipantFromSession falls back to the
+    // sole agent), and an un-addressed post there used to wake it
+    // unconditionally. That is the same un-addressed case the mode governs, so
+    // it is gated the same way — otherwise "nobody has to answer" would be a
+    // setting that quietly did nothing until a second agent joined.
+    const unpromptedAllowed = allowsUnpromptedReply({ conversationMode: session.conversation_mode });
+    if (!nextAgent && agentTurns === 0 && directTarget && unpromptedAllowed) {
      nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((directTarget.agent_id && String(agent.id) === String(directTarget.agent_id))
       || (directTarget.handle && (slugHandle(agent.handle || agent.name) === slugHandle(directTarget.handle) || slugHandle(agent.name) === slugHandle(directTarget.handle)))));
+     // The sole agent in a one-agent channel is the only one who could be meant,
+     // so a post there is addressed to it in everything but syntax. Paced replies
+     // in a room of one would just be a laggy DM.
+     if (nextAgent) addressedIndividually = true;
     }
     if (!nextAgent && agentTurns === 0 && threadParentId) {
      const target = await inferThreadAgentTarget(sessionId, threadParentId);
      if (target) {
       nextAgent = agents.find((agent) => isAgentEnabled(agent) && ((target.agentId && String(agent.id) === target.agentId)
        || (target.handle && (slugHandle(agent.handle || agent.name) === target.handle || slugHandle(agent.name) === target.handle))));
+      // Replying inside an agent's own thread is asking that agent, in the same
+      // way naming it is.
+      if (nextAgent) addressedIndividually = true;
      }
     }
-    // AUTO is always on for channels now (the per-channel toggle was removed).
-    // We're already in the non-DM branch, so any plain human message with no
-    // explicit target enters the context-aware auto-interject. Fires once per
-    // human message (agentTurns === 0, latest author is the human). The candidate
-    // pool is every enabled agent that is a channel participant UNION every agent
-    // that has recently posted here — so a human replying right after an agent
-    // draws that agent back in to decide "is this for me, or pass it on?". A
-    // single cheap Haiku call picks ONE agent or null (fails CLOSED).
-    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '') {
+    // An UN-ADDRESSED post: nobody was @mentioned, there is no direct target and
+    // no thread to answer in. Whether anyone is compelled to reply to it is the
+    // channel's own choice, and conversation_mode is where that choice is stored
+    // — it has been on chat_sessions since the beginning, but the dispatcher
+    // stopped reading it, so every channel behaved as 'auto' whatever it said.
+    //
+    //   'auto'    — the context-aware auto-interject below may draw ONE agent in
+    //               unprompted. One cheap Haiku call picks an agent or null, and
+    //               fails CLOSED. Still the default; unchanged for every
+    //               existing channel.
+    //   'social'  — the same election, then paced by the reply-cadence gate
+    //               further down (shared/replyCadence.cjs). The agent still
+    //               answers; it just does not answer in 400ms, and it is not
+    //               joined by every teammate at once.
+    //   'mention' — nobody is dispatched. The message is posted and read like
+    //               any other, and any agent can be pulled in later with an
+    //               @mention or @channel. "They don't have to answer now, but
+    //               they can whenever."
+    //
+    // Only the un-addressed case is governed. An @mention, a DM and a reply in
+    // an agent's thread dispatch in EVERY mode — the mode decides whether
+    // silence is allowed, never whether being asked directly is.
+    //
+    // Fires once per human message (agentTurns === 0, latest author is the
+    // human). The candidate pool is every enabled agent that is a channel
+    // participant UNION every agent that has recently posted here — so a human
+    // replying right after an agent draws that agent back in to decide "is this
+    // for me, or pass it on?".
+    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '' && unpromptedAllowed) {
      const candidateIds = new Set();
      for (const id of participantAgentIds) candidateIds.add(String(id));
      // Recent agent authors (newest first): the last one to speak is the
@@ -3561,8 +6555,48 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
      }
     }
    }
-   if (!nextAgent) return;
-   if (await hasActiveBurstJob(sessionId, nextAgent.id)) return;
+   if (!nextAgent) return { started, reason: 'no_agent' };
+   if (await hasActiveBurstJob(sessionId, nextAgent.id)) return { started, reason: 'agent_busy' };
+
+   // --- reply cadence -------------------------------------------------------
+   // In a channel an operator set to 'social', this turn may be held for a few
+   // seconds — or, if the room has already answered a message that named nobody,
+   // skipped so the reply is a conversation rather than a chorus.
+   //
+   // WHY HERE. This is the last point before a turn goes in flight, and the only
+   // point that knows all four things the decision needs: the mode, whether this
+   // agent was named, how many voices have already answered, and how long ago the
+   // message it answers landed. It is also AFTER the busy check, so a paced turn
+   // is never booked for an agent that could not run anyway.
+   //
+   // The reference message is the one this reply answers — the human's seed for
+   // the first reply, the previous message for a later one — because the wait is
+   // "land N seconds after that", not "wait N more seconds from now". Measuring
+   // it that way is what makes re-entry idempotent: on the wake, elapsed has
+   // grown, the same target is already met, and the turn runs.
+   //
+   // Nothing here can slow a DM, a huddle or a channel on 'auto'/'mention':
+   // replyCadencePlan answers delayMs 0 for all of them before it looks at
+   // anything else, and cadenceWakes is only ever written from this one place.
+   const cadenceRef = agentTurns === 0 ? burst[0] : latest;
+   const cadence = replyCadencePlan({
+    conversationMode: session.conversation_mode,
+    isDirectMessage,
+    folder: session.folder,
+    agentTurnsSoFar: agentTurns,
+    addressedIndividually,
+    jitterKey: String(cadenceRef?.id || ''),
+    elapsedMs: msSinceTimestamp(cadenceRef?.created_at),
+   });
+   if (cadence.standDown) {
+    // Not a lost reply: the room answered, this agent did not have to, and it is
+    // still reachable by name. That is the behaviour 'social' is chosen FOR.
+    return { started, reason: 'cadence_stand_down' };
+   }
+   if (cadence.delayMs > 0) {
+    scheduleCadenceWake(lockKey, cadence.delayMs, { workspaceId, sessionId, threadParentId: threadParentId || null });
+    return { started, reason: 'cadence_deferred' };
+   }
 
    const involved = new Map();
    for (const id of participantAgentIds) {
@@ -3584,7 +6618,11 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
    const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants });
-   if (!result || result.pending) return; // daemon resumes asynchronously; stop the loop
+   if (result && result.ok) started = true;
+   // `ok:false, pending:true` is the one that matters to the task queue: the
+   // one-active-job unique index bounced the insert, so NO job exists and nothing
+   // will ever answer this turn.
+   if (!result || result.pending) return { started, reason: result && result.ok ? 'dispatched' : 'refused' };
    // builtin turn finished synchronously — loop to evaluate the next turn
   }
  } finally {
@@ -3598,6 +6636,53 @@ function agentLiveMessageContent(message) {
  return `Thinking ${formatElapsedMs(message?.elapsedMs)}`;
 }
 
+// Every shape the server itself writes into an activity placeholder: the daemon's
+// own clock (`Thinking 0s`, `Thinking 1m 4s` — see agentLiveMessageContent /
+// formatElapsedMs) and the built-in chat's `Thinking…`. Deliberately narrower than
+// a bare `^Thinking`, so an agent reply that happens to OPEN with the word can
+// never be mistaken for a placeholder and rewritten or swept away.
+const PLACEHOLDER_CONTENT_RE = '^Thinking( [0-9]|…)';
+
+// Remove any "Thinking …" placeholder this turn left standing, except the one the
+// caller has already resolved itself.
+//
+// Only the CURRENT placeholder is tracked, in metadata.responseMessageId — but a
+// turn rotates through a fresh one per text block (handleAgentJobSegment), so a
+// job that dies, or a write that races its own finalization, can leave an earlier
+// one behind with nothing to finish it. Those rows then read "Thinking 2m 11s"
+// forever: a present-tense claim that an agent is working, made hours after it
+// stopped. That is worse than no row at all, because a human acts on it. They hold
+// nothing recoverable either — by the time one strands, the block that should have
+// been in it is already lost — so removing them is the honest resolution.
+//
+// Scoped hard: this agent, this session, this turn's own window. The M15 unique
+// index allows only one queued/running job per (session, agent), so no live turn's
+// placeholder can be inside that window while this one terminates.
+async function clearStrandedPlaceholders(job, keepMessageId = null) {
+ if (!job || !job.session_id || !job.agent_id) return;
+ const since = job.started_at || job.created_at;
+ if (!since) return;
+ try {
+  const rows = await getDb().unsafe(
+   `delete from messages
+      where session_id = $1
+        and sender_id = $2
+        and sender_kind = 'agent'
+        and coalesce(message_kind, '') = ''
+        and content ~ $3
+        -- The eager placeholder is inserted just BEFORE the job row it belongs to,
+        -- so the window has to open slightly ahead of the job's own clock.
+        and created_at >= $4::timestamptz - interval '1 minute'
+        and ($5::text is null or id::text <> $5::text)
+      returning *`,
+   [job.session_id, String(job.agent_id), PLACEHOLDER_CONTENT_RE, since, keepMessageId || null],
+  );
+  if (rows.length > 0) notifyDbSubscribers('messages', 'DELETE', rows);
+ } catch {
+  // best effort — tidy-up must never fail a job that otherwise finished correctly
+ }
+}
+
 // Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
 // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
 // a spinner when the daemon disconnects, crashes, or simply never answers.
@@ -3609,22 +6694,45 @@ async function finalizeStuckJob(job, reason) {
   // 'running' forever — the exact bug that let a phantom job wedge a DM indefinitely
   // (reaper, connection-drop cleanup, and startup reconcile all funnel through here).
   const updated = await getDb().unsafe(
-   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status = 'running' returning id`,
+   // 'queued' is in the guard as well as 'running': hasActiveBurstJob awaits this
+   // for phantom jobs that never got claimed (the MCP case), specifically so the
+   // one-active-job unique index won't bounce the retry. A running-only guard
+   // matched zero rows there, leaving the queued row holding the
+   // (session_id, agent_id) active slot and silently dropping the next message.
+   `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
    [job.id, `Agent stopped responding (${reason})`],
   );
   if (updated.length === 0) return; // a real result already finalized it
+  // The only job-terminating path that never notified subscribers. A wedged job's
+  // elapsed badge would otherwise tick forever, because the client never learns the
+  // job stopped — the timeout, dropped daemon, phantom cleanup and restart reconcile
+  // all land here.
+  notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
+  // A timeout, a dropped daemon, a phantom cleanup and a backend restart all land
+  // here — each one frees the agent's active-job slot, and each one used to strand
+  // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
+  scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
   const meta = parseJsonObject(job.metadata);
   const responseMessageId = meta.responseMessageId || null;
-  if (!responseMessageId) return;
-  const handle = meta.handle || 'agent';
-  const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
-  const rows = await getDb().unsafe(
-   `update messages set content = $2
-       where id = $1 and session_id = $3 and content ~ '^Thinking '
-       returning *`,
-   [responseMessageId, content, job.session_id],
-  );
-  if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+  if (responseMessageId) {
+   const handle = meta.handle || 'agent';
+   const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+   // Broadcast it for the same reason the reply is broadcast: the placeholder was
+   // working inside a thread, and a channel that shows nothing at all after the
+   // human's message reads as "still thinking" forever.
+   const rows = await getDb().unsafe(
+    `update messages set content = $2, broadcast_to_channel = $4
+        where id = $1 and session_id = $3 and content ~ $5
+        returning *`,
+    [responseMessageId, content, job.session_id, meta.broadcastToChannel === true, PLACEHOLDER_CONTENT_RE],
+   );
+   if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+  }
+  // A job that died leaves the human with something honest in the placeholder it
+  // was tracking — but a turn that had already rotated through several has others
+  // standing behind it, and those are not covered by the id above. No placeholder
+  // this turn wrote may outlive it still claiming to be live.
+  await clearStrandedPlaceholders(job, responseMessageId);
  } catch {
   // best effort
  }
@@ -3644,8 +6752,21 @@ async function failConnectionJobs(connectionId, reason) {
  }
 }
 
-// Backstop: time out jobs whose result/progress has gone stale. Farm coding jobs
-// share the CLI's 30-minute budget; chat turns retain the faster four-minute guard.
+// Backstop: time out jobs whose result/progress has gone stale.
+//
+// Staleness is measured from the last delta that carried actual CONTENT, not from
+// updated_at. A waiting daemon sends a content-free "Thinking Ns" tick every second,
+// and each one bumps updated_at — so an updated_at-based guard never fires and a
+// wedged agent spins forever (observed live: 8 minutes, 0 bytes of response, the
+// reaper never touched it). The earlier started_at-based guard had the opposite
+// bug: it killed healthy turns that were streaming happily at the 4-minute mark.
+// lastContentAt is written by handleAgentJobDelta only when the delta has text.
+//
+// The window is 10 minutes rather than 4: a coding agent can legitimately think
+// for minutes without emitting a token, and killing those was the original
+// complaint. NO_PROGRESS covers "alive but producing nothing"; HARD_CEILING is an
+// absolute stop measured from started_at, so no amount of ticking can keep a job
+// alive indefinitely. Farm coding jobs keep sharing the CLI's 30-minute budget.
 async function reapStuckAgentJobs() {
  try {
   const rows = await getDb().unsafe(
@@ -3653,7 +6774,13 @@ async function reapStuckAgentJobs() {
        where status = 'running'
          and (
            ((metadata->>'mode') = 'farm' and updated_at < now() - interval '31 minutes')
-           or (coalesce(metadata->>'mode', '') <> 'farm' and started_at < now() - interval '240 seconds')
+           or (
+             coalesce(metadata->>'mode', '') <> 'farm'
+             and (
+               coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - interval '10 minutes'
+               or started_at < now() - interval '30 minutes'
+             )
+           )
          )`,
   );
   for (const job of rows) await finalizeStuckJob(job, 'timed out');
@@ -3663,7 +6790,14 @@ async function reapStuckAgentJobs() {
 }
 
 async function markAgentConnectionOffline(ws) {
- const connectionId = ws.agentConnectionId;
+ return markConnectionOffline(ws.agentConnectionId);
+}
+
+// Settle ONE connection id: drop it from the live map, fail what it was running,
+// flip its row offline. Takes the id rather than the socket because a socket that
+// re-registers already points at its NEW connection id — deriving the id from the
+// socket there would offline the wrong (live) row and fail the wrong jobs.
+async function markConnectionOffline(connectionId) {
  if (!connectionId) return;
  connectedAgents.delete(connectionId);
  inferenceBroker.failConnection(connectionId, 'The inference agent connection disconnected.');
@@ -3702,6 +6836,24 @@ async function reconcileAgentConnectionsAtStartup() {
   const stuckJobs = await getDb().unsafe(`select * from agent_jobs where status = 'running'`);
   for (const job of stuckJobs) await finalizeStuckJob(job, 'the backend restarted');
   if (stuckJobs.length > 0) console.log(`[backend] finalized ${stuckJobs.length} orphaned running job(s) on startup`);
+
+  // A restart mid-job must not strand that agent's queue forever. finalizeStuckJob
+  // already drains, but do it explicitly here too so startup is ordered and
+  // logged, and so a job whose row was already finalized still gets a drain.
+  //
+  // Deliberately scoped to agents that were ACTUALLY mid-job at the restart — NOT
+  // a blanket sweep of every 'todo' task with an agent assignee. A blanket sweep
+  // would wake every stale assigned task in the workspace on every deploy, which
+  // is a token bill nobody asked for.
+  const restartedPairs = new Map();
+  for (const job of stuckJobs) {
+   if (!job.workspace_id || !job.agent_id) continue;
+   restartedPairs.set(`${job.workspace_id}:${job.agent_id}`, job);
+  }
+  for (const job of restartedPairs.values()) {
+   await drainAgentTaskQueue({ workspaceId: job.workspace_id, agentId: job.agent_id, cause: 'backend_restart' })
+    .catch((error) => console.error('drainAgentTaskQueue (startup) failed', error));
+  }
  } catch (error) {
   console.warn('[backend] startup agent-connection reconcile skipped:', error.message || error);
  }
@@ -3806,6 +6958,297 @@ async function pruneOfflineConnections() {
  }
 }
 
+// --- Cartesia ---------------------------------------------------------------
+// Text-to-speech for agent voices. The key lives ONLY here: a Cartesia voice id
+// is safe to hand the browser (it is a public identifier), the key is not.
+//
+// This file owns the catalogue and a one-shot render for the preview button.
+// Streaming playback of agent replies into a huddle is a separate pipeline and
+// is not built here.
+
+const CARTESIA_API_BASE = 'https://api.cartesia.ai';
+// Cartesia pins breaking changes behind a date header. Bumping it is a
+// deliberate act, so it is a constant with an env escape hatch rather than
+// "whatever is current".
+const CARTESIA_VERSION = String(process.env.CARTESIA_VERSION || '2026-03-01');
+// Every outbound Cartesia call is bounded. Without this, a hung provider held
+// the panel's request open indefinitely — the catalogue fetch and the preview
+// render both run inside a user-facing HTTP request.
+const CARTESIA_TIMEOUT_MS = Number(process.env.CARTESIA_TIMEOUT_MS || 15_000);
+const CARTESIA_VOICES_TTL_MS = 10 * 60 * 1000;
+// `GET /voices` caps `limit` at 100 and pages by cursor. ~836 voices is nine
+// round trips, which is why the result is cached rather than fetched per panel
+// open. The bound stops a pagination bug turning into an infinite loop.
+const CARTESIA_VOICES_PAGE = 100;
+const CARTESIA_VOICES_MAX_PAGES = 30;
+
+function cartesiaApiKey() {
+ return String(process.env.CARTESIA_API_KEY || '').trim();
+}
+
+function cartesiaHeaders() {
+ // X-API-Key, not Authorization: Bearer. The docs for this API version describe
+ // Bearer, but both forms were verified live against api.cartesia.ai on
+ // 2026-07-26 (200 on /voices and /tts/bytes with either header) — do not
+ // "fix" this to match the docs without re-running that check.
+ return {
+  'X-API-Key': cartesiaApiKey(),
+  'Cartesia-Version': CARTESIA_VERSION,
+  'Content-Type': 'application/json',
+ };
+}
+
+/**
+ * fetch with the Cartesia timeout attached, and the resulting AbortError
+ * translated into something a client can be told. Every outbound Cartesia call
+ * in this file goes through here — a hung provider must become a 504 with a
+ * sentence, not a request that never returns.
+ */
+async function cartesiaFetch(url, init = {}) {
+ try {
+  return await fetch(url, { ...init, signal: AbortSignal.timeout(CARTESIA_TIMEOUT_MS) });
+ } catch (error) {
+  if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+   const timeout = new Error(`Cartesia did not respond within ${Math.round(CARTESIA_TIMEOUT_MS / 1000)}s`);
+   timeout.status = 504;
+   throw timeout;
+  }
+  throw error;
+ }
+}
+
+/** The fields the picker and the resolver need — not the whole voice object. */
+function publicCartesiaVoice(voice) {
+ return {
+  id: String(voice.id || ''),
+  name: String(voice.name || '').slice(0, 200),
+  description: String(voice.description || '').slice(0, 400),
+  gender: voice.gender || null,
+  language: voice.language || null,
+  country: voice.country || null,
+  is_pro: voice.is_pro === true,
+ };
+}
+
+let cartesiaVoicesCache = { at: 0, voices: [], inflight: null };
+
+async function fetchCartesiaVoices() {
+ const out = [];
+ let cursor = '';
+ for (let page = 0; page < CARTESIA_VOICES_MAX_PAGES; page += 1) {
+  const url = new URL('/voices', CARTESIA_API_BASE);
+  url.searchParams.set('limit', String(CARTESIA_VOICES_PAGE));
+  if (cursor) url.searchParams.set('starting_after', cursor);
+  const response = await cartesiaFetch(url, { headers: cartesiaHeaders() });
+  if (!response.ok) {
+   const detail = await response.text().catch(() => '');
+   const error = new Error(`Cartesia /voices failed (${response.status}) ${detail.slice(0, 200)}`);
+   error.status = response.status === 401 || response.status === 403 ? 502 : 502;
+   throw error;
+  }
+  const payload = await response.json();
+  const batch = Array.isArray(payload?.data) ? payload.data : [];
+  for (const voice of batch) if (voice && voice.id) out.push(publicCartesiaVoice(voice));
+  if (!payload?.has_more || batch.length === 0) break;
+  cursor = String(payload.next_page || batch[batch.length - 1].id || '');
+  if (!cursor) break;
+ }
+ return out;
+}
+
+/**
+ * The catalogue, cached. Concurrent callers share ONE in-flight fetch — the
+ * Agents window and the resolver can both ask on the same tick, and nine
+ * paginated round trips is not something to do twice.
+ */
+async function cartesiaVoices() {
+ const now = Date.now();
+ if (cartesiaVoicesCache.voices.length > 0 && now - cartesiaVoicesCache.at < CARTESIA_VOICES_TTL_MS) {
+  return cartesiaVoicesCache.voices;
+ }
+ if (cartesiaVoicesCache.inflight) return cartesiaVoicesCache.inflight;
+ const inflight = fetchCartesiaVoices()
+  .then((voices) => {
+   cartesiaVoicesCache = { at: Date.now(), voices, inflight: null };
+   return voices;
+  })
+  .catch((error) => {
+   cartesiaVoicesCache = { ...cartesiaVoicesCache, inflight: null };
+   // Serve a stale catalogue rather than nothing: a voice list that is ten
+   // minutes out of date is strictly better than an empty picker, and an empty
+   // list would also make every agent's derived default resolve to ''.
+   if (cartesiaVoicesCache.voices.length > 0) return cartesiaVoicesCache.voices;
+   throw error;
+  });
+ cartesiaVoicesCache.inflight = inflight;
+ return inflight;
+}
+
+/** English voice ids in a STABLE order — what a derived default indexes into. */
+async function cartesiaEnglishVoiceIds() {
+ const voices = await cartesiaVoices();
+ return voices
+  .filter((voice) => String(voice.language || '').toLowerCase().startsWith('en'))
+  .map((voice) => voice.id)
+  .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * WHAT THE TTS PIPELINE CALLS. Which voice speaks for this agent, and how.
+ *
+ * Returns `{ voiceId, speed, emotion, isDefault, modelId }`. `voiceId` is ''
+ * only when the catalogue could not be loaded at all; the caller should skip
+ * speaking rather than substitute an arbitrary voice.
+ */
+async function agentVoiceSettings(agent) {
+ if (!agent) return null;
+ let voiceIds = [];
+ try {
+  voiceIds = await cartesiaEnglishVoiceIds();
+ } catch (error) {
+  console.error('[cartesia] voice catalogue unavailable:', error.message || error);
+ }
+ return resolveAgentVoice(agent, voiceIds);
+}
+
+// The preview line is a server-side constant, never client input — see the
+// route for why.
+const CARTESIA_PREVIEW_TEXT = 'Hello. This is how I sound when I answer in a huddle.';
+
+/** One-shot render to mp3 bytes. Not streaming; the preview is one short line. */
+async function cartesiaSpeak({ voiceId, speed = 1, emotion = 'neutral', transcript = CARTESIA_PREVIEW_TEXT }) {
+ if (!isCartesiaVoiceId(voiceId)) {
+  const error = new Error('A Cartesia voice id is required');
+  error.status = 400;
+  throw error;
+ }
+ const response = await cartesiaFetch(new URL('/tts/bytes', CARTESIA_API_BASE), {
+  method: 'POST',
+  headers: cartesiaHeaders(),
+  body: JSON.stringify({
+   model_id: CARTESIA_MODEL_ID,
+   transcript,
+   voice: { mode: 'id', id: voiceId },
+   // generation_config is the supported control surface on sonic-3 and newer.
+   // The old top-level `speed: "slow"|"normal"|"fast"` is deprecated.
+   generation_config: { speed, emotion },
+   // Verified live 2026-07-26: this exact shape returns 200 audio/mpeg (a real
+   // ID3-tagged MP3). The documented mp3 shape (bit_rate, no encoding, 44100)
+   // is ALSO accepted — Cartesia tolerates both; this one is what our tests pin.
+   output_format: { container: 'mp3', encoding: 'mp3', sample_rate: 24000 },
+  }),
+ });
+ if (!response.ok) {
+  const detail = await response.text().catch(() => '');
+  const error = new Error(`Cartesia /tts/bytes failed (${response.status}) ${detail.slice(0, 200)}`);
+  error.status = 502;
+  throw error;
+ }
+ return Buffer.from(await response.arrayBuffer());
+}
+
+// Columns applyIdentityDeclaration compares a declaration against. Keep in step
+// with IDENTITY_COLUMNS in shared/agentIdentity.cjs — a field missing here reads
+// as empty, so the declaration always looks like a change and rewrites the row
+// on every reconnect.
+const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, enabled, version from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+
+// How many times a declaration re-reads and retries after losing a write race.
+// Losing three in a row means a human is actively editing the row this second;
+// give way — the next reconnect declares again anyway.
+const AGENT_IDENTITY_WRITE_ATTEMPTS = 3;
+
+/**
+ * Apply an agent's self-declared identity to its row — THE one server-side path
+ * for it. Both the daemon (agent_register) and MCP (register_agent) land here,
+ * so the precedence rule in shared/agentIdentity.cjs is enforced once rather
+ * than in two places that will drift.
+ *
+ * Writes nothing when the declaration matches what is stored or is entirely
+ * locked by a human's choices — an agent that reconnects on a loop must not
+ * produce an UPDATE and a realtime fanout on every loop.
+ *
+ * CONCURRENCY: read → merge-in-JS → write races a human edit landing between
+ * the two. An unconditional UPDATE would rewrite the whole identity jsonb from
+ * the stale read — destroying the human's value AND the human_set flag that was
+ * just written to protect it. So the UPDATE is guarded on the `version` the
+ * merge was computed from (workspace_agents is a VERSIONED_TABLE — every writer
+ * bumps it), and a lost race re-reads and re-merges, so a field the human
+ * locked mid-race is honoured on the retry rather than clobbered.
+ */
+async function applyAgentIdentity({ workspaceId, agentId, row, declared, isNew = false }) {
+ let current = row;
+ for (let attempt = 0; attempt < AGENT_IDENTITY_WRITE_ATTEMPTS; attempt += 1) {
+  if (!current) {
+   const fresh = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
+   current = fresh[0];
+   if (!current) return null;
+  }
+  const result = applyIdentityDeclaration({ current, declared, isNew });
+  if (!result.changed) return null;
+
+  const params = [];
+  const setParts = [];
+  for (const [column, value] of Object.entries(result.columns)) {
+   setParts.push(`${quoteIdent(column)} = ${bindDbParam(params, 'workspace_agents', column, value)}`);
+  }
+  if (result.identity) {
+   setParts.push(`"identity" = ${bindDbParam(params, 'workspace_agents', 'identity', result.identity)}`);
+  }
+  // workspace_agents is a VERSIONED_TABLE; the generic write path bumps version
+  // on every update and the offline-write reconciler relies on it moving.
+  setParts.push('"version" = COALESCE("version", 0) + 1', 'updated_at = now()');
+  params.push(agentId, workspaceId, Number(current.version ?? 0));
+
+  const rows = await getDb().unsafe(
+   `update workspace_agents set ${setParts.join(', ')}
+      where id = $${params.length - 2} and workspace_id = $${params.length - 1}
+        and COALESCE("version", 0) = $${params.length}
+      returning *`,
+   params,
+  );
+  if (rows.length > 0) {
+   notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+   return rows[0];
+  }
+  // Someone else wrote the row after our read. Drop the stale snapshot and
+  // recompute against what they actually wrote.
+  current = null;
+ }
+ return null;
+}
+
+/**
+ * Boot-time repair for identity rows corrupted by the double-encoded jsonb
+ * bind (see normalizeJsonParam): `identity` stored as a jsonb string scalar,
+ * or `identity.human_set` degraded into an array by `||` against a scalar
+ * patch. Those rows are not just cosmetically wrong — jsonb_set on a scalar
+ * ERRORS, so a corrupted row is one a human can no longer edit at all. Runs
+ * once per boot after the schema gate; the WHERE selects only diseased rows,
+ * so a healthy database does zero writes.
+ */
+async function repairCorruptedAgentIdentities() {
+ const rows = await getDb().unsafe(
+  `select id, workspace_id, identity from workspace_agents
+     where jsonb_typeof(identity) is distinct from 'object'
+        or (identity ? 'human_set' and jsonb_typeof(identity->'human_set') is distinct from 'object')
+        or (identity ? 'voice' and jsonb_typeof(identity->'voice') is distinct from 'object')`,
+ );
+ for (const row of rows) {
+  const repaired = repairStoredIdentity(row.identity) ?? {};
+  await getDb().unsafe(
+   `update workspace_agents
+      set identity = $1::jsonb, "version" = COALESCE("version", 0) + 1, updated_at = now()
+      where id = $2 and workspace_id = $3`,
+   [repaired, row.id, row.workspace_id],
+  );
+ }
+ if (rows.length > 0) {
+  console.log(`[agensis] repaired ${rows.length} corrupted workspace_agents.identity row(s)`);
+ }
+ return rows.length;
+}
+
 async function registerAgentConnection(ws, message) {
  const auth = ws.agentAuth;
  if (!auth) throw forbidden('Agent token is required');
@@ -3814,8 +7257,16 @@ async function registerAgentConnection(ws, message) {
  if (workspaceId !== auth.workspaceId || agentId !== auth.agentId) {
   throw forbidden('Agent token does not match this workspace');
  }
- const enabledRows = await getDb().unsafe('select enabled from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
- if (!isAgentEnabled(enabledRows[0])) throw forbidden('Agent is deactivated');
+ const agentRows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
+ if (!isAgentEnabled(agentRows[0])) throw forbidden('Agent is deactivated');
+ // The agent declares who it is on every connect; a human's explicit change
+ // survives it. Best effort on purpose — a rejected avatar must never be the
+ // reason a daemon cannot come online.
+ try {
+  await applyAgentIdentity({ workspaceId, agentId, row: agentRows[0], declared: message.identity });
+ } catch (error) {
+  console.error('[agensis] agent identity declaration failed:', error.message || error);
+ }
  const handle = slugHandle(message.handle || auth.handle || auth.name);
  const name = String(message.name || auth.name || handle).trim() || handle;
  const host = String(message.host || '').slice(0, 180);
@@ -3838,14 +7289,44 @@ async function registerAgentConnection(ws, message) {
   `insert into agent_connections (id, workspace_id, agent_id, name, handle, host, cwd, status, metadata, connected_at, last_seen_at, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, 'online', $8::jsonb, now(), now(), now())
      returning *`,
-  [connectionId, workspaceId, agentId, name, handle, host, cwd, JSON.stringify(metadata)],
+  [connectionId, workspaceId, agentId, name, handle, host, cwd, metadata],
  );
  const connection = publicAgentConnection(rows[0]);
  ws.agentConnectionId = connectionId;
  ws.agentId = agentId;
  ws.workspaceId = workspaceId;
- connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, agent: auth.agent });
+ // ONE live daemon per agent. Registering supersedes any older live connection
+ // for the same agent: newest wins, deterministically.
+ //
+ // Why newest rather than keeping the incumbent and refusing this register: a
+ // daemon that dropped through a HALF-OPEN socket (laptop sleep, dead tunnel)
+ // reconnects on a new socket while the server still holds the zombie for up to
+ // ~2x LIVENESS_PING_INTERVAL_MS. Refusing would leave that daemon offline for
+ // the whole window while it retried every 2s. The newest socket is by
+ // definition the one the daemon itself believes in, so it takes over.
+ //
+ // Why this converges instead of thrashing: the loser is sent `agent_disabled`,
+ // which every released daemon treats as TERMINAL — it logs the reason and
+ // stops; it does not reconnect. So two daemons genuinely configured for the
+ // same agent settle on the last one to register rather than flapping every
+ // retry interval. (A daemon under a process supervisor that restarts it will
+ // win the slot back on restart; that is the supervisor's cadence, not a loop
+ // this server can damp further.)
+ //
+ // take → set with NO await between them, so two registers racing inside one
+ // tick still leave exactly one live entry.
+ const superseded = takeAgentDaemonConnections(agentId, workspaceId, ws);
+ connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, host, cwd, agent: auth.agent });
  notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
+ if (superseded.length > 0) {
+  // Name the loser AND the winner: an operator reading this needs to know which
+  // of two machines lost its daemon, not just that something was dropped.
+  for (const entry of superseded) {
+   if (entry.keepSocket) continue;
+   console.log(`[agensis] superseded daemon connection ${entry.connectionId} for @${handle} on ${entry.host || 'unknown host'}:${entry.cwd || '?'} — replaced by a newer register from ${host || 'unknown host'}:${cwd || '?'}`);
+  }
+  await closeTakenAgentDaemons(superseded, 'superseded');
+ }
  void logConnectionActivity(connection, 'agent_connected');
  sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
 }
@@ -3870,15 +7351,22 @@ function capabilitiesShapeValid(caps) {
 //  - Only act on a hash the daemon actually sent (older daemons omit them → no nudge).
 //  - Capabilities drift when the stored row is malformed OR its stored hash differs.
 //  - Memory drift when the stored memoryHash differs.
+//  - Skill-document drift when the stored skillsHash differs. capabilities.skills is a
+//    list of NAMES; the BODIES ride agent_skill_sync into agent_skill_documents, so they
+//    need their own hash — a daemon can edit a SKILL.md without the name list changing,
+//    and the capabilities hash would not move.
 // The stored reference only advances when a real snapshot lands, so a genuine mismatch
 // resolves in ~1 round-trip rather than looping every beat.
-function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash } = {}) {
+function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash, skillsHash } = {}) {
  const nudges = [];
  if (capabilitiesHash && (!capabilitiesShapeValid(stored) || capabilitiesHash !== stored.hash)) {
   nudges.push('agent_capabilities_refresh');
  }
  if (memoryHash && memoryHash !== (stored && stored.memoryHash)) {
   nudges.push('agent_memory_refresh');
+ }
+ if (skillsHash && skillsHash !== (stored && stored.skillsHash)) {
+  nudges.push('agent_skills_refresh');
  }
  return nudges;
 }
@@ -3891,7 +7379,7 @@ async function updateAgentHeartbeat(ws, metadata = {}, hashes = {}) {
      set status = $2, metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb, last_seen_at = now(), updated_at = now()
      where id = $1
      returning *`,
-  [connectionId, metadata.busy ? 'busy' : 'online', JSON.stringify(metadata || {})],
+  [connectionId, metadata.busy ? 'busy' : 'online', metadata || {}],
  );
  notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
 
@@ -3962,6 +7450,72 @@ async function handleAgentMemorySync(ws, message) {
 
  if (upserted.length > 0) notifyDbSubscribers('agent_memory_files', 'INSERT', upserted);
  if (pruned.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', pruned);
+}
+
+// Ingest the BODIES behind the skill names a daemon advertises.
+//
+// `capabilities.skills` is a list of names, which is why the Skills browser could say
+// who has a skill but never what it says. This is the same read-only mirror shape as
+// handleAgentMemorySync above — UPSERT by UNIQUE(agent_id, skill), then prune skills the
+// daemon no longer reports — deliberately, so there is one pattern for "a daemon pushed
+// files up", not two.
+//
+// Nothing is broadcast. A skill body is large and almost never looked at, so it does not
+// belong in the realtime fanout (sanitizeRealtimeRow strips bodies for exactly this
+// reason); the browser fetches one on demand from /backend/system/skill-content.
+async function handleAgentSkillSync(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth) throw forbidden('Agent token is required');
+ const workspaceId = ws.workspaceId || auth.workspaceId;
+ const agentId = ws.agentId || auth.agentId;
+ if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
+
+ const documents = normalizeSkillDocuments(message.skills);
+ const db = getDb();
+ const keptSkills = [];
+ for (const doc of documents) {
+  keptSkills.push(doc.skill);
+  await db.unsafe(
+   `insert into agent_skill_documents (workspace_id, agent_id, skill, path, summary, content, byte_size, truncated, last_synced, updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+       on conflict (agent_id, skill) do update set
+         path = excluded.path,
+         summary = excluded.summary,
+         content = excluded.content,
+         byte_size = excluded.byte_size,
+         truncated = excluded.truncated,
+         last_synced = now(),
+         updated_at = now(),
+         version = agent_skill_documents.version + 1`,
+   [workspaceId, agentId, doc.skill, doc.path, doc.summary, doc.content, doc.byteSize, doc.truncated],
+  );
+ }
+
+ if (keptSkills.length > 0) {
+  await db.unsafe(
+   `delete from agent_skill_documents where agent_id = $1 and skill <> all($2::text[])`,
+   [agentId, keptSkills],
+  );
+ } else {
+  await db.unsafe('delete from agent_skill_documents where agent_id = $1', [agentId]);
+ }
+
+ // Advance the drift reference HERE rather than waiting for the next capabilities
+ // snapshot. Without this the heartbeat would keep nudging agent_skills_refresh every
+ // beat until an unrelated capabilities sync happened to carry the new hash — the daemon
+ // would answer each nudge with a full re-push it had already sent.
+ if (typeof message.hash === 'string' && message.hash && ws.agentConnectionId) {
+  const rows = await db.unsafe(
+   `update agent_connections
+      set capabilities = coalesce(capabilities, '{}'::jsonb) || $2::jsonb, updated_at = now()
+      where id = $1 returning *`,
+   // Bound as an OBJECT: porsager turns a stringified bind into a jsonb STRING SCALAR,
+   // which `||` would then concatenate into an array of fragments (see parseJsonObject).
+   [ws.agentConnectionId, { skillsHash: message.hash }],
+  );
+  const live = connectedAgents.get(ws.agentConnectionId);
+  if (live && rows[0]) live.capabilities = parseJsonObject(rows[0].capabilities);
+ }
 }
 
 // Sanitizes a daemon-reported reach advert before it's stored. Caps addrs to 4 and
@@ -4225,12 +7779,13 @@ async function handleAgentCapabilitiesSync(ws, message) {
   // canonicalization contract). Advances only when a real snapshot lands here.
   hash: typeof message.hash === 'string' ? message.hash : null,
   memoryHash: typeof message.memoryHash === 'string' ? message.memoryHash : null,
+  skillsHash: typeof message.skillsHash === 'string' ? message.skillsHash : null,
  };
 
  const rows = await getDb().unsafe(
   `update agent_connections set capabilities = $2::jsonb, updated_at = now()
      where id = $1 returning *`,
-  [connectionId, JSON.stringify(capabilities)],
+  [connectionId, capabilities],
  );
  const liveConnection = connectedAgents.get(connectionId);
  if (liveConnection) liveConnection.capabilities = capabilities;
@@ -4255,6 +7810,11 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
  if (updatedRows.length === 0) return null;
  notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
 
+ // The agent just freed its one active-job slot: give it the next task waiting on
+ // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
+ // drain too — a job finishing is a job finishing.
+ scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`);
+
  // Farm-originated coding jobs are control-plane work, not chat turns. They
  // deliberately have no session and are polled through the integration API;
  // writing a message with a null session would both violate the FK contract
@@ -4268,26 +7828,107 @@ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', 
   : (responseText || `@${handle} finished without output.`);
  const threadParentId = jobMetadata.threadParentId || null;
  const responseMessageId = jobMetadata.responseMessageId || null;
- if (responseMessageId) {
+ // "Send to channel": the agent has been working inside a thread, so THIS write is
+ // the moment its answer becomes public. Flagging the row adds it to the channel
+ // view without moving it out of the thread. False for a turn that was already
+ // running inside a thread (nothing to broadcast) and for jobs written before this
+ // feature existed, which keeps their behaviour identical.
+ const broadcastToChannel = jobMetadata.broadcastToChannel === true;
+ const workThreadParentId = jobMetadata.workThreadParentId || threadParentId;
+ // A segmented turn (see handleAgentJobSegment) has already posted every completed
+ // text block as its own message and left a FRESH placeholder waiting for the next
+ // one. A turn that ends right after a block leaves that placeholder with nothing
+ // to say — the result is either empty or a repeat of the block already on screen —
+ // so it is DELETED rather than left behind as an orphan "Thinking …" bubble, and
+ // the block's own message stands in for it in Activity and task mirroring. A turn
+ // whose tail streamed on past the last segment still lands in the placeholder as
+ // before, and so does an error.
+ const lastSegmentText = Number(jobMetadata.segmentCount || 0) > 0
+  ? textFromValue(jobMetadata.lastSegmentText).trim()
+  : '';
+ const finalText = textFromValue(responseText).trim();
+ const trailingPlaceholderIsSpent = !errorText && !!lastSegmentText && (!finalText || finalText === lastSegmentText);
+ if (responseMessageId && trailingPlaceholderIsSpent) {
+  const removedRows = await getDb().unsafe(
+   'delete from messages where id = $1 and session_id = $2 returning *',
+   [responseMessageId, job.session_id],
+  );
+  if (removedRows.length > 0) notifyDbSubscribers('messages', 'DELETE', removedRows);
+  // The last completed BLOCK stands in as the turn's reply, so it is the row that
+  // gets broadcast — the placeholder that would have carried the flag is gone.
+  // UPDATE ... returning so the flip fans out to clients like any other change.
+  const segmentRows = jobMetadata.lastSegmentMessageId
+   ? await getDb().unsafe(
+    broadcastToChannel
+     ? `update messages set broadcast_to_channel = true
+          where id = $1 and session_id = $2 returning *`
+     : 'select * from messages where id = $1 and session_id = $2 limit 1',
+    [String(jobMetadata.lastSegmentMessageId), job.session_id],
+   )
+   : [];
+  if (segmentRows.length > 0) {
+   if (broadcastToChannel) notifyDbSubscribers('messages', 'UPDATE', segmentRows);
+   void logMessageActivity(segmentRows);
+   void mirrorAgentReplyToTaskComment(segmentRows[0]);
+  }
+ } else if (responseMessageId) {
   const messageRows = await getDb().unsafe(
-   `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4
+   `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4,
+                        broadcast_to_channel = $6
        where id = $1 and session_id = $5 returning *`,
-   [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id],
+   [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id, broadcastToChannel],
   );
   if (messageRows.length > 0) {
    notifyDbSubscribers('messages', 'UPDATE', messageRows);
    void logMessageActivity(messageRows);
    void mirrorAgentReplyToTaskComment(messageRows[0]);
+  } else if (jobMetadata.pendingPlaceholder) {
+   // The placeholder was reserved by a segment but never written, because it is
+   // created LAZILY by the first delta that has text for it (handleAgentJobDelta)
+   // — that is what keeps an empty "Thinking …" bubble out of the thread while
+   // the agent runs tools.
+   //
+   // If the turn ends before any such delta arrives, the UPDATE above matches
+   // nothing and the reply is silently DROPPED. That took the final block of a
+   // turn with it, and worse, swallowed the failure message on the error path:
+   // a crashed agent said nothing at all. Materialise the row instead.
+   const createdRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7)
+        on conflict (id) do nothing
+        returning *`,
+    [
+     responseMessageId, job.session_id, content,
+     jobMetadata.pendingPlaceholderParentId || workThreadParentId,
+     String(job.agent_id || ''), senderName, broadcastToChannel,
+    ],
+   );
+   if (createdRows.length > 0) {
+    notifyDbSubscribers('messages', 'INSERT', createdRows);
+    void logMessageActivity(createdRows);
+    void mirrorAgentReplyToTaskComment(createdRows[0]);
+   }
   }
  } else {
+  // No placeholder was ever created (an 'external' agent queued with nobody
+  // attached, claimed later). The answer still belongs in the work thread, still
+  // broadcast — otherwise it would land top-level and lose the thread it answered.
   const messageRows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-       values ($1, 'assistant', $2, $3, 'agent', $4, $5) returning *`,
-   [job.session_id, content, threadParentId, String(job.agent_id || ''), senderName],
+   `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+       values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6) returning *`,
+   [job.session_id, content, workThreadParentId, String(job.agent_id || ''), senderName, broadcastToChannel],
   );
   notifyDbSubscribers('messages', 'INSERT', messageRows);
   void mirrorAgentReplyToTaskComment(messageRows[0]);
  }
+ // The turn is over, so nothing in it may still be counting. The branches above
+ // resolve the placeholder the job was TRACKING; a segmented turn rotated through
+ // others, and a tick that raced this finalization can re-create one moments after
+ // it was deleted. Sweep whatever is left rather than leaving a chip ticking at a
+ // run that has finished. `responseMessageId` is held back because that row now
+ // holds the real reply — which, on the day an agent opens one with "Thinking 5s",
+ // would otherwise match the placeholder pattern and be deleted as debris.
+ await clearStrandedPlaceholders(job, responseMessageId);
  void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
   .catch((error) => console.error('continueConversation (job finalize) failed', error));
  return updatedRows[0] || null;
@@ -4330,7 +7971,7 @@ async function dispatchFarmAgentJob({ workspaceId, agentId, prompt, model = '', 
  const jobRows = await getDb().unsafe(
   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, prompt, status, started_at, metadata)
      values ($1, $2, $3, null, $4, 'running', now(), $5::jsonb) returning *`,
-  [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), JSON.stringify(metadata)],
+  [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), metadata],
  );
  const job = jobRows[0];
  notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
@@ -4396,6 +8037,8 @@ async function cancelFarmAgentJob({ workspaceId, jobId, connection = null } = {}
   return publicFarmAgentJob(current[0] || job);
  }
  notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
+ // Cancelling frees the agent exactly like finishing does.
+ scheduleTaskQueueDrain(job.workspace_id, job.agent_id, 'job_cancelled');
  const exactConnection = connectedAgents.get(job.connection_id);
  const target = connection || (exactConnection?.ws?.readyState === 1 ? exactConnection : null) || findConnectedAgent(String(workspaceId), String(job.agent_id), '');
  if (target) sendWs(target.ws, { type: 'agent_job_cancel', jobId: job.id, reason: 'Cancelled by Farm' });
@@ -4528,13 +8171,33 @@ async function finalizeRegistrationApproval(reg) {
  } else {
   const created = await getDb().unsafe(
    `insert into workspace_agents (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, mcp_approved)
-       values ($1, $2, $3, '', '', 'auto', 'builtin', 'default', 'AI', '#00a95c', true, true)
+       values ($1, $2, $3, '', '', 'auto', 'external', 'default', 'AI', '#00a95c', true, true)
        returning *`,
    [reg.workspace_id, name || handle || 'Agent', slugHandle(handle || name || 'agent')],
   );
   agentId = created[0].id;
   handle = slugHandle(created[0].handle || created[0].name);
   notifyDbSubscribers('workspace_agents', 'INSERT', created);
+ }
+ // The identity the client asked for in register_agent, applied now that a row
+ // exists. Approval is asynchronous, so this is the first moment it can land —
+ // and `isNew` is only true for the branch that just created the row, which is
+ // the one case where an agent is allowed to choose its own name.
+ try {
+  const declared = parseJsonObject(reg.requested_identity);
+  if (Object.keys(declared).length > 0) {
+   const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, reg.workspace_id]);
+   const applied = await applyAgentIdentity({
+    workspaceId: reg.workspace_id,
+    agentId,
+    row: rows[0],
+    declared,
+    isNew: !reg.agent_id,
+   });
+   if (applied) name = applied.name;
+  }
+ } catch (error) {
+  console.error('[agensis] register_agent identity declaration failed:', error.message || error);
  }
  const updReg = await getDb().unsafe(
   `update agent_registrations set status = 'approved', agent_id = $2, decided_at = now(), updated_at = now() where id = $1 returning *`,
@@ -4544,21 +8207,48 @@ async function finalizeRegistrationApproval(reg) {
  return { agentId, handle, name };
 }
 
-async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false }) {
+async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false, identity = null }) {
+ const declaredIdentity = normalizeIdentityDeclaration(identity);
  let agent = null;
  if (asHandle) {
   agent = await resolveWorkspaceAgentByHandle(workspaceId, asHandle);
   if (!agent) throw badRequest(`No agent "@${slugHandle(asHandle)}" in this workspace`);
   if (agent.mcp_approved) {
+   // The already-approved reconnect — the common case, and the one that happens
+   // several times a day. No registration row is written, so the declaration has
+   // to be applied here or an MCP agent could never update its own identity.
+   try {
+    const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agent.id, workspaceId]);
+    await applyAgentIdentity({ workspaceId, agentId: agent.id, row: rows[0], declared: declaredIdentity });
+   } catch (error) {
+    console.error('[agensis] register_agent identity declaration failed:', error.message || error);
+   }
    return { status: 'approved', agentId: agent.id, handle: slugHandle(agent.handle || agent.name) };
   }
  }
  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
- const reqName = agent ? agent.name : (name || reqHandle);
+ // The one door an UNTRUSTED client chooses its own handle through. @channel is
+ // reserved, so refuse it here rather than write a pending registration that
+ // could only ever be approved into an unmentionable agent. `agent` (an
+ // existing row, resolved by asHandle) cannot be reserved: nothing could have
+ // created it.
+ if (!agent && isReservedAgentHandle(reqHandle)) throw badRequest(reservedAgentHandleMessage(reqHandle));
+ // The bare `name` argument is the same field as identity.name and gets the
+ // same bound — otherwise this door would be the one way to smuggle an
+ // unbounded string into workspace_agents.name.
+ const reqName = agent ? agent.name : (String(name || reqHandle).trim().slice(0, IDENTITY_FIELD_LIMITS.name) || reqHandle);
  const rows = await getDb().unsafe(
-  `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status)
-     values ($1, $2, $3, $4, $5, $6) returning *`,
-  [workspaceId, agent ? agent.id : null, reqHandle, reqName, String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending'],
+  `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status, requested_identity)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb) returning *`,
+  [
+   workspaceId, agent ? agent.id : null, reqHandle, reqName,
+   String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending',
+   // The OBJECT, not JSON.stringify: postgres.js resolves the ::jsonb cast to a
+   // jsonb parameter and serializes the value itself — a pre-stringified value
+   // gets serialized AGAIN and lands as a jsonb string scalar. See
+   // normalizeJsonParam for the full failure mode this caused live.
+   declaredIdentity,
+  ],
  );
  const reg = rows[0];
  notifyDbSubscribers('agent_registrations', 'INSERT', rows);
@@ -4611,19 +8301,56 @@ async function handleAgentJobDelta(ws, message) {
  if (!job) throw forbidden('Agent job not found');
  const metadata = parseJsonObject(job.metadata);
  const responseMessageId = metadata.responseMessageId || null;
+ const deltaText = textFromValue(message.content ?? message.response ?? '').trim();
+ // lastDeltaAt marks "the daemon is alive"; lastContentAt marks "the agent produced
+ // something". Only the latter counts as progress for the stuck-job reaper — a
+ // waiting daemon ticks once a second with empty content, and treating that as
+ // progress is what let a wedged turn spin forever.
+ const nextMetadata = {
+  ...metadata,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+ };
+ if (deltaText) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
  const deltaRows = await getDb().unsafe(
   `update agent_jobs
      set response = $2,
          updated_at = now(),
-         metadata = coalesce(metadata, '{}'::jsonb) || $3::jsonb
+         metadata = $3::jsonb
      where id = $1 and status in ('queued', 'running')
+       and (jsonb_typeof(metadata) <> 'object'
+            or coalesce(metadata->>'responseMessageId', '') = $4)
      returning id`,
   [
    jobId,
-   textFromValue(message.content ?? message.response ?? '').trim(),
-   JSON.stringify({ lastDeltaAt: new Date().toISOString(), elapsedMs: Number(message.elapsedMs || 0) }),
+   deltaText,
+   // Write the whole merged object rather than SQL-side `metadata || patch`.
+   // `||` only merges when BOTH sides are jsonb objects; a metadata column that
+   // was double-encoded into a jsonb STRING scalar appends instead, turning the
+   // column into an array — after which metadata->>'mode' and
+   // metadata->>'lastContentAt' both read NULL in SQL. `metadata` here comes from
+   // parseJsonObject(), which already flattens that corruption back into an
+   // object, so writing it wholesale also self-heals any row still in the bad
+   // shape. Pass the OBJECT: postgres.js encodes it as real jsonb, whereas a
+   // JSON.stringify'd value re-creates the string-scalar bug.
+   nextMetadata,
+   // Compare-and-set on the placeholder this tick was written against. The write
+   // above is a WHOLESALE object (see the note directly above — it has to stay that
+   // way to keep self-healing a corrupted column), so a tick that read the job just
+   // before a concurrent `agent_job_segment` rotated the placeholder would REVERT
+   // that rotation, and then stream "Thinking Ns" over the text block the segment
+   // had only just finalised. That is precisely how a live-looking chip ended up
+   // stranded where an agent's reply should have been, taking the reply with it.
+   // Dropping the tick instead costs nothing — another lands a second later.
+   //
+   // The `jsonb_typeof` escape keeps the self-heal reachable: a column corrupted
+   // into a string scalar reads NULL for every key, so a strict comparison would
+   // wedge the job permanently in the one state that most needs repairing.
+   responseMessageId || '',
   ],
  );
+ // Either the job already finished, or a segment moved the placeholder on between
+ // the read above and this write. Everything below is stale either way.
  if (deltaRows.length === 0) return;
  if (responseMessageId) {
   const content = agentLiveMessageContent(message);
@@ -4634,20 +8361,298 @@ async function handleAgentJobDelta(ws, message) {
            sender_id = $3,
            sender_name = $4
        where id = $1 and session_id = $5
+         and ($6::boolean or content ~ $7)
        returning *`,
-   [responseMessageId, content, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', job.session_id],
+   [
+    responseMessageId, content, String(job.agent_id || ''),
+    job.agent_name || auth.name || auth.handle || 'Agent', job.session_id,
+    // A tick carrying TEXT owns the row and overwrites whatever is in it. A
+    // content-free liveness tick carries nothing but a clock, so it may only
+    // refresh a row that is STILL a placeholder — never overwrite words already on
+    // screen. The window is narrow (a segment finalising the block between this
+    // handler's two statements) but it is exactly the one that turned a finished
+    // paragraph back into "Thinking 2m 11s" and left it standing there.
+    deltaText.length > 0,
+    PLACEHOLDER_CONTENT_RE,
+   ],
   );
   if (updatedRows.length > 0) {
    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
+  } else if (metadata.pendingPlaceholder && deltaText) {
+   // A segment handed us an id but deliberately did not create the row, so the
+   // thread is not littered with empty "Thinking …" bubbles while the agent runs
+   // tools. This is the first content for that block: materialise it now.
+   //
+   // `deltaText` is the whole of "lazily". Without it, a content-free tick
+   // materialised the row as "Thinking Ns" — re-creating the very bubble lazy
+   // creation exists to prevent, and minting the row that then strands when the
+   // turn rotates past it.
+   const createdRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
+       on conflict (id) do nothing
+       returning *`,
+    [
+     responseMessageId, job.session_id, content,
+     metadata.pendingPlaceholderParentId || null,
+     String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent',
+    ],
+   );
+   if (createdRows.length > 0) notifyDbSubscribers('messages', 'INSERT', createdRows);
   }
  }
  await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
 }
 
-async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }) {
+// The two halves of a step, normalized to one clipped line each: the tool name
+// (`Read`) and its detail (`src/App.tsx`). Stored as their own columns so the UI
+// can render a compact chip instead of re-parsing the joined `content` line.
+function agentStepParts(message) {
+ const name = textFromValue(message?.name).replace(/\s+/g, ' ').trim();
+ const rawDetail = textFromValue(message?.detail).replace(/\s+/g, ' ').trim();
+ const detail = rawDetail.length > 160 ? `${rawDetail.slice(0, 159)}…` : rawDetail;
+ return { name, detail };
+}
+
+// Render one step as a single plain-text line, e.g. `Read · src/App.tsx`. Either
+// half may be missing (a tool with no arguments, or a daemon that sent no detail);
+// a step carrying neither is not worth a message. This stays the human-readable
+// FALLBACK: clients that predate tool_name/tool_detail (and rows inserted before
+// those columns existed) still read sensibly off `content` alone.
+function agentStepContent(message) {
+ const { name, detail } = agentStepParts(message);
+ if (name && detail) return `${name} · ${detail}`;
+ return name || detail;
+}
+
+// A daemon turn that reads files, greps and runs bash produces no text at all, so
+// the delta pump (text only) leaves the human staring at the "Thinking …"
+// placeholder in silence. Each step lands as its OWN message threaded under the
+// agent's reply — one row per round trip, never an update of the placeholder.
+async function handleAgentJobStep(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+ const jobId = String(message.jobId || '');
+ if (!jobId) throw badRequest('jobId is required');
+ const rows = await getDb().unsafe(
+  `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+  [jobId, auth.agentId, auth.workspaceId],
+ );
+ const job = rows[0];
+ if (!job) throw forbidden('Agent job not found');
+ if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
+ const content = agentStepContent(message);
+ if (!content) return;
+ const step = agentStepParts(message);
+ const metadata = parseJsonObject(job.metadata);
+ // Steps hang off the reply's THREAD ROOT, not off the reply itself. The
+ // "Thinking …" placeholder is itself a thread reply (a channel turn works in the
+ // thread on the human's message — see resolveWorkThreadParent — and a thread turn
+ // already did), so parenting steps to it buried them two levels deep: the thread
+ // panel renders one level, so every chip was invisible exactly when the human was
+ // watching the thread. Resolving to the placeholder's own parent keeps steps as
+ // its SIBLINGS, in the thread already on screen — the same thread the reply will
+ // be broadcast from. A placeholder with no parent at all (a session with nothing
+ // to hang a work thread off) still nests steps directly under it as before.
+ // Missing responseMessageId means the reply bubble is unknown; post the step at
+ // the top level rather than dropping it.
+ const responseMessageId = metadata.responseMessageId || null;
+ let threadParentId = responseMessageId;
+ if (responseMessageId) {
+  const parentRows = await getDb().unsafe(
+   'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
+   [responseMessageId, job.session_id],
+  );
+  if (parentRows[0] && parentRows[0].thread_parent_id) threadParentId = parentRows[0].thread_parent_id;
+ }
+ // A tool step is the agent demonstrably doing work, so — unlike a content-free
+ // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
+ // and sets lastContentAt exactly like a content-bearing delta does. `response` is
+ // deliberately left alone: only the delta pump and the final result own it.
+ const nextMetadata = {
+  ...metadata,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+ };
+ nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+ const stepRows = await getDb().unsafe(
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+       and (jsonb_typeof(metadata) <> 'object'
+            or coalesce(metadata->>'responseMessageId', '') = $3)
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
+  //
+  // Compare-and-set for the same reason as the delta pump: this is a wholesale
+  // object write, and steps fire every few seconds, so a step that read the job
+  // just before a segment rotated the placeholder would silently put the OLD id
+  // back — after which the next liveness tick streams "Thinking Ns" over the block
+  // the segment had just finalised.
+  [jobId, nextMetadata, responseMessageId || ''],
+ );
+ // The job already finished, or a segment moved the placeholder on under us. The
+ // step's thread parent was resolved from the old placeholder either way, so it
+ // would land in the wrong place.
+ if (stepRows.length === 0) return;
+ const messageRows = await getDb().unsafe(
+  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
+     values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
+  [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', step.name, step.detail],
+ );
+ notifyDbSubscribers('messages', 'INSERT', messageRows);
+}
+
+// An agent turn is really [text][tool][text][tool][text]. The delta pump owns ONE
+// placeholder for the WHOLE turn, so every text block was concatenated into a
+// single ever-growing bubble — five separate thoughts run together with no
+// boundary the human could read, let alone steer between. `agent_job_segment`
+// says "that text block is finished": the current placeholder is finalised with
+// the block's text (it becomes a normal, complete agent message) and a FRESH
+// placeholder takes its place for the next block. Deltas, steps and segments that
+// follow flow into the new one, so the turn renders as message · chips · message
+// instead of one bubble that grows.
+async function handleAgentJobSegment(ws, message) {
+ const auth = ws.agentAuth;
+ if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
+ const jobId = String(message.jobId || '');
+ if (!jobId) throw badRequest('jobId is required');
+ const rows = await getDb().unsafe(
+  `select j.*, a.name as agent_name, a.handle as agent_handle
+     from agent_jobs j
+     left join workspace_agents a on a.id = j.agent_id
+     where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
+     limit 1`,
+  [jobId, auth.agentId, auth.workspaceId],
+ );
+ const job = rows[0];
+ if (!job) throw forbidden('Agent job not found');
+ if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
+ const text = textFromValue(message.text ?? message.content ?? message.response).trim();
+ if (!text) return; // an empty block is not a message; never rotate the placeholder on one
+ const metadata = parseJsonObject(job.metadata);
+ const responseMessageId = metadata.responseMessageId || null;
+ const nextPlaceholderId = crypto.randomUUID();
+ // Where the block itself lands: normally the placeholder that has been streaming
+ // it (now final). A job with no placeholder at all still gets its own message
+ // rather than losing the text.
+ const blockMessageId = responseMessageId || crypto.randomUUID();
+ // A completed text block is the agent demonstrably producing output, so it counts
+ // as progress for the stuck-job reaper exactly like a tool step does.
+ // lastSegmentText/lastSegmentMessageId let finalizeAgentJobResult recognise a final
+ // result that merely repeats the block already on screen. `response` is deliberately
+ // left alone: only the delta pump and the final result own it.
+ const nextMetadata = {
+  ...metadata,
+  responseMessageId: nextPlaceholderId,
+  lastDeltaAt: new Date().toISOString(),
+  elapsedMs: Number(message.elapsedMs || 0),
+  segmentCount: Number(metadata.segmentCount || 0) + 1,
+  lastSegmentText: text,
+  lastSegmentMessageId: blockMessageId,
+ };
+ nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+ const segmentRows = await getDb().unsafe(
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
+  [jobId, nextMetadata],
+ );
+ if (segmentRows.length === 0) return; // the job already finished; the segment is stale
+ const senderName = job.agent_name || auth.name || auth.handle || 'Agent';
+ // Blocks and the next placeholder belong in the WORK thread, not at the dispatch
+ // level: a channel turn works inside the thread on the human's message and only
+ // its final answer is broadcast, so falling back to metadata.threadParentId (null
+ // for a channel turn) would drop every intermediate block into the channel. The
+ // row-derived parent below still wins whenever a placeholder exists.
+ let threadParentId = metadata.workThreadParentId || metadata.threadParentId || null;
+ if (responseMessageId) {
+  const finalizedRows = await getDb().unsafe(
+   `update messages
+       set content = $2,
+           sender_kind = 'agent',
+           sender_id = $3,
+           sender_name = $4
+       where id = $1 and session_id = $5
+       returning *`,
+   [responseMessageId, text, String(job.agent_id || ''), senderName, job.session_id],
+  );
+  if (finalizedRows.length > 0) {
+   notifyDbSubscribers('messages', 'UPDATE', finalizedRows);
+   // The replacement has to sit in exactly the same place as the message it
+   // succeeds, so read the parent off the row instead of recomputing one: inside
+   // a thread the placeholder is itself a reply (the same reason a tool step
+   // resolves the thread root from this column rather than assuming top level).
+   threadParentId = finalizedRows[0].thread_parent_id || null;
+  } else if (metadata.pendingPlaceholder) {
+   // The previous segment reserved this id but deliberately left the row
+   // unwritten (see the lazy placeholder note below). If the agent produced a
+   // second text block without any delta in between, the UPDATE above matches
+   // nothing and the block is silently DROPPED — a turn of three blocks showed
+   // only the first. Write the row this segment was going to finalise.
+   const blockRows = await getDb().unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+       values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
+       on conflict (id) do nothing
+       returning *`,
+    [
+     responseMessageId, job.session_id, text,
+     metadata.pendingPlaceholderParentId || threadParentId,
+     String(job.agent_id || ''), senderName,
+    ],
+   );
+   if (blockRows.length > 0) {
+    notifyDbSubscribers('messages', 'INSERT', blockRows);
+    threadParentId = blockRows[0].thread_parent_id || null;
+   }
+  }
+ } else {
+  const blockRows = await getDb().unsafe(
+   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+      values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
+   [blockMessageId, job.session_id, text, threadParentId, String(job.agent_id || ''), senderName],
+  );
+  notifyDbSubscribers('messages', 'INSERT', blockRows);
+ }
+ // The next placeholder is created LAZILY, by the first delta that actually has
+ // text for it (see handleAgentJobDelta). Creating it here left a visible
+ // "Thinking 29s" bubble sitting in the thread for as long as the agent spent on
+ // tool calls between two text blocks — a real turn produced three of them. The
+ // id and parent are recorded on the job so the delta can materialise the row in
+ // the right place when there is finally something to show.
+ //
+ // Written as a SECOND update rather than folded into the one above, because the
+ // parent is only known once the block's own row has been written and we can read
+ // it back. Build a fresh object rather than mutating `nextMetadata` — that one
+ // was already bound by the first statement, and mutating it after the fact is a
+ // trap waiting for anyone who later reads the bind back.
+ await getDb().unsafe(
+  `update agent_jobs
+     set updated_at = now(),
+         metadata = $2::jsonb
+     where id = $1 and status in ('queued', 'running')
+     returning id`,
+  // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
+  // jsonb STRING scalar, after which metadata->>'…' reads NULL for every key.
+  [jobId, { ...nextMetadata, pendingPlaceholder: true, pendingPlaceholderParentId: threadParentId }],
+ );
+}
+
+async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion' }) {
  const apiKey = await getAnthropicApiKey(workspaceId);
  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
+ const resolvedModel = resolveAnthropicModel(model);
  const response = await fetch('https://api.anthropic.com/v1/messages', {
   method: 'POST',
   headers: {
@@ -4656,7 +8661,7 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
    'anthropic-version': '2023-06-01',
   },
   body: JSON.stringify({
-   model: resolveAnthropicModel(model),
+   model: resolvedModel,
    max_tokens: 4096,
    messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
    system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
@@ -4668,20 +8673,56 @@ async function runAnthropicCompletion({ model, messages, memory, documents, work
  }
 
  const payload = await response.json();
+ // Metered from the API's OWN reported usage, never estimated from the text.
+ // Awaited rather than fire-and-forget so a caller's own error handling cannot
+ // race the write; it cannot throw, so awaiting costs only the insert.
+ await recordAnthropicUsage(dbQuery, {
+  workspaceId,
+  model: resolvedModel,
+  kind: usageKind,
+  usage: payload.usage,
+ });
  return (payload.content || [])
   .map((part) => part?.type === 'text' ? part.text : '')
   .filter(Boolean)
   .join('\n');
 }
 
-// Streaming variant of runAnthropicCompletion. Streams the Anthropic SSE response
-// and invokes onDelta(fullTextSoFar) as text accumulates (throttled by the caller
-// via the returned cadence). Returns the final text. Used by built-in agents so
-// their replies stream into the channel token-by-token like daemon agents do,
-// instead of popping in complete.
-async function runAnthropicCompletionStreaming({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null }, onDelta) {
+/**
+ * ONE streamed Anthropic turn, tool-use aware.
+ *
+ * Streams the SSE response, invoking onDelta(fullTextSoFar) as TEXT accumulates,
+ * and separately assembles any `tool_use` blocks the model emits. Returns
+ * `{ text, toolUses, stopReason }` — the caller decides whether to run the tools
+ * and come back (see runToolUseLoop) or to stop.
+ *
+ * Tool-use arrives as its own content block: `content_block_start` names the tool
+ * and its id, then a run of `input_json_delta` frames carries the arguments as
+ * PARTIAL JSON which is only parseable once the block stops. A block whose JSON
+ * never parses is surfaced with `{}` arguments plus `inputError`, so the caller
+ * can hand the model a readable failure instead of silently calling a tool with
+ * the wrong arguments.
+ *
+ * `messages[].content` is passed through untouched: a plain string for ordinary
+ * chat, or an array of content blocks once the loop starts appending assistant
+ * tool_use / user tool_result turns.
+ */
+async function streamAnthropicTurn({ model, messages, memory, documents, workspaceContext, agentContext, tools = null, maxTokens = 4096, workspaceId = null, usageKind = 'builtin_turn' }, onDelta) {
  const apiKey = await getAnthropicApiKey(workspaceId);
  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
+
+ const resolvedModel = resolveAnthropicModel(model);
+ const payload = {
+  model: resolvedModel,
+  max_tokens: maxTokens,
+  stream: true,
+  messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
+  system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+ };
+ // Omitted entirely when empty — an empty `tools: []` is not the same request as
+ // no tools at all, and the final "answer now" call of the loop depends on the
+ // model having no tool to reach for.
+ if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
 
  const response = await fetch('https://api.anthropic.com/v1/messages', {
   method: 'POST',
@@ -4690,13 +8731,7 @@ async function runAnthropicCompletionStreaming({ model, messages, memory, docume
    'x-api-key': apiKey,
    'anthropic-version': '2023-06-01',
   },
-  body: JSON.stringify({
-   model: resolveAnthropicModel(model),
-   max_tokens: 4096,
-   stream: true,
-   messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-   system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
-  }),
+  body: JSON.stringify(payload),
  });
 
  if (!response.ok || !response.body) {
@@ -4705,6 +8740,17 @@ async function runAnthropicCompletionStreaming({ model, messages, memory, docume
 
  let full = '';
  let buffer = '';
+ let stopReason = '';
+ // ONE model call is ONE usage row, and this function is called once per step of
+ // the builtin tool loop — up to BUILTIN_TOOL_LOOP_MAX_STEPS + 1 times in a
+ // single human turn. That multiplier is exactly why metering lives here rather
+ // than around the loop: recording once per turn would under-report a
+ // tool-heavy turn by up to 9x, and the tool-heavy turns are the expensive ones.
+ const usage = createAnthropicUsageAccumulator();
+ // Blocks are addressed by index across the whole message, and text and tool_use
+ // blocks share that numbering, so they are tracked in one map and split apart at
+ // the end rather than assumed to arrive in any particular order.
+ const blocks = new Map();
  const decoder = new TextDecoder();
  for await (const chunk of response.body) {
   buffer += decoder.decode(chunk, { stream: true });
@@ -4719,14 +8765,64 @@ async function runAnthropicCompletionStreaming({ model, messages, memory, docume
    if (!data || data === '[DONE]') continue;
    try {
     const parsed = JSON.parse(data);
-    if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-     full += parsed.delta.text || '';
-     if (onDelta) onDelta(full);
+    // Fed EVERY frame — the accumulator picks out message_start (input and
+    // cache tokens) and message_delta (the running output total) and ignores
+    // the rest, so no frame handler below has to know about billing.
+    usage.event(parsed);
+    if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
+     blocks.set(parsed.index, {
+      id: String(parsed.content_block.id || ''),
+      name: String(parsed.content_block.name || ''),
+      json: '',
+     });
+     continue;
+    }
+    if (parsed.type === 'content_block_delta') {
+     if (parsed.delta?.type === 'text_delta') {
+      full += parsed.delta.text || '';
+      if (onDelta) onDelta(full);
+      continue;
+     }
+     if (parsed.delta?.type === 'input_json_delta') {
+      const block = blocks.get(parsed.index);
+      if (block) block.json += parsed.delta.partial_json || '';
+     }
+     continue;
+    }
+    if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
+     stopReason = String(parsed.delta.stop_reason);
     }
    } catch { /* ignore malformed chunk */ }
   }
  }
- return full;
+
+ const toolUses = [];
+ for (const index of [...blocks.keys()].sort((a, b) => a - b)) {
+  const block = blocks.get(index);
+  if (!block.name) continue; // a tool_use block with no tool is not a call
+  const raw = block.json.trim();
+  let input = {};
+  let inputError = '';
+  if (raw) {
+   try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed;
+    else inputError = 'Tool arguments must be a JSON object.';
+   } catch {
+    inputError = 'Tool arguments were not valid JSON.';
+   }
+  }
+  toolUses.push({ id: block.id, name: block.name, input, inputError });
+ }
+ // Recorded after the stream drains, so a turn that is cut off mid-flight still
+ // books the tokens it had already reported rather than nothing.
+ await recordAnthropicUsage(dbQuery, {
+  workspaceId,
+  model: resolvedModel,
+  kind: usageKind,
+  counts: usage.result(),
+ });
+ return { text: full, toolUses, stopReason };
 }
 
 function safeFileName(name) {
@@ -5539,7 +9635,7 @@ async function logMessageActivity(rows) {
          values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
          on conflict do nothing
          returning *`,
-    [workspaceId, userId, message.id != null ? String(message.id) : null, title, JSON.stringify(metadata)],
+    [workspaceId, userId, message.id != null ? String(message.id) : null, title, metadata],
    );
    if (inserted.length > 0) {
     // table is 'activity_events' here, so this cannot re-trigger message logging.
@@ -5576,7 +9672,7 @@ async function logConnectionActivity(connection, eventType) {
    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
        values ($1, null, $2, 'agent', $3, $4, $5::jsonb, now())
        returning *`,
-   [workspaceId, eventType, connection.agent_id != null ? String(connection.agent_id) : null, title, JSON.stringify(metadata)],
+   [workspaceId, eventType, connection.agent_id != null ? String(connection.agent_id) : null, title, metadata],
   );
   if (inserted.length > 0) {
    notifyDbSubscribers('activity_events', 'INSERT', inserted);
@@ -5654,7 +9750,7 @@ function publicFlowEventRecord(table, row) {
   return { id: row.id, title: row.title, folder: row.folder, version: row.version, updatedAt: row.updated_at || null };
  }
  if (table === 'workspace_agents') {
-  return { id: row.id, name: row.name, handle: row.handle, enabled: row.enabled !== false, model: row.model || null, updatedAt: row.updated_at || null };
+  return { id: row.id, name: row.name, handle: row.handle, enabled: row.enabled !== false, model: row.model || null, metadata: parseJsonObject(row.metadata), updatedAt: row.updated_at || null };
  }
  if (table === 'workspace_members') {
   return { userId: row.user_id, role: row.role, updatedAt: row.updated_at || null };
@@ -5708,7 +9804,7 @@ async function enqueueFlowWebhookEvents(table, eventType, rows) {
          (connection_id, workspace_id, event_id, event_type, payload)
          values ($1, $2, $3, $4, $5::jsonb)
          on conflict (connection_id, event_id) do nothing`,
-    [connection.id, location.workspaceId, eventId, flowEventType, JSON.stringify(payload)],
+    [connection.id, location.workspaceId, eventId, flowEventType, payload],
    );
   }
  }
@@ -5799,7 +9895,20 @@ async function deliverNextFlowWebhook() {
 // broadcast is the real network win — otherwise every UPSERT fans the full body
 // (plus ~1/s heartbeat re-syncs) to every subscribed client. Keep the row shape
 // otherwise intact so list metadata (path, byte_size, summary, version) updates.
-const REALTIME_HEAVY_FIELDS = { agent_memory_files: ['content_cache'] };
+// Fields stripped from the realtime fanout. Mostly heavy bodies — and, for
+// workspace_secrets, the two columns that hold secret material.
+//
+// No client can subscribe to workspace_secrets at all (authorizeRealtimeBinding
+// calls ensureTable, and the table is deliberately absent from ALLOWED_TABLES),
+// and the vault routes broadcast `{ workspace_id, key }` rather than a row. This
+// is the third layer, and the one that survives someone later passing a full row:
+// a secret riding a broadcast into every subscribed browser is the worst outcome
+// this feature has, so it is stripped structurally rather than by convention.
+const REALTIME_HEAVY_FIELDS = {
+ agent_memory_files: ['content_cache'],
+ agent_jobs: ['prompt', 'response'],
+ workspace_secrets: VAULT_SECRET_COLUMNS,
+};
 function sanitizeRealtimeRow(table, row) {
  const heavy = REALTIME_HEAVY_FIELDS[table];
  if (!heavy || !row || typeof row !== 'object') return row;
@@ -6062,21 +10171,32 @@ async function authorizeRealtimeBroadcast(userId, channel) {
  await enforceWorkspaceRole(userId, workspaceId, 'read');
 }
 
+// One relay for the process; per-socket state hangs off `ws.voiceStt`.
+const voiceRelay = createVoiceRelay();
+
 function attachRealtime(server) {
  const wss = new WebSocketServer({ server, path: '/backend/ws' });
 
  wss.on('connection', (ws, req) => {
+  // FIRST listener: ws@8 emits 'error' on the socket for any receiver-level
+  // protocol violation (invalid UTF-8, bad opcode, oversized frame). The WS
+  // handshake needs no credentials (auth is a first-message frame), so without a
+  // handler any anonymous client could crash the process — an EventEmitter
+  // 'error' with no listener throws. Log only: ws closes the socket itself and
+  // the 'close' handler below already does the cleanup.
+  ws.on('error', (error) => {
+   console.warn('[backend] websocket error:', error?.message || error);
+  });
   ws.subscriptions = [];
   // Liveness: the heartbeat interval below pings each socket and terminates any
   // that miss a pong, so an ungraceful drop still fires 'close' (→ offline).
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  // H3/H5 — two auth paths, both supported for a smooth deploy + the daemon CLI:
-  //  (1) Query-param credentials, verified on connect: `agentToken=` (daemon CLI,
-  //      agent/agensis-cli) and `token=` (legacy browser compat window).
-  //  (2) First-message auth frame `{ type: 'auth', token }` (the browser client
-  //      now sends this so the token never appears in the WS URL / proxy logs).
+  // H3/H5 — two auth paths, retained for backward compatibility:
+  //  (1) Legacy query-param credentials: `agentToken=` or `token=`.
+  //  (2) First-message auth frame `{ type: 'auth', token }`, used by the browser
+  //      and the public agensis-agent daemon so tokens stay out of proxy logs.
   // authReady resolves true on success, false on failure/timeout; the message
   // handler gates every action on it.
   let authSettled = false;
@@ -6111,7 +10231,22 @@ function attachRealtime(server) {
   }, 10_000);
   if (authTimer.unref) authTimer.unref();
 
-  ws.on('message', async (raw) => {
+  ws.on('message', async (raw, isBinary) => {
+   // Binary frames are microphone audio for the Deepgram relay and nothing
+   // else. Checked FIRST: String()-ing a PCM buffer and handing it to JSON.parse
+   // is pure waste on a frame that arrives ~31 times a second (512 samples at
+   // 16kHz — see FRAMES_PER_POST in src/lib/pcmTap.worklet.js, halved from 1024
+   // to halve how long the last word of an utterance waits before Deepgram sees
+   // it), and an authenticated socket is the only place audio may come from.
+   // ws.userId is set only by finalizeAuthenticated, and only for a HUMAN
+   // session token — a daemon's agent-token socket has none and can never open
+   // a stream, let alone feed one.
+   if (isBinary) {
+    if (!ws.userId) return;
+    voiceRelay.handleAudio(ws, raw);
+    return;
+   }
+
    let message;
    try {
     message = JSON.parse(String(raw || '{}'));
@@ -6161,6 +10296,17 @@ function attachRealtime(server) {
      relayBroadcast(message.channel, message.event, message.payload);
      return;
     }
+    // Huddle speech-to-text. Replies ride the `system` event channel the
+    // browser already listens on, so no client-side plumbing was needed to
+    // receive them.
+    if (message.action === 'voice_stt_start' || message.action === 'voice_stt_stop') {
+     if (!ws.userId) return;
+     const handled = await voiceRelay.handleControl(ws, message, {
+      send: (payload) => sendWs(ws, { type: 'system', event: 'voice_stt', payload }),
+      rateLimited: () => !voiceStreamRateLimiter.check(String(ws.userId)).allowed,
+     });
+     if (handled) return;
+    }
     if (message.action === 'agent_register') {
      await registerAgentConnection(ws, message);
      return;
@@ -6169,6 +10315,7 @@ function attachRealtime(server) {
      await updateAgentHeartbeat(ws, message.metadata || {}, {
       capabilitiesHash: message.capabilitiesHash,
       memoryHash: message.memoryHash,
+      skillsHash: message.skillsHash,
      });
      return;
     }
@@ -6180,12 +10327,24 @@ function attachRealtime(server) {
      await handleAgentJobDelta(ws, message);
      return;
     }
+    if (message.action === 'agent_job_step') {
+     await handleAgentJobStep(ws, message);
+     return;
+    }
+    if (message.action === 'agent_job_segment') {
+     await handleAgentJobSegment(ws, message);
+     return;
+    }
     if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {
      inferenceBroker.handleAgentEvent(ws.agentId, message, ws.agentConnectionId);
      return;
     }
     if (message.action === 'agent_memory_sync') {
      await handleAgentMemorySync(ws, message);
+     return;
+    }
+    if (message.action === 'agent_skill_sync') {
+     await handleAgentSkillSync(ws, message);
      return;
     }
     if (message.action === 'agent_capabilities_sync') {
@@ -6209,6 +10368,8 @@ function attachRealtime(server) {
    clearTimeout(authTimer);
    settleAuth(false);
    websocketClients.delete(ws);
+   // A leaked upstream keeps billing Deepgram for a browser that is gone.
+   voiceRelay.teardown(ws);
    void markAgentConnectionOffline(ws);
   });
  });
@@ -6230,8 +10391,222 @@ function attachRealtime(server) {
  }, LIVENESS_PING_INTERVAL_MS);
  livenessInterval.unref?.();
  wss.on('close', () => clearInterval(livenessInterval));
+ // Server-level errors (a failed upgrade, an EADDR-style listen error surfaced by
+ // ws) would otherwise be an unhandled 'error' and kill the process.
+ wss.on('error', (error) => {
+  console.warn('[backend] websocket server error:', error?.message || error);
+ });
 
  return wss;
+}
+
+// --- Outbound SSRF guard for operator-supplied URLs ------------------------
+//
+// `base_url` is attacker-controlled in the sense that matters: any workspace
+// member with the `manage` role can set it, and the server then fetches it from
+// inside Fly's network with no egress restrictions. Unvalidated, that turns a
+// normal product feature into a request forgery primitive against the cloud
+// metadata endpoint (169.254.169.254), localhost admin ports, and anything else
+// reachable from the machine — with the response body streamed back to the
+// caller through the SSE relay.
+//
+// LIMITS — what this does NOT catch:
+//   * DNS rebinding. We re-resolve immediately before the fetch, but Node's
+//     global fetch gives no hook to pin the resolved address for the actual
+//     connection, so a hostname whose TTL expires between our lookup and
+//     undici's can still move. Closing that needs a custom dispatcher; the
+//     remaining window is small and every direct-address attack is blocked.
+//   * Open redirects at the upstream. We do not follow redirects to a private
+//     address because we do not follow redirects at all (see `redirect: 'error'`
+//     at the call site).
+//   * Operator-supplied `headers`, which are still passed through verbatim.
+const BLOCKED_IPV4_RANGES = [
+ ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+ ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16],
+ ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4],
+];
+
+function ipv4ToInt(address) {
+ return address.split('.').reduce((acc, octet) => ((acc << 8) + Number(octet)) >>> 0, 0);
+}
+
+// Expand an IPv6 literal into its eight 16-bit groups, or null if it will not
+// parse. `net.isIPv6` has already vetted the syntax, so this only has to fill in
+// the `::` elision — which is the whole point: the string tests below used to be
+// applied to the TEXT of an address, and text has more than one spelling.
+function ipv6Groups(address) {
+ const lower = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
+ if (!net.isIPv6(lower) || lower.includes('.')) return null;
+ const halves = lower.split('::');
+ if (halves.length > 2) return null;
+ const head = halves[0] ? halves[0].split(':') : [];
+ const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+ const parts = halves.length === 2
+  ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail]
+  : head;
+ if (parts.length !== 8) return null;
+ const groups = parts.map((part) => Number.parseInt(part || '0', 16));
+ return groups.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff) ? null : groups;
+}
+
+function isBlockedAddress(address) {
+ if (net.isIPv4(address)) {
+  const value = ipv4ToInt(address);
+  return BLOCKED_IPV4_RANGES.some(([base, bits]) => {
+   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+   return (value & mask) === (ipv4ToInt(base) & mask);
+  });
+ }
+ if (!net.isIPv6(address)) return true; // unparseable — refuse rather than guess
+ const lower = address.toLowerCase().replace(/^\[|\]$/g, '');
+ // IPv4-mapped (::ffff:a.b.c.d) must be judged on the embedded v4 address.
+ const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+ if (mapped) return isBlockedAddress(mapped[1]);
+ // Everything below used to be a prefix test on the TEXT, which let two spellings
+ // of a blocked address through: `::ffff:a9fe:a9fe` is 169.254.169.254 in hex form
+ // and matched none of the string tests, and `0:0:0:0:0:0:0:1` is loopback spelled
+ // out and is not the string '::1'. Both reached a fetch. Compare the NUMBERS.
+ const groups = ipv6Groups(lower);
+ if (!groups) return true;                                       // fail closed
+ if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+  return isBlockedAddress(`${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`);
+ }
+ // ::/96 — unspecified, loopback, and the deprecated v4-compatible range. None of
+ // them is ever a legitimate outbound destination.
+ if (groups.slice(0, 6).every((g) => g === 0)) return true;
+ if ((groups[0] & 0xfe00) === 0xfc00) return true;               // fc00::/7  unique-local
+ if ((groups[0] & 0xffc0) === 0xfe80) return true;               // fe80::/10 link-local
+ if ((groups[0] & 0xffc0) === 0xfec0) return true;               // fec0::/10 deprecated site-local
+ if ((groups[0] & 0xff00) === 0xff00) return true;               // ff00::/8  multicast
+ if (groups[0] === 0x0064 && groups[1] === 0xff9b) return true;   // 64:ff9b::/96 NAT64 — reaches v4 space
+ if (groups[0] === 0x2001 && groups[1] === 0x0db8) return true;   // 2001:db8::/32 documentation
+ return false;
+}
+
+// Throws a 400-shaped Error when the URL must not be fetched server-side.
+// Returns the normalized origin+path with any trailing slashes removed.
+async function assertSafeOutboundUrl(rawUrl, label = 'base_url') {
+ const reject = (message) => {
+  const error = new Error(`${label} ${message}`);
+  error.status = 400;
+  throw error;
+ };
+ let url;
+ try { url = new URL(String(rawUrl || '').trim()); } catch { return reject('must be a valid absolute URL'); }
+ if (url.protocol !== 'https:' && url.protocol !== 'http:') reject('must use http or https');
+ // Preserved from the superseded assertSafeGatewayBaseUrl: plaintext http would
+ // put the workspace's decrypted API key on the wire, and .local/.internal are
+ // split-horizon names that can resolve differently on the server than here.
+ if (url.protocol !== 'https:') reject('must use HTTPS');
+ const lowerHost = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+ if (lowerHost.endsWith('.local') || lowerHost.endsWith('.internal')) reject('must use a public hostname');
+ if (url.username || url.password) reject('must not embed credentials');
+
+ const host = url.hostname.replace(/^\[|\]$/g, '');
+ let addresses;
+ if (net.isIP(host)) {
+  addresses = [host];
+ } else {
+  try {
+   addresses = (await dns.lookup(host, { all: true, verbatim: true })).map(entry => entry.address);
+  } catch {
+   return reject('host could not be resolved');
+  }
+ }
+ if (!addresses.length) reject('host could not be resolved');
+ // ALL resolved addresses must be public — a host that returns one public and
+ // one private address is a rebinding attempt, not a misconfiguration.
+ if (addresses.some(isBlockedAddress)) reject('must not resolve to a private, loopback, link-local or reserved address');
+
+ return url.toString().replace(/\/+$/, '');
+}
+
+// --- Link preview cache rows ------------------------------------------------
+//
+// Listed explicitly, never `select *`: a column added to the table and forgotten
+// here would load blank rather than error, which is the failure mode this repo
+// keeps re-learning (the bootstrap sessions select, the /agents metadata column).
+const LINK_PREVIEW_COLUMNS = 'id, url_hash, url, final_url, status, title, '
+ + 'description, site_name, image_url, detail, fetched_at, expires_at';
+
+// `detail` is our own vocabulary ('timeout', 'http_404', 'too_many_redirects')
+// with ONE exception: `content_type_<type>` carries a media type the remote
+// server chose. Narrow charset, short cap — it is shown to a human as a reason.
+function sanitizePreviewDetail(value) {
+ return String(value == null ? '' : value)
+  .replace(/[^a-zA-Z0-9._+/-]+/g, '_')
+  .slice(0, 80);
+}
+
+/**
+ * Write one unfurl result into the cache, or refresh the row that is there.
+ *
+ * The clamps are applied AGAIN here even though link-preview.cjs already applied
+ * them. These columns are unbounded `text`, so the module being the only thing
+ * standing between a hostile page and a 5MB row would make it load-bearing in a
+ * place it is easy to edit without noticing.
+ *
+ * A refresh overwrites unconditionally, including a failure replacing a card
+ * that previously worked. That is deliberate for now: the failure TTL is an hour,
+ * so a site that blipped is re-tried soon, and "show the last thing we actually
+ * saw" needs conditional SQL that is harder to be sure about than this is.
+ */
+async function upsertLinkPreview(result) {
+ const status = LINK_PREVIEW_STATUSES.includes(result?.status) ? result.status : 'failed';
+ const url = String(result?.url || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS);
+ if (!url) return null;
+ const ttlSeconds = Math.max(60, Math.round(linkPreviewTtlMs(status) / 1000));
+ const rows = await getDb().unsafe(
+  `insert into link_previews
+      (url_hash, url, final_url, status, title, description, site_name, image_url, detail, fetched_at, expires_at)
+    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now() + make_interval(secs => $10::double precision))
+    on conflict (url_hash) do update set
+      url = excluded.url,
+      final_url = excluded.final_url,
+      status = excluded.status,
+      title = excluded.title,
+      description = excluded.description,
+      site_name = excluded.site_name,
+      image_url = excluded.image_url,
+      detail = excluded.detail,
+      fetched_at = excluded.fetched_at,
+      expires_at = excluded.expires_at
+    returning ${LINK_PREVIEW_COLUMNS}`,
+  [
+   linkPreviewCacheKey(url),
+   url,
+   String(result?.finalUrl || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS),
+   status,
+   clampPreviewText(result?.title, LINK_PREVIEW_MAX_TITLE_CHARS),
+   clampPreviewText(result?.description, LINK_PREVIEW_MAX_DESCRIPTION_CHARS),
+   clampPreviewText(result?.siteName, LINK_PREVIEW_MAX_SITE_CHARS),
+   String(result?.imageUrl || '').slice(0, LINK_PREVIEW_MAX_URL_CHARS),
+   sanitizePreviewDetail(result?.detail),
+   ttlSeconds,
+  ],
+ );
+ return rows[0] || null;
+}
+
+/**
+ * The client-facing shape of a cache row.
+ *
+ * `image_url` — the third-party host — is NEVER returned. The client receives
+ * only `imagePath`, a path on our own origin, so there is no way for a card to
+ * end up hotlinking a stranger's CDN even by accident.
+ */
+function publicLinkPreview(row) {
+ return {
+  url: String(row?.url || ''),
+  finalUrl: String(row?.final_url || ''),
+  status: String(row?.status || 'failed'),
+  title: String(row?.title || ''),
+  description: String(row?.description || ''),
+  siteName: String(row?.site_name || ''),
+  imagePath: row?.image_url ? `/backend/link-previews/${row.id}/image` : '',
+  detail: String(row?.detail || ''),
+  fetchedAt: row?.fetched_at ? new Date(row.fetched_at).toISOString() : null,
+ };
 }
 
 function createApp() {
@@ -6257,6 +10632,23 @@ function createApp() {
    throw error;
   })
   : Promise.resolve();
+ // Terminal handler attached at creation, so a boot-time DDL failure is never an
+ // unhandled rejection — Node's default mode terminates the process, which would
+ // make the per-request 500 degradation below unreachable. The gate still awaits
+ // the same promise, so requests keep surfacing the real error. Capturing it also
+ // lets /backend/health — registered before the gate — report "not ready" instead
+ // of a green light while every other /backend route is broken.
+ let runtimeSchemaError = null;
+ runtimeSchemaReady.catch((error) => { runtimeSchemaError = error; });
+
+ // Identity rows corrupted by the double-encoded jsonb bind (see
+ // normalizeJsonParam) are healed right after the schema gate — a corrupted
+ // row errors out of jsonb_set, so until it is repaired no human edit to that
+ // agent can save. Best-effort: a repair failure must not take the backend
+ // down, and the next boot tries again.
+ void runtimeSchemaReady
+  .then(() => repairCorruptedAgentIdentities())
+  .catch((error) => console.warn('[backend] identity repair skipped:', error.message || error));
 
  // Auth is enforced at the route boundary and again per workspace-scoped
  // operation. Keep this server-side; client filters are only UX hints.
@@ -6264,11 +10656,49 @@ function createApp() {
  app.get('/backend/health', async (_req, res) => {
   try {
    await getDb().unsafe('select 1');
+   // The DB answering is not enough: if the runtime schema migration failed every
+   // route behind the gate below is broken, so a 200 here would keep Fly routing
+   // traffic to a dead instance. fly.toml's check only looks at the HTTP status.
+   if (runtimeSchemaError) {
+    return res.status(503).json({ ok: false, schema: 'failed', error: runtimeSchemaError.message || String(runtimeSchemaError) });
+   }
    res.json({ ok: true });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
  });
+
+ // CSP violation sink. The Content-Security-Policy-Report-Only header on the
+ // Netlify side is inert without somewhere to report TO — without this, "ship
+ // report-only, watch the violations, then enforce" collects nothing and the
+ // policy can never be safely promoted. Deliberately:
+ //  - unauthenticated: the browser posts these with no credentials, by spec;
+ //  - registered ABOVE the runtime-schema gate: it needs no DB, and a violation
+ //    report is most interesting precisely when the rest of the API is broken;
+ //  - rate limited per IP and body-capped, since it is an open endpoint;
+ //  - always 204, so a misbehaving report can never surface to a user.
+ app.post(
+  '/backend/csp-report',
+  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '16kb' }),
+  (req, res) => {
+   if (rateLimitBlocked(res, cspReportRateLimiter, clientIpFromReq(req))) return;
+   try {
+    const body = req.body || {};
+    // Level 2 sends {"csp-report": {...}}; the Reporting API sends an array.
+    const reports = Array.isArray(body) ? body : [body['csp-report'] || body];
+    for (const report of reports.slice(0, 10)) {
+     if (!report || typeof report !== 'object') continue;
+     const directive = report['effective-directive'] || report['violated-directive'] || report.effectiveDirective || '';
+     const blocked = report['blocked-uri'] || report.blockedURL || '';
+     const documentUri = report['document-uri'] || report.documentURL || '';
+     console.warn('[csp] violation:', JSON.stringify({ directive, blocked, documentUri }));
+    }
+   } catch (error) {
+    console.warn('[csp] malformed report:', error?.message || error);
+   }
+   res.status(204).end();
+  },
+ );
 
  app.use('/backend', async (_req, res, next) => {
   try {
@@ -6397,7 +10827,7 @@ function createApp() {
     `insert into workspace_agents
          (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, enabled, connect_token_hash, metadata, created_by)
          values ($1, $2, $3, $4, '', $5, 'daemon', $6, true, $7, $8::jsonb, $9) returning *`,
-    [workspaceId, name, handle, String(req.body?.description || '').slice(0, 500), String(req.body?.model || 'auto').slice(0, 160), normalizeAgentPermissionMode(req.body?.permissionMode), hashAgentToken(token), JSON.stringify(metadata), req.farmIntegration.approvedBy || null],
+    [workspaceId, name, handle, String(req.body?.description || '').slice(0, 500), String(req.body?.model || 'auto').slice(0, 160), normalizeAgentPermissionMode(req.body?.permissionMode), hashAgentToken(token), metadata, req.farmIntegration.approvedBy || null],
    );
    const agent = rows[0];
    notifyDbSubscribers('workspace_agents', 'INSERT', rows.map(publicFarmEnrolledAgent));
@@ -6539,6 +10969,36 @@ function createApp() {
   }
  });
 
+ // The BODY behind a row in the Skills window. Three shapes, one route:
+ //   ?skill=<name>            -> the document for a skill some agent carries
+ //   ?library=<id>            -> the entries inside a detected skill library
+ //   ?library=<id>&entry=<n>  -> one entry's markdown
+ //
+ // Fly only (like /backend/system/slash-commands): the hosted frontend targets the
+ // Fly backend for every /backend call, and the sandbox-skill resolution needs the
+ // CommonJS skill modules. Not on Netlify.
+ //
+ // Workspace-scoped throughout — the skills, the authored definitions and the
+ // daemon-pushed documents are all read WHERE workspace_id = the id the caller
+ // proved `read` on, so a member of one workspace cannot reach another's.
+ app.get('/backend/system/skill-content', requireAuth, async (req, res) => {
+  try {
+   if (rateLimitBlocked(res, skillRateLimiter, `skill-content:${req.userId || clientIpFromReq(req)}`)) return;
+   const workspaceId = String(req.query.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+
+   const libraryId = String(req.query.library || '').trim();
+   if (libraryId) return res.json({ data: await skillLibraryPayload(libraryId, String(req.query.entry || '')), error: null });
+
+   const skill = String(req.query.skill || '').trim().slice(0, 200);
+   if (!skill) return jsonError(res, 400, new Error('skill or library is required'));
+   res.json({ data: await skillContentPayload(workspaceId, skill), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.post('/backend/system/inspect-path', requireAuth, async (req, res) => {
   try {
    const inspected = await inspectProjectPath(req.body?.path || '');
@@ -6657,6 +11117,38 @@ function createApp() {
    fs.createReadStream(fullPath).pipe(res);
   } catch (error) {
    jsonError(res, 500, error);
+  }
+ });
+
+ // Deleting an upload through the generic /backend/db/delete only removes the row,
+ // so the blob stayed on the Fly volume forever and the per-workspace quota (a
+ // sum(size) over surviving rows) drifted below real disk usage until ENOSPC.
+ // This route removes both. The path is resolved BEFORE the row is deleted, since
+ // the containment check needs the row's workspace_id and storage_path.
+ app.delete('/backend/files/:id', requireAuth, async (req, res) => {
+  try {
+   const rows = await getDb().unsafe('select id, workspace_id, storage_path from uploaded_files where id = $1 limit 1', [req.params.id]);
+   const file = rows[0];
+   if (!file) return jsonError(res, 404, new Error('File was not found'));
+   await enforceWorkspaceRole(req.userId, file.workspace_id, 'write');
+   let fullPath = '';
+   if (file.storage_path) {
+    try {
+     fullPath = resolveStoragePathForWorkspace(file.workspace_id, file.storage_path);
+    } catch (pathError) {
+     return jsonError(res, pathError.status || 403, pathError);
+    }
+   }
+   const deleted = await getDb().unsafe('delete from uploaded_files where id = $1 returning *', [file.id]);
+   if (deleted.length > 0) notifyDbSubscribers('uploaded_files', 'DELETE', deleted);
+   // Best effort: the row is already gone, so a missing/undeletable blob must not
+   // fail the request — it would just leave the caller unable to retry.
+   if (fullPath) {
+    try { fs.rmSync(fullPath, { force: true }); } catch { /* blob already gone */ }
+   }
+   res.json({ data: { id: file.id }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
   }
  });
 
@@ -7017,11 +11509,27 @@ function createApp() {
    // (inviteTokenLookupParams) so legacy plaintext rows keep working during the
    // transition. The plaintext is returned ONCE here, on creation.
    const token = crypto.randomBytes(32).toString('base64url');
+   // Orb config is optional on create (an omitted field keeps the column default,
+   // which reproduces the pre-orb behaviour) but must be settable here, or an orb
+   // created while the config route is unreachable comes back generic/unsigned
+   // with no prompt and the operator cannot tell why.
+   const config = normalizeOrbConfigInput(req.body || {});
    const rows = await getDb().unsafe(
-    `insert into agent_webhooks (workspace_id, agent_id, name, token)
-         values ($1, $2, $3, $4)
+    `insert into agent_webhooks
+         (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
+         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
          returning *`,
-    [workspaceId, agentId || null, String(name).trim(), hashAgentToken(token)],
+    [
+     workspaceId,
+     agentId || null,
+     String(name).trim(),
+     hashAgentToken(token),
+     config.provider,
+     config.prompt,
+     config.payloadFields,
+     config.routing,
+     config.rateLimitPerHour,
+    ],
    );
    notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
    res.json({ data: { ...rows[0], token }, error: null });
@@ -7030,10 +11538,85 @@ function createApp() {
   }
  });
 
+ // Orb configuration (plans/021). Guards are deliberately identical to the create
+ // route above — requireAuth plus enforceWorkspaceRole(..., 'manage') — rather
+ // than a new limiter: 'manage' is already the access level agent_webhooks
+ // carries in DB_TABLE_ACCESS, and the only unauthenticated surface in this
+ // feature is the trigger route, which has webhookRateLimiter plus its own
+ // per-orb hourly cap.
+ //
+ // `signing_secret` is WRITE-ONLY. It goes to the workspace vault, never to a
+ // column on agent_webhooks (which the frontend reads with select('*')), and is
+ // never returned. An empty string clears it.
+ app.put('/backend/agent-webhooks/:id', requireAuth, async (req, res) => {
+  try {
+   const webhookId = String(req.params.id || '').trim();
+   if (!webhookId) return jsonError(res, 400, new Error('webhook id is required'));
+   const existing = await getDb().unsafe('select * from agent_webhooks where id = $1 limit 1', [webhookId]);
+   const orb = existing[0];
+   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
+   await enforceWorkspaceRole(req.userId, orb.workspace_id, 'manage');
+
+   const config = normalizeOrbConfigInput(req.body || {}, orb);
+   let hasSecret = orb.has_signing_secret === true;
+   if (typeof req.body?.signing_secret === 'string') {
+    const secret = req.body.signing_secret.trim();
+    if (secret && secret.length < 16) {
+     return jsonError(res, 400, new Error('A signing secret must be at least 16 characters'));
+    }
+    await setWorkspaceSecretValue(
+     orb.workspace_id,
+     orbSecretKey(orb.id),
+     secret,
+     req.userId,
+     `Signing secret for orb "${String(orb.name || '').slice(0, 80)}"`,
+    );
+    hasSecret = Boolean(secret);
+   }
+   // A non-generic provider with no secret can never verify a delivery, so the
+   // trigger route answers 503. Refuse the configuration that guarantees that
+   // instead of letting the operator discover it from a provider's retry log.
+   if (config.provider !== 'generic' && !hasSecret) {
+    return jsonError(res, 400, new Error(
+     `Provider "${config.provider}" signs its deliveries, so this orb needs a signing secret. `
+     + 'Set signing_secret in the same request, or leave the provider as generic.',
+    ));
+   }
+
+   const name = typeof req.body?.name === 'string' && req.body.name.trim()
+    ? req.body.name.trim().slice(0, 200)
+    : orb.name;
+   const enabled = typeof req.body?.enabled === 'boolean' ? req.body.enabled : orb.enabled;
+   const rows = await getDb().unsafe(
+    `update agent_webhooks
+          set name = $2, enabled = $3, provider = $4, prompt = $5, payload_fields = $6::jsonb,
+              routing = $7, rate_limit_per_hour = $8, has_signing_secret = $9, updated_at = now()
+        where id = $1
+        returning *`,
+    [
+     orb.id,
+     name,
+     enabled,
+     config.provider,
+     config.prompt,
+     config.payloadFields,
+     config.routing,
+     config.rateLimitPerHour,
+     hasSecret,
+    ],
+   );
+   notifyDbSubscribers('agent_webhooks', 'UPDATE', rows);
+   res.json({ data: rows[0], error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.get('/backend/workspaces', requireAuth, async (req, res) => {
   try {
    const rows = await getDb().unsafe(
-    `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+    `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
+                w.local_path, w.project_kind, w.git_root, w.git_remote,
                 w.created_at, w.updated_at,
                 case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
          from workspaces w
@@ -7054,7 +11637,7 @@ function createApp() {
    if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
          from workspace_agents
          where workspace_id = $1
          order by created_at asc, name asc`,
@@ -7064,6 +11647,152 @@ function createApp() {
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
+ });
+
+ // Gateway configs: workspace-level named routes to an external OpenAI-compatible
+ // endpoint. The API key is stored encrypted (api_key_cipher) and is NEVER
+ // returned to the client — publicGatewayConfig strips it and reports only whether
+ // a key is configured. Selecting a gateway in chat routes that turn's inference
+ // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
+
+ // SSRF guard (H1). base_url comes straight from the request body and /backend/ai-chat
+ function publicGatewayConfig(row) {
+  return {
+   id: row.id,
+   workspace_id: row.workspace_id,
+   name: row.name,
+   base_url: row.base_url,
+   model: row.model,
+   protocol: row.protocol || 'openai-chat',
+   headers: parseJsonObject(row.headers),
+   has_key: Boolean(row.api_key_cipher),
+   created_at: row.created_at,
+   updated_at: row.updated_at,
+  };
+ }
+
+ // Resolve a `gateway:<id>` model to its upstream call config (with the decrypted
+ // key) for server-side inference. Returns null when the id is unknown to the
+ // workspace. Server-only — the plaintext key never leaves this process.
+ async function resolveGatewayRoute(workspaceId, gatewayId) {
+  const rows = await getDb().unsafe(
+   'select * from gateway_configs where id = $1 and workspace_id = $2 limit 1',
+   [String(gatewayId || ''), String(workspaceId || '')],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  let apiKey = '';
+  if (row.api_key_cipher) {
+   try { apiKey = await decryptVaultSecret(row.api_key_cipher); } catch { apiKey = ''; }
+  }
+  return {
+   id: row.id,
+   name: row.name,
+   baseUrl: String(row.base_url || '').replace(/\/+$/, ''),
+   model: row.model,
+   protocol: row.protocol || 'openai-chat',
+   headers: parseJsonObject(row.headers),
+   apiKey,
+  };
+ }
+
+ app.get('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rows = await getDb().unsafe(
+    'select * from gateway_configs where workspace_id = $1 order by created_at asc, name asc',
+    [workspaceId],
+   );
+   res.json({ data: rows.map(publicGatewayConfig), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:id/gateways', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const name = String(req.body?.name || 'Gateway').trim().slice(0, 120) || 'Gateway';
+   const rawBaseUrl = String(req.body?.base_url || req.body?.baseUrl || '').trim().slice(0, 500);
+   const model = String(req.body?.model || '').trim().slice(0, 200);
+   const apiKey = String(req.body?.api_key || req.body?.apiKey || '');
+   const headers = parseJsonObject(req.body?.headers);
+   if (!rawBaseUrl) return jsonError(res, 400, new Error('base_url is required'));
+   const baseUrl = await assertSafeOutboundUrl(rawBaseUrl);
+   const cipher = apiKey ? await encryptVaultSecret(apiKey) : '';
+   const rows = await getDb().unsafe(
+    `insert into gateway_configs (workspace_id, name, base_url, api_key_cipher, model, protocol, headers, created_by)
+         values ($1, $2, $3, $4, $5, 'openai-chat', $6::jsonb, $7) returning *`,
+    [workspaceId, name, baseUrl, cipher, model, headers, req.userId || null],
+   );
+   notifyDbSubscribers('gateway_configs', 'INSERT', rows.map(publicGatewayConfig));
+   res.status(201).json({ data: publicGatewayConfig(rows[0]), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.patch('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const gatewayId = String(req.params.gatewayId || '').trim();
+   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const sets = ['updated_at = now()'];
+   const params = [gatewayId, workspaceId];
+   const push = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
+   if (req.body?.name !== undefined) push('name', String(req.body.name).trim().slice(0, 120) || 'Gateway');
+   if (req.body?.base_url !== undefined || req.body?.baseUrl !== undefined) {
+    push('base_url', await assertSafeOutboundUrl(String(req.body.base_url ?? req.body.baseUrl).trim().slice(0, 500)));
+   }
+   if (req.body?.model !== undefined) push('model', String(req.body.model).trim().slice(0, 200));
+   if (req.body?.headers !== undefined) { params.push(parseJsonObject(req.body.headers)); sets.push(`headers = $${params.length}::jsonb`); }
+   // Only rotate the key when a non-empty api_key is provided; an omitted or empty
+   // field leaves the stored cipher intact so a name/model edit never wipes it.
+   if (req.body?.api_key || req.body?.apiKey) push('api_key_cipher', await encryptVaultSecret(String(req.body.api_key || req.body.apiKey)));
+   const rows = await getDb().unsafe(
+    `update gateway_configs set ${sets.join(', ')} where id = $1 and workspace_id = $2 returning *`,
+    params,
+   );
+   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
+   notifyDbSubscribers('gateway_configs', 'UPDATE', rows.map(publicGatewayConfig));
+   res.json({ data: publicGatewayConfig(rows[0]), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/gateways/:gatewayId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const gatewayId = String(req.params.gatewayId || '').trim();
+   if (!workspaceId || !gatewayId) return jsonError(res, 400, new Error('workspaceId and gatewayId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe('delete from gateway_configs where id = $1 and workspace_id = $2 returning id, workspace_id', [gatewayId, workspaceId]);
+   if (!rows[0]) return jsonError(res, 404, new Error('Gateway not found in this workspace'));
+   notifyDbSubscribers('gateway_configs', 'DELETE', [{ id: gatewayId, workspace_id: workspaceId }]);
+   res.json({ data: { id: gatewayId, deleted: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Voice huddles (LiveKit). Fly-only, like gateways: it needs the websocket fanout,
+ // so the Netlify mirror deliberately has no huddle routes.
+ mountHuddleRoutes(app, {
+  getDb, requireAuth, enforceWorkspaceRole, jsonError, notifyDbSubscribers,
+  rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
+ });
+
+ // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
+ // mirrored on Netlify; the Deepgram audio relay is not a route at all — it
+ // rides the realtime websocket, which only exists here. See server/voice.cjs.
+ mountVoiceRoutes(app, {
+  requireAuth, enforceWorkspaceRole, jsonError, rateLimitBlocked, voiceTokenRateLimiter,
  });
 
  // Per-workspace usage/storage stats in one round-trip. Read-role only. Bytes
@@ -7288,7 +12017,7 @@ function createApp() {
            (workspace_id, agent_id, created_by, key_hash, name, surface, scope, domain, metadata)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
          returning *`,
-    [workspaceId, agentId, req.userId, hashAgentToken(key), name, surface, scope, domain, JSON.stringify(metadata)],
+    [workspaceId, agentId, req.userId, hashAgentToken(key), name, surface, scope, domain, metadata],
    );
    notifyDbSubscribers('cursorbuddy_connection_keys', 'INSERT', rows.map(publicCursorBuddyConnectionKey));
    res.json({
@@ -7405,7 +12134,7 @@ function createApp() {
              updated_at = now()
          where id = $1
          returning *`,
-    [record.id, agent.id, JSON.stringify(metadata)],
+    [record.id, agent.id, metadata],
    );
    notifyDbSubscribers('cursorbuddy_connection_keys', 'UPDATE', updateRows.map(publicCursorBuddyConnectionKey));
    res.json({
@@ -7510,6 +12239,460 @@ function createApp() {
     return connection;
    });
    res.json({ data: reconciled, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Inbox (triage surface) ----------------------------------------------
+ // Aggregates the five existing "this needs a human" sources into one
+ // newest-first list. See buildInboxSql for the visibility + boundedness
+ // reasoning. Membership is enforced exactly as every sibling workspace route
+ // does (enforceWorkspaceRole 'read'); getting this wrong leaks one tenant's
+ // inbox into another's.
+ // The sidebar's Threads section: message threads this person follows, newest
+ // reply first, each carrying whether it has been read. See server/thread-inbox.cjs
+ // for what counts as a thread and what counts as following one.
+ app.get('/backend/workspaces/:workspaceId/threads', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const limit = Math.trunc(Number(req.query.limit)) || THREAD_INBOX_DEFAULT_LIMIT;
+   const rows = await getDb().unsafe(buildThreadInboxSql(limit), [workspaceId, String(req.userId)]);
+   const items = rows.map(toThreadInboxItem);
+   // Counted over the returned window, like the inbox badge: more unread than
+   // the cap is a "lots" signal, not a number anyone acts on precisely.
+   const unreadCount = items.reduce((n, item) => n + (item.unread ? 1 : 0), 0);
+   res.json({ data: { items, unreadCount }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/workspaces/:workspaceId/inbox', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const filter = String(req.query.filter || 'all').trim().toLowerCase();
+   if (!INBOX_FILTERS.has(filter)) return jsonError(res, 400, new Error('Unknown inbox filter'));
+   const limit = Math.min(INBOX_MAX_LIMIT, Math.max(1, Math.trunc(Number(req.query.limit)) || INBOX_DEFAULT_LIMIT));
+
+   const userRows = await getDb().unsafe('select display_name, email from app_users where id = $1 limit 1', [req.userId]);
+   const pattern = inboxMentionPattern(inboxMentionHandle(userRows[0]));
+
+   const rows = await getDb().unsafe(buildInboxSql(limit), [workspaceId, String(req.userId), pattern]);
+   const all = rows.map(toInboxItem);
+   // unreadCount is deliberately computed over EVERY category, not the filtered
+   // view, so the badge does not change when the user switches tabs. It counts
+   // the bounded window this query returns — an inbox with more unread than that
+   // is a "lots" signal, not a precise number.
+   const unreadCount = all.reduce((n, item) => n + (item.unread ? 1 : 0), 0);
+   const items = (filter === 'all' ? all : all.filter((item) => item.category === filter)).slice(0, limit);
+   res.json({ data: { items, unreadCount }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Advance the caller's read marker for one context. MONOTONIC: the upsert's
+ // WHERE guard drops a readAt that is not newer than the stored one, so a slow
+ // or out-of-order write (a second device that was behind) can never un-read an
+ // item. Always reports ok — "already at or ahead of this point" is success.
+ app.post('/backend/inbox/read', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim();
+   const contextKey = String(req.body?.contextKey || req.body?.context_key || '').trim().slice(0, 200);
+   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
+   if (!contextKey) return jsonError(res, 400, new Error('contextKey is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rawReadAt = req.body?.readAt ?? req.body?.read_at;
+   const readAt = rawReadAt === undefined || rawReadAt === null || rawReadAt === ''
+    ? new Date()
+    : new Date(rawReadAt);
+   if (Number.isNaN(readAt.getTime())) return jsonError(res, 400, new Error('readAt must be an ISO timestamp'));
+   // Stored at MILLISECOND resolution to match what the read predicate compares
+   // against (see buildInboxSql). Normalising on the way in means the column's
+   // contract holds whoever writes it, not just callers that happen to be
+   // JavaScript — and it keeps the monotonic guard below comparing like with
+   // like, so a marker cannot creep forward by sub-millisecond noise.
+   await getDb().unsafe(
+    `insert into inbox_read_state (user_id, workspace_id, context_key, read_at)
+         values ($1::uuid, $2::uuid, $3, date_trunc('milliseconds', $4::timestamptz))
+         on conflict (user_id, workspace_id, context_key)
+         do update set read_at = excluded.read_at, updated_at = now()
+         where inbox_read_state.read_at < excluded.read_at`,
+    [String(req.userId), workspaceId, contextKey, readAt.toISOString()],
+   );
+   res.json({ data: { ok: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Link preview cards ----------------------------------------------------
+ //
+ // The browser CANNOT do this itself: it cannot read a cross-origin document
+ // (CORS), and if it could, every reader's IP would be handed to every host
+ // anybody links to. One fetch here, cached, is both the only workable option
+ // and the private one.
+ //
+ // Every security decision lives in server/link-preview.cjs (SSRF gate, budget,
+ // untrusted-text clamp) and is tested there. This route is the boring half:
+ // validate, read cache, fetch the misses, write the cache, answer. Note there
+ // is no jsonb column anywhere in this feature — the whole row is text and
+ // timestamps, so the porsager-stringify trap (tests/jsonb-bind-hygiene) has
+ // nothing to catch here.
+ //
+ // `urls` comes from the client's own extractor (src/lib/linkPreview.ts). It is
+ // re-validated here regardless: a drift between the two extractors can only
+ // change which cards appear, never what this server is willing to fetch.
+ app.post('/backend/link-previews', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, linkPreviewRateLimiter, linkPreviewDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const submitted = Array.isArray(req.body?.urls) ? req.body.urls : [];
+   const wanted = [];
+   const seen = new Set();
+   // Scan a bounded prefix, then keep the first N that survive validation — a
+   // body with 10,000 urls must not become 10,000 URL parses.
+   for (const raw of submitted.slice(0, LINK_PREVIEW_MAX_PER_REQUEST * 4)) {
+    const normalized = normalizeUnfurlUrl(raw);
+    if (!normalized.ok || seen.has(normalized.url)) continue;
+    seen.add(normalized.url);
+    wanted.push(normalized.url);
+    if (wanted.length >= LINK_PREVIEW_MAX_PER_REQUEST) break;
+   }
+   if (!wanted.length) return res.json({ data: { previews: [] }, error: null });
+
+   const hashes = wanted.map(linkPreviewCacheKey);
+   // Explicit placeholders rather than `= any($1::text[])`: postgres.js will not
+   // array-serialize a raw JS array bound through .unsafe (see AGENTS.md), and
+   // with a cap of 8 there is nothing to gain from the array form.
+   const cached = await getDb().unsafe(
+    `select ${LINK_PREVIEW_COLUMNS} from link_previews
+        where url_hash in (${hashes.map((_hash, index) => `$${index + 1}`).join(', ')})
+          and expires_at > now()`,
+    hashes,
+   );
+   const byHash = new Map(cached.map(row => [row.url_hash, row]));
+
+   const misses = wanted.filter(url => !byHash.has(linkPreviewCacheKey(url)));
+   if (misses.length) {
+    // In parallel, bounded by LINK_PREVIEW_MAX_PER_REQUEST. Each fetch carries
+    // its own deadline, so the worst case for this handler is one timeout, not
+    // the sum of them.
+    const fetched = await Promise.all(misses.map(async (url) => {
+     try {
+      return await fetchLinkPreview(url);
+     } catch (error) {
+      // fetchLinkPreview is documented not to throw; if that ever stops being
+      // true, one bad URL must not fail the whole batch.
+      console.warn('[link-preview] unexpected throw:', error?.message || error);
+      return { url, finalUrl: '', status: 'failed', detail: 'internal_error', title: '', description: '', siteName: '', imageUrl: '' };
+     }
+    }));
+    for (const result of fetched) {
+     const row = await upsertLinkPreview(result);
+     if (row) byHash.set(row.url_hash, row);
+    }
+   }
+
+   res.json({
+    data: {
+     previews: wanted
+      .map(url => byHash.get(linkPreviewCacheKey(url)))
+      .filter(Boolean)
+      .map(publicLinkPreview),
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // The image proxy. Direct <img src="https://stranger.example/card.png"> would
+ // hand the reader's IP (and referer, and UA) to that host on every render —
+ // exactly the leak unfurling server-side was meant to avoid — so the bytes come
+ // through here instead.
+ //
+ // A proxy is a second SSRF surface, and this one is deliberately shaped so it
+ // barely is: it takes a PREVIEW ROW ID, never a URL. The set of fetchable
+ // targets is therefore exactly the set already unfurled and validated once, and
+ // fetchPreviewImage re-runs the full gate anyway (DNS can move between the two
+ // requests). Authenticated, rate-limited, image-only content types, 2MB cap.
+ app.get('/backend/link-previews/:id/image', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, linkPreviewImageRateLimiter, linkPreviewImageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const id = String(req.params.id || '');
+   // Checked before the query: an id that is not a uuid would make the ::uuid
+   // cast throw a 500 for what is really a 404.
+   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return jsonError(res, 404, new Error('Preview not found'));
+   }
+   const rows = await getDb().unsafe('select image_url from link_previews where id = $1::uuid limit 1', [id]);
+   const imageUrl = String(rows[0]?.image_url || '');
+   if (!imageUrl) return jsonError(res, 404, new Error('This preview has no image'));
+   const image = await fetchPreviewImage(imageUrl);
+   if (!image.ok) return jsonError(res, 502, new Error('Preview image could not be fetched'));
+   res.setHeader('Content-Type', image.contentType);
+   // Belt and braces on a body we did not author: no sniffing to something
+   // executable, and a CSP that permits nothing at all if it is ever navigated
+   // to directly rather than loaded as an <img>.
+   res.setHeader('X-Content-Type-Options', 'nosniff');
+   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+   // `private` so a shared cache never holds it; a day is well inside the row's
+   // own TTL and keeps a scrolling reader off this route entirely.
+   res.setHeader('Cache-Control', 'private, max-age=86400');
+   res.end(image.bytes);
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- In-app feedback -------------------------------------------------------
+ //
+ // SUBMIT is open to any authenticated user and rate limited; READ is not here
+ // at all. Reports are read as ordinary rows of the System workspace through
+ // the generic /backend/db gate, so "only members of the System workspace can
+ // see feedback" is the same membership check as every other table rather than
+ // a second authorization path written by hand.
+ //
+ // The client does NOT choose the destination workspace. It cannot: the body
+ // has no workspace field for the report's home, only `sourceWorkspaceId`
+ // (where the user was standing), which is recorded as context and never used
+ // for authorization. ensureSystemWorkspace resolves the target server-side.
+ app.post('/backend/feedback', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, feedbackRateLimiter, feedbackDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   // Re-validate, re-clamp and RE-REDACT. The browser already redacted before
+   // sending, but a request that did not come from our client would not have,
+   // and a feedback endpoint that trusts the caller to have scrubbed its own
+   // console is not a control at all.
+   const submission = normalizeFeedbackSubmission(req.body);
+   const sourceWorkspaceId = String(req.body?.workspaceId || req.body?.workspace_id || '').trim() || null;
+   const result = await insertFeedbackReport({
+    db: dbQuery,
+    // postgres.js: bind the OBJECT. JSON.stringify here would store a jsonb
+    // string scalar and every `diagnostics->>'…'` would silently return NULL.
+    // Verified against the live database — see insertFeedbackReport's comment.
+    jsonParam: (value) => value,
+    userId: req.userId,
+    sourceWorkspaceId,
+    submission,
+   });
+   // Fan the new task out to anyone with the System workspace open, so a report
+   // appears in the review list without a reload. Re-selected rather than
+   // returned from the insert because the fanout carries the whole row, and the
+   // insert only needs the id. Fly only: Netlify has no WebSocket layer.
+   // Never lets a broadcast failure fail an accepted report.
+   try {
+    const taskRows = await dbQuery('select * from tasks where id = $1', [result.taskId]);
+    if (taskRows.length > 0) notifyDbSubscribers('tasks', 'INSERT', taskRows);
+   } catch (error) {
+    console.warn('[feedback] realtime fanout failed:', error.message || error);
+   }
+   res.json({ data: { ok: true, taskId: result.taskId }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Tenants (system-owner admin surface) ----------------------------------
+ //
+ // The only routes in this file that read ACROSS workspaces and accounts. They
+ // are authorized by `assertSystemOwner` (shared/tenant-admin.cjs) and by
+ // nothing else — no workspace membership, no role, no allow-list of ids, and
+ // no email taken from the request. The check resolves the caller's email from
+ // their authenticated userId and compares it to AGENSIS_SYSTEM_OWNER_EMAIL;
+ // it refuses when that is unset.
+ //
+ // The Tenants button is hidden from everybody else in the UI. That is a
+ // nicety. THESE THREE CHECKS are the access control, and each route runs its
+ // own — a curl with a valid non-owner token gets 403 from every one of them.
+ //
+ // The read routes are read-only: upgrades and credits are still a later pass.
+ // The ONE thing this surface can now write is an owner broadcast — see the
+ // campaign routes below, which carry their own audit trail and cannot change
+ // anybody's account, only add a dismissible message to their UI.
+
+ // Whether the CALLER is the owner. Answers for the caller and nobody else, so
+ // it is safe for any signed-in user to ask — it is how the client decides
+ // whether to render the button at all, and a 403 there would be a console
+ // error on every ordinary user's session. Authorization is still the ONE
+ // gate: `assertSystemOwner` runs here exactly as on the data routes, and only
+ // its 403 is translated into `{ owner: false }`. Anything else (a DB failure,
+ // say) propagates — a broken check is an error, not "not the owner".
+ app.get('/backend/tenants/access', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   let owner = true;
+   try {
+    await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   } catch (error) {
+    if (error?.status !== 403) throw error;
+    owner = false;
+   }
+   res.json({ data: { owner }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const result = await listTenantAccounts(dbQuery);
+   res.json({ data: result, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Owner broadcasts ----------------------------------------------------
+ //
+ // The ONLY write routes on this surface, and the first thing in the product
+ // that puts one person's words into everybody else's UI. Every one of them
+ // runs `assertSystemOwner` — the same gate, in the same place in the handler,
+ // as the read routes above.
+ //
+ // REGISTERED BEFORE '/backend/tenants/:id'. Express matches in order, so
+ // '/backend/tenants/campaigns' registered after the parameterised route would
+ // be swallowed as an account id and answer 404 for the owner.
+ //
+ // The audit trail is the tenant_campaigns row itself: created_by, the sender's
+ // email as it read at send time, the segment, its plain-English summary, the
+ // recipient count, and the frozen recipient list in tenant_campaign_recipients.
+ // Not an activity_events row — those are workspace-scoped, and a broadcast
+ // belongs to no workspace.
+
+ /** The filters the composer may offer. Ids and labels only — no predicates. */
+ app.get('/backend/tenants/campaigns/categories', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   res.json({
+    data: {
+     categories: CAMPAIGN_CATEGORIES.map(({ id, label, days }) => ({ id, label, days: days === true })),
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ /**
+  * WHO WOULD RECEIVE THIS. The segment is evaluated server-side and the matched
+  * accounts are returned in full, so the owner can read the list before sending
+  * rather than trusting a number. Nothing is written.
+  */
+ app.post('/backend/tenants/campaigns/preview', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const segment = normalizeSegment(req.body?.segment);
+   const facts = await loadTenantFacts(dbQuery);
+   res.json({ data: buildSegmentPreview(segment, facts), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants/campaigns', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   res.json({ data: await listCampaigns(dbQuery), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ /**
+  * SEND. Two refusals stand between a mis-click and the whole deployment:
+  *
+  *   1. the audience is recomputed HERE, from the segment in this request — the
+  *      preview's list is never trusted, so a client cannot post a segment of
+  *      one and a recipient list of four hundred;
+  *   2. `assertSendable` refuses an empty match (nobody to send to) and refuses
+  *      a `confirm_recipient_count` that is not exactly the number just
+  *      computed — so the count the owner agreed to in the confirm dialog is
+  *      the count that actually goes out, and a segment that grew while they
+  *      were reading it comes back as a 409 to re-confirm.
+  *
+  * The jsonb bind is the OBJECT, not a string: porsager turns a stringified
+  * bind into a jsonb string scalar even under an explicit cast (see
+  * tests/jsonb-bind-hygiene.test.cjs). The Netlify mirror binds the string.
+  */
+ app.post('/backend/tenants/campaigns', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const ownerId = await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const input = normalizeCampaignInput(req.body);
+   const facts = await loadTenantFacts(dbQuery);
+   const matched = selectSegmentMatches(input.segment, facts);
+   assertSendable(matched.length, req.body?.confirm_recipient_count);
+   const ownerRows = await dbQuery('select email from app_users where id = $1 limit 1', [ownerId]);
+   const campaign = await createCampaign(dbQuery, {
+    title: input.title,
+    body: input.body,
+    surface: input.surface,
+    segmentBind: input.segment,
+    summary: describeSegment(input.segment),
+    recipientIds: matched.map((account) => account.user_id),
+    createdBy: ownerId,
+    createdByEmail: ownerRows?.[0]?.email || '',
+   });
+   console.log('[campaign] sent', {
+    id: campaign.id,
+    by: ownerId,
+    surface: campaign.surface,
+    recipients: campaign.recipient_count,
+    segment: campaign.summary,
+   });
+   res.json({ data: { campaign }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants/:id', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const detail = await getTenantAccount(dbQuery, String(req.params.id || ''));
+   if (!detail) return jsonError(res, 404, new Error('No such account'));
+   res.json({ data: detail, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Owner broadcasts, the receiving end -----------------------------------
+ //
+ // NOT owner-gated, and deliberately on a different path prefix so that stays
+ // obvious: every signed-in user reads their OWN messages here. Authorization is
+ // the user id from the verified session, bound into both statements — there is
+ // no request shape that reads or dismisses somebody else's message, and no
+ // route here can create, edit or delete a campaign.
+
+ app.get('/backend/campaign-messages', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, campaignMessageRateLimiter, campaignMessageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   res.json({ data: await listUserCampaignMessages(dbQuery, req.userId), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/campaign-messages/:id/dismiss', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, campaignMessageRateLimiter, campaignMessageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   res.json({ data: await dismissCampaignMessage(dbQuery, req.userId, String(req.params.id || '')), error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -7718,6 +12901,23 @@ function createApp() {
   }
  });
 
+ app.post('/backend/agents/:id/disconnect', requireAuth, async (req, res) => {
+  try {
+   const agentId = String(req.params.id || '').trim();
+   const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+   const agent = rows[0];
+   if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+   await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
+   const disconnectedCount = [...connectedAgents.values()].filter(
+    entry => String(entry.agentId) === String(agent.id) && String(entry.workspaceId) === String(agent.workspace_id),
+   ).length;
+   await disconnectAgentDaemons(agent.id, agent.workspace_id, 'disconnected');
+   res.json({ data: { id: agentId, disconnected: disconnectedCount }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.post('/backend/agents/:id/memory-refresh', requireAuth, async (req, res) => {
   try {
    const agentId = String(req.params.id || '').trim();
@@ -7759,8 +12959,12 @@ function createApp() {
     return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
    }
    await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
+   // `folder` is in the projection because the mode gate below needs it to
+   // recognise a legacy 'Direct messages' DM. An explicit column list that omits
+   // a column a decision reads is this repo's blank-column trap — the value
+   // arrives as undefined and the decision silently takes the other branch.
    const sessionRows = await getDb().unsafe(
-    'select id, workspace_id, participants, conversation_mode from chat_sessions where id = $1 limit 1',
+    'select id, workspace_id, participants, conversation_mode, folder from chat_sessions where id = $1 limit 1',
     [sessionId],
    );
    if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
@@ -7780,11 +12984,32 @@ function createApp() {
    const threadTarget = mentions.length === 0 && threadParentId
     ? await inferThreadAgentTarget(sessionId, threadParentId)
     : null;
-   // AUTO is always on for channels: a plain human message (no mention/direct/
-   // thread target) still enters the orchestrator for non-DM channels. A true
-   // 1:1 DM (a participant flagged direct:true) only routes to its own agent.
+   // A true 1:1 DM (a participant flagged direct:true) only routes to its own agent.
    const isDirectMessage = Boolean(directTarget && directTarget.direct);
-   const willDispatch = mentions.length > 0 || Boolean(threadTarget) || Boolean(directTarget) || !isDirectMessage;
+   // The DM test the MODE GATE uses has to be continueConversation's, not the
+   // narrow one above: it also counts the legacy 'Direct messages' folder, whose
+   // rows never got a direct-flagged participant. Kept separate so the branch
+   // below stays keyed on exactly what it always was.
+   const dmForModeGate = isDirectMessage || sessionRows[0].folder === 'Direct messages';
+   // `@channel` addresses the roster rather than a handle, so it counts as being
+   // addressed even though `mentions` (individual handles) is empty.
+   const addressesChannel = mentionsChannel(content);
+   // A directTarget only counts as ADDRESSED in a DM. In a channel it is the
+   // sole-agent-participant fallback, which is the un-addressed case the mode
+   // governs — see the matching gate in continueConversation.
+   const addressed = mentions.length > 0 || addressesChannel || Boolean(threadTarget)
+    || (Boolean(directTarget) && dmForModeGate);
+   // Nothing and nobody was addressed. Whether that still wakes an agent is the
+   // channel's conversation_mode — the SAME decision continueConversation makes
+   // (allowsUnpromptedReply), asked here only so the client is told the truth
+   // rather than being handed dispatched:true for a post nobody will answer.
+   if (!addressed && !allowsUnpromptedReply({
+    conversationMode: sessionRows[0].conversation_mode,
+    isDirectMessage: dmForModeGate,
+   })) {
+    return res.json({ data: { dispatched: false, reason: 'channel_replies_on_mention_only' }, error: null });
+   }
+   const willDispatch = addressed || !isDirectMessage;
    if (!willDispatch) {
     return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
    }
@@ -7797,7 +13022,13 @@ function createApp() {
    // open for the whole multi-turn chain would block the user's UI.
    void continueConversation({ workspaceId, sessionId, threadParentId: effectiveThreadParentId })
     .catch((error) => console.error('continueConversation (dispatch) failed', error));
-   const dispatchMode = directTarget ? 'direct' : (mentions.length > 0 || threadTarget ? 'mention' : 'auto');
+   // Diagnostic only (nothing branches on it), but ordered the way
+   // pickMentionNextAgent actually decides: an explicit mention outranks the
+   // sole-agent direct fallback, so reporting 'direct' for "@coder look" in a
+   // one-agent channel was simply describing the wrong reason.
+   const dispatchMode = addressesChannel
+    ? 'channel'
+    : (mentions.length > 0 || threadTarget ? 'mention' : (directTarget ? 'direct' : 'auto'));
    return res.json({ data: { dispatched: true, mode: dispatchMode, mentions }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -7809,19 +13040,11 @@ function createApp() {
  // token>` and gets the full workspace toolset — no agensis-agent daemon needed.
  // Mirrors the hilos /api/mcp model. See server/mcp.cjs.
  const mcpHandler = createMcpHandler({
-  getDb,
+  // The tool-facing capabilities, shared verbatim with the builtin tool loop
+  // (see mcpToolDeps / getBuiltinToolset). Only the transport concerns below are
+  // specific to this door.
+  ...mcpToolDeps(),
   verifyMcpToken,
-  continueConversation,
-  notifyDbSubscribers,
-  slugHandle,
-  claimMcpJob,
-  submitMcpJobResult,
-  resolveWorkspaceAgentByHandle,
-  registerAgentRequest,
-  getRegistrationStatus,
-  getAgentConnectionCommand: buildAgentConnectionCommand,
-  enforceWorkspaceRole,
-  roleHasWorkspaceCapability,
   rateLimiter: mcpRateLimiter,
   rateLimitBlocked,
   runtimeSchemaReady,
@@ -7857,93 +13080,282 @@ function createApp() {
   res.send(renderSkillMd({ baseUrl: skillBaseUrl(req) }));
  });
 
+ // --- Orbs: the event-driven webhook trigger --------------------------------
+ // (plans/021-event-driven-orbs.md)
+ //
+ // What this route used to do, and why all of it had to change:
+ //
+ //   1. It built the prompt as
+ //      `req.body.prompt || .text || .message || JSON.stringify(req.body)` —
+ //      the attacker-controlled payload WAS the entire user turn, delivered to an
+ //      agent whose permission_mode may be 'yolo' (--no-sandbox --yolo).
+ //   2. It called runAnthropicCompletion INLINE, so a daemon or sandbox agent
+ //      never actually ran in its runtime: it got a one-shot built-in completion
+ //      with no tools, no filesystem and no agent_jobs row. The orb never woke.
+ //   3. It awaited that completion before responding, routinely blowing past
+ //      GitHub's ~10s delivery timeout — so the provider retried, and with no
+ //      deduplication each retry created another session and another billed run.
+ //      The synchronous response shape was the retry-storm generator.
+ //   4. Nothing was verified. The token was the only authenticator, so a URL
+ //      leaked into a CI log was an unlimited agent-run button.
+ //
+ // Unauthenticated, so every gate below is load-bearing. The order is
+ // cheap-before-expensive with one deliberate exception: the IP rate limiter runs
+ // FIRST, ahead of the free header checks, because it is the only defence against
+ // volume and a malformed flood is still load.
  app.post('/backend/webhooks/:token', async (req, res) => {
+  const nowMs = Date.now();
   try {
-   // Unauthenticated endpoint: no userId/workspaceId is known before the token
-   // lookup, so rate-limit by caller IP (needs a trusted x-forwarded-for behind
-   // a proxy; falls back to the socket address).
+   // No userId/workspaceId is known before the token lookup, so rate-limit by
+   // caller IP (needs a trusted x-forwarded-for behind a proxy; falls back to the
+   // socket address). This is NOT sufficient on its own for an orb — every GitHub
+   // delivery arrives from GitHub's own address space, which is why there is a
+   // per-orb hourly cap further down.
    if (rateLimitBlocked(res, webhookRateLimiter, clientIpFromReq(req))) return;
-   const token = String(req.params.token || '');
-   const rows = await getDb().unsafe(
-    `select w.*,
-                a.id as agent_row_id,
-                a.name as agent_name,
-                a.handle as agent_handle,
-                a.description as agent_description,
-                a.system_prompt,
-                a.model,
-                a.soul,
-                a.instructions,
-                a.tools,
-                a.skills,
-                a.permission_mode
-         from agent_webhooks w
-         left join workspace_agents a on a.id = w.agent_id
-         where w.token in ($1, $2) and w.enabled = true
-         limit 1`,
-    inviteTokenLookupParams(token),
-   );
-   const webhook = rows[0];
-   if (!webhook) return jsonError(res, 404, new Error('Webhook not found'));
 
-   const prompt = String(req.body?.prompt || req.body?.text || req.body?.message || JSON.stringify(req.body || {})).trim();
-   if (!prompt) return jsonError(res, 400, new Error('Webhook payload did not include prompt, text, or message'));
-
-   const sessionRows = await getDb().unsafe(
-    `insert into chat_sessions (workspace_id, title, model, folder)
-         values ($1, $2, $3, $4)
-         returning *`,
-    [webhook.workspace_id, `Webhook: ${webhook.name}`, webhook.model || 'auto', 'Webhooks'],
-   );
-   const session = sessionRows[0];
-   const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content) values ($1, 'user', $2) returning *`,
-    [session.id, prompt],
-   );
-
-   await getDb().unsafe('update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1', [webhook.id]);
-   notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
-   notifyDbSubscribers('messages', 'INSERT', messageRows);
-
-   let assistantMessage = null;
-   try {
-    const content = await runAnthropicCompletion({
-     model: webhook.model || 'auto',
-     messages: [{ role: 'user', content: prompt }],
-     memory: null,
-     documents: null,
-     workspaceContext: { triggeredBy: 'webhook', webhook: webhook.name },
-     workspaceId: webhook.workspace_id,
-     agentContext: webhook.agent_id ? {
-      id: webhook.agent_row_id,
-      name: webhook.agent_name,
-      handle: webhook.agent_handle || slugHandle(webhook.agent_name || ''),
-      description: webhook.agent_description || '',
-      systemPrompt: webhook.system_prompt,
-      soul: webhook.soul,
-      instructions: webhook.instructions,
-      tools: parseJsonArray(webhook.tools),
-      skills: parseJsonArray(webhook.skills),
-      model: resolveAnthropicModel(webhook.model),
-      permissionMode: normalizeAgentPermissionMode(webhook.permission_mode),
-     } : null,
-    });
-    const assistantRows = await getDb().unsafe(
-     `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
-     [session.id, content],
-    );
-    assistantMessage = assistantRows[0];
-    notifyDbSubscribers('messages', 'INSERT', assistantRows);
-   } catch (error) {
-    const assistantRows = await getDb().unsafe(
-     `insert into messages (session_id, role, content) values ($1, 'assistant', $2) returning *`,
-     [session.id, `Webhook received, but agent execution failed: ${error.message || error}`],
-    );
-    assistantMessage = assistantRows[0];
-    notifyDbSubscribers('messages', 'INSERT', assistantRows);
+   // A signature is only meaningful over bytes we kept. express.json's `verify`
+   // hook populates req.rawBody and only runs for JSON, so a webhook configured
+   // as application/x-www-form-urlencoded arrives with no rawBody and fails
+   // closed on its own — but say so explicitly, or the operator spends an
+   // afternoon debugging a signature mismatch that is really a content-type
+   // mismatch.
+   if (!String(req.get('content-type') || '').toLowerCase().includes('application/json')) {
+    return jsonError(res, 415, new Error('Orb deliveries must be sent with Content-Type: application/json'));
+   }
+   const rawBody = req.rawBody;
+   if (!Buffer.isBuffer(rawBody)) {
+    return jsonError(res, 400, new Error('Orb delivery body could not be read as raw bytes'));
+   }
+   // express.json's global limit is 50mb, which is right for uploads and absurd
+   // for an unauthenticated webhook.
+   if (rawBody.length > ORB_MAX_BODY_BYTES) {
+    return jsonError(res, 413, new Error(`Orb delivery body exceeds ${ORB_MAX_BODY_BYTES} bytes`));
    }
 
-   res.json({ data: { session, userMessage: messageRows[0], assistantMessage }, error: null });
+   const token = String(req.params.token || '');
+   const rows = await getDb().unsafe(
+    'select * from agent_webhooks where token in ($1, $2) and enabled = true limit 1',
+    inviteTokenLookupParams(token),
+   );
+   const orb = rows[0];
+   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
+
+   // An orb with no agent used to fall through to a promptless built-in
+   // completion that went nowhere. There is nothing to wake, so say so.
+   if (!orb.agent_id) {
+    return jsonError(res, 400, new Error('This webhook has no agent assigned — assign one before triggering it'));
+   }
+   const agentRows = await getDb().unsafe(
+    'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+    [orb.agent_id, orb.workspace_id],
+   );
+   const agent = agentRows[0];
+   if (!agent) return jsonError(res, 404, new Error('The agent this webhook points at no longer exists'));
+   if (!isAgentEnabled(agent)) return jsonError(res, 400, new Error('The agent this webhook points at is deactivated'));
+
+   const provider = normalizeOrbProvider(orb.provider);
+   const secret = await getWorkspaceSecretValue(orb.workspace_id, orbSecretKey(orb.id));
+   const verdict = verifyOrbDelivery({ provider, secret, rawBody, headers: req.headers, nowMs });
+   if (!verdict.ok) {
+    await logOrbRejection({
+     orb,
+     status: 'rejected',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: verdict.reason,
+    });
+    // Fail closed on a misconfiguration rather than degrading to "unsigned":
+    // mirrors the huddles webhook returning 503 when the LiveKit keys are unset.
+    if (verdict.reason === 'unconfigured') {
+     return jsonError(res, 503, new Error(
+      `This orb's provider (${provider}) requires a signing secret and none is configured, `
+      + 'so the delivery cannot be verified. Nothing was run.',
+     ));
+    }
+    return jsonError(res, 401, new Error('Invalid signature'));
+   }
+
+   // The real bound on a successful prompt injection is not the fence in the
+   // composed message, it is the permission mode the agent runs at. An
+   // unauthenticated HTTP request must not reach a --no-sandbox --yolo run.
+   const refusal = orbDispatchRefusal({
+    signatureVerified: verdict.signatureVerified,
+    agentPermissionMode: normalizeAgentPermissionMode(agent.permission_mode),
+   });
+   if (refusal) {
+    await logOrbRejection({
+     orb,
+     status: 'rejected',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: 'unsigned orb, elevated agent permissions',
+    });
+    return jsonError(res, 403, new Error(refusal));
+   }
+
+   // Per-orb hourly cap, checked BEFORE the dedupe claim. Order matters: a
+   // throttled delivery must not consume its (webhook_id, delivery_key)
+   // idempotency slot, or the provider's legitimate retry an hour later would be
+   // answered "duplicate" and silently dropped.
+   //
+   // Only 'accepted' rows count. If throttled rows counted toward their own
+   // limit, an orb over its cap could never recover — every refusal would extend
+   // the window that caused it.
+   const limit = normalizeOrbRateLimit(orb.rate_limit_per_hour);
+   const usage = await getDb().unsafe(
+    `select count(*)::int as used from orb_deliveries
+       where webhook_id = $1 and status = 'accepted' and created_at > now() - interval '1 hour'`,
+    [orb.id],
+   );
+   if (Number(usage[0]?.used || 0) >= limit) {
+    await logOrbRejection({
+     orb,
+     status: 'throttled',
+     bodyHash: verdict.bodyHash,
+     eventType: verdict.eventType,
+     detail: `exceeded ${limit} deliveries/hour`,
+    });
+    return jsonError(res, 429, new Error(`This orb has reached its limit of ${limit} deliveries per hour`));
+   }
+
+   // Deduplication. DB-level, not the process-local claimTaskDispatch map: a
+   // provider retry can arrive minutes later, after a Fly restart, or on a second
+   // machine, none of which an in-memory window can see.
+   let delivery = null;
+   if (verdict.deliveryKey) {
+    // Exact path — the provider gave us a delivery id. This is also GitHub's
+    // replay guard, since GitHub does not timestamp its signature.
+    const claimed = await getDb().unsafe(
+     `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type)
+          values ($1, $2, $3, $4, $5)
+          on conflict (webhook_id, delivery_key) where delivery_key is not null do nothing
+          returning *`,
+     [orb.id, orb.workspace_id, verdict.deliveryKey, verdict.bodyHash, verdict.eventType],
+    );
+    // 200, not a 4xx: a 4xx tells the provider to keep retrying a delivery that
+    // has already been handled.
+    if (!claimed[0]) return res.status(200).json({ data: { duplicate: true }, error: null });
+    delivery = claimed[0];
+   } else {
+    // Best-effort windowed path — no provider delivery id. Deliberately NOT a
+    // unique constraint on body_hash: two genuinely distinct events can be
+    // byte-identical (a bare "deploy finished" ping) and a hard constraint would
+    // drop the second one forever. Send an Idempotency-Key to get the exact path.
+    const recent = await getDb().unsafe(
+     `select id from orb_deliveries
+        where webhook_id = $1 and delivery_key is null and body_hash = $2
+          and status = 'accepted' and created_at > now() - interval '10 minutes'
+        limit 1`,
+     [orb.id, verdict.bodyHash],
+    );
+    if (recent[0]) return res.status(200).json({ data: { duplicate: true }, error: null });
+    const inserted = await getDb().unsafe(
+     `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type)
+          values ($1, $2, null, $3, $4) returning *`,
+     [orb.id, orb.workspace_id, verdict.bodyHash, verdict.eventType],
+    );
+    delivery = inserted[0];
+   }
+
+   const handle = slugHandle(agent.handle || agent.name);
+   const { content } = composeOrbMessage({
+    orbName: orb.name,
+    agentHandle: handle,
+    prompt: orb.prompt,
+    provider,
+    eventType: verdict.eventType,
+    deliveryKey: verdict.deliveryKey || '',
+    signatureVerified: verdict.signatureVerified,
+    receivedAt: new Date(nowMs).toISOString(),
+    body: parseOrbBody(rawBody),
+    payloadFields: parseJsonArray(orb.payload_fields),
+   });
+
+   const routing = normalizeOrbRouting(orb.routing);
+   let session = null;
+   let threadParentId = null;
+   if (routing === 'thread') {
+    session = await findOrCreateDirectSession(orb.workspace_id, agent);
+    if (session && orb.thread_root_message_id) {
+     // Messages are SOFT-deleted, so the FK alone does not prove the root is
+     // still there — without the deleted_at check the thread reattaches to a
+     // message the human removed.
+     const rootRows = await getDb().unsafe(
+      'select id from messages where id = $1 and session_id = $2 and deleted_at is null limit 1',
+      [orb.thread_root_message_id, session.id],
+     );
+     threadParentId = rootRows[0]?.id || null;
+    }
+   }
+   if (!session) {
+    const sessionRows = await getDb().unsafe(
+     `insert into chat_sessions (workspace_id, title, model, folder)
+          values ($1, $2, $3, $4)
+          returning *`,
+     [orb.workspace_id, `Webhook: ${orb.name}`, agent.model || 'auto', 'Webhooks'],
+    );
+    session = sessionRows[0];
+    notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
+   }
+
+   // sender_kind 'system' / sender_name 'Orb' matches what the schedule runner
+   // already does with 'system'/'Schedule', so the UI never attributes an
+   // external event to a person.
+   const messageRows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_name)
+         values ($1, 'user', $2, $3, 'system', 'Orb')
+         returning *`,
+    [session.id, content, threadParentId],
+   );
+   notifyDbSubscribers('messages', 'INSERT', messageRows);
+   const messageRow = messageRows[0] || null;
+   // Follow postTaskSubthreadMention: the FIRST message becomes its own
+   // subthread root, so the agent's reply lands in the thread instead of
+   // scattering across the DM timeline.
+   if (routing === 'thread' && !threadParentId) threadParentId = messageRow?.id || null;
+
+   const orbRows = routing === 'thread'
+    ? await getDb().unsafe(
+     `update agent_webhooks
+           set last_triggered_at = now(), updated_at = now(),
+               session_id = $2, thread_root_message_id = $3
+         where id = $1 returning *`,
+     [orb.id, session.id, threadParentId],
+    )
+    : await getDb().unsafe(
+     'update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1 returning *',
+     [orb.id],
+    );
+   if (orbRows[0]) notifyDbSubscribers('agent_webhooks', 'UPDATE', orbRows);
+
+   const deliveryRows = await getDb().unsafe(
+    'update orb_deliveries set session_id = $2, message_id = $3 where id = $1 returning *',
+    [delivery.id, session.id, messageRow?.id || null],
+   );
+   notifyDbSubscribers('orb_deliveries', 'INSERT', deliveryRows.length > 0 ? deliveryRows : [delivery]);
+
+   // Fire and DO NOT await. continueConversation is the only door into real
+   // dispatch: it is what routes to a daemon or sandbox agent, takes the
+   // per-thread conversation lock, honours max_agent_turns and writes the
+   // agent_jobs row. Awaiting it is what used to push the response past GitHub's
+   // delivery timeout.
+   continueConversation({ workspaceId: orb.workspace_id, sessionId: session.id, threadParentId })
+    .catch((error) => console.error('orb dispatch failed', error?.message || error));
+
+   // 202, not 200-with-the-answer. This is an intentional break from the old
+   // response shape ({ session, userMessage, assistantMessage } after the model
+   // finished) because that shape is what caused the retries.
+   res.status(202).json({
+    data: {
+     deliveryId: delivery.id,
+     sessionId: session.id,
+     threadParentId,
+     messageId: messageRow?.id || null,
+     signatureVerified: verdict.signatureVerified,
+     duplicate: false,
+    },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, 500, error);
   }
@@ -7957,6 +13369,13 @@ function createApp() {
    if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
    const passwordPolicy = evaluatePasswordServerSide(password);
    if (!passwordPolicy.valid) return jsonError(res, 400, new Error(passwordPolicy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
+
+   // The configured system owner's address cannot be claimed through public
+   // signup: Tenants-surface authority derives from the stored email, and
+   // signup never verifies mailbox ownership (shared/tenant-admin.cjs has the
+   // full story). Same status and message as the duplicate-account refusal
+   // below, on purpose — this response must not mark the address as special.
+   if (isReservedSignupEmail(email)) return jsonError(res, 409, new Error('An account with that email already exists'));
 
    const existing = await getDb().unsafe('select id from app_users where email = $1 limit 1', [email]);
    if (existing.length > 0) return jsonError(res, 409, new Error('An account with that email already exists'));
@@ -8203,6 +13622,10 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // Returns DISMISSED rows too, on purpose: only 'manage' can read this list,
+   // and the client's "Show dismissed" toggle then costs no round trip. The
+   // include/exclude rule lives in src/lib/inviteDismissal.ts. `i.*` also means
+   // dismissed_at needs no mention here to survive.
    const rows = await getDb().unsafe(
     `select i.*, cu.email as created_by_email, au.email as accepted_by_email
            from workspace_invites i
@@ -8258,6 +13681,83 @@ function createApp() {
    );
    notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
    res.json({ data: rows[0] ?? null, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // A link is SPENT when it can no longer let anyone new in: revoked, already
+ // accepted, or a still-pending one past its expires_at (there is no 'expired'
+ // status column, so expiry has to be derived here as well as in the UI —
+ // src/lib/inviteDismissal.ts holds the matching client-side rule).
+ //
+ // This predicate is the security boundary for dismissal, which is why it lives
+ // in the SQL rather than only in the button's disabled state: dismissing an
+ // ACTIVE link would leave it granting access while vanishing from the only
+ // surface that lists it. Revoke first, then dismiss.
+ const SPENT_INVITE_SQL = `(
+        status in ('accepted', 'revoked')
+        or (status = 'pending' and expires_at is not null and expires_at <= now())
+      )`;
+
+ // Soft-dismiss / restore one spent invite. Nothing is deleted — an accepted
+ // invite is the audit trail of how a member got into the workspace, so the row
+ // (and its accepted_by/accepted_at) always survives being tidied away.
+ app.patch('/backend/workspaces/:id/invites/:inviteId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const inviteId = String(req.params.inviteId || '').trim();
+   if (!workspaceId || !inviteId) return jsonError(res, 400, new Error('workspace id and invite id are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const dismissed = req.body?.dismissed;
+   if (typeof dismissed !== 'boolean') return jsonError(res, 400, new Error('dismissed must be true or false'));
+   const rows = dismissed
+    ? await getDb().unsafe(
+     `update workspace_invites set dismissed_at = now(), updated_at = now()
+            where id = $1 and workspace_id = $2 and dismissed_at is null and ${SPENT_INVITE_SQL}
+            returning *`,
+     [inviteId, workspaceId],
+    )
+    : await getDb().unsafe(
+     `update workspace_invites set dismissed_at = null, updated_at = now()
+            where id = $1 and workspace_id = $2 and dismissed_at is not null
+            returning *`,
+     [inviteId, workspaceId],
+    );
+   if (rows.length === 0) {
+    // No row changed: either it isn't ours, or a guard refused. Re-read to tell
+    // the two apart — a wrong id must not look like a policy failure.
+    const existing = await getDb().unsafe(
+     'select * from workspace_invites where id = $1 and workspace_id = $2 limit 1',
+     [inviteId, workspaceId],
+    );
+    if (existing.length === 0) return jsonError(res, 404, new Error('Invite not found'));
+    // Already in the requested state → idempotent success.
+    if (Boolean(existing[0].dismissed_at) === dismissed) return res.json({ data: existing[0], error: null });
+    return jsonError(res, 409, new Error('Only a revoked, accepted or expired invite can be dismissed. Revoke it first.'));
+   }
+   notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+   res.json({ data: rows[0], error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Bulk clear: dismiss every spent link in one go. Same predicate, so an active
+ // link is skipped rather than hidden, however many rows the caller sweeps.
+ app.post('/backend/workspaces/:id/invites/dismiss-spent', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `update workspace_invites set dismissed_at = now(), updated_at = now()
+          where workspace_id = $1 and dismissed_at is null and ${SPENT_INVITE_SQL}
+          returning *`,
+    [workspaceId],
+   );
+   notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+   res.json({ data: rows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8496,7 +13996,7 @@ function createApp() {
     ? appendWorkspaceAccessClause(buildWhereClause(filters, []), req.userId)
     : buildWhereClause(filters, []);
    const { clause, params } = where;
-   const rows = await getDb().unsafe(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
+   const rows = await getDb().unsafe(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
    res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -8512,6 +14012,26 @@ function createApp() {
     if (!row || typeof row !== 'object') return row;
     let next = stripPrivilegedDbValues(table, row);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
+    // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
+    // titles. Title only on this route: inferring parent_id from a title string
+    // is the right call for the MCP tool (server/mcp.cjs, where agents create
+    // tasks) but would silently re-nest a human's task from what they typed.
+    if (table === 'tasks' && typeof next.title === 'string') {
+     const normalized = normalizeTaskTitle(next.title);
+     if (normalized.changed) next = { ...next, title: normalized.title };
+    }
+    // @channel addresses every agent in a channel, so no agent may answer to
+    // `channel`. Refused rather than mangled: a silently-renamed handle is an
+    // agent nobody can @mention. Mirrored in netlify/functions/backend.mjs and
+    // in registerAgentRequest (the MCP door).
+    if (table === 'workspace_agents' && isReservedAgentHandle(next.handle)) {
+     throw badRequest(reservedAgentHandleMessage(next.handle));
+    }
+    // Creation-time identity choices are HUMAN choices: synthesize the
+    // human_set locks server-side (discarding any client-supplied ones) so an
+    // agent's first connect cannot replace the avatar or profile the human
+    // just picked. Empty fields stay unlocked — locking '' pins emptiness.
+    next = synthesizeHumanIdentityInsert(table, next);
     return next;
    });
    if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
@@ -8540,6 +14060,24 @@ function createApp() {
     }
    }
 
+   // A task CREATED already assigned to an agent dispatches it too — otherwise
+   // "add task, assign @coder" would sit there while the same choice made a
+   // second later (via update) runs. An insert is always a change, so there is
+   // nothing to diff; dispatchTaskAssignment still vets agent-vs-human, disabled
+   // agents, terminal status and duplicates.
+   if (table === 'tasks') {
+    for (const row of result) {
+     const assigneeId = typeof row?.assignee_id === 'string' ? row.assignee_id.trim() : '';
+     if (!assigneeId || !row.id) continue;
+     void dispatchTaskAssignment({
+      workspaceId: row.workspace_id,
+      taskId: row.id,
+      agentId: assigneeId,
+      actorUserId: req.userId,
+     }).catch((error) => console.error('dispatchTaskAssignment failed', error));
+    }
+   }
+
    if (table === 'workspaces') {
     for (const row of result) {
      try {
@@ -8562,16 +14100,37 @@ function createApp() {
    const tableSql = ensureTable(table);
    if (!values || typeof values !== 'object') return jsonError(res, 400, new Error('Update values are required'));
    await enforceDbOperationAccess(req.userId, table, 'update', { filters, values });
+   // Renaming an agent INTO the reserved handle is the same door as creating one
+   // there. See the insert route above.
+   if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
+    return jsonError(res, 400, new Error(reservedAgentHandleMessage(values.handle)));
+   }
    const safeValues = stripPrivilegedDbValues(table, values);
-   const keys = Object.keys(safeValues);
-   if (keys.length === 0 && !(VERSIONED_TABLES.has(table) && values.version == null)) {
+
+   // A human editing an agent is the OTHER half of the identity precedence rule
+   // (shared/agentIdentity.cjs): whatever they touch here is recorded in
+   // identity.human_set so the agent's next self-declaration leaves it alone.
+   // This route is the one chokepoint every human agent edit goes through, which
+   // is why the marking lives here and not in whichever dialog made the edit.
+   // The identity jsonb itself is NEVER written from the client's object — only
+   // a validated `voice` is grafted onto the STORED column in SQL — so a
+   // payload like {"identity":{"human_set":{...}}} (or {"identity":{}}) can
+   // neither forge a lock nor erase one.
+   const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
+   const keys = Object.keys(markedValues);
+   if (keys.length === 0 && !lockPatch && !(VERSIONED_TABLES.has(table) && values.version == null)) {
     return jsonError(res, 400, new Error('No updatable fields provided'));
    }
 
    const params = [];
-   const setParts = keys.map((column) => {
-    return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
-   });
+   const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+   if (lockPatch) {
+    // Base is the stored column (a rename must not clobber the voice); locks
+    // merge INTO the stored ones, so a client cannot forge a lock for a field
+    // it did not write and a stale echo cannot un-protect a chosen field.
+    const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
+    setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
+   }
    if (VERSIONED_TABLES.has(table) && values.version == null) {
     setParts.push('"version" = COALESCE("version", 0) + 1');
    }
@@ -8579,6 +14138,23 @@ function createApp() {
     return jsonError(res, 400, new Error('No updatable fields provided'));
    }
    const setClause = setParts.join(', ');
+
+   // Dispatch-on-assign needs the PREVIOUS assignee: an update that re-writes the
+   // assignee it already had is not a change and must not re-run the agent. Read
+   // it with the same filters, before the write, and only for the rare update
+   // that actually sets assignee_id (an unassign — null/'' — never dispatches).
+   const nextAssigneeId = table === 'tasks' && typeof safeValues.assignee_id === 'string'
+    ? safeValues.assignee_id.trim()
+    : '';
+   let priorTaskRows = [];
+   if (nextAssigneeId) {
+    const priorWhere = buildWhereClause(filters, []);
+    priorTaskRows = await getDb().unsafe(
+     `select id, workspace_id, assignee_id from ${tableSql}${priorWhere.clause}`,
+     priorWhere.params,
+    ).catch(() => []);
+   }
+
    const where = buildWhereClause(filters, params);
    const result = await getDb().unsafe(
     `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
@@ -8586,6 +14162,21 @@ function createApp() {
    );
 
    notifyDbSubscribers(table, 'UPDATE', result);
+
+   // Assigning a task to an agent runs it — the same flow a task-comment @mention
+   // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed
+   // dispatch can never lose the user's edit. dispatchTaskAssignment re-checks
+   // everything that matters (agent vs human, disabled, done/cancelled, duplicate).
+   for (const before of priorTaskRows) {
+    if (String(before.assignee_id || '') === nextAssigneeId) continue;
+    void dispatchTaskAssignment({
+     workspaceId: before.workspace_id,
+     taskId: before.id,
+     agentId: nextAssigneeId,
+     actorUserId: req.userId,
+    }).catch((error) => console.error('dispatchTaskAssignment failed', error));
+   }
+
    res.json({ data: single ? (result[0] ?? null) : result, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -8616,7 +14207,13 @@ function createApp() {
  app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
   try {
    const workspaceId = settingsWorkspaceIdFromRequest(req);
-   if (workspaceId) await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // App-level (platform) secrets are not readable by users — omitting workspaceId
+   // used to skip authorization entirely and return a masked preview of the
+   // platform ANTHROPIC_API_KEY to any signed-in account. Mirrors the POST below.
+   if (!workspaceId) {
+    return jsonError(res, 403, new Error('App-level secret management is not available to users'));
+   }
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    const keys = await listManagedSecrets(workspaceId);
    res.json({ data: { keys }, error: null });
   } catch (error) {
@@ -8653,30 +14250,60 @@ function createApp() {
   }
  });
 
- // --- Workspace vault: arbitrary encrypted shared secrets --------------------
- // Values are AES-256-GCM encrypted at rest and NEVER returned in full — reads
- // return only a masked preview. Manage-role only, per workspace.
+ // --- The workspace vault ----------------------------------------------------
+ // ONE surface for every credential the workspace holds, including the namespaced
+ // ones. Manage-role only, per workspace, and WRITE-ONLY: this route decrypts
+ // nothing and its SQL does not select `value` or `secret_cipher` at all
+ // (VAULT_META_SELECT in shared/backend-core.cjs asks Postgres for a boolean).
+ // A masked preview used to be returned here; it is gone. A preview leaks a key's
+ // prefix and length, and for a credential an operator can simply re-paste that is
+ // a poor trade for a bit of UI reassurance — the same reasoning the
+ // /sandbox-credentials read already applied.
+ //
+ // Namespaced entries are no longer EXCLUDED, they are CLASSIFIED: each entry
+ // carries its group ('managed' | 'provider' | 'orb' | 'shared'), the thing that
+ // owns it, and the write lane that may change it. That is what makes showing them
+ // safe — `orb:<id>` arrives with lane 'none' and a name, so it reads as part of
+ // that orb rather than as a loose row someone might delete.
  app.get('/backend/workspaces/:id/vault', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   const rows = await getDb().unsafe(
-    `select key, description, secret_cipher, value, updated_at, updated_by
-           from workspace_secrets where workspace_id = $1 order by key asc`,
-    [workspaceId],
-   );
-   // Exclude the platform-managed keys (surfaced via /settings/secrets) so the
-   // vault UI only shows user-defined shared secrets.
-   const managed = new Set(MANAGED_SECRET_KEYS);
-   const data = [];
-   for (const row of rows) {
-    if (managed.has(row.key)) continue;
-    let plain = '';
-    if (row.secret_cipher) { try { plain = await decryptVaultSecret(row.secret_cipher); } catch { plain = ''; } }
-    else plain = row.value || '';
-    data.push({ key: row.key, description: row.description || '', preview: maskSecret(plain), configured: !!plain, updated_at: row.updated_at });
+   const stored = await listWorkspaceVaultEntries(workspaceId, {
+    db: dbUnsafe,
+    managedKeys: MANAGED_SECRET_KEYS,
+   });
+
+   // Provider credential SLOTS — the fix for "there is no way to enter Box's key".
+   // A stored row is the only thing a list of rows can show, so before any
+   // `sandbox:box:api_key` existed there was nothing to render and nowhere to type.
+   // The skill definitions know which credentials exist, so unset slots are listed
+   // too, each with the provider it belongs to and the env var name (a NAME, never
+   // a value) the same credential would come from on a machine that has one.
+   const byKey = new Map(stored.map((entry) => [entry.key, entry]));
+   for (const slot of providerCredentialSlots(await workspaceAuthoredProviderSkills(workspaceId))) {
+    const existing = byKey.get(slot.key);
+    const merged = {
+     ...(existing || {
+      ...classifyVaultKey(slot.key, { managedKeys: MANAGED_SECRET_KEYS }),
+      description: '',
+      configured: false,
+      legacy_plaintext: false,
+      updated_at: null,
+     }),
+     ownerLabel: slot.providerName,
+     label: credentialLabel(slot.credential),
+     skill_id: slot.skillId,
+     env: slot.env,
+     docs_url: slot.docsUrl,
+    };
+    byKey.set(slot.key, merged);
    }
+
+   const data = [...byKey.values()].sort((a, b) => (
+    a.group === b.group ? a.key.localeCompare(b.key) : a.group.localeCompare(b.group)
+   ));
    res.json({ data, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -8688,7 +14315,13 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    const key = String(req.params.key || '').trim();
    if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
-   if (!/^[A-Za-z0-9_.-]{1,128}$/.test(key)) return jsonError(res, 400, new Error('key must be 1-128 chars of letters, digits, _ . -'));
+   // The charset is the namespace guard: no colon means this route can never
+   // reach a `sandbox:` or `orb:` entry, whatever the caller sends.
+   if (!VAULT_KEY_RE.test(key)) {
+    return jsonError(res, 400, new Error(key.includes(':')
+     ? 'Namespaced vault entries are set by the surface that owns them: a provider credential through /sandbox-credentials, an orb signing secret from the orb panel.'
+     : 'key must be 1-128 chars of letters, digits, _ . -'));
+   }
    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    const value = typeof req.body?.value === 'string' ? req.body.value : '';
@@ -8706,6 +14339,7 @@ function createApp() {
    const workspaceId = String(req.params.id || '').trim();
    const key = String(req.params.key || '').trim();
    if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
+   if (!VAULT_KEY_RE.test(key)) return jsonError(res, 400, new Error('key must be 1-128 chars of letters, digits, _ . -'));
    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
@@ -8713,6 +14347,130 @@ function createApp() {
    res.json({ data: { key }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Sandbox provider credentials ------------------------------------------
+ // A Sandbox Agent's provider API keys. WRITE-ONLY: there is no route, here or
+ // anywhere else, that returns one. The read below reports `configured` and
+ // nothing more — not a masked preview, because a preview leaks a key's prefix
+ // and length, and for a provisioning credential that is a poor trade for a bit
+ // of UI reassurance. Stored in the same AES-256-GCM workspace vault as every
+ // other secret, under `sandbox:<provider>:<key>`; the colons keep the entries
+ // out of the generic vault PUT/DELETE routes (whose key pattern is
+ // [A-Za-z0-9_.-]) and out of the vault LIST above. Fly-only, like the gateway
+ // routes — nothing in the frontend bundle ever holds a provider key, and no
+ // VITE_ var exists for one.
+ app.get('/backend/workspaces/:id/sandbox-credentials', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `select key, value, secret_cipher, updated_at from workspace_secrets
+       where workspace_id = $1 and key like '${SANDBOX_VAULT_PREFIX}%' order by key asc`,
+    [workspaceId],
+   );
+   const data = [];
+   for (const row of rows) {
+    const parsed = parseSandboxCredentialKey(row.key);
+    if (!parsed) continue;
+    data.push({
+     provider: parsed.provider,
+     credential: parsed.key,
+     key: row.key,
+     configured: Boolean(row.secret_cipher || row.value),
+     updated_at: row.updated_at,
+    });
+   }
+   res.json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.put('/backend/workspaces/:id/sandbox-credentials/:provider', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   // The credential name defaults to api_key; both halves are validated by
+   // sandboxCredentialKey, which returns '' rather than building a key it is not
+   // sure about — so a provider name carrying a colon can never forge a
+   // different vault entry (e.g. an ANTHROPIC_API_KEY or an orb signing secret).
+   const key = sandboxCredentialKey(req.params.provider, req.body?.credential || 'api_key');
+   if (!key) return jsonError(res, 400, new Error('provider must be lowercase letters, digits, - or _, and credential must be lowercase letters, digits or _'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const value = typeof req.body?.value === 'string' ? req.body.value.trim() : '';
+   if (!value) return jsonError(res, 400, new Error('value is required — use DELETE to clear a credential'));
+   await setWorkspaceSecretValue(workspaceId, key, value, req.userId, `Sandbox provider credential (${key})`);
+   // Broadcast the KEY only. sanitizeRealtimeRow does not know about this table's
+   // value column, and a fanout carrying the secret would put it in every
+   // subscribed browser — which is the one thing this whole route exists to stop.
+   notifyDbSubscribers('workspace_secrets', 'UPDATE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key, configured: true }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/sandbox-credentials/:provider', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   const key = sandboxCredentialKey(req.params.provider, req.query?.credential || 'api_key');
+   if (!key) return jsonError(res, 400, new Error('provider and credential must be lowercase letters, digits, - or _'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
+   notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
+   res.json({ data: { key, configured: false }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Cartesia voices -------------------------------------------------------
+ // Two routes, both thin. The browser must never see CARTESIA_API_KEY, so the
+ // catalogue is proxied and the preview is rendered here.
+ //
+ // NOT the huddle playback pipeline — that is a separate piece of work. This is
+ // only "which voices exist" and "let me hear this one".
+
+ app.get('/backend/tts/voices', requireAuth, async (req, res) => {
+  try {
+   if (!cartesiaApiKey()) {
+    // A missing key is a configuration state, not a failure: the panel shows
+    // "voices unavailable" and every agent keeps its stored id.
+    return res.json({ data: [], error: null, configured: false });
+   }
+   const voices = await cartesiaVoices();
+   res.json({ data: voices, error: null, configured: true });
+  } catch (error) {
+   jsonError(res, error.status || 502, error);
+  }
+ });
+
+ app.post('/backend/tts/preview', requireAuth, async (req, res) => {
+  try {
+   if (rateLimitBlocked(res, ttsPreviewRateLimiter, req.userId || clientIpFromReq(req))) return;
+   if (!cartesiaApiKey()) return jsonError(res, 503, new Error('Cartesia is not configured'));
+
+   // Only the voice settings come from the client. The TRANSCRIPT does not:
+   // this route bills per character, and accepting arbitrary text would turn an
+   // authenticated preview button into a metered text-to-speech endpoint for
+   // anyone with an account.
+   const settings = normalizeVoicePreference(req.body || {});
+   if (!settings.cartesia_voice_id) return jsonError(res, 400, new Error('A Cartesia voice id is required'));
+
+   const audio = await cartesiaSpeak({
+    voiceId: settings.cartesia_voice_id,
+    speed: settings.speed ?? 1,
+    emotion: settings.emotion || 'neutral',
+   });
+   res.setHeader('Content-Type', 'audio/mpeg');
+   res.setHeader('Cache-Control', 'no-store');
+   res.send(audio);
+  } catch (error) {
+   jsonError(res, error.status || 502, error);
   }
  });
 
@@ -8730,6 +14488,73 @@ function createApp() {
     }
     : agentContext;
    const systemPrompt = buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext);
+
+   // Gateway configs route a chat turn at an external OpenAI-compatible endpoint.
+   // The browser selects the model id `gateway:<id>`; we call the upstream server
+   // directly with the decrypted key and relay its OpenAI SSE chunks unchanged over
+   // the same /backend/ai-chat contract the client already speaks.
+   if (String(model || '').startsWith('gateway:')) {
+    const gatewayId = String(model).slice('gateway:'.length);
+    const route = await resolveGatewayRoute(workspaceId, gatewayId);
+    if (!route) return jsonError(res, 404, new Error('Gateway is not available'));
+    if (!route.baseUrl || !route.model) return jsonError(res, 400, new Error('Gateway is missing a base URL or model'));
+    // Re-validate at use time, not just at write time: rows created before this
+    // guard existed are still in the table, and a hostname's DNS answer can
+    // change after it was accepted.
+    try {
+     await assertSafeOutboundUrl(route.baseUrl);
+    } catch {
+     return jsonError(res, 400, new Error(`Gateway ${route.name || route.id} has an unsafe base URL and was not called`));
+    }
+    const controller = new AbortController();
+    let completed = false;
+    bindInferenceAbort(req, res, controller, () => completed);
+    let upstream;
+    try {
+     upstream = await fetch(`${route.baseUrl}/chat/completions`, {
+      method: 'POST',
+      // H1 — never follow redirects: base_url is validated as public at write time,
+      // but a permitted host could still 302 this request onto an internal address.
+      redirect: 'error',
+      signal: controller.signal,
+      headers: {
+       'Content-Type': 'application/json',
+       ...(route.apiKey ? { Authorization: `Bearer ${route.apiKey}` } : {}),
+       ...route.headers,
+      },
+      body: JSON.stringify({
+       model: route.model,
+       stream: true,
+       messages: [
+        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+        ...chat.messages,
+       ],
+      }),
+     });
+    } catch (error) {
+     completed = true;
+     if (controller.signal.aborted) { try { res.end(); } catch { /* client gone */ } return; }
+     return jsonError(res, 502, new Error(`Gateway request failed: ${error?.message || error}`));
+    }
+    if (!upstream.ok || !upstream.body) {
+     completed = true;
+     const detail = await upstream.text().catch(() => '');
+     return jsonError(res, upstream.status === 401 ? 401 : 502, new Error(`Gateway returned ${upstream.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`));
+    }
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    try {
+     // The upstream already emits OpenAI `data: {chunk}` SSE framing (including the
+     // terminal `data: [DONE]`), so pass its bytes straight through to the client.
+     for await (const bytes of upstream.body) {
+      res.write(bytes);
+     }
+    } finally {
+     completed = true;
+    }
+    return res.end();
+   }
 
    // Workspace-shared inference routes are first-class chat models. Keep
    // the browser on the same /backend/ai-chat SSE contract while the broker
@@ -8807,6 +14632,10 @@ function createApp() {
    const reader = response.body.getReader();
    const decoder = new TextDecoder();
    let buffer = '';
+   // The browser only ever sees text deltas — the usage frames are stripped out
+   // of the relay. They are read HERE, on the way past, which is the only place
+   // this turn's token counts exist at all.
+   const usage = createAnthropicUsageAccumulator();
    while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -8825,6 +14654,7 @@ function createApp() {
      }
      try {
       const parsed = JSON.parse(data);
+      usage.event(parsed);
       if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
        res.write(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`);
       }
@@ -8833,6 +14663,14 @@ function createApp() {
      }
     }
    }
+   // Recorded before res.end() but after the stream drains: a client that
+   // disconnects mid-turn still spent whatever the model had already reported.
+   await recordAnthropicUsage(dbQuery, {
+    workspaceId,
+    model: resolvedModel,
+    kind: 'ai_chat',
+    counts: usage.result(),
+   });
    res.end();
   } catch (error) {
    // Once the SSE headers/body have started flushing, the status line is
@@ -8855,6 +14693,15 @@ function createApp() {
 }
 
 function startBackendServer(port = DEFAULT_PORT) {
+ // Last-resort process guards. A single malformed frame, a rejected background
+ // promise, or a throw from a detached callback must not take the whole backend
+ // down — every request path already reports its own errors, so log and stay up.
+ process.on('uncaughtException', (error) => {
+  console.error('[backend] uncaught exception:', error?.stack || error?.message || error);
+ });
+ process.on('unhandledRejection', (reason) => {
+  console.error('[backend] unhandled rejection:', reason?.stack || reason?.message || reason);
+ });
  const app = createApp();
  const server = http.createServer(app);
  const wss = attachRealtime(server);
@@ -8907,6 +14754,11 @@ function resetTestState() {
  farmIntegrationCoreInstance = undefined;
  flowConnectionCoreInstance = undefined;
  connectedAgents.clear();
+ recentTaskDispatches.clear();
+ taskQueueStrikes.clear();
+ taskQueueSelecting.clear();
+ conversationLocks.clear();
+ clearCadenceWakes();
 }
 
 // Test seam: register a fake WS client so the realtime-revocation path can be
@@ -8921,12 +14773,26 @@ function registerTestConnectedAgent(entry) {
  return entry;
 }
 
+// Test seam: read the live connection map, so a test can assert how MANY live
+// connections an agent has (the one-live-daemon-per-agent invariant) rather than
+// only whether dispatch happens to find one.
+function listTestConnectedAgents() {
+ return [...connectedAgents.values()];
+}
+
 module.exports = {
  startBackendServer,
  createApp,
  __test: {
   allowLoopbackAgentDevFallback,
   appendWorkspaceAccessClause,
+  assertSafeOutboundUrl,
+  isBlockedAddress,
+  // The credential-injecting provider proxy, exercised against a fake DB and a
+  // stubbed fetch in tests/provider-proxy.test.cjs.
+  callProviderOperation,
+  readCappedResponseText,
+  providerCallRateLimiter,
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
@@ -8934,8 +14800,49 @@ module.exports = {
   notifyDbSubscribers,
   relayBroadcast,
   registerTestConnectedAgent,
+  listTestConnectedAgents,
+  // One live daemon per agent: registration supersedes an older live connection.
+  registerAgentConnection,
+  disconnectAgentDaemons,
+  takeAgentDaemonConnections,
+  findConnectedAgent,
+  AGENT_DISCONNECT_CLOSE_MESSAGES,
   insertActiveAgentJob,
   buildWhereClause,
+  buildDaemonPrompt,
+  // Reply cadence — the pending-wake bookkeeping. The DECISION is pure and lives
+  // in shared/replyCadence.cjs; these are only the seams a test needs to prove
+  // that a held turn is booked (and never double-booked) rather than dropped.
+  // continueConversation itself is already exported further down.
+  cadenceWakes,
+  clearCadenceWakes,
+  scheduleCadenceWake,
+  agentNamedInBurst,
+  msSinceTimestamp,
+  TASK_QUEUE_BUSY_RUN_REASONS,
+  VOICE_HUDDLE_NOTE,
+  streamFlushDue,
+  BUILTIN_FLUSH_INTERVAL_MS,
+  // The builtin tool-use loop: the cap, the pure orchestrator (model + tools
+  // injected), and the identity/projection helpers that decide what a builtin
+  // turn may reach.
+  runToolUseLoop,
+  toolResultText,
+  builtinToolIdentity,
+  builtinStepDetail,
+  getBuiltinToolset,
+  mcpToolDeps,
+  streamAnthropicTurn,
+  BUILTIN_TOOL_LOOP_MAX_STEPS,
+  BUILTIN_TOOL_LOOP_MAX_CALLS,
+  BUILTIN_TOOL_RESULT_MAX_CHARS,
+  BUILTIN_TOOL_NOTE,
+  loadChannelIntentNote,
+  agentVoiceSettings,
+  cartesiaEnglishVoiceIds,
+  cartesiaSpeak,
+  fetchCartesiaVoices,
+  publicCartesiaVoice,
   capabilityForDbOperation,
   canManageWorkspace,
   canMutateWorkspace,
@@ -8978,6 +14885,24 @@ module.exports = {
   BOOTSTRAP_LIMITS,
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
+  resolveWorkThreadParent,
+  loadChannelMessages,
+  sanitizeRealtimeRow,
+  // The vault: encryption at rest, the legacy-plaintext backfill, and the
+  // managed-key state shape (which must never carry a preview again).
+  encryptVaultSecret,
+  decryptVaultSecret,
+  // Exposed for tests/env-isolation.test.cjs only: it is the one call that
+  // reports whether a test process could open a real database connection.
+  getDatabaseUrl,
+  getWorkspaceSecretValue,
+  setWorkspaceSecretValue,
+  reencryptLegacyPlaintextSecrets,
+  listManagedSecrets,
+  MANAGED_SECRET_KEYS,
+  CHANNEL_CONTEXT_MAX_BYTES,
+  agentContextBytes,
+  boundAgentContextMessages,
   agentRuntimePayload,
   resolveRunTarget,
   taskStatusOnDispatch,
@@ -8985,6 +14910,16 @@ module.exports = {
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
+  dispatchCommentMentions,
+  dispatchTaskAssignment,
+  drainAgentTaskQueue,
+  agentHasActiveJob,
+  agentHasAnyActiveJob,
+  claimTaskDispatch,
+  releaseTaskDispatch,
+  TASK_ASSIGN_CLAIM_MS,
+  TASK_QUEUE_MAX_STRIKES,
+  TASK_QUEUE_SCAN_LIMIT,
   createTtlPromiseCache,
   hasActiveBurstJob,
   capabilitiesShapeValid,
@@ -9001,6 +14936,8 @@ module.exports = {
   mintPeerTicket,
   mergeSlashCommands,
   finalizeStuckJob,
+  clearStrandedPlaceholders,
+  PLACEHOLDER_CONTENT_RE,
   reapStuckAgentJobs,
   claimMcpJob,
   submitMcpJobResult,
@@ -9011,8 +14948,14 @@ module.exports = {
   getFarmAgentJob,
   cancelFarmAgentJob,
   handleAgentJobDelta,
+  handleAgentJobStep,
+  handleAgentJobSegment,
+  agentStepContent,
+  agentStepParts,
   handleAgentCapabilitiesSync,
   resolveWorkspaceAgentByHandle,
+  applyAgentIdentity,
+  repairCorruptedAgentIdentities,
   registerAgentRequest,
   finalizeRegistrationApproval,
   decideAgentRegistration,
@@ -9021,6 +14964,11 @@ module.exports = {
   hasMcpPresence,
   ensureMentionedParticipants,
   parseAgentMentions,
+  parseAllMentions,
+  pickMentionNextAgent,
+  agentsAddressedByRow,
+  slugHandle,
+  continueConversation,
   verifyNetlifyDeploySignature,
   buildSystemPrompt,
   normalizeAiChatMessages,

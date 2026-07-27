@@ -26,6 +26,9 @@ export interface WorkspaceInvite {
   accepted_by_email: string | null;
   accepted_at: string | null;
   expires_at: string | null;
+  // Soft delete for the list only — the row (and its acceptance record) always
+  // survives. null = shown. See src/lib/inviteDismissal.ts for who may be set.
+  dismissed_at: string | null;
   created_at: string;
 }
 
@@ -75,6 +78,41 @@ export function useWorkspaceUsers(workspaceId: string | null) {
     setInvites(prev => prev.map(i => i.id === inviteId ? { ...i, status: 'revoked' } : i));
   }, [workspaceId]);
 
+  // Tidy a spent link out of the list, or put it back. The server refuses to
+  // dismiss a still-active link (409), so a rejected call must not leave the
+  // local row looking hidden — hence the refresh on failure rather than an
+  // unconditional optimistic write.
+  const setInviteDismissed = useCallback(async (inviteId: string, dismissed: boolean) => {
+    if (!workspaceId) return;
+    const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+      body: JSON.stringify({ dismissed }),
+    });
+    if (!res.ok) {
+      await refresh();
+      throw new Error(dismissed ? 'Failed to dismiss invite link' : 'Failed to restore invite link');
+    }
+    const payload = await res.json().catch(() => null);
+    const row = (payload?.data ?? null) as WorkspaceInvite | null;
+    setInvites(prev => prev.map(i => i.id === inviteId
+      ? { ...i, dismissed_at: row?.dismissed_at ?? (dismissed ? new Date().toISOString() : null) }
+      : i));
+  }, [workspaceId, refresh]);
+
+  // Bulk clear. The server applies the same spent-only predicate, so anything
+  // still live is skipped rather than hidden; re-read the list afterwards so
+  // what the user sees is what actually happened.
+  const dismissSpentInvites = useCallback(async () => {
+    if (!workspaceId) return;
+    const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/invites/dismiss-spent`), {
+      method: 'POST',
+      headers: apiAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to clear spent invite links');
+    await refresh();
+  }, [workspaceId, refresh]);
+
   const removeMember = useCallback(async (memberId: string) => {
     if (!workspaceId) return;
     const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`), {
@@ -96,11 +134,22 @@ export function useWorkspaceUsers(workspaceId: string | null) {
     setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role } : m));
   }, [workspaceId]);
 
-  return { members, invites, loading, refresh, createInvite, revokeInvite, removeMember, changeMemberRole };
+  return {
+    members,
+    invites,
+    loading,
+    refresh,
+    createInvite,
+    revokeInvite,
+    setInviteDismissed,
+    dismissSpentInvites,
+    removeMember,
+    changeMemberRole,
+  };
 }
 
 // Build the shareable invite URL the recipient opens. The accept flow reads the
-// ?invite= param on load (see App.tsx).
+// ?invite= param on the app entry point (see App.tsx).
 export function inviteUrl(origin: string, token: string): string {
-  return `${origin.replace(/\/$/, '')}/?invite=${encodeURIComponent(token)}`;
+  return `${origin.replace(/\/$/, '')}/app?invite=${encodeURIComponent(token)}`;
 }

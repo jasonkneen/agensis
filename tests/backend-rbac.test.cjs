@@ -61,6 +61,11 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {} } = {}) {
       const ws = rowWorkspaces[m[1]]?.[params[0]];
       return ws ? [{ workspace_id: ws }] : [];
     }
+    // Nested workspaces: the ancestor walk that resolves INHERITED roles. It
+    // runs only when the DIRECT role fell short of the capability, which is
+    // every denial below. No fixture here has a parent, so nothing is inherited
+    // and the denial stands.
+    if (n.includes('with recursive chain as')) return [];
     throw new Error(`Unexpected SQL in test: ${sql}`);
   }
   db.calls = calls;

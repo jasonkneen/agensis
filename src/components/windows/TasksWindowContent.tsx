@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  CalendarRange,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -8,6 +9,7 @@ import {
   Clock,
   Columns3,
   CornerDownRight,
+  ExternalLink,
   Flag,
   GanttChart,
   Link2,
@@ -23,9 +25,31 @@ import {
 import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
+import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
+import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
+import {
+  DAY_MS,
+  applyHideDone,
+  buildGanttRows,
+  countOpenTasks,
+  buildTaskSpans,
+  dependencyCandidates as resolveDependencyCandidates,
+  dueDateFromExclusiveEnd,
+  fromDateInputValue,
+  labelFitsInsideBar,
+  resolveTaskFocus,
+  WIDEST_TASK_FILTERS,
+  startOfDay,
+  taskDependsOn,
+  toDateInputValue,
+  type GanttRow,
+  type TaskAssignmentFilter,
+  type TaskSpan,
+} from './taskSchedule';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -64,6 +88,7 @@ import {
 } from '@/components/ui/marker';
 import {
   NativeSelect,
+  NativeSelectOptGroup,
   NativeSelectOption,
 } from '@/components/ui/native-select';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -85,6 +110,8 @@ interface TasksWindowContentProps {
   onToggleStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  /** Opens the chat a task is being worked in (source_type 'chat'). */
+  onOpenSession?: (sessionId: string) => void;
   /** A task to scroll to and expand once it's in view (e.g. opened from search). */
   focusTaskId?: string;
   /** Called once the focus has been applied, so the caller can clear it. */
@@ -116,19 +143,53 @@ const TASK_COMMENT_AVATAR_COLORS = [
   'bg-pink-500',
 ];
 
-type AssignmentFilter = 'all' | 'mine' | 'others';
+type AssignmentFilter = TaskAssignmentFilter;
 
-// Reads happen against a mix of shapes: the backend returns a JS string[]
-// (postgres.js parses uuid[]), but an offline/cached row or a raw PG array
-// literal could surface as a string. Normalize every read so counts, Set math,
-// and .includes() never operate on characters of a string.
-function taskDependsOn(task: Task): string[] {
-  const raw = task.depends_on as unknown;
-  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string' && id.length > 0);
-  if (typeof raw === 'string') {
-    return raw.replace(/^\{|\}$/g, '').split(',').map(id => id.replace(/^"|"$/g, '').trim()).filter(Boolean);
-  }
-  return [];
+type TaskView = 'list' | 'kanban' | 'gantt';
+
+// Remembered per workspace: reopening Tasks and being shown every completed
+// item again, every single time, is the whole complaint these three answer.
+// Search text and the selected task stay in memory — a search box that survives
+// a reload shows a filtered list with nothing on screen explaining why.
+const ASSIGNMENT_FILTER_PREF = oneOf<AssignmentFilter>(['all', 'mine', 'others']);
+const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt']);
+
+// A task dispatched to an agent records the chat it is being worked in:
+// source_type 'chat' + the session id. Every other source_type stores a
+// different kind of id (an agent id for 'ai', a canvas object id for 'canvas'),
+// so only 'chat' is safe to open as a session.
+function taskChatSessionId(task: Task): string | null {
+  return task.source_type === 'chat' && task.source_id ? task.source_id : null;
+}
+
+// Assignee options: people AND agents. Assigning an agent dispatches the task to
+// it — that's the point of the picker, so agents can't be missing from it.
+// Disabled agents are left out: they can't run.
+function AssigneeOptions({ members, agents }: { members: WorkspaceMember[]; agents: WorkspaceAgent[] }) {
+  const activeAgents = agents.filter(agent => agent.enabled !== false);
+  return (
+    <>
+      <NativeSelectOption value="">Unassigned</NativeSelectOption>
+      {members.length > 0 && (
+        <NativeSelectOptGroup label="People">
+          {members.map(member => (
+            <NativeSelectOption key={member.user_id} value={member.user_id}>
+              {member.email?.split('@')[0] || 'Member'}
+            </NativeSelectOption>
+          ))}
+        </NativeSelectOptGroup>
+      )}
+      {activeAgents.length > 0 && (
+        <NativeSelectOptGroup label="Agents">
+          {activeAgents.map(agent => (
+            <NativeSelectOption key={agent.id} value={agent.id}>
+              @{agentHandle(agent)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelectOptGroup>
+      )}
+    </>
+  );
 }
 
 export const TasksWindowContent = memo(function TasksWindowContent({
@@ -144,15 +205,31 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onToggleStatus,
   onDeleteTask,
   onUpdateAgent,
+  onOpenSession,
   focusTaskId,
   onFocusTaskConsumed,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
-  const [filter, setFilter] = useState<AssignmentFilter>('all');
-  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('list');
+  const [filter, setFilter] = usePersistedPreference(
+    viewPreferenceKey('tasks.filter', workspaceId), ASSIGNMENT_FILTER_PREF, 'all' as AssignmentFilter,
+  );
+  const [hideDone, setHideDone] = usePersistedPreference(
+    viewPreferenceKey('tasks.hide-done', workspaceId), booleanPreference, false,
+  );
+  const [view, setView] = usePersistedPreference(
+    viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Which focus request we widened the filters FOR. Transient on purpose: the
+  // widening below used to call setFilter/setHideDone, which are the PERSISTED
+  // setters — so arriving from a comment or @mention link on a task that the
+  // current filters hide (a done task, with "Hide done" on) silently wrote the
+  // user's preference away. They set "Hide done" once, followed one link, and it
+  // was off forever with nothing to point at. Overriding for the duration of the
+  // focus shows the task without touching what they chose.
+  const [widenedForFocus, setWidenedForFocus] = useState<string | null>(null);
 
   const childrenMap = useMemo(() => {
     const map: Record<string, Task[]> = {};
@@ -166,17 +243,31 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
   const allTopLevel = useMemo(() => tasks.filter(task => !task.parent_id), [tasks]);
 
+  const focusRowId = useMemo(() => {
+    if (!focusTaskId) return undefined;
+    const target = tasks.find(t => t.id === focusTaskId);
+    return target?.parent_id || focusTaskId;
+  }, [focusTaskId, tasks]);
+
+  // The filters actually in force: the user's, unless a focus request needed
+  // them widened to reach its task.
+  const focusWidened = Boolean(focusRowId) && widenedForFocus === focusRowId;
+  const effectiveFilter = focusWidened ? WIDEST_TASK_FILTERS.filter : filter;
+  const effectiveHideDone = focusWidened ? WIDEST_TASK_FILTERS.hideDone : hideDone;
+
   const filteredTopLevel = useMemo(() => {
     const me = currentUserId || members.find(member => member.email === currentUserEmail)?.user_id || '';
+    let list = allTopLevel;
+    const filter = effectiveFilter;
     if (filter === 'mine') {
-      if (!me) return [];
-      return allTopLevel.filter(task => task.assignee_id === me);
+      list = me ? allTopLevel.filter(task => task.assignee_id === me) : [];
+    } else if (filter === 'others') {
+      list = allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
     }
-    if (filter === 'others') {
-      return allTopLevel.filter(task => task.assignee_id && task.assignee_id !== me);
-    }
-    return allTopLevel;
-  }, [allTopLevel, filter, members, currentUserEmail, currentUserId]);
+    // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
+    // "Done" here means closed — done AND cancelled; see isClosedTask.
+    return applyHideDone(list, effectiveHideDone);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -214,7 +305,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     return 'Someone';
   };
 
-  const openCount = filteredTopLevel.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
+  // Same function the sidebar badge uses, so the two "N open" numbers can only
+  // ever differ by the assignment filter the user can see in this toolbar —
+  // never by what counts as a task. `filteredTopLevel` is already top-level, so
+  // countOpenTasks' parent_id check is a no-op here; sharing it is the point.
+  const openCount = countOpenTasks(filteredTopLevel);
 
   // The right-hand editor panel (Kanban/Gantt) is driven by a selected task id.
   // Resolving against live `tasks` means a deleted selection auto-closes the panel.
@@ -243,24 +338,46 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   // A focused task may be a subtask (rendered inside its parent's expanded
   // row, not as its own top-level row) — resolve to the row that actually
   // needs to scroll/expand.
-  const focusRowId = useMemo(() => {
-    if (!focusTaskId) return undefined;
-    const target = tasks.find(t => t.id === focusTaskId);
-    return target?.parent_id || focusTaskId;
-  }, [focusTaskId, tasks]);
 
+  // The last focus request that reached a terminal action. Kept in a ref so it
+  // does not re-trigger the effect: its only job is to stop a spent request
+  // from widening the filters a second time, every time the user narrows them.
+  const handledFocusRef = useRef<string | null>(null);
+
+  // The current assignment filter or "hide done" toggle may hide the focused
+  // task's row entirely — e.g. jumping in from a comment/@mention link on a
+  // task that's already done. resolveTaskFocus decides whether that is worth
+  // overriding the user's filters for; the rules (and the bug that produced
+  // them) are documented there.
   useEffect(() => {
-    if (!focusRowId) return;
-    // The current assignment filter may hide the focused task's row entirely.
-    if (filter !== 'all' && !filteredTopLevel.some(task => task.id === focusRowId)) {
-      setFilter('all');
-      return; // re-run once the wider list renders
+    const action = resolveTaskFocus({
+      focusRowId,
+      handledFocusId: handledFocusRef.current,
+      isVisible: Boolean(focusRowId) && filteredTopLevel.some(task => task.id === focusRowId),
+      filters: { filter: effectiveFilter, hideDone: effectiveHideDone },
+    });
+    if (action.kind === 'reset') {
+      handledFocusRef.current = null;
+      return;
     }
-    const node = document.getElementById(`task-row-${focusRowId}`);
-    if (!node) return;
-    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (action.kind === 'idle') return;
+    if (action.kind === 'widen') {
+      // Transient — NOT setFilter/setHideDone, which persist. See widenedForFocus.
+      setWidenedForFocus(focusRowId ?? null);
+      return; // re-runs once the wider list renders
+    }
+    // Terminal: mark the request spent BEFORE consuming, so a re-render in
+    // between cannot re-enter the widening branch.
+    handledFocusRef.current = focusRowId ?? null;
+    if (action.kind === 'reveal') {
+      // Best effort — the Board and Timeline views have no task-row element.
+      document.getElementById(`task-row-${focusRowId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
     onFocusTaskConsumed?.();
-  }, [focusRowId, filter, filteredTopLevel, onFocusTaskConsumed]);
+    // setFilter/setHideDone are stable (see usePersistedPreference) but are not
+    // the useState setters the lint rule knows to ignore, so they are listed.
+  }, [focusRowId, effectiveFilter, effectiveHideDone, filteredTopLevel, onFocusTaskConsumed]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
@@ -278,6 +395,16 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
           <ToggleGroupItem value="others" title="Assigned to other workspace members">Others</ToggleGroupItem>
         </ToggleGroup>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => setHideDone(v => !v)}
+          title={hideDone ? 'Show done and cancelled tasks' : 'Hide done and cancelled tasks'}
+          className={cn(hideDone && 'text-primary')}
+        >
+          {hideDone ? 'Show done' : 'Hide done'}
+        </Button>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
         <ToggleGroup
           type="single"
@@ -320,22 +447,15 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               <NativeSelectOption key={priority} value={priority}>{PRIORITY_LABELS[priority]}</NativeSelectOption>
             ))}
           </NativeSelect>
-          {members.length > 0 && (
-            <NativeSelect
-              value={newAssignee}
-              onChange={e => setNewAssignee(e.target.value)}
-              size="sm"
-              className="w-40 max-w-full"
-              aria-label="Assignee"
-            >
-              <NativeSelectOption value="">Unassigned</NativeSelectOption>
-              {members.map(member => (
-                <NativeSelectOption key={member.user_id} value={member.user_id}>
-                  {member.email?.split('@')[0] || 'Member'}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          )}
+          <NativeSelect
+            value={newAssignee}
+            onChange={e => setNewAssignee(e.target.value)}
+            size="sm"
+            className="w-40 max-w-full"
+            aria-label="Assignee"
+          >
+            <AssigneeOptions members={members} agents={agents} />
+          </NativeSelect>
           <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim()}>
             <Plus data-icon="inline-start" />
             Add
@@ -345,7 +465,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
       {view === 'list' ? (
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col gap-4 p-3">
+          <div className="flex flex-col gap-3 p-3">
             {filteredTopLevel.length === 0 ? (
               <Empty className="min-h-80 border-0">
                 <EmptyHeader>
@@ -361,8 +481,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 const items = grouped[status];
                 if (items.length === 0) return null;
                 return (
-                  <section key={status} className="flex flex-col gap-2">
-                    <Marker variant="separator">
+                  <section key={status} className="flex flex-col gap-1.5">
+                    <Marker variant="separator" className="min-h-0 text-xs">
                       <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
                     </Marker>
                     <ItemGroup className="gap-1">
@@ -371,21 +491,24 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                           key={task.id}
                           task={task}
                           subtasks={childrenMap[task.id] || []}
-                          allTasks={allTopLevel}
+                          allTasks={tasks}
                           assigneeLabel={memberLabel(task.assignee_id)}
                           assigneeActive={isAssigneeActive(task.assignee_id, agentConnections)}
                           members={members}
                           agents={agents}
                           onUpdateAgent={onUpdateAgent}
+                          onOpenSession={onOpenSession}
                           workspaceId={workspaceId}
                           currentUserId={currentUserId}
                           currentUserEmail={currentUserEmail}
+                          hideDone={hideDone}
                           autoExpand={task.id === focusRowId}
                           onToggle={() => onToggleStatus(task)}
                           onDelete={() => onDeleteTask(task.id)}
                           onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
                           onChangeAssignee={assigneeId => onUpdateTask(task.id, { assignee_id: assigneeId })}
                           onChangeDependsOn={next => onUpdateTask(task.id, { depends_on: next })}
+                          onChangeDates={updates => onUpdateTask(task.id, updates)}
                           onAddSubtask={title => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
                           onToggleSubtask={sub => onToggleStatus(sub)}
                           onDeleteSubtask={id => onDeleteTask(id)}
@@ -413,6 +536,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             ) : (
               <TaskGantt
                 tasks={filteredTopLevel}
+                allTasks={tasks}
+                hideDone={hideDone}
                 memberLabel={memberLabel}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
@@ -424,13 +549,15 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             <TaskEditPanel
               task={selectedTask}
               subtasks={childrenMap[selectedTask.id] || []}
-              allTasks={allTopLevel}
+              allTasks={tasks}
               members={members}
               agents={agents}
               onUpdateAgent={onUpdateAgent}
+              onOpenSession={onOpenSession}
               workspaceId={workspaceId}
               currentUserId={currentUserId}
               currentUserEmail={currentUserEmail}
+              hideDone={hideDone}
               onClose={() => setSelectedTaskId(null)}
               onChangeTitle={title => onUpdateTask(selectedTask.id, { title })}
               onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
@@ -438,6 +565,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
               onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
               onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
+              onChangeDates={updates => onUpdateTask(selectedTask.id, updates)}
               onAddSubtask={title => onCreateTask({ title, parent_id: selectedTask.id, source_type: 'manual' })}
               onToggleSubtask={sub => onToggleStatus(sub)}
               onDeleteSubtask={id => onDeleteTask(id)}
@@ -458,20 +586,24 @@ function TaskRow({
   members,
   agents,
   onUpdateAgent,
+  onOpenSession,
   workspaceId,
   currentUserId,
   currentUserEmail,
+  hideDone,
   autoExpand,
   onToggle,
   onDelete,
   onChangeStatus,
   onChangeAssignee,
   onChangeDependsOn,
+  onChangeDates,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
 }: {
   task: Task;
+  /** ALL of this task's subtasks — the x/y badge counts the real total. */
   subtasks: Task[];
   allTasks: Task[];
   assigneeLabel: string | null;
@@ -479,15 +611,18 @@ function TaskRow({
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onOpenSession?: (sessionId: string) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
+  hideDone?: boolean;
   autoExpand?: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
   onChangeDependsOn: (next: string[]) => void;
+  onChangeDates: (updates: Partial<Task>) => void;
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
@@ -495,6 +630,7 @@ function TaskRow({
   const [expanded, setExpanded] = useState(false);
   const done = task.status === 'done';
   const doneSubs = subtasks.filter(subtask => subtask.status === 'done').length;
+  const chatSessionId = taskChatSessionId(task);
 
   // Re-expand whenever this row becomes the search/focus target — covers both
   // first mount and a second click on an already-mounted row.
@@ -560,23 +696,28 @@ function TaskRow({
           </div>
         </ItemContent>
         <ItemActions className="ml-auto flex-wrap justify-end">
-          {members.length > 0 && (
-            <NativeSelect
-              value={task.assignee_id || ''}
-              onChange={e => onChangeAssignee(e.target.value || null)}
-              onClick={e => e.stopPropagation()}
-              size="sm"
-              className="w-32"
-              aria-label="Assign task"
+          {chatSessionId && onOpenSession && (
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={e => { e.stopPropagation(); onOpenSession(chatSessionId); }}
+              title="Open the chat this task is being worked in"
             >
-              <NativeSelectOption value="">Unassigned</NativeSelectOption>
-              {members.map(member => (
-                <NativeSelectOption key={member.user_id} value={member.user_id}>
-                  {member.email?.split('@')[0] || 'Member'}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <ExternalLink data-icon="inline-start" />
+              Open chat
+            </Button>
           )}
+          <NativeSelect
+            value={task.assignee_id || ''}
+            onChange={e => onChangeAssignee(e.target.value || null)}
+            onClick={e => e.stopPropagation()}
+            size="sm"
+            className="w-32"
+            aria-label="Assign task"
+          >
+            <AssigneeOptions members={members} agents={agents} />
+          </NativeSelect>
           <NativeSelect
             value={task.status}
             onChange={e => onChangeStatus(e.target.value as TaskStatus)}
@@ -599,8 +740,10 @@ function TaskRow({
         <TaskDetail
           task={task}
           subtasks={subtasks}
+          hideDone={hideDone}
           allTasks={allTasks}
           onChangeDependsOn={onChangeDependsOn}
+          onChangeDates={onChangeDates}
           members={members}
           agents={agents}
           onUpdateAgent={onUpdateAgent}
@@ -620,12 +763,14 @@ function TaskRow({
 function TaskDetail({
   task,
   subtasks,
+  hideDone,
   allTasks,
   members,
   agents,
   onUpdateAgent,
   onChangeAssignee,
   onChangeDependsOn,
+  onChangeDates,
   workspaceId,
   currentUserId,
   currentUserEmail,
@@ -635,12 +780,15 @@ function TaskDetail({
 }: {
   task: Task;
   subtasks: Task[];
+  /** Toolbar toggle: hide closed subtasks too, so it means the same thing here. */
+  hideDone?: boolean;
   allTasks: Task[];
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
   onChangeDependsOn: (next: string[]) => void;
+  onChangeDates: (updates: Partial<Task>) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
@@ -749,14 +897,14 @@ function TaskDetail({
     setPendingMentionAgent(null);
   };
 
-  // Candidate dependencies: every other top-level task, excluding self and any
-  // task that already depends on THIS one (blocks a direct 2-cycle A<->B).
+  // Candidate dependencies: every other task in the workspace, minus anything
+  // that (transitively) already depends on THIS one. Excluding only the DIRECT
+  // dependents was not enough — A->B->C left "C depends on A" selectable, and a
+  // cycle hangs any topological layout.
   const dependsOn = taskDependsOn(task);
   const dependencyCandidates = useMemo(
-    () => allTasks.filter(candidate =>
-      candidate.id !== task.id && !taskDependsOn(candidate).includes(task.id),
-    ),
-    [allTasks, task.id],
+    () => resolveDependencyCandidates(task, allTasks),
+    [allTasks, task],
   );
 
   const toggleDependency = (candidateId: string) => {
@@ -766,8 +914,56 @@ function TaskDetail({
     onChangeDependsOn(Array.from(set));
   };
 
+  // The x/y badge on the row above counts EVERY subtask, so the hidden ones are
+  // still accounted for — this only stops "Hide done" leaving them on screen.
+  const visibleSubtasks = useMemo(() => applyHideDone(subtasks, Boolean(hideDone)), [subtasks, hideDone]);
+  const hiddenSubtaskCount = subtasks.length - visibleSubtasks.length;
+
+  const startValue = toDateInputValue(task.start_date);
+  const dueValue = toDateInputValue(task.due_date);
+  // Both dates set, and due lands before start. Rendering still copes (the span
+  // clamps to at least one day) but the row is telling you something is wrong.
+  const rangeInverted = Boolean(startValue && dueValue && dueValue < startValue);
+
   return (
     <div className="task-detail ml-8 flex flex-col gap-4 border-l py-3 pr-3 pl-5">
+      <section className="flex flex-col gap-2">
+        <Marker>
+          <MarkerIcon>
+            <CalendarRange />
+          </MarkerIcon>
+          <MarkerContent>Schedule</MarkerContent>
+        </Marker>
+        <div className="flex flex-wrap gap-2">
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+            Start date
+            <Input
+              type="date"
+              value={startValue}
+              max={dueValue || undefined}
+              onChange={e => onChangeDates({ start_date: fromDateInputValue(e.target.value) })}
+            />
+          </label>
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+            Due date
+            <Input
+              type="date"
+              value={dueValue}
+              min={startValue || undefined}
+              onChange={e => onChangeDates({ due_date: fromDateInputValue(e.target.value) })}
+            />
+          </label>
+        </div>
+        {rangeInverted && (
+          <p className="px-1 text-xs text-destructive">Due date is before the start date.</p>
+        )}
+        {!startValue && !dueValue && (
+          <p className="px-1 text-xs text-muted-foreground">
+            No dates yet — the timeline shows this as a marker on the day it was created.
+          </p>
+        )}
+      </section>
+
       <section className="flex flex-col gap-2">
         <Marker>
           <MarkerIcon>
@@ -810,9 +1006,14 @@ function TaskDetail({
           </MarkerIcon>
           <MarkerContent>Subtasks</MarkerContent>
         </Marker>
-        {subtasks.length > 0 && (
+        {hiddenSubtaskCount > 0 && (
+          <p className="px-1 text-xs text-muted-foreground">
+            {hiddenSubtaskCount} done or cancelled {hiddenSubtaskCount === 1 ? 'subtask' : 'subtasks'} hidden.
+          </p>
+        )}
+        {visibleSubtasks.length > 0 && (
           <ItemGroup className="gap-1">
-            {subtasks.map(subtask => {
+            {visibleSubtasks.map(subtask => {
               const subDone = subtask.status === 'done';
               return (
                 <Item key={subtask.id} size="xs" variant="muted" className="task-subtask-row">
@@ -991,6 +1192,51 @@ function TaskDetail({
 // task's core fields (title/description/status/priority/assignee) and then
 // reuses <TaskDetail> for depends_on / subtasks / comments.
 // ---------------------------------------------------------------------------
+// Drag-to-resize for the task editor. Width rules live in lib/taskPanelWidth.
+function useTaskPanelWidth() {
+  const [width, setWidth] = useState(readStoredTaskPanelWidth);
+  const asideRef = useRef<HTMLElement | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  // The panel must never be wider than its container leaves room for, so also
+  // clamp on container resize — not just while dragging. Otherwise shrinking the
+  // window re-creates the original overflow.
+  const clamp = (next: number) => clampTaskPanelWidth(
+    next,
+    asideRef.current?.parentElement?.clientWidth ?? null,
+  );
+
+  useEffect(() => {
+    const parent = asideRef.current?.parentElement;
+    if (!parent || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setWidth(current => clamp(current)));
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, []);
+
+  const startResize = (event: React.PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = asideRef.current?.getBoundingClientRect().width ?? width;
+    setDragging(true);
+    // Dragging the LEFT edge: moving left grows the panel, hence startX - x.
+    const onMove = (moveEvent: PointerEvent) => setWidth(clamp(startWidth + (startX - moveEvent.clientX)));
+    const onUp = () => {
+      setDragging(false);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      setWidth(current => {
+        try { window.localStorage.setItem(TASK_PANEL_WIDTH_KEY, String(current)); } catch { /* private mode */ }
+        return current;
+      });
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
+  return { width, asideRef, startResize, dragging };
+}
+
 function TaskEditPanel({
   task,
   subtasks,
@@ -998,9 +1244,11 @@ function TaskEditPanel({
   members,
   agents,
   onUpdateAgent,
+  onOpenSession,
   workspaceId,
   currentUserId,
   currentUserEmail,
+  hideDone,
   onClose,
   onChangeTitle,
   onChangeDescription,
@@ -1008,6 +1256,7 @@ function TaskEditPanel({
   onChangePriority,
   onChangeAssignee,
   onChangeDependsOn,
+  onChangeDates,
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
@@ -1018,9 +1267,11 @@ function TaskEditPanel({
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  onOpenSession?: (sessionId: string) => void;
   workspaceId: string;
   currentUserId?: string;
   currentUserEmail: string;
+  hideDone?: boolean;
   onClose: () => void;
   onChangeTitle: (title: string) => void;
   onChangeDescription: (description: string) => void;
@@ -1028,6 +1279,7 @@ function TaskEditPanel({
   onChangePriority: (priority: TaskPriority) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
   onChangeDependsOn: (next: string[]) => void;
+  onChangeDates: (updates: Partial<Task>) => void;
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
@@ -1037,11 +1289,14 @@ function TaskEditPanel({
   // changes (keyed by task.id).
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description || '');
+  const chatSessionId = taskChatSessionId(task);
 
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description || '');
   }, [task.id, task.title, task.description]);
+
+  const panel = useTaskPanelWidth();
 
   const commitTitle = () => {
     const next = title.trim();
@@ -1054,7 +1309,23 @@ function TaskEditPanel({
   };
 
   return (
-    <aside className="task-edit-panel flex w-80 shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md">
+    <aside
+      ref={panel.asideRef}
+      className="task-edit-panel relative flex shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md"
+      style={{ width: panel.width }}
+    >
+      <div
+        onPointerDown={panel.startResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize task editor"
+        className={cn(
+          'absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none',
+          'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-primary/0 after:transition-colors',
+          'hover:after:bg-primary/40',
+          panel.dragging && 'after:bg-primary/60',
+        )}
+      />
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
         <span className="text-xs font-semibold tracking-tight text-muted-foreground">Edit task</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close editor">
@@ -1109,31 +1380,38 @@ function TaskEditPanel({
                 ))}
               </NativeSelect>
             </div>
-            {members.length > 0 && (
-              <NativeSelect
-                value={task.assignee_id || ''}
-                onChange={e => onChangeAssignee(e.target.value || null)}
+            <NativeSelect
+              value={task.assignee_id || ''}
+              onChange={e => onChangeAssignee(e.target.value || null)}
+              size="sm"
+              aria-label="Assign task"
+            >
+              <AssigneeOptions members={members} agents={agents} />
+            </NativeSelect>
+            {chatSessionId && onOpenSession && (
+              <Button
+                type="button"
+                variant="outline"
                 size="sm"
-                aria-label="Assign task"
+                className="self-start"
+                onClick={() => onOpenSession(chatSessionId)}
               >
-                <NativeSelectOption value="">Unassigned</NativeSelectOption>
-                {members.map(member => (
-                  <NativeSelectOption key={member.user_id} value={member.user_id}>
-                    {member.email?.split('@')[0] || 'Member'}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                <ExternalLink data-icon="inline-start" />
+                Open chat
+              </Button>
             )}
           </div>
           <TaskDetail
             task={task}
             subtasks={subtasks}
+            hideDone={hideDone}
             allTasks={allTasks}
             members={members}
             agents={agents}
             onUpdateAgent={onUpdateAgent}
             onChangeAssignee={onChangeAssignee}
             onChangeDependsOn={onChangeDependsOn}
+            onChangeDates={onChangeDates}
             workspaceId={workspaceId}
             currentUserId={currentUserId}
             currentUserEmail={currentUserEmail}
@@ -1409,33 +1687,45 @@ function TaskKanban({
 }
 
 // ---------------------------------------------------------------------------
-// Gantt timeline — rows are tasks, the X axis is days. Bars span start_date (or
-// created_at) to due_date (or start + 1 day). Bars drag horizontally with
-// pointer events (day-snapped) to reschedule; the right edge resizes due_date
-// only. Dependency arrows are drawn as non-interactive SVG lines; a task that
-// starts before a dependency ends gets a violation tint.
+// Gantt timeline — rows are tasks (parents with their children inlined and
+// indented underneath), the X axis is days.
+//
+// What a row draws comes from buildTaskSpans in ./taskSchedule:
+//   'span'   — the task has start_date and/or due_date: a real range.
+//   'rollup' — a parent: the union of its own dates and every scheduled
+//              descendant, drawn as a slim summary bar (not draggable — moving
+//              a summary would not move the children it summarises).
+//   'point'  — NO dates anywhere in its subtree: a single-day diamond marker on
+//              its created_at, deliberately unlike a bar so an unscheduled task
+//              is never mistaken for a real one-day span.
+//
+// Bars drag horizontally (day-snapped) to reschedule; the right edge resizes
+// due_date only. Dependency arrows are non-interactive SVG; a task that starts
+// before a dependency ends gets a violation tint. Labels sit inside the bar when
+// it is wide enough and outside it when it is not, so a one-day bar still reads
+// as its title instead of "T…".
 // ---------------------------------------------------------------------------
 
-const DAY_MS = 86400000;
 const GANTT_DAY_WIDTH = 32;
-const GANTT_ROW_HEIGHT = 36;
-const GANTT_LABEL_WIDTH = 176;
-
-function startOfDay(ms: number): number {
-  const d = new Date(ms);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function taskStartMs(task: Task): number {
-  return startOfDay(new Date(task.start_date || task.created_at).getTime());
-}
-
-function taskEndMs(task: Task): number {
-  const start = taskStartMs(task);
-  if (task.due_date) return Math.max(start, startOfDay(new Date(task.due_date).getTime()));
-  return start + DAY_MS;
-}
+// One line of text (text-sm, matching the List view) plus room to breathe. The
+// old 36px held two jammed lines because the name lived in a side column; the
+// name now rides the bar, so a row is a single line again — just a taller one.
+const GANTT_ROW_HEIGHT = 40;
+const GANTT_HEADER_HEIGHT = 36;
+// Bars sit inside the row with breathing room above and below.
+const GANTT_BAR_HEIGHT = 24;
+// Depth indent applied to a row's label (never to its bar — a bar's position
+// means a date and must not be nudged to show hierarchy).
+const GANTT_DEPTH_INDENT = 14;
+// Closest two axis labels may sit before one is dropped.
+const GANTT_TICK_MIN_GAP = 56;
+// A label that rides beside its bar truncates at this width, with the full
+// title on hover. ~66 characters — longer than any title in practice, and 2.5x
+// what the old fixed name column could show before it cut a title off.
+const GANTT_ALONGSIDE_LABEL_MAX = 520;
+// Room to the right of the grid so the last row's alongside label is fully
+// reachable by scrolling instead of being clipped by the content width.
+const GANTT_LABEL_GUTTER = GANTT_ALONGSIDE_LABEL_MAX + 48;
 
 interface GanttDrag {
   taskId: string;
@@ -1443,17 +1733,23 @@ interface GanttDrag {
   originX: number;
   startMs: number;
   endMs: number;
-  offsetDays: number;
 }
 
 function TaskGantt({
   tasks,
+  allTasks,
+  hideDone,
   memberLabel,
   selectedTaskId,
   onSelectTask,
   onReschedule,
 }: {
+  /** Rows to chart (already assignment-filtered, top-level only). */
   tasks: Task[];
+  /** EVERY task in the workspace — needed to resolve children and rollups. */
+  allTasks: Task[];
+  /** Toolbar toggle: closed subtasks drop out of the rows, not the rollups. */
+  hideDone?: boolean;
   memberLabel: (assigneeId: string | null) => string | null;
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
@@ -1463,27 +1759,44 @@ function TaskGantt({
   // Preview offset (in snapped days) applied to the dragging bar before commit.
   const [previewDays, setPreviewDays] = useState(0);
 
+  // Only the ROWS honour "hide done" — spans below still resolve over every
+  // task, so a parent's rollup keeps spanning the children it is hiding.
+  const rowSource = useMemo(() => applyHideDone(allTasks, Boolean(hideDone)), [allTasks, hideDone]);
+  const rows = useMemo<GanttRow[]>(() => buildGanttRows(tasks, rowSource), [tasks, rowSource]);
+  // Spans are resolved over ALL tasks so a parent still rolls up over a child
+  // the assignment filter hides.
+  const spans = useMemo(() => buildTaskSpans(allTasks), [allTasks]);
+  const spanOf = (task: Task): TaskSpan => {
+    const span = spans.get(task.id);
+    if (span) return span;
+    const day = startOfDay(new Date(task.created_at).getTime());
+    return { startMs: day, endMs: day + DAY_MS, kind: 'point' };
+  };
+
   const { windowStart, dayCount } = useMemo(() => {
     const today = startOfDay(Date.now());
     let min = today - 7 * DAY_MS;
     let max = today + 30 * DAY_MS;
-    for (const task of tasks) {
-      min = Math.min(min, taskStartMs(task));
-      max = Math.max(max, taskEndMs(task));
+    for (const row of rows) {
+      const span = spans.get(row.task.id);
+      if (!span) continue;
+      min = Math.min(min, span.startMs);
+      max = Math.max(max, span.endMs);
     }
     const days = Math.max(1, Math.round((max - min) / DAY_MS) + 1);
     return { windowStart: min, dayCount: days };
-  }, [tasks]);
+  }, [rows, spans]);
 
   const rowIndex = useMemo(() => {
     const map = new Map<string, number>();
-    tasks.forEach((task, i) => map.set(task.id, i));
+    rows.forEach((row, i) => map.set(row.task.id, i));
     return map;
-  }, [tasks]);
+  }, [rows]);
 
   const dayToX = (ms: number) => ((startOfDay(ms) - windowStart) / DAY_MS) * GANTT_DAY_WIDTH;
   const gridWidth = dayCount * GANTT_DAY_WIDTH;
-  const gridHeight = tasks.length * GANTT_ROW_HEIGHT;
+  const contentWidth = gridWidth + GANTT_LABEL_GUTTER;
+  const gridHeight = rows.length * GANTT_ROW_HEIGHT;
 
   useEffect(() => {
     if (!drag) return;
@@ -1498,17 +1811,19 @@ function TaskGantt({
         // the editor. The resize handle should never open the panel.
         if (drag.mode === 'move') onSelectTask(drag.taskId);
       } else if (drag.mode === 'move') {
-        // Materialize both dates so the update shape is always {start_date, due_date}.
+        // Materialize both dates so the update shape is always {start_date, due_date}
+        // — dragging an undated marker is how you schedule it in the first place.
+        // drag.endMs is EXCLUSIVE, so due_date is the day before it.
         const nextStart = drag.startMs + deltaDays * DAY_MS;
         const nextEnd = drag.endMs + deltaDays * DAY_MS;
         onReschedule(drag.taskId, {
           start_date: new Date(nextStart).toISOString(),
-          due_date: new Date(nextEnd).toISOString(),
+          due_date: dueDateFromExclusiveEnd(nextEnd),
         });
       } else {
         // Resize the right edge: due_date only, floored to at least one day wide.
         const nextEnd = Math.max(drag.startMs + DAY_MS, drag.endMs + deltaDays * DAY_MS);
-        onReschedule(drag.taskId, { due_date: new Date(nextEnd).toISOString() });
+        onReschedule(drag.taskId, { due_date: dueDateFromExclusiveEnd(nextEnd) });
       }
       setDrag(null);
       setPreviewDays(0);
@@ -1521,7 +1836,7 @@ function TaskGantt({
     };
   }, [drag, onReschedule, onSelectTask]);
 
-  if (tasks.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
         No tasks to chart. Add one above.
@@ -1531,17 +1846,16 @@ function TaskGantt({
 
   // Dependency arrows: dep bar end -> task bar start, only when both are visible.
   const arrows: Array<{ key: string; x1: number; y1: number; x2: number; y2: number; violation: boolean }> = [];
-  for (const task of tasks) {
-    const toRow = rowIndex.get(task.id);
+  for (const row of rows) {
+    const toRow = rowIndex.get(row.task.id);
     if (toRow === undefined) continue;
-    const taskStart = taskStartMs(task);
-    for (const depId of taskDependsOn(task)) {
+    const taskStart = spanOf(row.task).startMs;
+    for (const depId of taskDependsOn(row.task)) {
       const fromRow = rowIndex.get(depId);
       if (fromRow === undefined) continue;
-      const dep = tasks[fromRow];
-      const depEnd = taskEndMs(dep);
+      const depEnd = spanOf(rows[fromRow].task).endMs;
       arrows.push({
-        key: `${depId}->${task.id}`,
+        key: `${depId}->${row.task.id}`,
         x1: dayToX(depEnd),
         y1: fromRow * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2,
         x2: dayToX(taskStart),
@@ -1552,153 +1866,270 @@ function TaskGantt({
   }
 
   // Day header ticks — label the 1st of each month plus every 7th day so the
-  // axis stays readable at 32px/day without crowding.
+  // axis stays readable at 32px/day. The two rules collide near a month
+  // boundary ("1 Aug" landing right beside "2 Aug"), so a tick that would sit
+  // on top of the previous label is dropped.
   const ticks: Array<{ x: number; label: string }> = [];
   for (let i = 0; i < dayCount; i++) {
     const ms = windowStart + i * DAY_MS;
     const d = new Date(ms);
-    if (d.getDate() === 1 || i === 0 || i % 7 === 0) {
-      ticks.push({ x: i * GANTT_DAY_WIDTH, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
-    }
+    if (d.getDate() !== 1 && i !== 0 && i % 7 !== 0) continue;
+    const x = i * GANTT_DAY_WIDTH;
+    const previous = ticks[ticks.length - 1];
+    if (previous && x - previous.x < GANTT_TICK_MIN_GAP) continue;
+    ticks.push({ x, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
   }
   const todayX = dayToX(Date.now());
   const todayVisible = todayX >= 0 && todayX <= gridWidth;
+  // Every row is an undated marker, so the chart is a column of identical
+  // diamonds conveying nothing. Say so once, above the rows, rather than
+  // leaving the user to work out that the timeline has no timeline in it.
+  const nothingScheduled = rows.every(row => spanOf(row.task).kind === 'point');
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
-      <div className="flex" style={{ width: GANTT_LABEL_WIDTH + gridWidth }}>
-        {/* Sticky task-label column */}
-        <div className="sticky left-0 z-10 shrink-0 border-r border-border bg-background" style={{ width: GANTT_LABEL_WIDTH }}>
-          <div className="h-8 border-b border-border" />
-          {tasks.map(task => {
-            const assignee = memberLabel(task.assignee_id);
-            return (
-              <div
-                key={task.id}
-                className="flex flex-col justify-center overflow-hidden border-b border-border/60 px-2"
-                style={{ height: GANTT_ROW_HEIGHT }}
-              >
-                <span className={cn('truncate text-xs', task.status === 'done' && 'text-muted-foreground line-through')}>
-                  {task.title}
-                </span>
-                {assignee && <span className="truncate text-[10px] text-muted-foreground">{assignee}</span>}
-              </div>
-            );
-          })}
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      {nothingScheduled && (
+        <p className="shrink-0 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+          Nothing is scheduled yet. Give a task a start or due date — or drag its marker
+          along the timeline — and it draws as a bar.
+        </p>
+      )}
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex" style={{ width: contentWidth }}>
+          {/* Timeline grid. There is no separate name column: every task's name
+              rides its own bar or marker (see the label block below). */}
+          <div className="relative" style={{ width: contentWidth }}>
+            {/* Day header */}
+            <div className="relative border-b border-border" style={{ width: contentWidth, height: GANTT_HEADER_HEIGHT }}>
+              {ticks.map(tick => (
+                <div
+                  key={tick.x}
+                  className="absolute top-0 flex h-full items-center border-l border-border/40 pl-1.5 text-xs text-muted-foreground"
+                  style={{ left: tick.x }}
+                >
+                  {tick.label}
+                </div>
+              ))}
+            </div>
 
-        {/* Timeline grid */}
-        <div className="relative" style={{ width: gridWidth }}>
-          {/* Day header */}
-          <div className="relative h-8 border-b border-border" style={{ width: gridWidth }}>
-            {ticks.map(tick => (
-              <div
-                key={tick.x}
-                className="absolute top-0 flex h-full items-center border-l border-border/40 pl-1 text-[10px] text-muted-foreground"
-                style={{ left: tick.x }}
-              >
-                {tick.label}
-              </div>
-            ))}
-          </div>
-
-          <div className="relative" style={{ width: gridWidth, height: gridHeight }}>
-            {/* Row backgrounds */}
-            {tasks.map((task, i) => (
-              <div
-                key={task.id}
-                className="absolute left-0 border-b border-border/40"
-                style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: gridWidth }}
-              />
-            ))}
-
-            {/* Today marker */}
-            {todayVisible && (
-              <div className="absolute top-0 z-0 w-px bg-primary/40" style={{ left: todayX, height: gridHeight }} aria-hidden />
-            )}
-
-            {/* Dependency arrows */}
-            <svg className="pointer-events-none absolute inset-0 overflow-visible" width={gridWidth} height={gridHeight} aria-hidden>
-              <defs>
-                <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                  <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
-                </marker>
-              </defs>
-              {arrows.map(arrow => (
-                <path
-                  key={arrow.key}
-                  d={`M${arrow.x1},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y2} L${arrow.x2},${arrow.y2}`}
-                  fill="none"
-                  className={cn('stroke-[1.5]', arrow.violation ? 'stroke-destructive/70' : 'stroke-muted-foreground/40')}
-                  markerEnd="url(#gantt-arrow)"
+            <div className="relative" style={{ width: contentWidth, height: gridHeight }}>
+              {/* Row backgrounds. Also the row's click target: with the name
+                  column gone, clicking anywhere on the band selects the task,
+                  so selection no longer depends on hitting a 12px diamond. */}
+              {rows.map((row, i) => (
+                <div
+                  key={row.task.id}
+                  className={cn(
+                    'absolute left-0 cursor-pointer border-b border-border/40',
+                    selectedTaskId === row.task.id && 'bg-muted',
+                  )}
+                  style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                  onClick={() => onSelectTask(row.task.id)}
                 />
               ))}
-            </svg>
 
-            {/* Bars */}
-            {tasks.map((task, i) => {
-              const isDragging = drag?.taskId === task.id;
-              const shiftDays = isDragging ? previewDays : 0;
-              const startMs = taskStartMs(task);
-              const endMs = taskEndMs(task);
-              const moveShift = isDragging && drag?.mode === 'move' ? shiftDays : 0;
-              const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
-              const left = dayToX(startMs + moveShift * DAY_MS);
-              const rawWidth = ((endMs - startMs) / DAY_MS + resizeShift) * GANTT_DAY_WIDTH;
-              const width = Math.max(GANTT_DAY_WIDTH, rawWidth);
-              const deps = taskDependsOn(task);
-              const violation = deps.some(depId => {
-                const depRow = rowIndex.get(depId);
-                if (depRow === undefined) return false;
-                return startMs < taskEndMs(tasks[depRow]);
-              });
-              return (
-                <div
-                  key={task.id}
-                  className={cn(
-                    'absolute flex cursor-pointer items-center rounded-md border text-[10px] shadow-sm',
-                    task.status === 'done'
-                      ? 'border-emerald-500/40 bg-emerald-500/25'
-                      : task.status === 'cancelled'
-                        ? 'border-border bg-muted'
-                        : 'border-primary/40 bg-primary/25',
-                    violation && 'ring-1 ring-destructive/60',
-                    selectedTaskId === task.id && 'ring-2 ring-primary',
-                    isDragging && 'z-20 opacity-80',
-                  )}
-                  style={{
-                    left,
-                    top: i * GANTT_ROW_HEIGHT + 6,
-                    height: GANTT_ROW_HEIGHT - 12,
-                    width,
-                  }}
-                  title={`${task.title}${violation ? ' — starts before a dependency ends' : ''}`}
-                  onPointerDown={e => {
-                    if (e.button !== 0) return;
-                    e.preventDefault();
-                    setDrag({ taskId: task.id, mode: 'move', originX: e.clientX, startMs, endMs, offsetDays: 0 });
-                    setPreviewDays(0);
-                  }}
-                >
-                  <span className="pointer-events-none min-w-0 flex-1 truncate px-1.5">{task.title}</span>
-                  {/* Right-edge resize handle (due_date only) */}
-                  <span
-                    className="h-full w-2 shrink-0 cursor-ew-resize rounded-r-md bg-foreground/10 hover:bg-foreground/25"
-                    onPointerDown={e => {
-                      if (e.button !== 0) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setDrag({ taskId: task.id, mode: 'resize', originX: e.clientX, startMs, endMs, offsetDays: 0 });
-                      setPreviewDays(0);
-                    }}
-                    aria-label="Resize due date"
+              {/* Today marker */}
+              {todayVisible && (
+                <div className="absolute top-0 z-0 w-px bg-primary/40" style={{ left: todayX, height: gridHeight }} aria-hidden />
+              )}
+
+              {/* Dependency arrows */}
+              <svg className="pointer-events-none absolute inset-0 overflow-visible" width={gridWidth} height={gridHeight} aria-hidden>
+                <defs>
+                  <marker id="gantt-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L6,3 L0,6 Z" className="fill-muted-foreground/60" />
+                  </marker>
+                </defs>
+                {arrows.map(arrow => (
+                  <path
+                    key={arrow.key}
+                    d={`M${arrow.x1},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y1} L${(arrow.x1 + arrow.x2) / 2},${arrow.y2} L${arrow.x2},${arrow.y2}`}
+                    fill="none"
+                    className={cn('stroke-[1.5]', arrow.violation ? 'stroke-destructive/70' : 'stroke-muted-foreground/40')}
+                    markerEnd="url(#gantt-arrow)"
                   />
-                </div>
-              );
-            })}
+                ))}
+              </svg>
+
+              {/* Bars */}
+              {rows.map((row, i) => {
+                const task = row.task;
+                const span = spanOf(task);
+                const isDragging = drag?.taskId === task.id;
+                const shiftDays = isDragging ? previewDays : 0;
+                const moveShift = isDragging && drag?.mode === 'move' ? shiftDays : 0;
+                const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
+                const left = dayToX(span.startMs + moveShift * DAY_MS);
+                const days = Math.max(1, (span.endMs - span.startMs) / DAY_MS + resizeShift);
+                const width = days * GANTT_DAY_WIDTH;
+                const assigneeLabel = memberLabel(task.assignee_id);
+                const deps = taskDependsOn(task);
+                const violation = deps.some(depId => {
+                  const depRow = rowIndex.get(depId);
+                  if (depRow === undefined) return false;
+                  return span.startMs < spanOf(rows[depRow].task).endMs;
+                });
+                // Where this row's name goes. There is exactly one copy of it,
+                // and it belongs to the shape: inside the bar when the bar is
+                // wide enough to hold the WHOLE title, immediately alongside
+                // when it is not (which includes every undated marker — a
+                // diamond can hold no text at all). One rule for every row, no
+                // per-row guesswork, and no title is ever truncated by a bar
+                // whose width is really just its date range.
+                const labelInside = span.kind === 'span' && labelFitsInsideBar(task.title, width, row.depth);
+                const labelPlacement = labelInside ? 'inside' : 'outside';
+                // Width of the shape the alongside label has to clear.
+                const shapeWidth = span.kind === 'point' ? GANTT_DAY_WIDTH : width;
+                const statusTint = task.status === 'done'
+                  ? 'border-emerald-500/40 bg-emerald-500/25'
+                  : task.status === 'cancelled'
+                    ? 'border-border bg-muted'
+                    : 'border-primary/40 bg-primary/25';
+                const tooltip = [
+                  task.title,
+                  span.kind === 'point'
+                    ? 'no dates set — drag to schedule'
+                    : span.kind === 'rollup'
+                      ? 'rolled up from subtasks'
+                      : `${new Date(span.startMs).toLocaleDateString()} → ${new Date(span.endMs - DAY_MS).toLocaleDateString()}`,
+                  violation ? 'starts before a dependency ends' : null,
+                ].filter(Boolean).join(' — ');
+
+                const startDrag = (e: React.PointerEvent, mode: 'move' | 'resize') => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  if (mode === 'resize') e.stopPropagation();
+                  setDrag({ taskId: task.id, mode, originX: e.clientX, startMs: span.startMs, endMs: span.endMs });
+                  setPreviewDays(0);
+                };
+
+                return (
+                  <div
+                    key={task.id}
+                    // Spans the full row rather than starting at the bar, so the
+                    // alongside label below can be `sticky` — see its comment.
+                    className="pointer-events-none absolute left-0 flex items-center"
+                    style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                    // Which of the three shapes this row drew, and where its title
+                    // ended up. Asserted by tests/unit/tasksWindowRender.test.ts —
+                    // "every bar is a narrow block with a one-character label" is
+                    // otherwise only visible to a human looking at the screen.
+                    data-gantt-kind={span.kind}
+                    data-gantt-label={labelPlacement}
+                    data-gantt-days={Math.round(days)}
+                    data-gantt-id={task.id}
+                  >
+                    <span className="absolute flex items-center" style={{ left, height: GANTT_ROW_HEIGHT }}>
+                    {span.kind === 'point' ? (
+                      // Single-day marker: a diamond, NOT a bar. An undated task
+                      // must not look like a real one-day span.
+                      <span
+                        className="pointer-events-auto grid cursor-pointer place-items-center"
+                        style={{ width: GANTT_DAY_WIDTH, height: GANTT_ROW_HEIGHT }}
+                        title={tooltip}
+                        onPointerDown={e => startDrag(e, 'move')}
+                      >
+                        <span
+                          className={cn(
+                            // Neutral whatever the status. A marker means "no
+                            // dates set", and a screen of green diamonds spent
+                            // the loudest colour available on the one thing in
+                            // this view carrying no schedule at all. Done still
+                            // reads: the title beside it is struck through,
+                            // exactly as it is in the List view.
+                            'size-3 rotate-45 border border-dashed border-muted-foreground/70 bg-muted-foreground/15',
+                            selectedTaskId === task.id && 'border-primary bg-primary/40',
+                            isDragging && 'opacity-70',
+                          )}
+                          aria-hidden
+                        />
+                      </span>
+                    ) : span.kind === 'rollup' ? (
+                      // Summary bar: slim, with end caps, spanning its children. It
+                      // is derived from them, so it CLICKS to select rather than
+                      // dragging — moving a summary would move nothing real.
+                      <span
+                        className="pointer-events-auto relative flex cursor-pointer items-center"
+                        style={{ width, height: GANTT_ROW_HEIGHT }}
+                        title={tooltip}
+                        onClick={() => onSelectTask(task.id)}
+                      >
+                        <span
+                          className={cn(
+                            'absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-sm bg-foreground/45',
+                            selectedTaskId === task.id && 'bg-primary',
+                            violation && 'bg-destructive/70',
+                          )}
+                          aria-hidden
+                        />
+                        <span className="absolute top-1/2 left-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
+                        <span className="absolute top-1/2 right-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
+                      </span>
+                    ) : (
+                      <span
+                        className={cn(
+                          'pointer-events-auto flex cursor-pointer items-center overflow-hidden rounded-md border text-xs shadow-sm',
+                          statusTint,
+                          violation && 'ring-1 ring-destructive/60',
+                          selectedTaskId === task.id && 'ring-2 ring-primary',
+                          isDragging && 'opacity-80',
+                        )}
+                        style={{ width, height: GANTT_BAR_HEIGHT }}
+                        title={tooltip}
+                        onPointerDown={e => startDrag(e, 'move')}
+                      >
+                        {labelInside && (
+                          <span className="pointer-events-none flex min-w-0 flex-1 items-center gap-1 truncate px-2">
+                            {row.depth > 0 && <CornerDownRight className="size-3.5 shrink-0 opacity-70" aria-hidden />}
+                            <span className={cn('truncate', task.status === 'done' && 'line-through')}>{task.title}</span>
+                          </span>
+                        )}
+                        {/* Right-edge resize handle (due_date only) */}
+                        <span
+                          className="ml-auto h-full w-2 shrink-0 cursor-ew-resize bg-foreground/10 hover:bg-foreground/25"
+                          onPointerDown={e => startDrag(e, 'resize')}
+                          aria-label="Resize due date"
+                        />
+                      </span>
+                    )}
+                    </span>
+                    {/* The name, when the shape is too small to hold it — which
+                        is every undated marker. It is `sticky`, so it travels
+                        with its bar until the bar scrolls off the left edge and
+                        then pins there: with no name column left, that is the
+                        only thing keeping rows identifiable once you scroll into
+                        next month. The chip background is what makes it legible
+                        when it is pinned over the grid. */}
+                    {labelPlacement === 'outside' && (
+                      <span
+                        data-gantt-sticky-label=""
+                        className={cn(
+                          'pointer-events-auto sticky z-10 cursor-pointer truncate rounded-sm bg-card/80 px-1 text-sm',
+                          row.hasChildren && 'font-medium',
+                          task.status === 'done' ? 'text-muted-foreground line-through' : 'text-foreground',
+                        )}
+                        style={{
+                          marginLeft: left + shapeWidth + 6 + row.depth * GANTT_DEPTH_INDENT,
+                          left: 8 + row.depth * GANTT_DEPTH_INDENT,
+                          maxWidth: GANTT_ALONGSIDE_LABEL_MAX,
+                        }}
+                        title={tooltip}
+                        onClick={() => onSelectTask(task.id)}
+                      >
+                        {row.depth > 0 && (
+                          <CornerDownRight className="mr-1 inline size-3.5 shrink-0 align-[-3px] text-muted-foreground" aria-hidden />
+                        )}
+                        {task.title}
+                        {assigneeLabel && <span className="text-muted-foreground"> · {assigneeLabel}</span>}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
-    </ScrollArea>
+      </ScrollArea>
+    </div>
   );
 }

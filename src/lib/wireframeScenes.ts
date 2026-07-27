@@ -1,0 +1,287 @@
+// ---------------------------------------------------------------------------
+// WIREFRAME DEMOS — tiny animated illustrations of a feature, as DATA.
+//
+// A feature demo is a handful of grey boxes that move. Not a screenshot: a
+// screenshot of this app goes stale the moment the UI changes, has to be
+// recaptured per theme, and drags a binary into the bundle. A wireframe says
+// "a panel slides in from the left and a row lights up" — which stays true
+// through a restyle, weighs nothing, and inherits the current theme's colours
+// because it is drawn from theme tokens rather than baked pixels.
+//
+// The format is deliberately small. A scene is a list of shapes on a fixed
+// viewBox, each with a delay and one named motion. Authoring a new demo is
+// adding data to this file, never writing CSS — which is the whole point of it
+// being a format rather than a component per demo.
+//
+// Rendered by src/components/wireframe/WireframeDemo.tsx.
+// Authoring guide: .claude/skills/wireframe-demos/SKILL.md
+// ---------------------------------------------------------------------------
+
+/** The drawing surface every scene is authored against. */
+export const WIREFRAME_VIEWBOX = { width: 160, height: 100 } as const;
+
+/**
+ * What a shape represents. This is presentational vocabulary, not app
+ * concepts — `row` is "a line of content", not `ChatMessage`. Keeping it
+ * abstract is what stops a demo needing an update when a real component moves.
+ */
+export type WireframeKind =
+  | 'panel' // a surface: window, dialog, sidebar
+  | 'row' // a line of content inside a surface
+  | 'bar' // a short text-ish run
+  | 'chip' // a pill: a tag, a badge, an avatar
+  | 'button' // an affordance
+  | 'cursor'; // the pointer, for demos that show an interaction
+
+/** How a shape arrives, and whether it keeps moving. */
+export type WireframeMotion =
+  | 'none' // present from the first frame
+  | 'fade'
+  | 'slide-left' // enters from the right, settles
+  | 'slide-right' // enters from the left, settles
+  | 'slide-up'
+  | 'pop' // scales up from nothing — good for "this appeared"
+  | 'pulse'; // arrives, then breathes — good for "this is the point"
+
+/** Emphasis. Tones map to theme tokens, never to literal colours. */
+export type WireframeTone = 'base' | 'muted' | 'accent';
+
+export interface WireframeShape {
+  kind: WireframeKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Seconds before this shape animates in. */
+  delay?: number;
+  motion?: WireframeMotion;
+  tone?: WireframeTone;
+}
+
+export interface WireframeScene {
+  /** Stable id — also the animation namespace, so it must be unique. */
+  id: string;
+  /** Read by screen readers in place of the animation. Required: a decorative
+   *  <svg> with no text is invisible to anyone not looking at it. */
+  alt: string;
+  shapes: WireframeShape[];
+}
+
+/** One slide of the gallery: a demo on the left, words on the right. */
+export interface GallerySlide {
+  id: string;
+  title: string;
+  body: string;
+  scene: WireframeScene;
+}
+
+// --- validation ------------------------------------------------------------
+
+const KINDS: readonly WireframeKind[] = ['panel', 'row', 'bar', 'chip', 'button', 'cursor'];
+const MOTIONS: readonly WireframeMotion[] = [
+  'none', 'fade', 'slide-left', 'slide-right', 'slide-up', 'pop', 'pulse',
+];
+const TONES: readonly WireframeTone[] = ['base', 'muted', 'accent'];
+
+/**
+ * Whether a shape is drawable. A shape outside the viewBox or with no area is
+ * not a rendering bug to hunt later — it is authoring data that is wrong now,
+ * and this is where that gets caught.
+ */
+export function isValidShape(value: unknown): value is WireframeShape {
+  if (!value || typeof value !== 'object') return false;
+  const s = value as Record<string, unknown>;
+  if (!KINDS.includes(s.kind as WireframeKind)) return false;
+  for (const key of ['x', 'y', 'w', 'h'] as const) {
+    const n = s[key];
+    if (typeof n !== 'number' || !Number.isFinite(n)) return false;
+  }
+  const { x, y, w, h } = s as unknown as WireframeShape;
+  if (w <= 0 || h <= 0) return false;
+  if (x < 0 || y < 0) return false;
+  if (x + w > WIREFRAME_VIEWBOX.width || y + h > WIREFRAME_VIEWBOX.height) return false;
+  if (s.delay !== undefined && (typeof s.delay !== 'number' || s.delay < 0)) return false;
+  if (s.motion !== undefined && !MOTIONS.includes(s.motion as WireframeMotion)) return false;
+  if (s.tone !== undefined && !TONES.includes(s.tone as WireframeTone)) return false;
+  return true;
+}
+
+/** A scene is drawable if it is identified, described, and every shape is valid. */
+export function isValidScene(value: unknown): value is WireframeScene {
+  if (!value || typeof value !== 'object') return false;
+  const scene = value as Record<string, unknown>;
+  if (typeof scene.id !== 'string' || scene.id.trim() === '') return false;
+  if (typeof scene.alt !== 'string' || scene.alt.trim() === '') return false;
+  if (!Array.isArray(scene.shapes) || scene.shapes.length === 0) return false;
+  return scene.shapes.every(isValidShape);
+}
+
+/**
+ * How long one loop of a scene lasts, in seconds — the longest shape delay plus
+ * the shared animation duration, floored so a single instant shape still holds
+ * on screen long enough to be seen.
+ */
+export const WIREFRAME_ANIMATION_SECONDS = 0.55;
+export const WIREFRAME_MIN_LOOP_SECONDS = 2.4;
+
+export function sceneDurationSeconds(scene: WireframeScene): number {
+  const last = scene.shapes.reduce((max, s) => Math.max(max, s.delay ?? 0), 0);
+  return Math.max(WIREFRAME_MIN_LOOP_SECONDS, last + WIREFRAME_ANIMATION_SECONDS);
+}
+
+// --- the built-in scenes ---------------------------------------------------
+//
+// One per feature worth illustrating. Authored against a 160x100 box: a rough
+// 16:10, which is why the slide puts the demo left and the prose right.
+
+/** A side panel arriving beside a list — used for split-view style features. */
+const splitView: WireframeScene = {
+  id: 'split-view',
+  alt: 'A list on the left; a detail panel slides in beside it and its heading highlights.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 8, w: 70, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 12, y: 16, w: 56, h: 7, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'row', x: 12, y: 28, w: 56, h: 7, tone: 'accent', motion: 'fade', delay: 0.2 },
+    { kind: 'row', x: 12, y: 40, w: 56, h: 7, tone: 'base', motion: 'fade', delay: 0.3 },
+    { kind: 'row', x: 12, y: 52, w: 56, h: 7, tone: 'base', motion: 'fade', delay: 0.4 },
+    { kind: 'panel', x: 84, y: 8, w: 70, h: 84, tone: 'base', motion: 'slide-left', delay: 0.55 },
+    { kind: 'bar', x: 92, y: 18, w: 40, h: 8, tone: 'accent', motion: 'pulse', delay: 0.9 },
+    { kind: 'bar', x: 92, y: 34, w: 54, h: 5, tone: 'muted', motion: 'fade', delay: 1.05 },
+    { kind: 'bar', x: 92, y: 44, w: 46, h: 5, tone: 'muted', motion: 'fade', delay: 1.15 },
+  ],
+};
+
+/** Chips appearing in a field — token/skill inputs, participant chips. */
+const chips: WireframeScene = {
+  id: 'chips',
+  alt: 'A text field where typed words become removable chips, one after another.',
+  shapes: [
+    { kind: 'panel', x: 10, y: 26, w: 140, h: 48, tone: 'muted', motion: 'none' },
+    { kind: 'chip', x: 18, y: 38, w: 30, h: 12, tone: 'accent', motion: 'pop', delay: 0.15 },
+    { kind: 'chip', x: 52, y: 38, w: 38, h: 12, tone: 'accent', motion: 'pop', delay: 0.5 },
+    { kind: 'chip', x: 94, y: 38, w: 26, h: 12, tone: 'accent', motion: 'pop', delay: 0.85 },
+    { kind: 'bar', x: 124, y: 42, w: 16, h: 4, tone: 'muted', motion: 'pulse', delay: 1.1 },
+    { kind: 'cursor', x: 120, y: 52, w: 8, h: 10, tone: 'base', motion: 'fade', delay: 1.2 },
+  ],
+};
+
+/** Rows pacing in one at a time — reply cadence, staggered arrival. */
+const cadence: WireframeScene = {
+  id: 'cadence',
+  alt: 'Replies arriving one at a time, spaced apart, rather than all at once.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 8, w: 144, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 16, y: 16, w: 60, h: 9, tone: 'base', motion: 'slide-right', delay: 0.1 },
+    { kind: 'row', x: 84, y: 32, w: 56, h: 9, tone: 'accent', motion: 'slide-left', delay: 0.7 },
+    { kind: 'row', x: 84, y: 48, w: 48, h: 9, tone: 'accent', motion: 'slide-left', delay: 1.3 },
+    { kind: 'row', x: 84, y: 64, w: 52, h: 9, tone: 'accent', motion: 'slide-left', delay: 1.9 },
+  ],
+};
+
+/** A tool being called and a result coming back — the agent tool loop. */
+const toolLoop: WireframeScene = {
+  id: 'tool-loop',
+  alt: 'An agent calls a tool, a result returns, and the answer is written.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 10, w: 64, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'panel', x: 88, y: 10, w: 64, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'bar', x: 16, y: 20, w: 44, h: 6, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'button', x: 16, y: 34, w: 34, h: 12, tone: 'accent', motion: 'pop', delay: 0.4 },
+    { kind: 'row', x: 96, y: 34, w: 48, h: 12, tone: 'accent', motion: 'slide-left', delay: 0.9 },
+    { kind: 'bar', x: 96, y: 54, w: 40, h: 5, tone: 'muted', motion: 'fade', delay: 1.2 },
+    { kind: 'bar', x: 16, y: 60, w: 48, h: 5, tone: 'base', motion: 'fade', delay: 1.5 },
+    { kind: 'bar', x: 16, y: 70, w: 36, h: 5, tone: 'base', motion: 'fade', delay: 1.65 },
+  ],
+};
+
+/** A card unfurling under a line of text — link previews. */
+const preview: WireframeScene = {
+  id: 'preview',
+  alt: 'A pasted link expands into a preview card with a thumbnail and title.',
+  shapes: [
+    { kind: 'bar', x: 16, y: 16, w: 90, h: 6, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'panel', x: 16, y: 30, w: 128, h: 54, tone: 'base', motion: 'slide-up', delay: 0.45 },
+    { kind: 'panel', x: 24, y: 38, w: 38, h: 38, tone: 'accent', motion: 'fade', delay: 0.8 },
+    { kind: 'bar', x: 70, y: 42, w: 60, h: 7, tone: 'base', motion: 'fade', delay: 0.95 },
+    { kind: 'bar', x: 70, y: 54, w: 66, h: 4, tone: 'muted', motion: 'fade', delay: 1.05 },
+    { kind: 'bar', x: 70, y: 62, w: 50, h: 4, tone: 'muted', motion: 'fade', delay: 1.15 },
+  ],
+};
+
+/** Windows dropping away to reveal the desktop. */
+const showDesktop: WireframeScene = {
+  id: 'show-desktop',
+  alt: 'Open windows drop away to the dock, leaving the desktop and its input.',
+  shapes: [
+    { kind: 'panel', x: 14, y: 12, w: 60, h: 44, tone: 'base', motion: 'fade', delay: 0 },
+    { kind: 'panel', x: 50, y: 26, w: 60, h: 44, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'panel', x: 86, y: 16, w: 58, h: 44, tone: 'base', motion: 'fade', delay: 0.3 },
+    { kind: 'panel', x: 34, y: 76, w: 92, h: 14, tone: 'accent', motion: 'slide-up', delay: 1.1 },
+    { kind: 'chip', x: 60, y: 79, w: 8, h: 8, tone: 'muted', motion: 'pop', delay: 1.4 },
+    { kind: 'chip', x: 74, y: 79, w: 8, h: 8, tone: 'muted', motion: 'pop', delay: 1.5 },
+    { kind: 'chip', x: 88, y: 79, w: 8, h: 8, tone: 'muted', motion: 'pop', delay: 1.6 },
+  ],
+};
+
+export const WIREFRAME_SCENES = {
+  splitView, chips, cadence, toolLoop, preview, showDesktop,
+} as const;
+
+export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
+
+// --- the gallery -----------------------------------------------------------
+
+/**
+ * The slides shown above the notes. Hand-authored rather than derived from the
+ * release notes: a gallery is a curated "here is what is worth knowing", and
+ * every entry needs a demo that actually illustrates it. Notes without a scene
+ * are still listed below as bullets — they just do not get a slide.
+ */
+export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    id: 'tool-loop',
+    title: 'Agents can use tools',
+    body: 'Built-in agents now call tools and act on the results, instead of describing what they would do.',
+    scene: toolLoop,
+  },
+  {
+    id: 'skills-chips',
+    title: 'Skills as chips',
+    body: 'Type to search, click to add, and remove with a single x — no more editing a comma-separated line.',
+    scene: chips,
+  },
+  {
+    id: 'cadence',
+    title: 'Replies at a human pace',
+    body: 'Set a channel to social and agents answer across a conversation instead of all in the same second.',
+    scene: cadence,
+  },
+  {
+    id: 'link-previews',
+    title: 'Links unfurl',
+    body: 'Paste a link and it becomes a card. Fetched once by the server, so no site learns who read it.',
+    scene: preview,
+  },
+  {
+    id: 'split-view',
+    title: 'Detail beside the list',
+    body: 'Agents, skills and tenants open their detail next to what you were looking at, not on top of it.',
+    scene: splitView,
+  },
+  {
+    id: 'show-desktop',
+    title: 'Clear the desk',
+    body: 'The Desktop button puts every open window down to the dock, and brings them all back.',
+    scene: showDesktop,
+  },
+];
+
+/**
+ * Which slide to show for a given index, wrapping. Extracted so the carousel's
+ * dots and the keyboard handler share one definition of "next" — two of those
+ * disagreeing is how a gallery ends up skipping a slide at the wrap.
+ */
+export function nextSlideIndex(current: number, total: number, step = 1): number {
+  if (total <= 0) return 0;
+  return ((current + step) % total + total) % total;
+}

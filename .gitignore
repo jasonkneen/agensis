@@ -37,5 +37,12 @@ desktop/third_party/
 # Local upload store + test artifacts (runtime-generated, never source)
 .agensis_uploads/
 
+# What a failing surface painted, dumped by the smoke gate (npm run smoke)
+.smoke-failures/
+
 # Local session scratchpad (not repo content)
 SCRATCHPAD.md
+
+# Agent/Playwright debug screenshots dropped at the repo root. Deliberately
+# root-only: public/ and desktop/assets/ images are real assets.
+/*.png

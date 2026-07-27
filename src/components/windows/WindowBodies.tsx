@@ -19,7 +19,10 @@
 import { useCallback, type ComponentProps } from 'react';
 import { ChatWindowContent } from './ChatWindowContent';
 import { DocWindowContent } from './DocWindowContent';
+import { AppletDocWindowContent } from './AppletDocWindowContent';
 import { TasksWindowContent } from './TasksWindowContent';
+import { APPLETS_FOLDER } from '../../lib/canvasApps';
+import type { SendMessageResult } from '../../hooks/useChat';
 import type { ChatSession, Document, FloatingWindow, MemoryFact } from '../../types';
 
 export type ChatWindowBodyProps = Omit<
@@ -35,7 +38,11 @@ export type ChatWindowBodyProps = Omit<
     docs?: Document[],
     threadParentId?: string | null,
     targetSession?: ChatSession | null,
-  ) => void;
+    // Thread composer's "Send to channel": also show this reply in the channel.
+    broadcastToChannel?: boolean,
+    // `delivered: false` means the message was rolled back and is nowhere —
+    // the composer has to put the draft back.
+  ) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
   onAppSplitThread: (source: ChatSession) => void;
 };
@@ -53,15 +60,15 @@ export function ChatWindowBody({
   const handleSendMessage = useCallback(
     (content: string, model: string, mf?: MemoryFact[], docs?: Document[]) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      onAppSendMessage(content, model, mf, docs, null, winSession || null);
+      return onAppSendMessage(content, model, mf, docs, null, winSession || null);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage],
   );
 
   const handleSendThreadReply = useCallback(
-    (content: string, model: string) => {
+    (content: string, model: string, broadcastToChannel?: boolean) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null);
+      return onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage, memoryFacts, activeThreadId],
   );
@@ -94,6 +101,9 @@ export type DocWindowBodyProps = Omit<
     actionLabel: string;
     onConfirm: () => void | Promise<void>;
   }) => void;
+  // Only used when document.folder === APPLETS_FOLDER (see below) — adds the
+  // doc's saved HTML to the current canvas as an applet object.
+  onAddToCanvasApplet?: (doc: Document) => void;
 };
 
 export function DocWindowBody({
@@ -102,6 +112,7 @@ export function DocWindowBody({
   onCloseWindow,
   onUpdateWindow,
   onRequestConfirm,
+  onAddToCanvasApplet,
   ...contentProps
 }: DocWindowBodyProps) {
   const handleDelete = useCallback(
@@ -123,6 +134,22 @@ export function DocWindowBody({
     (title: string) => onUpdateWindow(windowId, { title }),
     [onUpdateWindow, windowId],
   );
+
+  // Applets are stored as documents so the Canvas Apps picker can list them,
+  // but their body is source code, not prose — DocWindowContent is a
+  // contentEditable rich-text editor that sanitizes (and would strip
+  // <script>/<style>) on every autosave. Route folder === APPLETS_FOLDER docs
+  // to the plain-text code editor + live preview instead.
+  if (contentProps.document.folder === APPLETS_FOLDER) {
+    return (
+      <AppletDocWindowContent
+        {...contentProps}
+        onDelete={handleDelete}
+        onTitleChange={handleTitleChange}
+        onAddToCanvas={onAddToCanvasApplet}
+      />
+    );
+  }
 
   return (
     <DocWindowContent {...contentProps} onDelete={handleDelete} onTitleChange={handleTitleChange} />

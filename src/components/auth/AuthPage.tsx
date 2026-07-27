@@ -12,6 +12,14 @@ interface AuthPageProps {
   onSignIn: (email: string, password: string) => Promise<{ error: string | null }>;
   onSignUp: (email: string, password: string) => Promise<{ error: string | null }>;
   onOAuthSignIn: (provider: 'google' | 'github') => Promise<{ error: string | null }>;
+  /**
+   * Why the user is looking at this screen rather than their workspace — an
+   * expired/revoked session, or a social login that did not complete. Rendered
+   * above the form because it explains a page transition the user did not ask
+   * for; a toast would fade while they were still working out what happened.
+   */
+  notice?: string | null;
+  onDismissNotice?: () => void;
 }
 
 /*
@@ -81,7 +89,7 @@ function nextLockUntil(attempts: number): number {
   return Date.now() + seconds * 1000;
 }
 
-export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
+export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn, notice, onDismissNotice }: AuthPageProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -220,6 +228,23 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn }: AuthPageProps) {
               : 'Get started with your intelligent workspace'}
           </p>
         </div>
+
+        {notice && (
+          <Alert variant="destructive" data-testid="auth-notice">
+            <AlertDescription className="flex items-start justify-between gap-3">
+              <span>{notice}</span>
+              {onDismissNotice && (
+                <button
+                  type="button"
+                  onClick={onDismissNotice}
+                  className="shrink-0 text-xs font-medium underline underline-offset-2 opacity-80 hover:opacity-100"
+                >
+                  Dismiss
+                </button>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
 
         <Card>
           <CardHeader>

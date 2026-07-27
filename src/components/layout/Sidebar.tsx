@@ -1,3 +1,4 @@
+import { channelIconGlyph } from '../../lib/channelProfile';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -7,6 +8,7 @@ import {
  Brain,
  ChevronRight,
  Clock,
+ Code2,
  Copy,
  CreditCard,
  FileText,
@@ -14,10 +16,12 @@ import {
  Folder,
  GitMerge,
  Hash,
+ Inbox,
  Layers3,
  LayoutTemplate,
  LogOut,
  MessageSquare,
+ Minimize2,
  Sparkles,
  MoreHorizontal,
  Split,
@@ -30,6 +34,7 @@ import {
  Settings,
  Star,
  UserRound,
+ Check,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
@@ -59,7 +64,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentStatusFeed } from './AgentStatusFeed';
+import { SessionWorkBadge } from '../chat/AgentWorkBadge';
 import { APP_VERSION, BUILD_ID } from '../../lib/appVersion';
+import { useAgentWorkFeed } from '../../hooks/useAgentWork';
 import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 
 /**
@@ -132,7 +139,7 @@ function AgentStatusFeedOverlay({
 
  return createPortal(
   <div
-   className="pointer-events-none fixed z-[9500]"
+   className="pointer-events-none fixed z-[var(--z-agent-feed)]"
    style={{
     left: rect.left,
     bottom: rect.bottom,
@@ -148,6 +155,18 @@ function AgentStatusFeedOverlay({
 }
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
+import { partitionSidebarSessions } from '../../lib/sidebarSessions';
+import { isHuddleSession } from '../../lib/huddleTranscript';
+import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { cn } from '../../lib/utils';
+import { useThreadInbox } from '../../hooks/useThreadInbox';
+import { threadReplyLabel, threadRowTitle } from '../../lib/threadInbox';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { APPLETS_FOLDER } from '../../lib/canvasApps';
+
+// Which agents the DM section lists, remembered per workspace alongside the
+// other view preferences (see src/lib/viewPreferences.ts).
+const DM_FILTER_PREF = oneOf<DmFilter>(['active', 'idle', 'busy', 'all']);
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
@@ -161,9 +180,11 @@ const SIDEBAR_FRAME_STYLE: React.CSSProperties = {
  height: '100%',
 };
 
-// Width of the macOS traffic-light cluster in the hidden_inset_tall band. The
-// expanded header row (collapse button + workspace pill) is inset by this on the
-// desktop shell so those controls sit just to the right of the window buttons.
+// Width of the macOS traffic-light cluster in the hidden_inset_tall band, from
+// the WINDOW's left edge. The expanded header row (collapse button + workspace
+// pill) is inset by this on the desktop shell so those controls sit just to the
+// right of the window buttons — less whatever chrome (the workspace rail) is
+// already covering that band to the sidebar's left.
 const SIDEBAR_TITLEBAR_LEFT_INSET = 78;
 
 type SidebarAgentTarget = {
@@ -190,6 +211,12 @@ interface SidebarProps {
  // Desktop shell traffic-light band (~52px). Padded into the sidebar header so
  // the workspace controls sit below the macOS window buttons.
  titlebarInset?: number;
+ // Width of chrome pinned to the LEFT of this sidebar — currently the workspace
+ // switcher rail. The sidebar owns `--workspace-viewport-left`, which it derives
+ // arithmetically from its own width; without this the fallback would be short
+ // by the rail's width and every window measured from that fallback would land
+ // one rail too far left.
+ leadingInset?: number;
  onToggleCollapse: () => void;
  onOpenCommandPalette: () => void;
  onOpenWorkspaceGrid?: () => void;
@@ -199,6 +226,7 @@ interface SidebarProps {
  onCreateWorkspace: () => void;
  onDocumentOpen: (doc: Document) => void;
  onDocumentUpdate?: (id: string, updates: { title?: string; content?: string; folder?: string | null }) => void;
+ onAddToCanvasApplet?: (doc: Document) => void;
  onSessionOpen: (session: ChatSession) => void;
  onSessionUpdate?: (id: string, updates: Partial<ChatSession>) => void;
  onSessionArchive?: (id: string, archived?: boolean) => void;
@@ -206,6 +234,22 @@ interface SidebarProps {
  onDirectMessageDelete?: (session: ChatSession) => void;
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
+ onOpenInbox?: () => void;
+ /**
+  * Put this desktop's open panels away (minimise, never close) so the wallpaper
+  * and the home composer are all that is left — and bring them back on the next
+  * press. Named for the gesture, not the noun: a *desktop* is a canvas layer you
+  * switch between, and this switches nothing. See src/lib/showDesktop.ts.
+  */
+ onShowDesktop?: () => void;
+ /** True while this desktop is bare because the row put its windows away. */
+ showingDesktop?: boolean;
+ /**
+  * Open one message thread — the session it lives in, and the parent message
+  * whose replies to show. The sidebar knows both; the app decides how to
+  * present them (window, panel), which is why this is a prop and not a route.
+  */
+ onOpenThread?: (sessionId: string, parentMessageId: string) => void;
  onOpenMemory: () => void;
  onOpenSkills?: () => void;
  onOpenTasks?: () => void;
@@ -217,6 +261,8 @@ interface SidebarProps {
  onAgentProfile?: (agent: SidebarAgentTarget) => void;
  onOpenTemplates?: () => void;
  openTaskCount?: number;
+ /** Unread inbox items — the "this needs you" badge above the channel list. */
+ inboxUnreadCount?: number;
  recents: Document[];
  sessions: ChatSession[];
  agents?: WorkspaceAgent[];
@@ -242,6 +288,7 @@ export const Sidebar = React.memo(function Sidebar({
  collapsed,
  overlay = false,
  titlebarInset = 0,
+ leadingInset = 0,
  onToggleCollapse,
  onOpenCommandPalette,
  onOpenWorkspaceGrid,
@@ -250,6 +297,7 @@ export const Sidebar = React.memo(function Sidebar({
  onCreateWorkspace,
  onDocumentOpen,
  onDocumentUpdate,
+ onAddToCanvasApplet,
  onSessionOpen,
  onSessionUpdate,
  onSessionArchive,
@@ -257,6 +305,10 @@ export const Sidebar = React.memo(function Sidebar({
  onDirectMessageDelete,
  onSessionSplit,
  onSessionMerge,
+ onOpenInbox,
+ onShowDesktop,
+ showingDesktop = false,
+ onOpenThread,
  onOpenMemory,
  onOpenSkills,
  onOpenTasks,
@@ -268,6 +320,7 @@ export const Sidebar = React.memo(function Sidebar({
  onAgentProfile,
  onOpenTemplates,
  openTaskCount = 0,
+ inboxUnreadCount = 0,
  recents,
  sessions,
  agents = [],
@@ -286,6 +339,11 @@ export const Sidebar = React.memo(function Sidebar({
  notificationsSlot,
  presenceSlot,
 }: SidebarProps) {
+ // Feeds the agent-work store for every live-elapsed badge in the app (sidebar
+ // rows AND the thread indicator). Mounted here because the sidebar is the one
+ // component that is always mounted inside a workspace — even collapsed, and
+ // even behind the closed mobile drawer. It holds no state of its own.
+ useAgentWorkFeed(workspace?.id);
  const [accountDialogOpen, setAccountDialogOpen] = React.useState(false);
  const [accountDialogTab, setAccountDialogTab] = React.useState<'profile' | 'billing'>('profile');
  const openAccountDialog = (tab: 'profile' | 'billing') => {
@@ -342,15 +400,22 @@ export const Sidebar = React.memo(function Sidebar({
   () => buildDirectAgents(agents, agentConnections, favoriteAgentKeys),
   [agents, agentConnections, favoriteAgentKeys],
  );
- const { activeChannelSessions, directSessions, threadSessions } = React.useMemo(() => {
-  const activeSessions = uniqueSessions.filter(session => !session.archived_at);
-  const direct = activeSessions.filter(isDirectSession);
-  const threads = activeSessions.filter(session => !isDirectSession(session) && isThreadSession(session));
-  return {
-   activeChannelSessions: activeSessions.filter(session => !isDirectSession(session) && !isThreadSession(session)),
-   directSessions: direct,
-   threadSessions: threads,
-  };
+ // Channels, DMs and threads belong to the WORKSPACE and are listed on every
+ // desktop of it. A desktop is a window/wallpaper configuration, not a place
+ // content lives, so nothing here is filtered by the open desktop — see
+ // partitionSidebarSessions for why that filter was removed.
+ // threadSessions is still partitioned OUT even though the Threads section no
+ // longer renders it: those sessions must not fall through into the channel or
+ // DM lists, which is what the partition is for. The section itself is now
+ // driven by useThreadInbox (message threads), not by folder.
+ const { activeChannelSessions, directSessions } = React.useMemo(() => {
+  const { channels, direct, threads } = partitionSidebarSessions(uniqueSessions, {
+   isDirect: isDirectSession,
+   isThread: isThreadSession,
+   exclude: isHuddleSession,
+  });
+  void threads;
+  return { activeChannelSessions: channels, directSessions: direct };
  }, [uniqueSessions]);
  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
  // A split of a DM is itself a DM session (same agent participant), so the
@@ -366,14 +431,22 @@ export const Sidebar = React.memo(function Sidebar({
   () => buildDirectMessageTargets(dmPrimarySessions, directAgents, favoriteAgentKeys),
   [dmPrimarySessions, directAgents, favoriteAgentKeys],
  );
- const [dmFilter, setDmFilter] = React.useState<'active' | 'idle' | 'busy' | 'all'>('all');
+ const [dmFilter, setDmFilter] = usePersistedPreference(
+  viewPreferenceKey('sidebar.dm-filter', workspace?.id), DM_FILTER_PREF, 'all' as DmFilter,
+ );
  const filteredDmTargets = React.useMemo(() => {
   if (dmFilter === 'all') return directMessageTargets;
   if (dmFilter === 'active') return directMessageTargets.filter(a => a.status === 'online');
   if (dmFilter === 'busy') return directMessageTargets.filter(a => a.status === 'busy');
   return directMessageTargets.filter(a => !a.status || (a.status !== 'online' && a.status !== 'busy'));
  }, [directMessageTargets, dmFilter]);
- const groupedThreadSessions = React.useMemo(() => groupSessionsByFolder(threadSessions, 'Threads'), [threadSessions]);
+
+
+ // The Threads SECTION is about message threads — replies under a message —
+ // not about sessions that happen to sit in a folder called Threads. Those are
+ // different things (see server/thread-inbox.cjs), and it is the message
+ // threads a person means when they ask what they still need to read.
+ const threadInbox = useThreadInbox(workspace?.id ?? null);
  const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
  const focusedWindow = floatingWindows
@@ -384,13 +457,19 @@ export const Sidebar = React.memo(function Sidebar({
  const focusedWindowType = focusedWindow?.type;
  const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
+ // Traffic-light clearance measured from the sidebar's OWN left edge: the rail
+ // to its left already covers that much of the band, so inset by the remainder
+ // or the header ends up parked 52px further right than the window buttons.
+ const titlebarLeftInset = titlebarInset ? Math.max(0, SIDEBAR_TITLEBAR_LEFT_INSET - leadingInset) : 0;
+
  const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
   // Overlay (phone drawer): the sidebar floats above the canvas, so the
   // viewport's left inset is just the chrome gap — never the sidebar width.
   const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width);
   // Sidebar is flush to the left edge now, so the canvas starts one chrome gap
   // to the right of it (previously two gaps straddled a floating panel).
-  const left = overlay ? WORKSPACE_CHROME_GAP : sidebarFrameWidth + WORKSPACE_CHROME_GAP;
+  // `leadingInset` is anything pinned further left still — the workspace rail.
+  const left = overlay ? WORKSPACE_CHROME_GAP : leadingInset + sidebarFrameWidth + WORKSPACE_CHROME_GAP;
   document.documentElement.style.setProperty('--workspace-viewport-left', `${left}px`);
   // Canvas viewport clears only the chrome gap at top now — the titlebar band
   // is over the sidebar (left), not the canvas column, so panels reach the top
@@ -398,7 +477,7 @@ export const Sidebar = React.memo(function Sidebar({
   document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
- }, [collapsed, overlay, titlebarInset]);
+ }, [collapsed, overlay, titlebarInset, leadingInset]);
 
  React.useEffect(() => {
   setWorkspaceViewportLeft(sidebarWidth);
@@ -437,25 +516,42 @@ export const Sidebar = React.memo(function Sidebar({
   return (
    <aside
     data-sidebar-panel
-    className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground shadow-xl"
+    // No shadow utility here: `[data-sidebar-panel]` in index.css sets
+    // box-shadow unlayered, so it wins over any Tailwind shadow-* on the
+    // element. Depth and elevation for all three shell columns live in that one
+    // rule — see src/lib/chromeDepth.ts.
+    className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground"
     style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
    >
+    {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
+        Decorative, non-interactive, and out of flow, so it is not a flex item. */}
+    <div aria-hidden="true" className="sidebar-accent-wash" />
     <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
      <PanelLeft />
     </Button>
     <Separator />
-    <SidebarRailButton icon={<Layers3 />} title="Switch workspace" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
+    {/* Desktops, not workspaces: this opens the desktop grid, and the workspace
+        rail immediately to the left is what switches workspaces. Labelling both
+        "workspace" is what made the two concepts indistinguishable. */}
+    <SidebarRailButton icon={<Layers3 />} title="Switch desktop" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
     <SidebarRailButton icon={<Plus />} title="Create workspace" onClick={onCreateWorkspace} />
-    <SidebarRailButton icon={<Settings />} title="Workspace settings" onClick={onOpenSettings} />
+    <SidebarRailButton icon={<Settings />} title="Desktop settings" onClick={onOpenSettings} />
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
-    <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadSessions.length} onClick={() => revealSection('threads')} />
+    {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
+    {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
+    {/* Same order as the expanded panel, and for the same reason — collapsing
+        the sidebar must not reshuffle where things are. The two Separators sit
+        where the expanded panel draws its two rules. */}
+    {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
+    <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+    <Separator />
+    <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
     <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
-    {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
-    <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
+    <Separator />
     {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
@@ -509,17 +605,22 @@ export const Sidebar = React.memo(function Sidebar({
    <aside
     ref={sidebarRef}
     data-sidebar-panel
-    className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-none border-r border-border bg-card/45 text-card-foreground shadow-xl"
+    // See the collapsed panel above: elevation is owned by index.css, not by a
+    // shadow utility here.
+    className="relative flex h-full shrink-0 flex-col overflow-hidden rounded-none border-r border-border bg-card/45 text-card-foreground"
     style={{ ...SIDEBAR_FRAME_STYLE, width: sidebarWidth }}
    >
+    {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
+        Decorative, non-interactive, and out of flow, so it is not a flex item. */}
+    <div aria-hidden="true" className="sidebar-accent-wash" />
     <div
      data-sidebar-titlebar
      className="px-2 pt-2 pb-3"
      style={{
-      paddingLeft: titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : undefined,
+      paddingLeft: titlebarLeftInset || undefined,
       // Desktop traffic-light clearance, also exposed as a CSS var so themes
       // that reset the titlebar padding (neo/brutal) can still honour it.
-      '--sidebar-titlebar-inset': `${titlebarInset ? SIDEBAR_TITLEBAR_LEFT_INSET : 0}px`,
+      '--sidebar-titlebar-inset': `${titlebarLeftInset}px`,
      } as React.CSSProperties}
     >
      <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
@@ -530,7 +631,7 @@ export const Sidebar = React.memo(function Sidebar({
        type="button"
        className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
        onClick={onOpenWorkspaceGrid || onCreateWorkspace}
-       aria-label="Switch workspace"
+       aria-label="Switch desktop"
       >
        <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
       </button>
@@ -553,56 +654,94 @@ export const Sidebar = React.memo(function Sidebar({
     </div>
 
     <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
-     <div className="flex flex-col gap-1 pb-2">
+     {/* gap-0.5, not gap-1: with ~14 entries the inter-row gap is counted
+         thirteen times, so it moves the sidebar's overall height as much as
+         any single row's height does. */}
+     <div className="flex flex-col gap-0.5 pb-2">
+      {/* Above the channels: whatever needs a human is the first thing in the
+          sidebar, not something you scroll past. */}
+      {onOpenInbox && (
+       <ActionTile
+        icon={<Inbox />}
+        label="Inbox"
+        count={inboxUnreadCount}
+        active={focusedWindowType === 'inbox'}
+        onClick={onOpenInbox}
+       />
+      )}
+      {/* Directly under Inbox: the way back to a bare desktop — wallpaper and
+          the home composer, with the open panels minimised into the dock. Not
+          "Desktop": that word is already a canvas layer you switch between (the
+          workspace pill above does that), and this switches nothing. */}
+      {onShowDesktop && (
+       <ActionTile
+        icon={<Minimize2 />}
+        label="Desktop"
+        active={showingDesktop}
+        pressed={showingDesktop}
+        onClick={onShowDesktop}
+       />
+      )}
+      {/* Tasks and Memory join the fixed top block rather than sitting below the
+          sections. They are the two destinations you go to REPEATEDLY and by
+          name — the rest of the standalone rows are occasional — and down there
+          they were separated from Inbox and Desktop by five collapsible
+          sections whose height changes every time one is opened, so their
+          position on screen was never twice the same. */}
+      {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
+      <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+      {/* Closes the fixed block. Below it everything is a collapsible section;
+          above it, nothing moves. See .sidebar-group-divider. */}
+      <div aria-hidden="true" className="sidebar-group-divider" />
       <SidebarSection
        id="threads"
        label="Threads"
        icon={<MessageSquare />}
-       count={threadSessions.length}
+       count={threadInbox.unreadCount}
        open={openSections.has('threads')}
        onOpenChange={open => toggleSection('threads', open)}
       >
-       {groupedThreadSessions.map(group => (
-        group.folder === 'General' ? (
-         <SessionTree
-          key={group.folder}
-          sessions={group.sessions}
-          icon={<MessageSquare />}
-          archiveNoun="thread"
-          limit={8}
-          chatPresence={chatPresence}
-          onSessionOpen={onSessionOpen}
-          onSessionUpdate={onSessionUpdate}
-          onSessionArchive={onSessionArchive}
-          onSessionDelete={onSessionDelete}
-          onSessionSplit={onSessionSplit}
-          onSessionMerge={onSessionMerge}
-         />
-        ) : (
-         <SidebarFolderGroup
-          key={group.folder}
-          id={`threads-folder:${group.folder}`}
-          label={group.folder}
-          count={group.sessions.length}
-          open={openSections.has(`threads-folder:${group.folder}`)}
-          onOpenChange={open => toggleSection(`threads-folder:${group.folder}`, open)}
+       {/* Threads a person FOLLOWS, unread first — the section exists so a
+           reply you have not seen is the top row. An empty list is a real,
+           good state and says so rather than rendering nothing. */}
+       {threadInbox.items.length === 0 ? (
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+         {threadInbox.loading ? 'Loading threads' : 'No threads yet'}
+        </p>
+       ) : (
+        threadInbox.items.map(thread => (
+         <button
+          key={thread.parentId}
+          type="button"
+          data-thread-unread={thread.unread ? 'true' : undefined}
+          className={cn(
+           'flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring',
+           thread.unread && 'font-medium',
+          )}
+          onClick={() => {
+           // Read on OPEN, not on render: a thread scrolling past in the
+           // sidebar has not been read by anyone.
+           threadInbox.markThreadRead(thread.parentId);
+           if (thread.sessionId) onOpenThread?.(thread.sessionId, thread.parentId);
+          }}
          >
-          <SessionTree
-           sessions={group.sessions}
-           icon={<MessageSquare />}
-           archiveNoun="thread"
-           limit={8}
-           chatPresence={chatPresence}
-           onSessionOpen={onSessionOpen}
-           onSessionUpdate={onSessionUpdate}
-           onSessionArchive={onSessionArchive}
-           onSessionDelete={onSessionDelete}
-           onSessionSplit={onSessionSplit}
-           onSessionMerge={onSessionMerge}
-          />
-         </SidebarFolderGroup>
-        )
-       ))}
+          <span className="flex min-w-0 items-center gap-1.5">
+           {/* The unread dot carries the state on its own, so the row does
+               not depend on weight alone — weight is easy to miss against a
+               wallpaper. */}
+           {thread.unread && (
+            <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-primary" />
+           )}
+           <span className={cn('min-w-0 flex-1 truncate text-sm', !thread.unread && 'text-muted-foreground')}>
+            {threadRowTitle(thread)}
+           </span>
+          </span>
+          <span className="truncate pl-0 text-xs text-muted-foreground">
+           {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+          </span>
+         </button>
+        ))
+       )}
       </SidebarSection>
       <SidebarSection
        id="channels"
@@ -672,6 +811,7 @@ export const Sidebar = React.memo(function Sidebar({
            doc={doc}
            onOpen={() => onDocumentOpen(doc)}
            onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
+           onAddToCanvas={onAddToCanvasApplet}
            presenceUsers={documentPresence[doc.id] || []}
           />
          ))
@@ -748,8 +888,16 @@ export const Sidebar = React.memo(function Sidebar({
         />
        ))}
       </SidebarSection>
-      {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
-      <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
+      {/* Closes the band of collapsible sections. Everything below is a
+          top-level destination, not a member of the section above it: flush
+          against Archive's header they read as Archive's CONTENTS, which is
+          exactly how they were reported. The rule is a sibling of the Archive
+          <Collapsible>, not a child, so it lands below Archive's rows when
+          Archive is open and directly below the ARCHIVE label when it is
+          closed. Correct in both states, which is why it is placed here rather
+          than "after the Archive header". Paired with the rule above THREADS —
+          together they bracket the sections, which is the Slack shape. */}
+      <div aria-hidden="true" className="sidebar-group-divider" />
       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
@@ -1102,7 +1250,11 @@ function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: 
     {DM_FILTER_OPTIONS.map(opt => (
      <DropdownMenuItem key={opt.value} onSelect={() => onChange(opt.value)}>
       {opt.label}
-      {filter === opt.value && <span className="ml-auto text-xs text-primary">✓</span>}
+      {/* A lucide icon, not a check GLYPH: a text tick renders in whatever the
+          user's emoji font decides, which on some platforms is a coloured
+          emoji — and this repo has an absolute no-emoji rule. An icon also
+          inherits currentColor, so it follows the theme. */}
+      {filter === opt.value && <Check className="ml-auto size-3.5 text-primary" aria-hidden />}
      </DropdownMenuItem>
     ))}
    </DropdownMenuContent>
@@ -1136,7 +1288,7 @@ function DirectAgentRow({
  const profileEnabled = Boolean(agent.agentId || handle);
 
  return (
-  <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
+  <div className="sidebar-agent-row group flex min-w-0 w-full items-center gap-1 flex-nowrap rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground">
    <button
     type="button"
     className="sidebar-agent-primary min-w-0 rounded-md px-1.5 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1166,6 +1318,9 @@ function DirectAgentRow({
      </span>
     </span>
    </button>
+   {/* Most agent work happens in DMs, so the elapsed badge belongs here too —
+       keyed on the DM's session, same store, same conditional mount. */}
+   {agent.session ? <SessionWorkBadge sessionId={agent.session.id} /> : null}
    <DropdownMenu>
     <DropdownMenuTrigger asChild>
      <Button
@@ -1219,11 +1374,14 @@ function SidebarRailButton({
  icon,
  title,
  count,
+ pressed,
  onClick,
 }: {
  icon: React.ReactNode;
  title: string;
  count?: number;
+ /** Set only on toggles — a plain launcher must NOT report a pressed state. */
+ pressed?: boolean;
  onClick: () => void;
 }) {
  return (
@@ -1233,6 +1391,8 @@ function SidebarRailButton({
    size="icon-sm"
    className="sidebar-rail-button relative"
    onClick={onClick}
+   aria-pressed={pressed}
+   data-active={pressed ? 'true' : undefined}
    aria-label={title}
    title={typeof count === 'number' && count > 0 ? `${title} (${count})` : title}
   >
@@ -1257,12 +1417,18 @@ function ActionTile({
  label,
  count,
  active = false,
+ pressed,
  onClick,
 }: {
  icon: React.ReactNode;
  label: string;
  count?: number;
  active?: boolean;
+ /**
+  * Set only on rows that are toggles. Left undefined everywhere else so a
+  * launcher is not announced as a pressed/unpressed control it isn't.
+  */
+ pressed?: boolean;
  onClick: () => void;
 }) {
  return (
@@ -1270,6 +1436,7 @@ function ActionTile({
    type="button"
    className="sidebar-action-row flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
    data-active={active ? 'true' : undefined}
+   aria-pressed={pressed}
    onClick={onClick}
   >
    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
@@ -1286,7 +1453,6 @@ function ActionTile({
 function SidebarSection({
  id,
  label,
- icon,
  count,
  actionLabel,
  onAction,
@@ -1297,7 +1463,13 @@ function SidebarSection({
 }: {
  id: string;
  label: string;
- icon: React.ReactNode;
+ /**
+  * Still accepted so every call site keeps compiling, but no longer rendered:
+  * a section is a label now, and the icon duplicated the word next to it.
+  * Left in the type deliberately rather than removed from ~8 call sites in
+  * one styling change — deleting it is a separate, mechanical commit.
+  */
+ icon?: React.ReactNode;
  count: number;
  actionLabel?: string;
  onAction?: () => void;
@@ -1309,18 +1481,22 @@ function SidebarSection({
  const hasAction = Boolean(actionLabel && onAction);
 
  return (
-  <Collapsible open={open} onOpenChange={onOpenChange} className="pt-2">
+  <Collapsible open={open} onOpenChange={onOpenChange} className="pt-3">
    <div className="sidebar-section-header">
     <CollapsibleTrigger asChild>
      <button
       type="button"
-      className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="sidebar-section-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-0.5 text-left"
       aria-controls={`${id}-content`}
      >
-      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-      <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">
-       {icon}
-      </span>
+      {/* A section name is a LABEL for what follows, not a row you act on —
+          so the chevron stays small and quiet, and the section icon is gone
+          entirely. The icon was doing the same job as the word beside it,
+          and at label size two glyphs competing for one meaning is noise.
+          Item icons still carry per-row identity; this level does not need
+          one. Kept as a button so the section still collapses by click and
+          by keyboard. */}
+      <ChevronRight className={`sidebar-section-chevron size-3 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
       {!hasAction && count > 0 && (
        <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
@@ -1345,7 +1521,11 @@ function SidebarSection({
     )}
     {headerActions}
    </div>
-   <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-1 pl-6">
+   {/* pl-1, not pl-6. The old indent aligned children under the header's
+       ICON; with the icon gone there is nothing to align to, and a deep
+       indent under a quiet label just wastes the width a sidebar has least
+       of. Items now sit near the panel edge with the label above them. */}
+   <CollapsibleContent id={`${id}-content`} className="sidebar-section-content pt-0.5 pl-1">
     {children}
    </CollapsibleContent>
   </Collapsible>
@@ -1527,7 +1707,10 @@ function SessionTree({
    <React.Fragment key={session.id}>
     <SessionRow
      session={session}
-     icon={icon}
+     // A channel that chose an icon wears it here too, so the sidebar and the
+     // channel header agree. Threads and DMs pass no icon key and keep the
+     // group's glyph.
+     icon={session.icon ? React.createElement(channelIconGlyph(session.icon)) : icon}
      archiveNoun={archiveNoun}
      depth={depth}
      chip={chip}
@@ -1632,6 +1815,10 @@ function SessionRow({
        </span>
       )}
       <span className="min-w-0 flex-1 truncate text-left">{session.title}</span>
+      {/* "# general   5m 55s" while an agent is working in this session. Mounts
+          its own 1s clock only while there IS work, so an idle sidebar runs no
+          timers; the row itself never re-renders on that tick. */}
+      <SessionWorkBadge sessionId={session.id} />
       {presenceUsers.length > 0 && (
        <span className="ml-auto flex shrink-0 items-center gap-0.5">
         {presenceUsers.slice(0, 3).map(person => (
@@ -1722,19 +1909,25 @@ function DocumentRow({
  doc,
  onOpen,
  onMoveFolder,
+ onAddToCanvas,
  presenceUsers = [],
 }: {
  doc: Document;
  onOpen: () => void;
  onMoveFolder: (folder: string) => void;
+ onAddToCanvas?: (doc: Document) => void;
  presenceUsers?: ItemPresenceUser[];
 }) {
+ // Applet storage docs (folder === APPLETS_FOLDER) are source code, not prose —
+ // a distinct icon flags that up front, and "Add to canvas" gives them a
+ // one-click path onto the board without opening the doc first.
+ const isApplet = doc.folder === APPLETS_FOLDER;
  return (
   <ContextMenu>
    <ContextMenuTrigger asChild>
     <div className="min-w-0 w-full">
      <ItemRow
-      icon={<FileText />}
+      icon={isApplet ? <Code2 /> : <FileText />}
       label={doc.title}
       onClick={onOpen}
       kind="document"
@@ -1745,6 +1938,15 @@ function DocumentRow({
    <ContextMenuContent>
     <ContextMenuLabel>{doc.title}</ContextMenuLabel>
     <ContextMenuSeparator />
+    {isApplet && onAddToCanvas && (
+     <>
+      <ContextMenuItem onSelect={() => onAddToCanvas(doc)}>
+       <LayoutTemplate data-icon="inline-start" />
+       Add to canvas
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+     </>
+    )}
     <ContextMenuSub>
      <ContextMenuSubTrigger>
       <Folder data-icon="inline-start" />

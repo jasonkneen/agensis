@@ -111,6 +111,10 @@ function getDefaultRestoreSize(type: FloatingWindowType): { width: number; heigh
     tasks: { width: Math.min(680, Math.max(460, Math.round(viewport.width * 0.52))), height: Math.min(720, Math.max(540, Math.round(viewport.height * 0.74))) },
     activity: { width: Math.min(620, Math.max(420, Math.round(viewport.width * 0.48))), height: Math.min(720, Math.max(540, Math.round(viewport.height * 0.74))) },
     agents: { width: Math.min(980, Math.max(720, Math.round(viewport.width * 0.72))), height: Math.min(760, Math.max(560, Math.round(viewport.height * 0.76))) },
+    // Narrower than the old 940 default (was reading as a full-width feed rather
+    // than a chat-like pane) but still wide enough for two-pane triage: default
+    // list width (340) + a readable detail column comfortably fit in 760.
+    inbox: { width: Math.min(760, Math.max(560, Math.round(viewport.width * 0.58))), height: Math.min(740, Math.max(540, Math.round(viewport.height * 0.76))) },
   };
   return fitWindowSize(sizeMap[type] || sizeMap.chat, viewport, WORKSPACE_WINDOW_MARGIN);
 }
@@ -179,6 +183,21 @@ function getVisibleBounds(win: FloatingWindow): WindowBounds {
     width: win.width,
     height: win.height,
   });
+}
+
+// A container can only be split if BOTH resulting tiles clear the minimum
+// window size. Without this guard the two halves are floored independently —
+// getSplitTile floors the dragged half at MIN_WINDOW_WIDTH, and
+// clampToViewport floors the complementary half at the same minimum — so a
+// container narrower than 2 × MIN produces two tiles that together exceed it
+// and visibly OVERLAP, while still being handed a shared groupId. A 500px-wide
+// target used to yield two 320px tiles: a 140px overlap the UI treated as a
+// clean tiled pair. Refusing the split is the honest outcome; there is no
+// arrangement of a 500px box into two 320px halves.
+export function canSplitContainer(container: WindowBounds, edge: TileEdge): boolean {
+  return edge === 'left' || edge === 'right'
+    ? Math.round(container.width) >= MIN_WINDOW_WIDTH * 2
+    : Math.round(container.height) >= MIN_WINDOW_HEIGHT * 2;
 }
 
 export function getSplitTile(container: WindowBounds, edge: TileEdge): WindowBounds {
@@ -287,7 +306,15 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
   if (workspaceEdge) {
     const partner = visiblePartners[0];
     if (!partner) return windows;
-    const partnerBounds = clampToViewport(getComplementaryTile(viewportBounds, workspaceEdge));
+    if (!canSplitContainer(viewportBounds, workspaceEdge)) return windows;
+    // NOT clampToViewport: the complementary tile is by construction inside
+    // `container`, which is already on-screen, so clamping can only do harm.
+    // It used to do exactly that twice over — flooring the tile's width back
+    // up to MIN_WINDOW_WIDTH (creating the overlap canSplitContainer now
+    // prevents), and shrinking its height by WORKSPACE_BOTTOM_RESERVE, which
+    // the shell does not subtract. That second mismatch is why a snapped pair
+    // landed with bottom edges 56px out of line.
+    const partnerBounds = getComplementaryTile(viewportBounds, workspaceEdge);
     const groupId = partner.groupId || active.groupId || generateGroupId();
     return cleanupSoloGroups(windows.map(w => {
       if (w.id === partner.id) {
@@ -302,12 +329,15 @@ function maybeSplitPartner(previousWindows: FloatingWindow[], windows: FloatingW
     .map(partner => {
       const container = getVisibleBounds(partner);
       const edge = getTileEdge(activeBounds, container);
-      return edge ? { partner, container, edge } : null;
+      // A target too small to hold two minimum-size tiles is not a split
+      // target at all — pairing with it produced overlapping windows.
+      if (!edge || !canSplitContainer(container, edge)) return null;
+      return { partner, container, edge };
     })
     .find(Boolean);
   if (!splitTarget) return windows;
 
-  const partnerBounds = clampToViewport(getComplementaryTile(splitTarget.container, splitTarget.edge));
+  const partnerBounds = getComplementaryTile(splitTarget.container, splitTarget.edge);
   const groupId = splitTarget.partner.groupId || active.groupId || generateGroupId();
   return cleanupSoloGroups(windows.map(w => {
     if (w.id === splitTarget.partner.id) {
@@ -703,6 +733,17 @@ export function useWindows() {
     );
   }, []);
 
+  // Explicit bulk form of minimizeWindow, for callers that know which way they
+  // want the flag to go rather than "the other way". minimizeWindow TOGGLES, so
+  // putting several windows away one call at a time is only correct while every
+  // id happens to be on the same side — the Show desktop button drives whole
+  // sets, and one already-minimized id in the list would pop back up.
+  const setWindowsMinimized = useCallback((ids: readonly string[], minimized: boolean) => {
+    if (ids.length === 0) return;
+    const target = new Set(ids);
+    setWindows(prev => prev.map(w => (target.has(w.id) ? { ...w, minimized } : w)));
+  }, []);
+
   // Enter full-expand focused on `id`: raise it to the top so it becomes the
   // single visible window, un-minimize it, and switch the workspace into full
   // mode. Every other open window stays mounted (cached) for instant switching.
@@ -743,5 +784,5 @@ export function useWindows() {
     if (viewMode === 'multi' && prefersFullExpandRef.current) setViewMode('full');
   }, [viewMode, hasVisibleWindow]);
 
-  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
+  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
 }

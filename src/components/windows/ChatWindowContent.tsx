@@ -1,3 +1,4 @@
+import { buildChannelRoster, participantAgentKey } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -16,13 +17,14 @@ import {
   GitCommitHorizontal,
   Columns2,
   Globe,
-  Hash,
   Layers,
   Link2,
   Loader2,
   MessageSquare,
   Mic,
   Monitor,
+  MoreHorizontal,
+  Settings2,
   Palette,
   PanelRightClose,
   PanelRightOpen,
@@ -59,8 +61,35 @@ import {
   type ProjectFileSource,
 } from '../chat/ComposerAddContent';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
+import {
+  RAIL_ANIMATION_MS,
+  parseRailPreference,
+  railPreferenceKey,
+  resolveRailState,
+  toggledRailPreference,
+  type RailPreference,
+} from '@/lib/threadWidgetRail';
+import { HuddleCard } from '../huddle/HuddleCard';
+import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
+import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
+import { EditChannelDialog } from '../chat/EditChannelDialog';
+import { channelIconGlyph, normalizeChannelIcon, type ChannelProfileDraft } from '../../lib/channelProfile';
+import {
+  CHANNEL_MENTION_HANDLE,
+  CHANNEL_MENTION_MAX_AGENTS,
+  agentMentionHandles,
+  mentionsChannel,
+  normalizeConversationMode,
+} from '../../lib/channelMentions';
+import { HuddlePanel } from '../huddle/HuddlePanel';
+import { HuddleSessionProvider } from '../huddle/HuddleSessionContext';
+import { HuddleToolbarButton } from '../huddle/HuddleToolbarButton';
 import { ChatArtifact, extractHtmlArtifact } from '../chat/ChatArtifact';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { LinkPreviewCards } from '../chat/LinkPreviewCards';
+import { ToolStepGroup } from '../chat/ToolStepGroup';
+import { buildTranscriptRows } from '../chat/toolSteps';
+import { isBroadcastFromThread } from '../chat/channelView';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
   BUILTIN_SLASH_ITEMS,
@@ -110,6 +139,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -148,12 +178,27 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
+import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
-import { activityLine, extractActivityVerb, isActivityPlaceholderMessage } from '../../lib/activityStatus';
+import { huddleAgentOptions } from '../../lib/huddleAgents';
+import { groupHuddleMarkers, type HuddleMarkerGroup, isHuddleMarkerMessage } from '../../lib/huddleTranscript';
+import {
+  activityLine,
+  extractActivityVerb,
+  isActivityPlaceholderMessage,
+  isLiveActivityPlaceholder,
+} from '../../lib/activityStatus';
+import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
+import { useSharedNow } from '../../hooks/useSharedNow';
+import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
+import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
+import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
+import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatWindowContentProps {
   messages: ChatMessage[];
@@ -177,10 +222,21 @@ interface ChatWindowContentProps {
   onSelectAgent?: (agent: WorkspaceAgent | null) => void;
   canvasGroups?: CanvasGroup[];
   canvasObjects?: CanvasObject[];
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void;
+  // May resolve `{ delivered: false }` — the message was rejected and rolled
+  // back, so the composer restores the draft instead of eating it.
+  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[]) => void | Promise<SendOutcome | void>;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
-  onSendThreadReply?: (content: string, model: string) => void;
+  // broadcastToChannel = the thread composer's "Send to channel" switch: post the
+  // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
+  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  /**
+   * Tell the app a channel's own row changed (title, icon, description,
+   * intent, participants). The window keeps its own copy of the channel for
+   * its header, but the SIDEBAR reads the app's session list — so without this
+   * a rename showed in the header and nowhere else until a reload.
+   */
+  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   readOnly?: boolean;
   channelTitle?: string;
   workspaceId?: string | null;
@@ -188,6 +244,8 @@ interface ChatWindowContentProps {
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
   onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
   systemCapabilities?: SystemCapabilities | null;
+  // Rendered INSIDE the channel overflow menu, so it must be menu-item-shaped
+  // (a DropdownMenuItem / DropdownMenuSub), not a standalone button.
   contextControls?: React.ReactNode;
   isDirectMessage?: boolean;
   onAgentProfile?: (agentIdOrHandle: string) => void;
@@ -198,7 +256,6 @@ interface ChatWindowContentProps {
   subThreadStreaming?: boolean;
   onOpenSubThread?: (session: ChatSession) => void;
   onCloseSubThread?: () => void;
-  onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
   onSendSubThreadMessage?: (content: string) => void;
   onSplitThread?: () => void;
   currentUserId?: string;
@@ -213,7 +270,7 @@ type ChannelPresenceUser = {
 };
 
 
-type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'is_favorite' | 'archived_at' | 'participants' | 'conversation_mode'>;
+type ChannelSessionMeta = Pick<ChatSession, 'id' | 'title' | 'folder' | 'description' | 'icon' | 'intent' | 'is_favorite' | 'archived_at' | 'participants' | 'conversation_mode'>;
 
 const CHANNEL_META_COLUMNS = '*';
 
@@ -227,7 +284,20 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
+type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads' | 'huddle';
+
+// The chat column: message list and composer share ONE width so they line up.
+// They were independent before — the composer was centred at max-w-[800px] while
+// the message list ran the full width of the window, so messages sat left of the
+// input they belong to. Change this in one place or they drift apart again.
+//
+// Sharing the cap is only half of sharing the measure: the box the column is
+// centred INSIDE has to be the same on both sides too, which is why the scroll
+// viewport carries the composer shell's own horizontal padding (see
+// MessageScrollerViewport below). The literal has to stay a literal for
+// Tailwind to emit it, and CHAT_COLUMN_MAX_WIDTH in threadWidgetRail.ts mirrors
+// it — the rail's gutter maths is derived from the same number.
+const CHAT_COLUMN_CLASS = 'mx-auto w-full max-w-[800px]';
 
 export const ChatWindowContent = React.memo(function ChatWindowContent({
   messages,
@@ -250,6 +320,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   onOpenThread,
   onCloseThread,
   onSendThreadReply,
+  onSessionMetaSaved,
   readOnly = false,
   channelTitle = 'general',
   workspaceId = null,
@@ -266,12 +337,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   subThreadStreaming = false,
   onOpenSubThread,
   onCloseSubThread,
-  onCreateSubThread,
   onSendSubThreadMessage,
   onSplitThread,
   currentUserId = '',
 }: ChatWindowContentProps) {
-  const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [selectedModel, setSelectedModel] = useState(() => getSettings().ai_default_model || 'auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
@@ -291,8 +360,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [slashStartPos, setSlashStartPos] = useState(-1);
   const [autoScroll, setAutoScroll] = useState(true);
   const [sidePanel, setSidePanel] = useState<ChatSidePanel | null>(null);
-  const [widgetsCollapsed, setWidgetsCollapsed] = useState(true);
-  const [widgetsTooNarrow, setWidgetsTooNarrow] = useState(false);
+  const [railPreference, setRailPreference] = useState<RailPreference>('auto');
+  const [railHasContent, setRailHasContent] = useState(false);
+  const [railSurfaceWidth, setRailSurfaceWidth] = useState<number | null>(null);
   const [profileAgentKey, setProfileAgentKey] = useState<string | null>(null);
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [addParticipantsOpen, setAddParticipantsOpen] = useState(false);
@@ -307,6 +377,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
   const [deleteMessageTarget, setDeleteMessageTarget] = useState<ChatMessage | null>(null);
   const [panelWidth, setPanelWidth] = useState(360);
+  // Thread replies read better as a near-even split than the narrow fixed
+  // sidebar used for files/pins/profile/sub-thread panels, so it gets its own
+  // width state. `null` means "not manually resized yet" — render at a CSS
+  // percentage (auto-adjusts as the window resizes) rather than a stale px
+  // value computed once at open time.
+  const [threadPanelWidth, setThreadPanelWidth] = useState<number | null>(null);
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectRoot, setProjectRoot] = useState('');
   const [projectFileSources, setProjectFileSources] = useState<ProjectFileSource[]>([]);
@@ -314,7 +390,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const sidePanelRef = useRef<HTMLElement | null>(null);
   const autoOpenedProfileForRef = useRef<string | null>(null);
+
+  useComposerAutosize(inputRef, input);
 
   const filteredDocs = useMemo(() => {
     const q = docPickerQuery.toLowerCase();
@@ -352,9 +431,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
     [composerProjectGroups],
   );
+  const { gateways } = useGateways(workspaceId || null);
   const modelOptions = useMemo(
-    () => workspaceChatModels(workspaceId, agentConnections),
-    [workspaceId, agentConnections],
+    () => workspaceChatModels(workspaceId, agentConnections, gateways),
+    [workspaceId, agentConnections, gateways],
   );
 
   useEffect(() => {
@@ -435,7 +515,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }).join('\n');
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() || streaming) return;
     let content = input.trim();
     if (linkedFiles.length > 0) {
@@ -444,12 +524,25 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
-    onSendMessage(content, selectedModel, memoryFacts, linkedDocs.length > 0 ? linkedDocs : undefined);
+    // Stay optimistic — the message appears in the transcript immediately and
+    // the box clears — but keep the draft until the write is confirmed. A
+    // rejected send rolls its row back, and without this the user's text went
+    // with it.
+    const draft = { input, linkedDocs, linkedGroups, linkedFiles };
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
     setLinkedFiles([]);
     inputRef.current?.focus();
+
+    const outcome = await onSendMessage(content, selectedModel, memoryFacts, draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined);
+    if (outcome && outcome.delivered === false) {
+      setInput(draft.input);
+      setLinkedDocs(draft.linkedDocs);
+      setLinkedGroups(draft.linkedGroups);
+      setLinkedFiles(draft.linkedFiles);
+      inputRef.current?.focus();
+    }
   };
 
   const insertComposerText = (text: string) => {
@@ -540,8 +633,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     void uploadAndLinkFiles(files);
   };
 
-  const handleAgentSelect = (agent: WorkspaceAgent) => {
-    const handle = agentHandle(agent);
+  const insertMentionHandle = (handle: string) => {
     const selectionEnd = inputRef.current?.selectionStart || input.length;
     const before = input.slice(0, Math.max(0, atStartPos));
     const after = input.slice(selectionEnd);
@@ -552,6 +644,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setAtStartPos(-1);
     inputRef.current?.focus();
   };
+
+  const handleAgentSelect = (agent: WorkspaceAgent) => insertMentionHandle(agentHandle(agent));
 
   const handleDocSelect = (doc: Document) => {
     if (!linkedDocs.find(d => d.id === doc.id)) {
@@ -600,11 +694,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         setShowDocPicker(false);
         return;
       }
-      // Tab or Enter completes the top item (agents render above docs) and closes the @ menu.
+      // Tab or Enter completes the top item and closes the @ menu. The order
+      // mirrors what is RENDERED: agents, then Everyone, then documents. @channel
+      // is deliberately behind the agents — someone typing "@sc" for Scout must
+      // never get "ask all six" from a reflex Tab — but once the typed text rules
+      // every agent out ("@chann"), it is the top item on screen and completing
+      // anything else would mean the keyboard and the eye disagree.
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         if (filteredAgents.length > 0) {
           e.preventDefault();
           handleAgentSelect(filteredAgents[0]);
+          return;
+        }
+        if (showChannelMentionOption && docPickerQuery.trim()) {
+          e.preventDefault();
+          insertMentionHandle(CHANNEL_MENTION_HANDLE);
           return;
         }
         if (filteredDocs.length > 0) {
@@ -711,17 +815,56 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   );
   const parentMessage = activeThreadId ? visibleMessages.find(m => m.id === activeThreadId) : null;
   const pinnedMessages = visibleMessages.filter(message => message.pinned);
+  const subThreadCount = useMemo(
+    () => Object.values(subThreadsByMessage).reduce((total, list) => total + list.length, 0),
+    [subThreadsByMessage],
+  );
   const inferredSessionId = useMemo(() => (
     messages[0]?.session_id ||
     topLevelMessages?.[0]?.session_id ||
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
-  // Floating thread widgets overlay the message list — messages stay full
-  // width, the cards just float over the empty right-hand space (they don't
-  // reserve a column). The overlay is click-through except for the cards.
+  // Floating thread widgets. The rail shows itself once the session's widgets
+  // have content and hides again on the toolbar toggle — see
+  // `src/lib/threadWidgetRail.ts` for the whole decision, including why the
+  // message column's width is identical whether the rail is open or shut.
   const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
-  const widgetsActive = showWidgetRail && !widgetsCollapsed && !widgetsTooNarrow;
+  // Voice huddle strip, between the header and the transcript. Bound to THIS
+  // session so the call belongs to the conversation it was called from.
+  const showHuddleCard = !readOnly && !!inferredSessionId && !!workspaceId;
+  const rail = useMemo(
+    () => resolveRailState({
+      hasContent: railHasContent,
+      preference: railPreference,
+      surfaceWidth: railSurfaceWidth,
+      applies: showWidgetRail,
+    }),
+    [railHasContent, railPreference, railSurfaceWidth, showWidgetRail],
+  );
+  const railOpen = rail.open;
+  // Space the chat body gives up so the rail can sit BESIDE the conversation.
+  // Zero unless there's room for it without narrowing the message column.
+  const railReserve = railOpen ? rail.reserve : 0;
+  // Only while floating on top does anything inside a message row need to dodge
+  // the cards — beside the conversation, the row never reaches them.
+  const railOverlaying = railOpen && rail.layout === 'overlay';
+  const toggleWidgetRail = useCallback(() => {
+    const next = toggledRailPreference(rail.open);
+    setRailPreference(next);
+    if (inferredSessionId) {
+      try { localStorage.setItem(railPreferenceKey(inferredSessionId), next); } catch { /* ignore quota */ }
+    }
+  }, [rail.open, inferredSessionId]);
+  // A choice made by hand is per session and sticky: reload it when the session
+  // changes, and drop the content flag so the new session's rail doesn't
+  // inherit the last one's answer before its own items have loaded.
+  useEffect(() => {
+    setRailHasContent(false);
+    if (!inferredSessionId) { setRailPreference('auto'); return; }
+    try { setRailPreference(parseRailPreference(localStorage.getItem(railPreferenceKey(inferredSessionId)))); }
+    catch { setRailPreference('auto'); }
+  }, [inferredSessionId]);
   // "Clear my head": eject the current view without deleting anything. A per-session
   // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
   const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
@@ -746,6 +889,24 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [displayMessages, clearCutoffMs],
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
+  // Consecutive tool steps collapse into one chip row; every other message keeps its
+  // own row at its original position. Order is never changed.
+  const shownRows = useMemo(() => buildTranscriptRows(shownMessages), [shownMessages]);
+
+  // Marker runs, resolved once per message list rather than per row: the row
+  // loop needs to know both "does a group START here" and "is this marker
+  // already inside one", and asking that per row would be quadratic.
+  const { huddleGroupByLeadId, huddleGroupedIds } = useMemo(() => {
+    const byLead = new Map<string, HuddleMarkerGroup>();
+    const swallowed = new Set<string>();
+    for (const entry of groupHuddleMarkers(shownMessages)) {
+      if ((entry as HuddleMarkerGroup).kind !== 'huddle-group') continue;
+      const group = entry as HuddleMarkerGroup;
+      byLead.set(group.messages[0].id, group);
+      group.messages.slice(1).forEach(message => swallowed.add(message.id));
+    }
+    return { huddleGroupByLeadId: byLead, huddleGroupedIds: swallowed };
+  }, [shownMessages]);
 
   // Slash menu: built-ins that actually have a home here + the enumerated inserts,
   // fuzzy-ranked and grouped for display. `/split` only when splitting is wired;
@@ -874,10 +1035,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // Live "who's working right now" for the status line above the composer —
   // derived only from this session's own messages, so it never leaks across
   // windows and auto-clears the instant real content replaces the placeholder.
+  // A placeholder left behind by a job that died is NOT proof of work, so it is
+  // filtered by age here as well as in the transcript's chips.
   const thinkingAgents = useMemo(() => {
     const entries: { name: string; activity: string }[] = [];
     for (const m of displayMessages) {
-      if (!isActivityPlaceholderMessage(m)) continue;
+      if (!isLiveActivityPlaceholder(m)) continue;
       const name = (m.sender_name || directAgent?.name || 'Agent').trim();
       const activity = extractActivityVerb(safeMessageText(m.content));
       if (name && !entries.find(e => e.name === name)) entries.push({ name, activity });
@@ -910,38 +1073,43 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [agentConnections, agents, persistedParticipants, presenceUsers],
   );
 
-  const participants = useMemo(() => {
-    const map = new Map<string, DisplayParticipant>();
-    persistedParticipants.forEach(participant => {
-      map.set(participant.id, withLiveParticipantStatus(participant, agents, agentConnections));
-    });
-    presenceUsers.forEach(participant => {
-      const id = participant.kind === 'agent' ? `agent:${participant.id}` : `user:${participant.id}`;
-      map.set(id, {
-        id,
-        name: participant.isCurrentUser ? 'You' : participant.name,
-        kind: participant.kind === 'agent' ? 'agent' : 'user',
-        status: participant.status,
-        user_id: participant.kind === 'agent' ? null : participant.id,
-        agent_id: participant.kind === 'agent' ? participant.id : null,
-        connected: Boolean(participant.status && participant.status !== 'offline'),
-      });
-    });
-    return Array.from(map.values()).slice(0, 6);
-  }, [agentConnections, agents, persistedParticipants, presenceUsers]);
+  // WHO IS IN THIS CHANNEL — the stored roster, and nothing else.
+  //
+  // This used to merge workspace PRESENCE in wholesale, so every agent that
+  // happened to be online anywhere in the workspace appeared as a member of
+  // every channel. The owner caught it exactly: "4 in the room, no one there
+  // because they are not really there" — the header counted four while the
+  // huddle, which reads the stored roster, correctly said one. The add dialog
+  // was telling the truth all along by offering those agents as "Add"; the
+  // dropdown was the liar, and the mismatch is what made adding them look like
+  // it produced duplicates.
+  //
+  // Presence still contributes STATUS to a stored member (withLiveParticipantStatus
+  // and the branch below) — being online is a property of someone in the room,
+  // not a way into it. Humans present in the channel are a separate matter from
+  // agents: a human who has the channel open IS in it, which is what the
+  // presence feed means for people, so live humans are still merged.
+  const participants = useMemo(
+    () => buildChannelRoster<ChannelParticipant, DisplayParticipant>({
+      stored: persistedParticipants,
+      present: presenceUsers,
+      decorate: participant => withLiveParticipantStatus(participant, agents, agentConnections),
+    }),
+    [agentConnections, agents, persistedParticipants, presenceUsers],
+  );
 
   // Agents @mentioned in the current draft that aren't channel participants yet.
   // On send, the server adds them to the roster (ensureMentionedParticipants), so
-  // we surface a small heads-up here. Mirrors the server mention regex + is a
-  // no-op in 1:1 DMs. Matches on persisted participants (the roster the server
-  // checks), not transient presence.
+  // we surface a small heads-up here. Uses the SAME parser the server dispatches
+  // with (src/lib/channelMentions.ts, pinned to shared/channelMentions.cjs), and
+  // is a no-op in 1:1 DMs. Matches on persisted participants (the roster the
+  // server checks), not transient presence.
   const mentionedNotInChannel = useMemo(() => {
     if (isDirectMessage) return [] as string[];
-    const re = /(^|\s)@([a-zA-Z0-9_.-]{1,64})\b/g;
     const names = new Map<string, string>();
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(input))) {
-      const handle = match[2];
+    // `@channel` is excluded by agentMentionHandles: it addresses the roster
+    // rather than adding to it, so there is never anyone to add for it.
+    for (const handle of agentMentionHandles(input)) {
       const agent = agents.find(item => agentMatchesLookupKey(item, handle));
       if (!agent) continue;
       if (persistedParticipants.some(p => participantMatchesLookupKey(p, handle))) continue;
@@ -950,6 +1118,37 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return Array.from(names.values());
   }, [input, agents, persistedParticipants, isDirectMessage]);
 
+  // Who `@channel` in the current draft will actually reach: the STORED agent
+  // roster, capped the same way the server caps it. Shown because "pings
+  // everyone" costs one model turn per agent, and the number is the only honest
+  // way to say how much. Empty (and hidden) when the draft has no @channel, in a
+  // DM, or when the channel has no agents in it.
+  const channelMentionTargets = useMemo(() => {
+    if (isDirectMessage || !mentionsChannel(input)) return [] as string[];
+    return persistedParticipants
+      .filter(participant => participant.kind === 'agent')
+      .map(participant => {
+        const agent = agents.find(item => agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+        if (agent && agent.enabled === false) return '';
+        return agent?.name || participant.name || '';
+      })
+      .filter(Boolean)
+      .slice(0, CHANNEL_MENTION_MAX_AGENTS);
+  }, [input, agents, persistedParticipants, isDirectMessage]);
+
+  // `@channel` is offered in the composer's @ menu alongside the agent handles,
+  // because a mention nobody can discover is a mention nobody uses. Not in a DM:
+  // there is no roster there to address, and the one agent already answers a
+  // plain message. Hidden once the typed query stops being a prefix of it.
+  const showChannelMentionOption = !isDirectMessage
+    && CHANNEL_MENTION_HANDLE.startsWith(docPickerQuery.trim().toLowerCase());
+  // Enabled agents on the STORED roster — what `@channel` costs, in turns.
+  const channelAgentCount = useMemo(() => persistedParticipants.filter(participant => {
+    if (participant.kind !== 'agent') return false;
+    const agent = agents.find(item => agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
+    return !agent || agent.enabled !== false;
+  }).length, [agents, persistedParticipants]);
+
   const agentAvatarLookup = useMemo(
     () => buildAgentAvatarLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
@@ -957,6 +1156,37 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const agentAccentLookup = useMemo(
     () => buildAgentAccentLookup(agents, persistedParticipants),
     [agents, persistedParticipants],
+  );
+  // Who a huddle utterance can be addressed to, in roster order. Empty in a DM:
+  // the single agent there already answers a plain message, so there is nothing
+  // to switch between and nothing to @mention.
+  // A DM's huddle has ONE agent, and it still needs to be in this list. This
+  // returned [] for DMs — no strip is needed when there is no one to choose
+  // between — but the list is also where the SPEAKER finds whose voice to use.
+  // Empty meant activeAgent was null, voiceId fell back to '', and the server
+  // derived a default voice: boris, who has a voice stored, came out sounding
+  // like someone else entirely in every DM. The strip hides itself when there
+  // is nothing to choose (below); the roster stays populated regardless.
+  const huddleAgents = useMemo(
+    () => huddleAgentOptions(agents, persistedParticipants),
+    [agents, persistedParticipants],
+  );
+  // Which agent a huddle utterance is addressed to. Lifted here so the strip in
+  // the card and the composer in the panel talk to the SAME agent — two
+  // controls disagreeing about who is listening is worse than one.
+  const [huddleActiveAgentId, setHuddleActiveAgentId] = useState('');
+  // Which huddle the panel is showing. Null means "this channel's current one";
+  // a marker from an old huddle sets it explicitly.
+  const [huddlePanelId, setHuddlePanelId] = useState<string | null>(null);
+  const openHuddlePanel = useCallback((huddleId?: string | null) => {
+    setHuddlePanelId(huddleId || null);
+    setSidePanel('huddle');
+  }, []);
+  // Who replied and when, per parent message — derived from the messages already
+  // in memory (threadReplyCounts stays the source of truth for the number itself).
+  const threadReplySummaries = useMemo(
+    () => buildThreadReplySummaries(messages, message => resolveMessageAvatar(message, agentAvatarLookup)),
+    [messages, agentAvatarLookup],
   );
 
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
@@ -1003,6 +1233,12 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }
     const next = normalizeChannelSessionMeta({ ...session, ...normalizedUpdates, ...data });
     setChannelMeta(next);
+    // The sidebar reads the app's session list, not this window's channelMeta,
+    // so it has to be told. Sent as the SAVED fields rather than the whole
+    // row: the app's ChatSession and this window's ChannelSessionMeta are
+    // different shapes, and pushing a foreign row into the list is how you get
+    // a sidebar entry with half its fields missing.
+    if (session.id) onSessionMetaSaved?.(session.id, normalizedUpdates as Record<string, unknown>);
     return next;
   };
 
@@ -1017,10 +1253,51 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setFlowConnectOpen(true);
   };
 
+
+/**
+ * One id for one participant, whatever shape wrote it. Session rosters hold
+ * both `agent:<uuid>` and bare `<uuid>` ids for agents (two historical
+ * writers), while the dialog's options are keyed `agent:<uuid>` — compared
+ * raw, an auto-added agent never matched its own dialog row, showed "Add"
+ * while standing in the channel, and clicking Add duplicated it. The
+ * duplicate then answered every turn twice, which a huddle read aloud twice.
+ */
+function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent_id?: unknown; handle?: unknown }): string {
+  if (participant?.kind === 'agent') {
+    const bare = participantAgentKey(participant);
+    if (bare) return `agent:${bare}`;
+  }
+  return String(participant?.id ?? '');
+}
+
+  const [editChannelOpen, setEditChannelOpen] = useState(false);
+
+  // The dialog's seed. Built from the PERSISTED meta so a reopened dialog shows
+  // what is stored, never what a previous cancelled edit left in state.
+  const channelProfileBaseline = useMemo<ChannelProfileDraft>(() => ({
+    title: channelMeta?.title || channelTitle || '',
+    description: channelMeta?.description || '',
+    icon: normalizeChannelIcon(channelMeta?.icon),
+    intent: channelMeta?.intent || '',
+    conversation_mode: normalizeConversationMode(channelMeta?.conversation_mode),
+  }), [
+    channelMeta?.title, channelMeta?.description, channelMeta?.icon, channelMeta?.intent,
+    channelMeta?.conversation_mode, channelTitle,
+  ]);
+
+  // The channel's chosen glyph, or the hash. Capitalised because it is rendered
+  // as a component.
+  const ChannelIcon = useMemo(() => channelIconGlyph(channelMeta?.icon), [channelMeta?.icon]);
+
+  const handleSaveChannelProfile = async (patch: Partial<ChannelProfileDraft>) => {
+    const saved = await persistChannelUpdates(patch as Partial<ChannelSessionMeta>);
+    return Boolean(saved);
+  };
+
   const handleOpenParticipantsDialog = () => {
     const selected = new Set<string>();
     const saved = persistedParticipants.length > 0 ? persistedParticipants : participants;
-    saved.forEach(participant => selected.add(participant.id));
+    saved.forEach(participant => selected.add(dialogParticipantKey(participant)));
     setSelectedParticipantIds(selected);
     setAddParticipantsOpen(true);
   };
@@ -1034,9 +1311,25 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     });
   };
 
+  // Remove one participant from the dropdown's X. Writes from the PERSISTED
+  // roster (never the presence-merged display list), filtered by the canonical
+  // key so an agent's historical shape-twin rows — `agent:<uuid>` and bare
+  // `<uuid>` — leave together; removing one visual row must not leave a hidden
+  // duplicate behind to keep answering turns. Reversible via the add dialog,
+  // so no confirm. "You" gets no X: removing yourself is leaving, a different
+  // action with different consequences, not roster tidying.
+  const handleRemoveParticipant = async (participant: { id?: unknown; kind?: unknown; agent_id?: unknown; handle?: unknown }) => {
+    const targetKey = dialogParticipantKey(participant);
+    if (!targetKey) return;
+    const source = persistedParticipants.length > 0 ? persistedParticipants : [];
+    const next = source.filter(row => dialogParticipantKey(row) !== targetKey);
+    if (next.length === source.length) return;
+    await persistChannelUpdates({ participants: next });
+  };
+
   const handleSaveParticipants = async () => {
     const selected = participantCandidates
-      .filter(participant => selectedParticipantIds.has(participant.id))
+      .filter(participant => selectedParticipantIds.has(dialogParticipantKey(participant)))
       .map(toPersistedParticipant);
     const saved = await persistChannelUpdates({ participants: selected });
     if (saved) setAddParticipantsOpen(false);
@@ -1049,6 +1342,25 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     }));
   };
 
+  // M9: an override is only a stand-in while the write is in flight. Left in place
+  // it would mask every later realtime UPDATE for that row (someone else reacting,
+  // unpinning, editing) for the lifetime of the window, so drop the keys we wrote
+  // optimistically as soon as the server acknowledges and let realtime own the row
+  // again. Only the keys this action touched are cleared, so a concurrent
+  // in-flight action on the same message keeps its own override.
+  const clearMessageOverride = (messageId: string, keys: Array<keyof (Partial<ChatMessage> & { deleted?: boolean })>) => {
+    setMessageOverrides(prev => {
+      const current = prev[messageId];
+      if (!current) return prev;
+      const remaining = { ...current };
+      for (const key of keys) delete remaining[key];
+      const next = { ...prev };
+      if (Object.keys(remaining).length === 0) delete next[messageId];
+      else next[messageId] = remaining;
+      return next;
+    });
+  };
+
   const handleTogglePin = async (message: ChatMessage) => {
     const nextPinned = !message.pinned;
     setMessageOverride(message.id, { pinned: nextPinned });
@@ -1059,6 +1371,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .eq('id', message.id)
       .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { pinned: message.pinned });
+    else clearMessageOverride(message.id, ['pinned']);
     setMessageActionBusy(null);
   };
 
@@ -1078,6 +1391,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .eq('id', message.id)
       .eq('session_id', message.session_id);
     if (error) setMessageOverride(message.id, { reactions: message.reactions });
+    else clearMessageOverride(message.id, ['reactions']);
   };
 
   const handleStartEdit = (message: ChatMessage) => {
@@ -1104,6 +1418,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (previous?.session_id) updateQuery.eq('session_id', previous.session_id);
     const { error } = await updateQuery;
     if (error && previous) setMessageOverride(messageId, { content: previous.content });
+    else if (!error) clearMessageOverride(messageId, ['content']);
     setMessageActionBusy(null);
     setEditingMessageId(null);
     setEditingContent('');
@@ -1124,6 +1439,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       .delete()
       .eq('id', message.id)
       .eq('session_id', message.session_id);
+    // M9 does not apply to the delete override: the row is gone, so no later
+    // realtime UPDATE can be masked by it. Clearing it here would only resurrect
+    // the message until the realtime DELETE lands (forever, if realtime is down).
     if (error) setMessageOverride(message.id, { deleted: false });
     setMessageActionBusy(null);
   };
@@ -1172,9 +1490,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     const el = document.getElementById(`chat-msg-${messageId}`);
     if (!el) return;
     setAutoScroll(false);
+    // Scroll only — deliberately no highlight flash. The 1.6s animated
+    // background this used to add read as a flicker, and it fought with the
+    // row's own hover/agent-accent backgrounds while it ran. The thread toolbar
+    // appearing is sufficient confirmation of where you landed.
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('chat-msg-jump-highlight');
-    window.setTimeout(() => el.classList.remove('chat-msg-jump-highlight'), 1600);
   }, []);
   const openThread = () => {
     setSidePanel('thread');
@@ -1196,11 +1516,19 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   };
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    const isThread = sidePanel === 'thread';
     const startX = event.clientX;
-    const startWidth = panelWidth;
+    // Read the actual on-screen width rather than trusting state — the thread
+    // panel starts life as a CSS percentage (`45%`), not a px value, so
+    // `threadPanelWidth` alone doesn't know the real width to drag from until
+    // the user has resized it at least once.
+    const startWidth = sidePanelRef.current?.getBoundingClientRect().width
+      ?? (isThread ? threadPanelWidth ?? 360 : panelWidth);
+    const maxWidth = isThread ? 900 : 680;
     const onMove = (moveEvent: PointerEvent) => {
-      const next = Math.min(680, Math.max(280, startWidth + (startX - moveEvent.clientX)));
-      setPanelWidth(next);
+      const next = Math.min(maxWidth, Math.max(280, startWidth + (startX - moveEvent.clientX)));
+      if (isThread) setThreadPanelWidth(next);
+      else setPanelWidth(next);
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -1212,6 +1540,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
   return (
     <div className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
+      {/* Wraps the message column AND the side panel, because the huddle panel
+          is one of the side panels and drives off the same hook the toolbar
+          button and the card do. It stays scoped to this channel rather than
+          the app: the hook is realtime-driven and only re-renders on a real
+          huddle event (start / join / leave / end), never per message — the
+          transcript itself lives in the panel's own hook. */}
+      <HuddleSessionProvider
+        workspaceId={showHuddleCard ? workspaceId : null}
+        sessionId={showHuddleCard ? inferredSessionId : null}
+      >
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
           <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
@@ -1227,34 +1565,28 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 <span className="max-w-48 truncate font-semibold">{directAgent?.name || channelTitle || 'Direct message'}</span>
               </Button>
             ) : (
-              <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
-                      <Hash data-icon="inline-start" />
-                      <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
-                      <ChevronDown className="size-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-72">
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        handleOpenParticipantsDialog();
-                      }}
-                    >
-                      <UserPlus data-icon="inline-start" />
-                      Add people or agents
-                    </DropdownMenuItem>
-                    {channelActionStatus && (
-                      <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => void handleOpenFlowConnect()}>
-                  <Link2 data-icon="inline-start" />
-                  Connect
-                </Button>
-              </>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="Open channel menu">
+                    <ChannelIcon data-icon="inline-start" />
+                    <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
+                    <ChevronDown className="size-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-72">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      handleOpenParticipantsDialog();
+                    }}
+                  >
+                    <UserPlus data-icon="inline-start" />
+                    Add people or agents
+                  </DropdownMenuItem>
+                  {channelActionStatus && (
+                    <div className="px-2 py-1 text-xs text-muted-foreground">{channelActionStatus}</div>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
             <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)}>
               <MessageSquare data-icon="inline-start" />
@@ -1263,10 +1595,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')}>
               <Paperclip data-icon="inline-start" />
               Files
-            </Button>
-            <Button type="button" variant={sidePanel === 'pins' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('pins')}>
-              <Pin data-icon="inline-start" />
-              Pins
             </Button>
             <Button
               type="button"
@@ -1277,99 +1605,190 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
             >
               <GitBranch data-icon="inline-start" />
               Threads
-              {Object.values(subThreadsByMessage).flat().length > 0 && (
+              {subThreadCount > 0 && (
                 <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
-                  {Object.values(subThreadsByMessage).flat().length}
+                  {subThreadCount}
                 </span>
               )}
             </Button>
-            {onSplitThread && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2"
-                onClick={onSplitThread}
-                title="Split this thread — copies the transcript into a new thread beside this one; send a message to start it"
-              >
-                <Columns2 data-icon="inline-start" />
-                Split
-              </Button>
+            {showHuddleCard && (
+              <HuddleToolbarButton
+                workspaceId={workspaceId}
+                sessionId={inferredSessionId}
+                title={channelTitle}
+              />
             )}
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={clearView} title="Clear this view — messages stay; scroll up to restore">
-              <Eraser data-icon="inline-start" />
-              Clear
-            </Button>
             <div className="min-w-2 flex-1" />
-            {!isDirectMessage && contextControls && (
-              <div className="flex min-w-0 max-w-[40vw] shrink overflow-x-auto text-xs text-muted-foreground">
-                {contextControls}
-              </div>
-            )}
             {!isDirectMessage && (
-              <>
-                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setCatchUpOpen(true)}>
-                  <RotateCcw data-icon="inline-start" />
-                  Catch up
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="participant-count-chip h-8 gap-1 px-2"
-                      title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
-                    >
-                      <Users data-icon="inline-start" />
-                      {participants.length}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-64">
-                    {participants.map(participant => (
-                      <DropdownMenuItem key={participant.id} className="gap-2">
-                        <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
-                          {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
-                          {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm">{participant.name}</span>
-                          {participant.status && (
-                            <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
-                          )}
-                        </span>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="participant-count-chip h-8 gap-1 px-2"
+                    title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
+                  >
+                    <Users data-icon="inline-start" />
+                    {participants.length}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  {participants.map(participant => (
+                    <DropdownMenuItem key={participant.id} className="gap-2">
+                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
+                        {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
+                        {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{participant.name}</span>
+                        {participant.status && (
+                          <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
+                        )}
+                      </span>
+                      {participant.user_id !== currentUserId && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="shrink-0 opacity-60 hover:opacity-100"
+                          aria-label={`Remove ${participant.name} from this channel`}
+                          onClick={event => {
+                            // Keep the menu open: removing three agents should
+                            // be three clicks, not three menu reopenings.
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleRemoveParticipant(participant);
+                          }}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
-            {showWidgetRail && (
+            {/* Thread widgets show themselves once they have content, so most of
+                the time this is the "put it back" / "get it out of my way"
+                control — which is why it sits next to the "..." menu rather than
+                inside it. It is rendered for EVERY session the rail applies to,
+                including one with no widgets yet: this button is the only thing
+                on screen that says the feature exists, and pressing it opens the
+                rail on its empty states. See rule 3 in lib/threadWidgetRail.ts. */}
+            {rail.toggleVisible && (
               <Button
                 type="button"
-                variant={widgetsCollapsed ? 'ghost' : 'secondary'}
+                variant={railOpen ? 'secondary' : 'ghost'}
                 size="sm"
                 className="h-8 px-2"
-                aria-pressed={!widgetsCollapsed}
-                disabled={widgetsTooNarrow}
-                title={
-                  widgetsTooNarrow
-                    ? 'Widen the window to show widgets'
-                    : widgetsCollapsed
-                      ? 'Show thread widgets'
-                      : 'Hide thread widgets'
-                }
-                onClick={() => setWidgetsCollapsed(v => !v)}
+                disabled={!rail.toggleEnabled}
+                aria-pressed={railOpen}
+                title={!rail.toggleEnabled
+                  ? 'Widen the window to show thread widgets'
+                  : railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
+                aria-label={railOpen ? 'Hide thread widgets' : 'Show thread widgets'}
+                onClick={toggleWidgetRail}
               >
-                {widgetsCollapsed ? <PanelRightOpen /> : <PanelRightClose />}
+                {railOpen ? <PanelRightClose /> : <PanelRightOpen />}
               </Button>
             )}
+            {/* Overflow. Everything that isn't Messages / Files / Threads lives
+                here — this row previously carried nine labelled ghost buttons
+                inside a fixed h-11 strip with overflow-hidden, so on a narrow
+                window the right-hand controls were simply clipped. This is the
+                CHANNEL menu; FloatingWindowShell's own "..." owns WINDOW actions
+                (share, maximize, close) and is not rendered at all for grouped
+                panes, so channel actions cannot live there. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="More channel actions">
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => setEditChannelOpen(true)}>
+                    <Settings2 data-icon="inline-start" />
+                    Edit channel
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => setSidePanel('pins')}>
+                  <Pin data-icon="inline-start" />
+                  Pins
+                </DropdownMenuItem>
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => setCatchUpOpen(true)}>
+                    <RotateCcw data-icon="inline-start" />
+                    Catch up
+                  </DropdownMenuItem>
+                )}
+                {!isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => { void handleOpenFlowConnect(); }}>
+                    <Link2 data-icon="inline-start" />
+                    Connect
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                {onSplitThread && (
+                  <DropdownMenuItem onSelect={() => onSplitThread()}>
+                    <Columns2 data-icon="inline-start" />
+                    Split thread
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={clearView}>
+                  <Eraser data-icon="inline-start" />
+                  Clear this view
+                </DropdownMenuItem>
+                {!isDirectMessage && contextControls && (
+                  <>
+                    <DropdownMenuSeparator />
+                    {contextControls}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
+        {showHuddleCard && (
+          <HuddleCard
+            workspaceId={workspaceId}
+            sessionId={inferredSessionId}
+            agents={huddleAgents}
+            activeAgentId={huddleActiveAgentId}
+            onActiveAgentChange={setHuddleActiveAgentId}
+            onOpenPanel={openHuddlePanel}
+          />
+        )}
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
-            <MessageScrollerViewport onScroll={handleScrollerScroll}>
-              <MessageScrollerContent className="min-h-full gap-0 py-2">
+            {/* The rail's width comes out of the SURFACE, never out of the
+                message column: reserving it here shifts the centred column
+                left and leaves its rendered width identical to the closed
+                state (the reserve is only ever non-zero when the surface has
+                the room). Padding the scroll viewport rather than the rows is
+                the whole fix — `pr-[300px]` on each row used to take 220px
+                straight off the 800px column, which is why code blocks grew a
+                horizontal scrollbar and prose wrapped mid-window.
+
+                `px-2` is what keeps the transcript and the composer on the
+                same measure once the 800px cap stops binding — i.e. exactly
+                when a side panel is open. The composer sits inside the shell's
+                own `p-2`, so without a matching inset here the transcript ran
+                flush to the surface edge while the composer sat one step in on
+                each side: same centre line, 15px narrower, visibly two columns
+                instead of one. It has to be the same `0.5rem` the shell uses,
+                not a hardcoded 8 — this app's root font-size is 15px, so `p-2`
+                computes to 7.5px and a literal would be half a pixel out. */}
+            <MessageScrollerViewport
+              onScroll={handleScrollerScroll}
+              className="px-2 transition-[padding] ease-out motion-reduce:transition-none"
+              style={{
+                paddingRight: railReserve ? `calc(0.5rem + ${railReserve}px)` : undefined,
+                transitionDuration: `${RAIL_ANIMATION_MS}ms`,
+              }}
+            >
+              <MessageScrollerContent className={cn('min-h-full gap-0 py-2', CHAT_COLUMN_CLASS)}>
                 {clearedAt && hiddenCount > 0 && (
                   <button
                     type="button"
@@ -1407,14 +1826,50 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                         </Button>
                       </div>
                     )}
-                    {shownMessages.map((msg, idx) => (
-                      <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={idx === shownMessages.length - 1}>
+                    {shownRows.map(row => {
+                      const isLastRow = row.index === shownMessages.length - 1;
+                      if (row.kind === 'steps') {
+                        return (
+                          <MessageScrollerItem key={row.key} scrollAnchor={isLastRow}>
+                            <ToolStepGroup row={row} />
+                          </MessageScrollerItem>
+                        );
+                      }
+                      const msg = row.message;
+                      // "You were in a huddle" — a fact about the channel, not
+                      // something anyone said in it. One quiet line where the
+                      // whole voice conversation used to be dumped.
+                      //
+                      // A RUN of them collapses further: ten stacked lines was
+                      // ten rows of chrome for one fact, so consecutive markers
+                      // render as one dated row of numbered chips. A lone
+                      // marker keeps its sentence.
+                      if (isHuddleMarkerMessage(msg)) {
+                        const group = huddleGroupByLeadId.get(msg.id);
+                        if (group) {
+                          return (
+                            <MessageScrollerItem key={group.key} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
+                              <HuddleMarkerGroupRow group={group} onOpen={openHuddlePanel} />
+                            </MessageScrollerItem>
+                          );
+                        }
+                        // A marker swallowed by the group above it renders nothing.
+                        if (huddleGroupedIds.has(msg.id)) return null;
+                        return (
+                          <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
+                            <HuddleMarkerRow message={msg} onOpen={openHuddlePanel} />
+                          </MessageScrollerItem>
+                        );
+                      }
+                      return (
+                      <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
                         <ChatMessageBubble
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
                           accent={resolveMessageAccent(msg, agentAccentLookup)}
-                          isStreaming={streaming && idx === shownMessages.length - 1 && msg.role === 'assistant'}
+                          isStreaming={streaming && isLastRow && msg.role === 'assistant'}
                           replyCount={threadReplyCounts[msg.id]}
+                          replySummary={threadReplySummaries[msg.id]}
                           isEditing={editingMessageId === msg.id}
                           editingContent={editingContent}
                           actionBusy={messageActionBusy === msg.id}
@@ -1428,16 +1883,23 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                             onOpenThread(msg.id);
                             openThread();
                           } : undefined}
+                          // A broadcast reply's thread is rooted at its PARENT, not
+                          // at itself — opening msg.id would open an empty thread on
+                          // the answer instead of the conversation that produced it.
+                          onOpenSourceThread={onOpenThread && msg.thread_parent_id ? () => {
+                            onOpenThread(msg.thread_parent_id as string);
+                            openThread();
+                          } : undefined}
                           onAgentProfile={openAgentProfilePanel}
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
-                          onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
-                          widgetsActive={widgetsActive}
+                          widgetsOverlaying={railOverlaying}
                           currentUserId={currentUserId}
                           onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
                         />
                       </MessageScrollerItem>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </MessageScrollerContent>
@@ -1446,8 +1908,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
               <ThreadWidgetRail
                 workspaceId={workspaceId}
                 sessionId={inferredSessionId}
-                collapsed={widgetsCollapsed}
-                onTooNarrowChange={setWidgetsTooNarrow}
+                open={rail.open}
+                layout={rail.layout}
+                onSurfaceWidthChange={setRailSurfaceWidth}
+                onContentChange={setRailHasContent}
                 onJumpToMessage={handleJumpToMessage}
                 onBlockerAnswered={(item, response) => {
                   // Post the answered blocker back into the chat so it's tracked
@@ -1485,9 +1949,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </span>
               </div>
             )}
-            <div className="channel-composer border-t border-border p-2">
+            {/* Match the message column's shift so the composer stays under the
+                conversation rather than under the rail. The reserve is added on
+                top of COMPOSER_SHELL_CLASS's own `p-2` — that's what keeps the
+                two 800px columns on the same centre line. Same `0.5rem` the
+                scroll viewport above uses, for the same reason. */}
+            <div
+              className={cn(COMPOSER_SHELL_CLASS, 'transition-[padding] ease-out motion-reduce:transition-none')}
+              style={{ paddingRight: railReserve ? `calc(0.5rem + ${railReserve}px)` : undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
+            >
               {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
-                <div className="mx-auto mb-2 flex w-full max-w-[800px] flex-wrap gap-1.5">
+                <div className={cn('mb-2 flex flex-wrap gap-1.5', CHAT_COLUMN_CLASS)}>
                   {linkedFiles.map(file => (
                     <FileChip
                       key={file.id}
@@ -1514,10 +1986,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 </div>
               )}
 
-              <div className="relative mx-auto w-full max-w-[800px]" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+              <div className={cn('relative', CHAT_COLUMN_CLASS)} onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
+                {/* Both pickers open UPWARD from the composer, so their height is
+                    free space they are not using: nothing sits above them to
+                    displace. Capped at 520px / 72vh — tall enough to show
+                    several two-line rows at once instead of one row and a
+                    scrollbar, and still short of covering the conversation.
+                    The vh half of the min() matters because this composer lives
+                    in a resizable WINDOW: a short window gets a proportional
+                    picker rather than one taller than the window itself. */}
                 {showSlashPicker && (
-                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(340px,58vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                    <CommandList className="max-h-[min(260px,44vh)]">
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(520px,72vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(440px,64vh)]">
                       <CommandEmpty>No commands or skills match.</CommandEmpty>
                       {slashGroups.map(group => {
                         if (group.type === 'builtin') {
@@ -1562,8 +2042,8 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                 )}
 
                 {showDocPicker && (
-                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(320px,55vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                    <CommandList className="max-h-[min(240px,40vh)]">
+                  <Command className="absolute right-0 bottom-full left-0 z-50 mb-2 max-h-[min(500px,70vh)] overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                    <CommandList className="max-h-[min(420px,62vh)]">
                       <CommandEmpty>No agents or documents found.</CommandEmpty>
                       {filteredAgents.length > 0 && (
                         <CommandGroup heading="Agents">
@@ -1571,7 +2051,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                             <CommandItem
                               key={agent.id}
                               value={`${agent.name} ${agentHandle(agent)}`}
-                              className="rounded-lg px-2 py-1.5"
+                              // py-2.5, not py-1.5: this row is a name AND a
+                              // description on two lines, and one-line padding
+                              // made the pair read as one cramped block.
+                              className="rounded-lg px-2 py-2.5"
                               onSelect={() => handleAgentSelect(agent)}
                             >
                               <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
@@ -1586,6 +2069,34 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                               <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
                             </CommandItem>
                           ))}
+                        </CommandGroup>
+                      )}
+                      {/* BELOW the agents on purpose. Tab/Enter completes the top
+                          item, and asking every agent at once is a paid mistake to
+                          make by reflex — so @channel is one deliberate step away,
+                          never the accidental default. It still completes on
+                          Tab/Enter once the typed text rules the agents out (see
+                          handleKeyDown), so the keyboard and the list agree. */}
+                      {showChannelMentionOption && (
+                        <CommandGroup heading="Everyone">
+                          <CommandItem
+                            value={`${CHANNEL_MENTION_HANDLE} everyone all agents`}
+                            className="rounded-lg px-2 py-1.5"
+                            onSelect={() => insertMentionHandle(CHANNEL_MENTION_HANDLE)}
+                          >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                              <Users className="size-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">Everyone in this channel</span>
+                              <span className="block truncate text-xs text-muted-foreground">
+                                {channelAgentCount === 0
+                                  ? 'No agents in this channel yet'
+                                  : `Asks all ${channelAgentCount} agent${channelAgentCount === 1 ? '' : 's'} here, one after another`}
+                              </span>
+                            </span>
+                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{CHANNEL_MENTION_HANDLE}</span>
+                          </CommandItem>
                         </CommandGroup>
                       )}
                       <CommandGroup heading="Documents">
@@ -1651,6 +2162,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                       : `${mentionedNotInChannel.join(', ')} aren't in this channel yet — they'll be added when you send.`}
                   </div>
                 )}
+                {/* Who @channel will reach, by name. One agent is one paid turn, so
+                    the count is the cost — worth showing before Send, not after. */}
+                {channelMentionTargets.length > 0 && (
+                  <div className="px-1 pb-1 text-xs text-muted-foreground">
+                    {`@channel asks ${channelMentionTargets.join(', ')} — ${channelMentionTargets.length} repl${channelMentionTargets.length === 1 ? 'y' : 'ies'}, one after another.`}
+                  </div>
+                )}
+                {!isDirectMessage && channelMentionTargets.length === 0 && mentionsChannel(input) && (
+                  <div className="px-1 pb-1 text-xs text-muted-foreground">
+                    No agents are in this channel yet, so @channel reaches nobody. Add some from the members list.
+                  </div>
+                )}
                 <InputGroup className="h-auto flex-col items-stretch">
                   <InputGroupTextarea
                     ref={inputRef}
@@ -1659,18 +2182,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                     onKeyDown={handleKeyDown}
                     onPaste={handleComposerPaste}
                     placeholder={isDirectMessage
-                      ? `Message ${directAgent?.name || channelTitle || 'agent'}...`
-                      : `Post in #${channelTitle || 'general'}... @agent, @ documents, # canvas groups`}
+                      ? directMessageComposerPlaceholder(directAgent?.name || channelTitle)
+                      : channelComposerPlaceholder(channelTitle)}
                     disabled={streaming}
                     rows={1}
-                    className="max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed"
-                    onInput={e => {
-                      const el = e.currentTarget;
-                      el.style.height = 'auto';
-                      el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
-                    }}
+                    className={COMPOSER_TEXTAREA_CLASS}
+                    onInput={e => autosizeComposer(e.currentTarget)}
                   />
-                  <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
+                  <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
                     <div className="flex items-center gap-1">
                       <Popover open={addContextOpen} onOpenChange={(open) => {
                         setAddContextOpen(open);
@@ -1689,7 +2208,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                           side="top"
                           align="start"
                           sideOffset={8}
-                          className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                          className="z-[var(--z-nested-modal)] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
                         >
                           <ComposerAddContent
                             documents={documents}
@@ -1759,17 +2278,27 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
       {!readOnly && sidePanel && (
         <aside
+          ref={sidePanelRef}
           className="channel-side-panel relative flex h-full shrink-0 flex-col border-l border-border text-card-foreground"
-          style={{ width: panelWidth }}
+          style={{ width: sidePanel === 'thread' ? (threadPanelWidth ?? '45%') : panelWidth }}
         >
           <div
             className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
             onPointerDown={beginPanelResize}
             aria-hidden
           />
-          {sidePanel === 'profile' ? (
+          {sidePanel === 'huddle' ? (
+            <HuddlePanel
+              workspaceId={workspaceId}
+              huddleId={huddlePanelId}
+              agents={huddleAgents}
+              activeAgentId={huddleActiveAgentId}
+              onClose={closeSidePanel}
+            />
+          ) : sidePanel === 'profile' ? (
             <AgentProfileSidePanel
               agent={profileAgent}
+              currentUserId={currentUserId}
               participant={profileParticipant}
               connections={agentConnections}
               lookupKey={profileAgentKey || directProfileKey}
@@ -1834,6 +2363,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           ) : null}
         </aside>
       )}
+      </HuddleSessionProvider>
 
 
       <Dialog open={catchUpOpen} onOpenChange={setCatchUpOpen}>
@@ -1850,6 +2380,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
           </div>
         </DialogContent>
       </Dialog>
+
+      <EditChannelDialog
+        open={editChannelOpen}
+        onOpenChange={setEditChannelOpen}
+        baseline={channelProfileBaseline}
+        onSave={handleSaveChannelProfile}
+        status={channelActionStatus}
+      />
 
       <Dialog open={addParticipantsOpen} onOpenChange={setAddParticipantsOpen}>
         <DialogContent className="max-h-[calc(100svh-2rem)] max-w-lg overflow-hidden">
@@ -1868,14 +2406,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
                   </div>
                   <div className="space-y-1">
                     {candidates.map(participant => {
-                      const selected = selectedParticipantIds.has(participant.id);
+                      const selected = selectedParticipantIds.has(dialogParticipantKey(participant));
                       return (
                         <button
                           key={participant.id}
                           type="button"
                           className={`flex w-full min-w-0 items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${selected ? 'border-primary bg-primary/10' : 'border-border bg-background hover:bg-muted/50'
                             }`}
-                          onClick={() => handleToggleParticipant(participant.id)}
+                          onClick={() => handleToggleParticipant(dialogParticipantKey(participant))}
                         >
                           <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
                             {participant.kind === 'agent' ? <Bot className="size-4" /> : participant.name.slice(0, 2).toUpperCase()}
@@ -1940,44 +2478,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={Boolean(subThreadPickerMessageId)} onOpenChange={open => { if (!open) setSubThreadPickerMessageId(null); }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Dispatch background task to…</DialogTitle>
-            <p className="mt-1 text-xs text-muted-foreground">The agent receives this message as a task and works autonomously. View progress in the Threads panel.</p>
-          </DialogHeader>
-          <div className="flex flex-col gap-1 py-2">
-            {agents.filter(a => a.enabled !== false).map(agent => (
-              <button
-                key={agent.id}
-                type="button"
-                className="flex items-center gap-3 rounded-md px-3 py-2.5 text-left hover:bg-muted"
-                onClick={() => {
-                  if (subThreadPickerMessageId && onCreateSubThread) {
-                    const parentMsg = visibleMessages.find(m => m.id === subThreadPickerMessageId);
-                    const content = parentMsg ? (typeof parentMsg.content === 'string' ? parentMsg.content : JSON.stringify(parentMsg.content)) : undefined;
-                    onCreateSubThread(subThreadPickerMessageId, agent, content);
-                  }
-                  setSubThreadPickerMessageId(null);
-                  setSidePanel('sub-threads');
-                }}
-              >
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                  <Bot className="size-3.5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">{agent.name}</div>
-                  {agent.handle && <div className="truncate text-xs text-muted-foreground">@{agent.handle}</div>}
-                </div>
-              </button>
-            ))}
-            {agents.filter(a => a.enabled !== false).length === 0 && (
-              <p className="px-3 py-2 text-sm text-muted-foreground">No agents available in this workspace.</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       <ConnectFlowsDialog
         workspaceId={workspaceId || null}
         channelId={flowConnectChannelId}
@@ -2011,12 +2511,94 @@ function ThinkingIndicator({ text = 'Thinking…' }: { text?: string }) {
   );
 }
 
+/**
+ * The "3 replies · last reply 24 minutes ago" chip under a threaded message.
+ *
+ * Split out of ChatMessageBubble purely so the relative time can stay live: it
+ * subscribes to the shared minute clock, and a tick re-renders every subscriber.
+ * Kept at this leaf, a tick re-renders one small chip per threaded message —
+ * not the message rows themselves (avatars, markdown, artifacts).
+ */
+function ThreadReplySummaryButton({
+  parentMessageId,
+  replyCount,
+  summary,
+  onOpenThread,
+}: {
+  parentMessageId: string;
+  replyCount: number;
+  summary?: ThreadReplySummary;
+  onOpenThread: () => void;
+}) {
+  const now = useSharedNow();
+
+  // replyCount stays authoritative for the number; summary only decorates it
+  // (who spoke, how long ago) and can be absent for windows that were handed
+  // counts but not the messages behind them.
+  const replyLabel = `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`;
+  const replyParticipants = summary?.participants ?? [];
+  const replyOverflow = summary?.overflow ?? 0;
+  const lastReplyLabel = formatLastReplyTime(summary?.lastReplyAt, now);
+
+  return (
+    <button
+      type="button"
+      className="mt-1 -ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+      onClick={onOpenThread}
+      aria-label={lastReplyLabel
+        ? `Open thread — ${replyLabel}, last reply ${lastReplyLabel}`
+        : `Open thread — ${replyLabel}`}
+    >
+      {replyParticipants.length > 0 ? (
+        <span className="flex shrink-0 items-center">
+          {replyParticipants.map((participant, index) => (
+            <span
+              key={participant.key}
+              className={cn(
+                'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background',
+                index > 0 && '-ml-1.5',
+              )}
+              title={participant.name}
+            >
+              <MessageAvatar
+                avatar={participant.avatar}
+                initials={participant.name.slice(0, 2).toUpperCase()}
+                isAgent={participant.isAgent}
+              />
+            </span>
+          ))}
+          {replyOverflow > 0 && (
+            <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background">
+              +{replyOverflow}
+            </span>
+          )}
+        </span>
+      ) : (
+        <CornerDownRight className="size-3 shrink-0" />
+      )}
+      <span className="shrink-0 font-medium">{replyLabel}</span>
+      {/* "· working 1m 4s" while an agent has a running job in THIS thread.
+          Self-contained: it subscribes to the agent-work store and owns the 1s
+          clock internally, so the tick repaints one <span> and this chip (with
+          its avatars + markdown-free labels) is untouched. */}
+      <ThreadWorkBadge parentMessageId={parentMessageId} />
+      {lastReplyLabel && (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
+          <span className="truncate text-muted-foreground/70">last reply {lastReplyLabel}</span>
+        </>
+      )}
+    </button>
+  );
+}
+
 function ChatMessageBubble({
   msg,
   avatar,
   accent,
   isStreaming,
   replyCount,
+  replySummary,
   isEditing,
   editingContent,
   actionBusy,
@@ -2027,11 +2609,11 @@ function ChatMessageBubble({
   onSaveEdit,
   onDelete,
   onOpenThread,
+  onOpenSourceThread,
   onAgentProfile,
   subThreads,
   onOpenSubThread,
-  onCreateSubThread,
-  widgetsActive,
+  widgetsOverlaying,
   currentUserId,
   onToggleReaction,
 }: {
@@ -2040,6 +2622,7 @@ function ChatMessageBubble({
   accent?: string;
   isStreaming?: boolean;
   replyCount?: number;
+  replySummary?: ThreadReplySummary;
   isEditing?: boolean;
   editingContent?: string;
   actionBusy?: boolean;
@@ -2050,11 +2633,11 @@ function ChatMessageBubble({
   onSaveEdit?: () => void;
   onDelete?: () => void;
   onOpenThread?: () => void;
+  onOpenSourceThread?: () => void;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   subThreads?: ChatSession[];
   onOpenSubThread?: (session: ChatSession) => void;
-  onCreateSubThread?: () => void;
-  widgetsActive?: boolean;
+  widgetsOverlaying?: boolean;
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
 }) {
@@ -2084,7 +2667,7 @@ function ChatMessageBubble({
 
   return (
     <div
-      className={cn('chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 hover:bg-muted/40', widgetsActive ? 'pr-[300px]' : 'pr-20')}
+      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40"
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >
@@ -2106,6 +2689,29 @@ function ChatMessageBubble({
             <span className="truncate text-sm font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
           {timeLabel && <span className="shrink-0 text-xs text-muted-foreground">{timeLabel}</span>}
+          {/* A broadcast reply was WRITTEN in a thread and only its answer was sent
+              here, so without this it reads as a top-level message that lost its
+              context — you cannot tell what it is replying to, or where the tool
+              steps and intermediate blocks went. The chip says "there is a working
+              conversation behind this" and opens it. */}
+          {isBroadcastFromThread(msg) && (
+            onOpenSourceThread ? (
+              <button
+                type="button"
+                className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                onClick={onOpenSourceThread}
+                title="Written in a thread — open it to see the working"
+              >
+                <CornerDownRight className="size-3" />
+                from a thread
+              </button>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <CornerDownRight className="size-3" />
+                from a thread
+              </span>
+            )
+          )}
         </div>
         {isEditing ? (
           <div className="mt-2 max-w-4xl space-y-2">
@@ -2126,6 +2732,10 @@ function ChatMessageBubble({
           </div>
         ) : (
           <div className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground">
+            {/* buildTranscriptRows now diverts activity placeholders into the chip
+                strip, so this branch no longer fires from the transcript. Kept as the
+                floor: anything that renders a bubble straight from a message (a thread
+                parent, a future surface) must not print "Thinking 15s" as prose. */}
             {isThinkingPlaceholder ? (
               <ThinkingIndicator text={placeholderText} />
             ) : displayContent ? (
@@ -2136,6 +2746,13 @@ function ChatMessageBubble({
               <span className="text-muted-foreground">{unavailableMessage}</span>
             )}
             {artifact && <ChatArtifact artifact={artifact} />}
+            {/* Link cards, once the message has settled. Deliberately NOT while
+                streaming: the URL is still being typed a token at a time, so
+                unfurling mid-stream would fire a request for a half-written link
+                and flash a card that is about to be wrong. */}
+            {!isStreaming && !isThinkingPlaceholder && displayContent && (
+              <LinkPreviewCards content={displayContent} />
+            )}
           </div>
         )}
         {isStreaming && msg.content && (
@@ -2145,16 +2762,14 @@ function ChatMessageBubble({
           </div>
         )}
         {replyCount && onOpenThread ? (
-          <button
-            type="button"
-            className="mt-1 inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            onClick={onOpenThread}
-          >
-            <CornerDownRight className="size-3" />
-            {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-          </button>
+          <ThreadReplySummaryButton
+            parentMessageId={msg.id}
+            replyCount={replyCount}
+            summary={replySummary}
+            onOpenThread={onOpenThread}
+          />
         ) : null}
-        {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
+        {subThreads && subThreads.length > 0 ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {(subThreads || []).map(session => {
               const agentParticipants = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
@@ -2165,7 +2780,7 @@ function ChatMessageBubble({
                 <button
                   key={session.id}
                   type="button"
-                  className="inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="control-outer-ring inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => onOpenSubThread?.(session)}
                 >
                   <MessageSquare className="size-2.5" />
@@ -2173,16 +2788,6 @@ function ChatMessageBubble({
                 </button>
               );
             })}
-            {onCreateSubThread && (
-              <button
-                type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                onClick={onCreateSubThread}
-              >
-                <Plus className="size-3" />
-                Sub-thread
-              </button>
-            )}
           </div>
         ) : null}
         {/* Reaction pills — always visible when reactions exist */}
@@ -2194,7 +2799,7 @@ function ChatMessageBubble({
                 type="button"
                 onClick={() => onToggleReaction?.(emoji)}
                 className={cn(
-                  'inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
+                  'control-outer-ring inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
                   users.includes(uid)
                     ? 'border-primary/40 bg-primary/10 text-foreground'
                     : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -2210,7 +2815,7 @@ function ChatMessageBubble({
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)
           instead of scrolling off the top with the message header. */}
-      <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsActive ? 'right-[288px]' : 'right-3')}>
+      <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsOverlaying ? 'right-[288px]' : 'right-3')}>
         <div className="pointer-events-auto sticky top-2 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
           {onToggleReaction && (
             <Popover open={reactionPickerOpen} onOpenChange={setReactionPickerOpen}>
@@ -2875,11 +3480,13 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
 
 function AgentProfileSidePanel({
   agent,
+  currentUserId,
   participant,
   connections,
   lookupKey,
   onClose,
 }: {
+  currentUserId?: string;
   agent: WorkspaceAgent | null;
   participant: ChannelParticipant | null;
   connections: AgentConnection[];
@@ -2945,6 +3552,18 @@ function AgentProfileSidePanel({
             <AgentProfileField label="Handle" value={handle ? `@${handle}` : ''} />
             <AgentProfileField label="Agent ID" value={agent?.id ? shortId(agent.id) : ''} title={agent?.id} />
             <AgentProfileField label="Workspace ID" value={agent?.workspace_id ? shortId(agent.workspace_id) : ''} title={agent?.workspace_id} />
+            {/* Whose agent this is. In a shared workspace it is the difference
+                between "the AI said" and "Jason's agent said" — accountability
+                when an agent does something surprising. */}
+            <AgentProfileField
+              label="Managed by"
+              value={
+                agent?.created_by
+                  ? (currentUserId && agent.created_by === currentUserId ? 'you' : shortId(agent.created_by))
+                  : ''
+              }
+              title={agent?.created_by || undefined}
+            />
             <AgentProfileField label="Version" value={agent?.version ? `v${agent.version}` : ''} />
             <AgentProfileField label="Created" value={formatDateTime(agent?.created_at)} />
             <AgentProfileField label="Updated" value={formatDateTime(agent?.updated_at)} />
@@ -3072,11 +3691,21 @@ function AgentProfileSection({ title, children }: { title: string; children: Rea
 }
 
 function AgentProfileTextSection({ title, value, tall = false }: { title: string; value: string; tall?: boolean }) {
+  // Soul, system prompt, instructions and description are markdown documents,
+  // and this rendered them pre-wrapped, so headings and lists arrived as
+  // literal # and -. Same fix as the agent DETAIL pane in
+  // AgentsWindowContent — both surfaces show the same four fields, and letting
+  // one render markdown while the other shows source is how they drift.
+  // MarkdownContent builds its own elements and never injects HTML, which
+  // matters because an agent writes its own soul.
   return (
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
       <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
-      <div className={`overflow-auto whitespace-pre-wrap text-sm leading-relaxed ${tall ? 'max-h-48' : 'max-h-32'}`}>
-        {value}
+      {/* min-w-0: .chat-markdown is a grid, and grid children default to
+          min-width:auto, so a fenced code block would widen this card rather
+          than scroll inside it. */}
+      <div className={`min-w-0 overflow-auto text-sm leading-relaxed ${tall ? 'max-h-48' : 'max-h-32'}`}>
+        <MarkdownContent content={value} compact />
       </div>
     </section>
   );
@@ -3447,6 +4076,10 @@ function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMe
   return {
     ...meta,
     folder: meta.folder ?? null,
+    description: meta.description ?? '',
+    icon: normalizeChannelIcon(meta.icon),
+    intent: meta.intent ?? '',
+    conversation_mode: normalizeConversationMode(meta.conversation_mode),
     is_favorite: Boolean(meta.is_favorite),
     archived_at: meta.archived_at ?? null,
     participants: normalizeChannelParticipants(meta.participants),
@@ -3897,7 +4530,9 @@ function SlashRow({
   return (
     <CommandItem
       value={item.id}
-      className={`rounded-lg px-2 py-1.5${indented ? ' ml-3' : ''}`}
+      // py-2.5 for the same reason as the mention rows: title plus
+      // description is two lines and needs more than one line's padding.
+      className={`rounded-lg px-2 py-2.5${indented ? ' ml-3' : ''}`}
       onSelect={onSelect}
     >
       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">

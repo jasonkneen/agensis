@@ -1,16 +1,30 @@
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
+  Archive,
   Check,
   Crown,
+  Eye,
+  EyeOff,
   Link2,
   Mail,
   Plus,
   Trash2,
+  Undo2,
   UserRound,
   Users,
 } from 'lucide-react';
 import type { WorkspaceUser, WorkspaceInvite, InviteRole } from '../../hooks/useWorkspaceUsers';
 import { inviteUrl } from '../../hooks/useWorkspaceUsers';
+import {
+  dismissableInvites,
+  dismissedCount,
+  inviteLifecycleState,
+  isInviteDismissable,
+  visibleInvites,
+  type InviteLifecycleState,
+} from '@/lib/inviteDismissal';
+import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,6 +49,8 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Spinner } from '@/components/ui/spinner';
 
 interface UsersWindowContentProps {
+  /** Scopes the remembered "show dismissed invites" toggle. Optional: without it the toggle is session-only. */
+  workspaceId?: string | null;
   workspaceName: string;
   currentUserId?: string;
   currentUserEmail?: string;
@@ -44,11 +60,14 @@ interface UsersWindowContentProps {
   loading?: boolean;
   onCreateInvite: (role: InviteRole, email?: string) => Promise<WorkspaceInvite | null>;
   onRevokeInvite: (inviteId: string) => Promise<void>;
+  onSetInviteDismissed: (inviteId: string, dismissed: boolean) => Promise<void>;
+  onDismissSpentInvites: () => Promise<void>;
   onRemoveMember: (memberId: string) => Promise<void>;
   onChangeMemberRole: (memberId: string, role: 'editor' | 'viewer') => Promise<void>;
 }
 
 export const UsersWindowContent = memo(function UsersWindowContent({
+  workspaceId = null,
   workspaceName,
   currentUserId,
   currentUserEmail,
@@ -58,6 +77,8 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   loading = false,
   onCreateInvite,
   onRevokeInvite,
+  onSetInviteDismissed,
+  onDismissSpentInvites,
   onRemoveMember,
   onChangeMemberRole,
 }: UsersWindowContentProps) {
@@ -66,6 +87,35 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   const [creating, setCreating] = useState(false);
   const [copiedCreate, setCopiedCreate] = useState(false);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  // Remembered: someone tidying up old invites reopens this window repeatedly,
+  // and re-clicking "Show dismissed" each time is the same paper cut as
+  // re-hiding done tasks.
+  const [showDismissed, setShowDismissed] = usePersistedPreference(
+    viewPreferenceKey('users.show-dismissed', workspaceId), booleanPreference, false,
+  );
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  // Recomputed per render rather than memoised on a clock: expiry moves on its
+  // own, and this list is small.
+  const shownInvites = visibleInvites(invites, showDismissed);
+  const clearable = useMemo(() => dismissableInvites(invites), [invites]);
+  const hiddenCount = useMemo(() => dismissedCount(invites), [invites]);
+
+  const handleClearSpent = async () => {
+    if (clearing) return;
+    if (!confirmClear) {
+      setConfirmClear(true);
+      return;
+    }
+    setClearing(true);
+    try {
+      await onDismissSpentInvites();
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
+  };
 
   const handleCreateInvite = async () => {
     if (creating) return;
@@ -191,10 +241,36 @@ export const UsersWindowContent = memo(function UsersWindowContent({
         </section>
 
         <section className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Link2 className="size-4 text-primary" />
             <h2 className="text-sm font-semibold">Invite links</h2>
-            <Badge variant="secondary">{invites.length}</Badge>
+            <Badge variant="secondary">{shownInvites.length}</Badge>
+            <div className="flex-1" />
+            {clearable.length > 0 && (
+              <Button
+                type="button"
+                variant={confirmClear ? 'destructive' : 'ghost'}
+                size="sm"
+                onClick={() => void handleClearSpent()}
+                disabled={clearing}
+                title="Dismiss every revoked, accepted or expired link. Nothing is deleted."
+              >
+                {clearing ? <Spinner data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
+                {confirmClear ? `Clear ${clearable.length}?` : `Clear spent (${clearable.length})`}
+              </Button>
+            )}
+            {hiddenCount > 0 && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={showDismissed}
+                onClick={() => setShowDismissed(v => !v)}
+              >
+                {showDismissed ? <EyeOff data-icon="inline-start" /> : <Eye data-icon="inline-start" />}
+                {showDismissed ? 'Hide dismissed' : `Show dismissed (${hiddenCount})`}
+              </Button>
+            )}
           </div>
 
           <div className="rounded-lg border bg-card/55 p-3 backdrop-blur-md">
@@ -239,55 +315,100 @@ export const UsersWindowContent = memo(function UsersWindowContent({
             </div>
           </div>
 
-          {invites.length === 0 ? (
+          {shownInvites.length === 0 ? (
             <Empty className="border-0 py-5">
               <EmptyHeader>
                 <EmptyMedia variant="icon" className="size-9">
                   <Link2 className="size-4" />
                 </EmptyMedia>
-                <EmptyTitle className="text-sm">No invite links yet</EmptyTitle>
-                <EmptyDescription>Links you create will appear here.</EmptyDescription>
+                <EmptyTitle className="text-sm">
+                  {invites.length === 0 ? 'No invite links yet' : 'No invite links to show'}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {invites.length === 0
+                    ? 'Links you create will appear here.'
+                    : 'Every link here has been dismissed. Use "Show dismissed" to bring them back.'}
+                </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
             <ItemGroup className="gap-1">
-              {invites.map((invite) => (
-                <Item key={invite.id} variant="outline">
-                  <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                    {invite.email ? <Mail className="size-4" /> : <Link2 className="size-4" />}
-                  </ItemMedia>
-                  <ItemContent className="min-w-0">
-                    <ItemTitle className="truncate">{invite.email || 'Anyone with the link'}</ItemTitle>
-                    <div className="flex flex-wrap items-center gap-1">
-                      <Badge variant={roleBadgeVariant(invite.role)}>{invite.role}</Badge>
-                      <InviteStatusBadge status={invite.status} />
-                      {invite.created_at && (
-                        <span className="text-xs text-muted-foreground">{formatInviteDate(invite.created_at)}</span>
+              {shownInvites.map((invite) => {
+                const state = inviteLifecycleState(invite);
+                const isDismissed = Boolean(invite.dismissed_at);
+                const label = invite.email || 'anyone with the link';
+                return (
+                  <Item key={invite.id} variant="outline" className={isDismissed ? 'opacity-60' : undefined}>
+                    <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                      {invite.email ? <Mail className="size-4" /> : <Link2 className="size-4" />}
+                    </ItemMedia>
+                    <ItemContent className="min-w-0">
+                      <ItemTitle className="truncate">{invite.email || 'Anyone with the link'}</ItemTitle>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge variant={roleBadgeVariant(invite.role)}>{invite.role}</Badge>
+                        <InviteStateBadge state={state} />
+                        {isDismissed && (
+                          <Badge variant="outline" className="text-muted-foreground">
+                            dismissed
+                          </Badge>
+                        )}
+                        {invite.created_at && (
+                          <span className="text-xs text-muted-foreground">{formatInviteDate(invite.created_at)}</span>
+                        )}
+                      </div>
+                      {invite.status === 'accepted' && invite.accepted_by_email && (
+                        <ItemDescription>Accepted by {invite.accepted_by_email}</ItemDescription>
                       )}
-                    </div>
-                    {invite.status === 'accepted' && invite.accepted_by_email && (
-                      <ItemDescription>Accepted by {invite.accepted_by_email}</ItemDescription>
-                    )}
-                  </ItemContent>
-                  {invite.status === 'pending' && (
+                    </ItemContent>
                     <ItemActions>
-                      {/* The invite link is shown once at creation and stored
-                          only as a hash, so it can't be re-copied here (L4).
-                          Revoke and create a new one if the link was lost. */}
-                      <span className="text-xs text-muted-foreground">Link shown once</span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void onRevokeInvite(invite.id)}
-                        aria-label={`Revoke invite for ${invite.email || 'anyone with the link'}`}
-                      >
-                        Revoke
-                      </Button>
+                      {state === 'active' && (
+                        <>
+                          {/* The invite link is shown once at creation and stored
+                              only as a hash, so it can't be re-copied here (L4).
+                              Revoke and create a new one if the link was lost. */}
+                          <span className="text-xs text-muted-foreground">Link shown once</span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void onRevokeInvite(invite.id)}
+                            aria-label={`Revoke invite for ${label}`}
+                          >
+                            Revoke
+                          </Button>
+                        </>
+                      )}
+                      {isDismissed && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void onSetInviteDismissed(invite.id, false)}
+                          aria-label={`Restore invite for ${label}`}
+                        >
+                          <Undo2 data-icon="inline-start" />
+                          Restore
+                        </Button>
+                      )}
+                      {/* Only a spent link gets a Dismiss button. A live one has
+                          to be revoked first — hiding it while it still lets
+                          people in would take it off the only list it is on. */}
+                      {isInviteDismissable(invite) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => void onSetInviteDismissed(invite.id, true)}
+                          aria-label={`Dismiss invite for ${label}`}
+                          title="Dismiss from this list. The record is kept."
+                        >
+                          <Archive />
+                        </Button>
+                      )}
                     </ItemActions>
-                  )}
-                </Item>
-              ))}
+                  </Item>
+                );
+              })}
             </ItemGroup>
           )}
         </section>
@@ -302,18 +423,21 @@ function roleBadgeVariant(role: string): 'default' | 'secondary' | 'outline' {
   return 'outline';
 }
 
-function InviteStatusBadge({ status }: { status: WorkspaceInvite['status'] }) {
-  if (status === 'accepted') {
+// Shows the DERIVED state, not the raw status column: a pending invite past its
+// expiry is finished business, and labelling it "pending" next to a Dismiss
+// button would read as though a live link were being hidden.
+function InviteStateBadge({ state }: { state: InviteLifecycleState }) {
+  if (state === 'accepted') {
     return (
       <Badge variant="default" className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
         accepted
       </Badge>
     );
   }
-  if (status === 'revoked') {
+  if (state === 'revoked' || state === 'expired') {
     return (
       <Badge variant="outline" className="text-muted-foreground">
-        revoked
+        {state}
       </Badge>
     );
   }

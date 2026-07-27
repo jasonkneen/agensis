@@ -1,3 +1,7 @@
+// Type-only, so it erases at build time and cannot create a runtime cycle.
+import type { AgentVoicePreference } from '../lib/agentVoice';
+import type { ConversationMode } from '../lib/channelMentions';
+
 export interface Workspace {
  id: string;
  name: string;
@@ -11,6 +15,28 @@ export interface Workspace {
  git_remote?: string;
  background_opacity?: number | null;
  background_image?: string | null;
+ /**
+  * The System workspace: where in-app feedback reports land as ordinary tasks.
+  * A flag, not a type — it has members, roles and invites like any other
+  * workspace, and only one row may carry it (partial unique index
+  * `uq_workspaces_system`). Included in the `/backend/workspaces` projection
+  * (which lists its columns explicitly) so the workspace rail can group it
+  * below a divider; also present on generic `select('*')` reads.
+  */
+ is_system?: boolean;
+ /**
+  * The group this workspace sits inside; `null` (or absent) means top level.
+  *
+  * Grouping is EMERGENT, not a new entity — a workspace with children renders
+  * as a group, one without renders as a leaf. Children inherit AGENTS and
+  * MEMBERS from their ancestors; CONTENT (channels, documents, tasks, memory)
+  * belongs to exactly one workspace and is never visible from a sibling or a
+  * parent.
+  *
+  * Foundation only: nothing creates a child yet, so this is `null` on every
+  * row today. Present in the `/backend/workspaces` projection on BOTH backends.
+  */
+ parent_id?: string | null;
  version?: number;
  created_at: string;
  updated_at: string;
@@ -36,10 +62,26 @@ export interface ChatSession {
  workspace_id: string;
  title: string;
  model: string;
+ /** Canvas layer (project) this session belongs to. Null = unassigned, shown in every project. Mirrors canvas_objects.layer_id (client-generated id, no FK). */
+ canvas_id?: string | null;
  folder?: string | null;
+ /** What the channel is for, shown under its name. */
+ description?: string | null;
+ /** Icon KEY (see src/lib/channelProfile.ts), not a glyph. '' = the default hash. */
+ icon?: string | null;
+ /**
+  * How people and AGENTS should behave in this channel, in the owner's words.
+  * The server injects it into every agent turn here, so it sets their tone.
+  */
+ intent?: string | null;
  is_favorite?: boolean;
  participants?: ChannelParticipant[] | null;
- conversation_mode?: 'mention' | 'auto' | null;
+ /**
+  * How eagerly this channel answers a post that named nobody: 'auto' at once
+  * (the default), 'social' unhurried (see src/lib/replyCadence.ts), 'mention'
+  * not at all. Normalized by src/lib/channelMentions.ts.
+  */
+ conversation_mode?: ConversationMode | null;
  max_agent_turns?: number | null;
  auto_rounds?: number | null;
  archived_at?: string | null;
@@ -79,6 +121,26 @@ export interface Message {
  pinned?: boolean;
  reactions?: Record<string, string[]>;
  deleted_at?: string | null;
+ // '' or absent for a normal message, 'tool_step' for one agent tool call. Steps
+ // render as compact chips instead of full message rows (components/chat/toolSteps.ts).
+ // `content` keeps its human-readable fallback ("Bash · cd ~/repo && git log") so
+ // rows written before these columns existed still read sensibly.
+ // ...and 'huddle' for the single marker row a finished huddle leaves in the
+ // channel it was called from ("You were in a huddle · 12:04 · Ada, Sam"). Its
+ // `content` is a complete sentence, so a client that does not know the kind
+ // still renders something true; huddle_id below is what makes it a link back
+ // to the transcript.
+ message_kind?: string | null;
+ tool_name?: string | null;
+ tool_detail?: string | null;
+ /** Set only on a huddle marker row. Null/absent everywhere else. */
+ huddle_id?: string | null;
+ // "Send to channel": a thread reply that is ALSO shown in the channel/DM view.
+ // An agent works inside a thread and flags only its final answer; a human can
+ // flag a reply from the thread composer. The row KEEPS its thread_parent_id, so a
+ // broadcast reply shows in BOTH views (see isChannelMessage in
+ // components/chat/channelView.ts).
+ broadcast_to_channel?: boolean | null;
  created_at: string;
 }
 
@@ -179,11 +241,12 @@ export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'li
 
 export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'inbox';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
-export type TaskSourceType = 'manual' | 'chat' | 'document' | 'canvas' | 'ai';
+/** Mirrors the `tasks_source_type_check` constraint — keep the two in step. */
+export type TaskSourceType = 'manual' | 'chat' | 'document' | 'canvas' | 'ai' | 'feedback';
 
 export interface Task {
  id: string;
@@ -242,6 +305,19 @@ export interface TaskComment {
  updated_at: string;
 }
 
+export interface ActivityEventComment {
+ id: string;
+ event_id: string;
+ workspace_id: string;
+ user_id: string | null;
+ parent_id: string | null;
+ content: string;
+ resolved: boolean;
+ version?: number;
+ created_at: string;
+ updated_at: string;
+}
+
 export interface DocumentComment {
  id: string;
  // Optional so MemoryFileComment (anchored to a workspace file, not a
@@ -272,7 +348,12 @@ export type ActivityEventType =
  | 'canvas_updated'
  | 'message_sent'
  | 'agent_connected'
- | 'agent_disconnected';
+ | 'agent_disconnected'
+ // An agent made a credentialed call to a provider skill through the server (it
+ // never holds the credential itself). The audit trail for that: metadata carries
+ // the provider, the operation, the resolved URL and the HTTP status — never a
+ // request or response body, and never a header.
+ | 'provider_call';
 
 export interface ActivityEvent {
  id: string;
@@ -284,6 +365,41 @@ export interface ActivityEvent {
  title: string;
  metadata: Record<string, unknown>;
  created_at: string;
+}
+
+/** Triage categories, most urgent first. `blocker` is the one an agent raises
+ *  when it hits a decision it cannot make — that is what the inbox exists for. */
+export type InboxCategory = 'blocker' | 'comment' | 'mention' | 'error';
+
+export type InboxFilter = 'all' | InboxCategory;
+
+/**
+ * One row in the triage inbox. Aggregated server-side from data that already
+ * exists (thread_items, the three comment tables, activity_events, agent_jobs)
+ * — the inbox adds no producers of its own.
+ *
+ * `contextKey` is the READ-STATE key AND the grouping key: every item sharing
+ * one is one conversation, marked read together (see inbox_read_state).
+ */
+export interface InboxItem {
+ /** Stable, unique across categories (prefixed by category). */
+ id: string;
+ category: InboxCategory;
+ /** One line, already human-readable. */
+ title: string;
+ /** Short preview, may be ''. */
+ body: string;
+ /** Read-state key, e.g. 'blocker:<uuid>' / 'thread:<uuid>' / 'comment:<uuid>'. */
+ contextKey: string;
+ /** Chat session to open, when there is one. */
+ sessionId: string | null;
+ /** 'document' | 'task' | 'memory_file' | 'agent_job' | … */
+ entityType: string | null;
+ entityId: string | null;
+ /** Who/what caused it, may be ''. */
+ actorName: string;
+ createdAt: string;
+ unread: boolean;
 }
 
 export interface FloatingWindow {
@@ -346,6 +462,19 @@ export type SharedAgentModel = {
  shared: true;
 };
 
+export interface GatewayConfig {
+ id: string;
+ workspace_id: string;
+ name: string;
+ base_url: string;
+ model: string;
+ protocol: string;
+ headers?: Record<string, unknown>;
+ has_key?: boolean;
+ created_at?: string;
+ updated_at?: string;
+}
+
 export const AI_MODELS: AIModel[] = [
  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
  { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Most capable model' },
@@ -382,9 +511,25 @@ export interface WorkspaceAgent {
  tools?: string[];
  skills?: string[];
  metadata?: Record<string, unknown> | null;
+ /**
+  * How this agent presents itself, and who chose it.
+  *
+  * `voice` is a PORTABLE preference (accent + variant index + rate/pitch),
+  * never a device voice name — see src/lib/agentVoice.ts. `human_set` records
+  * which identity fields a person explicitly chose, so the agent's
+  * self-declaration on every reconnect can fill in the rest without
+  * overwriting them (shared/agentIdentity.cjs).
+  */
+ identity?: {
+  voice?: AgentVoicePreference | null;
+  human_set?: Record<string, boolean> | null;
+ } | null;
  handle?: string | null;
  model: string;
- run_mode?: 'builtin' | 'daemon' | 'sandbox';
+ /** How this agent's turns are served. 'external' = an MCP client registered
+  *  itself (register_agent) and works AS this agent via claim_job — remote, but
+  *  with no daemon CLI to connect, so the daemon Connect flow does not apply. */
+ run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
  sandbox_provider?: string | null;
  sandbox_config?: Record<string, unknown>;
  enabled?: boolean;
@@ -422,6 +567,32 @@ export interface AgentConnection {
  updated_at: string;
 }
 
+/**
+ * One row of `agent_jobs` — an agent turn the server has queued/started.
+ *
+ * Only the columns the client actually reads are typed: the row also carries
+ * `prompt` and `response`, which are the FULL daemon prompt and the FULL reply,
+ * so nothing client-side should select them (see useAgentWorkFeed).
+ * `metadata.threadParentId` is what ties a job to a thread rather than just to
+ * the session it runs in.
+ */
+export interface AgentJobRow {
+ id: string;
+ workspace_id: string;
+ agent_id: string | null;
+ session_id: string | null;
+ status: 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+ started_at: string | null;
+ created_at: string;
+ metadata: Record<string, unknown>;
+}
+
+/** Which provider signs deliveries to an orb, and therefore how they verify. */
+export type OrbProvider = 'generic' | 'github' | 'stripe';
+
+/** 'new' opens a session per delivery; 'thread' appends to one stable thread. */
+export type OrbRouting = 'new' | 'thread';
+
 export interface AgentWebhook {
  id: string;
  workspace_id: string;
@@ -431,8 +602,126 @@ export interface AgentWebhook {
  enabled: boolean;
  last_triggered_at: string | null;
  version?: number;
+ /** Orb config (plans/021). Every default reproduces the pre-orb behaviour. */
+ provider?: OrbProvider;
+ /** The operator's instruction — the ONLY instruction region in the composed message. */
+ prompt?: string;
+ /** Allowlist of dot-paths projected out of the payload. Empty = whole body, truncated. */
+ payload_fields?: string[];
+ routing?: OrbRouting;
+ rate_limit_per_hour?: number;
+ /**
+  * Advisory hint only. The secret itself lives in the workspace vault and is
+  * never sent to the browser; the trigger route reads the vault, not this flag.
+  */
+ has_signing_secret?: boolean;
+ session_id?: string | null;
+ thread_root_message_id?: string | null;
  created_at: string;
  updated_at: string;
+}
+
+/**
+ * What the orb config route accepts. `signing_secret` is WRITE-ONLY — it is
+ * stored in the workspace vault and never read back, so there is no matching
+ * field on AgentWebhook. An empty string clears it.
+ */
+export type OrbConfigInput = Partial<
+ Pick<AgentWebhook, 'name' | 'enabled' | 'provider' | 'prompt' | 'payload_fields' | 'routing' | 'rate_limit_per_hour'>
+> & { signing_secret?: string };
+
+/** One inbound orb delivery: the dedupe record and the operator-visible log row. */
+export interface OrbDelivery {
+ id: string;
+ webhook_id: string;
+ workspace_id: string;
+ delivery_key: string | null;
+ body_hash: string;
+ event_type: string;
+ status: 'accepted' | 'duplicate' | 'rejected' | 'throttled' | 'failed';
+ session_id: string | null;
+ message_id: string | null;
+ detail: string;
+ created_at: string;
+}
+
+/** A huddle row — an ad-hoc voice call bound to the channel it happened in. */
+export interface Huddle {
+ id: string;
+ workspace_id: string;
+ /** The channel/DM the huddle was CALLED FROM. Not where its conversation lives. */
+ session_id: string;
+ /**
+  * The huddle's OWN conversation — a chat_sessions row of its own, where the
+  * transcript and the agents' replies land instead of in the host channel.
+  * Null for huddles that predate it; readers fall back to session_id, which is
+  * what those huddles actually did.
+  */
+ transcript_session_id?: string | null;
+ /** Namespaced 'agensis-<huddleId>': the LiveKit project is shared with other apps. */
+ room_name: string;
+ started_by: string | null;
+ started_at: string;
+ ended_at: string | null;
+}
+
+/**
+ * One APPEND-ONLY huddle event. Never updated, never deleted — participant
+ * state is folded from the log (see lib/huddleState), which is what lets the
+ * card survive a reconnect and out-of-order delivery with no reconciliation.
+ */
+export interface HuddleEvent {
+ id: string;
+ huddle_id: string;
+ workspace_id: string;
+ session_id: string;
+ kind: 'started' | 'participant_joined' | 'participant_left' | 'ended';
+ /** Server-assigned LiveKit identity, 'user:<userId>'. Never client-supplied. */
+ identity: string;
+ display_name: string;
+ event_id: string;
+ seq: number | string;
+ created_at: string;
+}
+
+export interface HuddleParticipant {
+ identity: string;
+ userId: string;
+ name: string;
+ joinedAt: string | null;
+}
+
+/** Folded huddle state — the shape both the server route and the client fold return. */
+export interface HuddleState {
+ id: string;
+ workspaceId: string;
+ /** The channel/DM the huddle was called from. */
+ sessionId: string;
+ /** The huddle's own conversation session, or null for a pre-transcript huddle. */
+ transcriptSessionId: string | null;
+ roomName: string;
+ startedBy: string | null;
+ startedAt: string | null;
+ endedAt: string | null;
+ active: boolean;
+ participants: HuddleParticipant[];
+ /** Exactly participants.length. An ended huddle reports 0 — never a phantom 1. */
+ participantCount: number;
+ /** Truthful "how busy did it get": max concurrent participants seen in the log. */
+ peakParticipants: number;
+ /** Distinct people who joined at any point. */
+ everJoinedCount: number;
+}
+
+/** What the start/join routes hand back. The API secret never leaves the server. */
+export interface HuddleJoinGrant {
+ huddle: HuddleState | null;
+ /** Short-lived, room-scoped LiveKit access token minted server-side. */
+ token: string;
+ /** Public LiveKit wss:// endpoint. */
+ url: string;
+ identity: string;
+ roomName: string;
 }
 
 export interface OnboardingStep {

@@ -21,7 +21,47 @@ import {
  arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
+ safeSelectColumns,
+ getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
+ setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
+ VAULT_KEY_RE,
+ listWorkspaceSecretMeta,
+ listWorkspaceVaultEntries,
+ normalizeFeedbackSubmission,
+ insertFeedbackReport,
+ badRequest,
 } from '../../shared/backend-core.cjs';
+import {
+ assertSystemOwner,
+ isReservedSignupEmail,
+ listTenantAccounts,
+ getTenantAccount,
+} from '../../shared/tenant-admin.cjs';
+// Cost metering, shared with the Fly lane so both backends write identically
+// shaped rows into one table. FAIL-OPEN by contract — never wrap in try/catch.
+import { recordAnthropicUsage, createAnthropicUsageAccumulator } from '../../shared/usage-metering.cjs';
+import {
+ CAMPAIGN_CATEGORIES,
+ normalizeSegment,
+ normalizeCampaignInput,
+ assertSendable,
+ selectSegmentMatches,
+ describeSegment,
+ loadTenantFacts,
+ buildSegmentPreview,
+ createCampaign,
+ listCampaigns,
+ listUserCampaignMessages,
+ dismissCampaignMessage,
+} from '../../shared/tenant-campaigns.cjs';
+import { normalizeTaskTitle } from '../../shared/taskTitle.cjs';
+import { markHumanIdentityWrite, identityWriteSql, synthesizeHumanIdentityInsert } from '../../shared/agentIdentity.cjs';
+import {
+ isReservedAgentHandle,
+ reservedAgentHandleMessage,
+ slugMentionHandle,
+} from '../../shared/channelMentions.cjs';
+import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -51,9 +91,24 @@ const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // Per-IP FAILED-attempt limiter (L3): bounds credential-stuffing across emails.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// Voice: a Cartesia token is a credential at a metered provider, so minting is
+// bounded per user+workspace. Mirrors the Fly limiter's budget exactly.
+const voiceTokenRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // F9: curb email-enumeration via lookup_user_by_email — per-caller budget, on
 // top of the 'manage' capability gate below (mirrors server/index.cjs).
 const emailLookupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// Feedback: any signed-in user may submit, so this is the only thing standing
+// between one account and an unbounded write into the System workspace's task
+// list. Tight on purpose — nobody files five genuine bug reports a minute.
+const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+// Tenants (the system-owner admin surface). Mirrors server/index.cjs: every
+// request costs a DB lookup of the caller's own email before it can be refused,
+// so this is what stops an authenticated non-owner turning the 403 into a free
+// query loop.
+const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Delivery side of owner broadcasts: read by every signed-in session, not by
+// the operator, so it gets its own budget rather than sharing the admin one.
+const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -81,6 +136,9 @@ function rateLimitBlock(limiter, key) {
 // here at module load is safe. DB errors fail open (see createDbRateLimiter).
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'dispatch' });
+const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
+const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
+const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'campaign-messages' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
 // Callers MUST await it.
@@ -101,9 +159,75 @@ const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json
 const CODEX_PETS_ROOT = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'pets');
 let database;
 
+// The whole architecture is TWO BACKENDS OVER ONE DATABASE (see AGENTS.md), so
+// which connection string wins here is load-bearing, not a detail.
+//
+// This used to read NETLIFY_DB_URL || NETLIFY_DATABASE_URL || DATABASE_URL, which
+// let a Netlify-provisioned database silently outrank the one an operator had
+// explicitly configured. In production it did exactly that, and the two backends
+// ended up on DIFFERENT databases:
+//
+//   - Google sign-in is the ONE route that must run on the Netlify origin (it
+//     needs the edge-injected identity context), so it created the account here,
+//     in the auto-provisioned database, and minted a token for it.
+//   - Every other call goes to the Fly backend, which uses the real shared
+//     database, could not find that user, and returned 401.
+//
+// The result was a user who signed in successfully and then got 401 on every
+// single request, forever. No OAuth account ever reached the real database.
+//
+// Explicit configuration therefore wins, and the auto-provisioned vars are only
+// a fallback for an environment where nobody set DATABASE_URL (matching how
+// server/index.cjs resolves AUTH_SECRET: env first, generated fallback second).
+export const DB_URL_VARS = ['DATABASE_URL', 'NETLIFY_DB_URL', 'NETLIFY_DATABASE_URL'];
+
+/** Exported so the precedence can be tested without a live database. */
+/**
+ * A connection string only counts if it could actually connect.
+ *
+ * Precedence without validation is a loaded gun: production had DATABASE_URL set
+ * to `=postgresql://…` — one stray leading `=` — and promoting it to first place
+ * handed neon() a string it rejects, taking the whole function down while a
+ * perfectly good fallback sat right behind it. A value that cannot be parsed is
+ * not configuration, it is a typo, and it must not outrank something that works.
+ */
+function isUsableDbUrl(value) {
+ if (!value) return false;
+ try {
+  const { protocol } = new URL(value);
+  return protocol === 'postgres:' || protocol === 'postgresql:';
+ } catch {
+  return false;
+ }
+}
+
+export function resolveDbUrl(env = process.env) {
+ const rejected = [];
+ for (const name of DB_URL_VARS) {
+  const value = String(env[name] || '').trim();
+  if (!value) continue;
+  if (!isUsableDbUrl(value)) {
+   rejected.push(name);
+   continue;
+  }
+  return { connectionString: value, source: name, rejected };
+ }
+ return { connectionString: '', source: null, rejected };
+}
+
 function dbPool() {
  if (!database) {
-  const connectionString = process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL;
+  const { connectionString, source, rejected } = resolveDbUrl();
+  if (rejected.length > 0) {
+   console.error(`[db] ignoring malformed connection string in ${rejected.join(', ')}`);
+  }
+  // Loud, once, at cold start: a backend quietly talking to the wrong database
+  // is the most expensive failure this file can have, and it is invisible from
+  // the outside — every response looks healthy.
+  const shadowed = DB_URL_VARS.filter(name => name !== source && String(process.env[name] || '').trim());
+  if (source && shadowed.length > 0) {
+   console.warn(`[db] using ${source}; ignoring also-set ${shadowed.join(', ')}`);
+  }
   database = connectionString ? getDatabase({ connectionString }) : getDatabase();
  }
  return database.pool;
@@ -156,13 +280,11 @@ function verifyPassword(password, passwordHash) {
  return crypto.timingSafeEqual(computed, stored);
 }
 
+// The canonical implementation lives in shared/channelMentions.cjs, beside the
+// mention parser that has to produce the same string from an @mention of a
+// handle this mints. Fly delegates to the same function.
 function slugHandle(value) {
- return String(value || 'agent')
-  .toLowerCase()
-  .replace(/^@+/, '')
-  .replace(/[^a-z0-9_-]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 40) || 'agent';
+ return slugMentionHandle(value);
 }
 
 function hashAgentToken(token) {
@@ -323,12 +445,20 @@ function jsonErrorWithData(status, error, data = null) {
 }
 
 function getAuthSecret() {
- const secret = process.env.AUTH_SECRET;
+ // H9: accept the AGENSIS_AUTH_SECRET alias, in the same precedence order as
+ // server/index.cjs (AGENSIS_ first). AGENTS.md documents the var as "AUTH_SECRET
+ // (a.k.a. AGENSIS_AUTH_SECRET)" and Fly honours both, so an operator who set only
+ // the alias on Netlify used to get the hardcoded placeholder below — and if both
+ // are set to different values, matching Fly's order keeps the two backends on ONE
+ // secret instead of minting tokens the daemon then rejects.
+ const secret = process.env.AGENSIS_AUTH_SECRET || process.env.AUTH_SECRET;
  if (secret) return secret;
  // F2: NEVER fall back to the DB URL or a hardcoded constant — either makes the
- // HMAC session secret guessable/forgeable. Fail closed in production; only the
- // dev/preview sandbox may use a fixed placeholder.
- if (process.env.NODE_ENV === 'production') {
+ // HMAC session secret guessable/forgeable. Fail closed unless the insecure
+ // placeholder is explicitly opted into: NODE_ENV is not guaranteed to be
+ // 'production' in the Netlify Functions runtime, so gating on it left a real
+ // deploy signing sessions with a public constant (H9).
+ if (process.env.AGENSIS_ALLOW_INSECURE_AUTH !== 'true') {
   const err = new Error('Server auth is not configured (set AUTH_SECRET)');
   err.status = 500;
   throw err;
@@ -516,10 +646,34 @@ async function query(text, params = []) {
  return result.rows;
 }
 
-function maskSecret(value) {
- if (!value) return '';
- if (value.length <= 8) return '••••••';
- return `${value.slice(0, 4)}…${value.slice(-4)}`;
+// ----------------------------------------------------------------------------
+// VAULT WRITES ON THIS LANE.
+//
+// Both hosts read and write the same `workspace_secrets` rows in the same Neon
+// DB, and both derive the AES-256-GCM key the same way (shared/backend-core.cjs):
+// a dedicated SECRETS_ENCRYPTION_KEY if it is set, else the HMAC AUTH_SECRET. Fly
+// HAS SECRETS_ENCRYPTION_KEY; this function historically did not — so a secret
+// written here was encrypted under the auth fallback, and the Fly server, deriving
+// from the dedicated key, could not decrypt it. AES-GCM fails closed, so the
+// symptom was not garbage: the key silently read back as NOT CONFIGURED, and the
+// provider call it was entered for kept refusing.
+//
+// So this lane refuses to WRITE a vault secret unless SECRETS_ENCRYPTION_KEY is
+// set here too — which is the operator saying "I have synced it with the primary".
+// Reads are always served: a metadata list holds no secret material.
+//
+// This is a fail-closed guard, not a capability check: `assertWorkspaceRole(...,
+// 'manage')` still runs on every write. Both must pass.
+function vaultWritesEnabled() {
+ return String(process.env.SECRETS_ENCRYPTION_KEY || '').trim().length > 0;
+}
+
+function vaultWriteUnavailable() {
+ return jsonError(503, new Error(
+  'Vault writes are served by the primary backend. This host has no SECRETS_ENCRYPTION_KEY, '
+  + 'so a secret written here would be encrypted with different key material and would read back '
+  + 'as not configured on the server that uses it. Set the same SECRETS_ENCRYPTION_KEY on both hosts to enable this route.',
+ ));
 }
 
 async function ensureSecretsTables() {
@@ -535,10 +689,20 @@ async function ensureSecretsTables() {
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       key text NOT NULL,
       value text NOT NULL DEFAULT '',
+      secret_cipher text DEFAULT '',
+      description text DEFAULT '',
       updated_by uuid,
       updated_at timestamptz DEFAULT now(),
       PRIMARY KEY (workspace_id, key)
     )
+  `);
+ // Idempotent backfill for databases whose workspace_secrets predates
+ // encryption-at-rest (CREATE TABLE IF NOT EXISTS above is a no-op for them).
+ // Mirrors ensureRuntimeSchema in server/index.cjs — this mirror now writes
+ // ciphertext, so the columns have to exist wherever it runs.
+ await query(`
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
+    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
  await query('CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id)');
 }
@@ -549,25 +713,20 @@ async function getSettingValue(key) {
  return rows[0]?.value || '';
 }
 
+// M5: both vault helpers delegate to the shared implementation so this mirror
+// stores AES-256-GCM ciphertext in secret_cipher (value stays '') and prefers it
+// on read — exactly like server/index.cjs. Writing plaintext into `value` here
+// left the Fly server's cipher-first read serving the OLD key after a rotation
+// through Netlify.
 async function getWorkspaceSecretValue(workspaceId, key) {
  if (!workspaceId) return '';
  await ensureSecretsTables();
- const rows = await query(
-  'select value from workspace_secrets where workspace_id = $1 and key = $2 limit 1',
-  [workspaceId, key],
- );
- return rows[0]?.value || '';
+ return coreGetWorkspaceSecretValue(workspaceId, key, { db: query, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId = null) {
  await ensureSecretsTables();
- await query(
-  `insert into workspace_secrets (workspace_id, key, value, updated_by, updated_at)
-     values ($1, $2, $3, $4, now())
-     on conflict (workspace_id, key)
-     do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
-  [workspaceId, key, value, userId],
- );
+ await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId });
 }
 
 async function resolveSecret(key, workspaceId = null) {
@@ -577,8 +736,18 @@ async function resolveSecret(key, workspaceId = null) {
  return appValue || process.env[key] || '';
 }
 
+// Managed-key STATE, never any part of a value — mirrors the Fly shape. The
+// masked preview both lanes used to return was of the PLATFORM key whenever the
+// workspace had none of its own, which showed every workspace owner four
+// characters of the app-level ANTHROPIC_API_KEY. `scope` already says which key is
+// in play.
 async function listManagedSecrets(workspaceId = null) {
  await ensureSecretsTables();
+ const meta = new Map();
+ if (workspaceId) {
+  const rows = await listWorkspaceSecretMeta(workspaceId, { db: query }).catch(() => []);
+  for (const row of rows) meta.set(row.key, row);
+ }
  return Promise.all(MANAGED_SECRET_KEYS.map(async (key) => {
   const workspaceValue = await getWorkspaceSecretValue(workspaceId, key).catch(() => '');
   const fallbackValue = workspaceValue ? '' : await resolveSecret(key, null);
@@ -586,8 +755,8 @@ async function listManagedSecrets(workspaceId = null) {
   return {
    key,
    configured: Boolean(value),
-   preview: maskSecret(value),
    scope: workspaceValue ? 'workspace' : fallbackValue ? 'app' : 'unset',
+   updated_at: meta.get(key)?.updated_at || null,
   };
  }));
 }
@@ -639,6 +808,15 @@ function publicWorkspace(row) {
   id: row.id,
   name: row.name,
   description: row.description || '',
+  // Mirrors server/index.cjs — the workspace rail paints `icon` and groups
+  // `is_system` apart, and it reads whichever backend answered.
+  icon: row.icon || '',
+  is_system: row.is_system === true,
+  // Groupable workspaces: null = top level, otherwise the group this workspace
+  // sits inside. Must match server/index.cjs — the client reads whichever
+  // backend answered, and a column present on one and missing on the other is
+  // exactly how `icon` and `is_system` went missing here before.
+  parent_id: row.parent_id || null,
   local_path: row.local_path || '',
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
@@ -649,22 +827,40 @@ function publicWorkspace(row) {
  };
 }
 
+// The serverless mirror of the Fly server's agentRuntimePayload. The KEY SET
+// must match it exactly — tests/agents-projection-parity.test.cjs diffs the two
+// — because any field present on one backend and absent on the other blanks in
+// the UI whenever a reload happens to be served by the other one. That is how
+// soul, accent_color and openpet_avatar_id each shipped broken here.
 function publicWorkspaceAgent(row) {
  if (!row) return row;
+ const permissionMode = normalizeAgentPermissionMode(row.permission_mode || row.permissionMode);
  return {
   id: row.id,
   workspace_id: row.workspace_id,
   name: row.name,
   avatar: row.avatar || 'AI',
+  openpet_avatar_id: row.openpet_avatar_id || '',
+  accent_color: row.accent_color || '',
   handle: row.handle || slugHandle(row.name),
   description: row.description || '',
   system_prompt: row.system_prompt || '',
+  soul: row.soul || '',
+  instructions: row.instructions || '',
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
   metadata: parseJsonObject(row.metadata),
-  model: row.model || 'auto',
-  run_mode: row.run_mode === 'daemon' ? 'daemon' : 'builtin',
-  permission_mode: normalizeAgentPermissionMode(row.permission_mode),
+  identity: parseJsonObject(row.identity),
+  model: resolveAnthropicModel(row.model),
+  run_mode: row.run_mode === 'daemon' ? 'daemon'
+   : row.run_mode === 'sandbox' ? 'sandbox'
+    : 'builtin',
+  sandbox_provider: row.sandbox_provider || null,
+  sandbox_config: parseJsonObject(row.sandbox_config),
+  permissionMode,
+  permission_mode: permissionMode,
+  permissionFlags: agentPermissionFlags(permissionMode),
+  version: Number(row.version || 0),
   enabled: row.enabled !== false,
  };
 }
@@ -781,7 +977,8 @@ async function ensureCursorBuddyConnectionKeyTables() {
 
 async function handleWorkspaces(userId) {
  const rows = await query(
-  `select w.id, w.name, w.description, w.local_path, w.project_kind, w.git_root, w.git_remote,
+  `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
+            w.local_path, w.project_kind, w.git_root, w.git_remote,
             w.created_at, w.updated_at,
             case when w.user_id = $1 then 'owner' else coalesce(wm.role, 'viewer') end as role
      from workspaces w
@@ -830,8 +1027,11 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
  await ensureAgentRuntimeTables();
+ // Same column list as the Fly server's /agents route — the parity test
+ // extracts and diffs both, so a column added on one side fails until it is
+ // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, description, system_prompt, tools, skills, model, handle, run_mode, permission_mode, version, enabled
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -878,6 +1078,39 @@ async function handleWorkspaceUsage(workspaceId, userId) {
   },
   error: null,
  });
+}
+
+// Huddle voice. Only the Cartesia half is mirrored here, and that is not an
+// omission: the Deepgram side is an audio RELAY over the realtime websocket
+// (server/voice.cjs), and this runtime has no websockets. Huddles themselves
+// are Fly-only for the same reason, so nothing that can reach these routes is
+// missing its transcription. The token exchange is mirrored anyway because it
+// is plain HTTP and a workspace-scoped 404 here would be a silent dead speaker
+// on any deployment that does route /backend through Netlify.
+async function handleVoiceCapabilities(workspaceId, userId) {
+ if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+ await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+ return json({ data: voiceCapabilities(process.env), error: null });
+}
+
+async function handleVoiceTtsToken(workspaceId, userId) {
+ if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
+ await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
+ const limit = voiceTokenRateLimiter.check(`${userId}:${workspaceId}`);
+ if (!limit.allowed) {
+  return json({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }, 429);
+ }
+ const reason = unavailableReason('tts', process.env);
+ if (reason) return jsonError(503, new Error(reason));
+ try {
+  const { token, expiresInSeconds } = await mintCartesiaToken({ apiKey: String(process.env.CARTESIA_API_KEY || '').trim() });
+  const capabilities = voiceCapabilities(process.env);
+  return json({ data: { token, expiresInSeconds, ...(capabilities.tts || {}) }, error: null });
+ } catch (error) {
+  // scrubError, not the raw error: jsonError forwards `message` verbatim, and
+  // this is the one route whose upstream is authenticated with a raw secret.
+  return jsonError(error.status || 502, scrubError(error, process.env));
+ }
 }
 
 async function handleSystemCapabilities(req) {
@@ -1294,6 +1527,10 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_provider text;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -1312,8 +1549,38 @@ async function ensureAgentRuntimeTables() {
       last_triggered_at timestamptz,
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now(),
-      version integer NOT NULL DEFAULT 1
+      version integer NOT NULL DEFAULT 1,
+      provider text NOT NULL DEFAULT 'generic',
+      prompt text NOT NULL DEFAULT '',
+      payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
+      routing text NOT NULL DEFAULT 'new',
+      rate_limit_per_hour integer NOT NULL DEFAULT 60,
+      has_signing_secret boolean NOT NULL DEFAULT false,
+      session_id uuid,
+      thread_root_message_id uuid
     )
+  `);
+ // Orbs (plans/021). agent_webhooks is a FOUR-place schema table, not three:
+ // this bootstrap is a real fourth source of truth for it, despite AGENTS.md
+ // saying the Netlify backend has no independent DDL. Miss this file and a
+ // Netlify-first bootstrap of a fresh DB produces an agent_webhooks with none of
+ // the orb columns, which the Fly trigger route then reads as blank.
+ //
+ // session_id / thread_root_message_id are plain uuid here, WITHOUT the FKs the
+ // other three schema places carry. This function runs on live request paths
+ // (agent creation, CursorBuddy pairing) and this backend never creates
+ // chat_sessions or messages, so referencing them would make a hot path depend on
+ // a table this file has no hand in provisioning. Netlify never writes these two
+ // columns; the Fly server and neon-schema.sql hold the real constraints.
+ await query(`
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'generic';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS prompt text NOT NULL DEFAULT '';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS routing text NOT NULL DEFAULT 'new';
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS rate_limit_per_hour integer NOT NULL DEFAULT 60;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS has_signing_secret boolean NOT NULL DEFAULT false;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS session_id uuid;
+    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS thread_root_message_id uuid;
   `);
  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id)');
  await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
@@ -1387,11 +1654,50 @@ async function handleCreateAgentWebhook(req, userId) {
  // table/trigger route, so both writers must hash or the trigger's dual-path
  // lookup would never match a netlify-created row.
  const token = crypto.randomBytes(32).toString('base64url');
+ // Orb config (plans/021), mirroring server/index.cjs's create route so an orb
+ // created through this backend is not silently generic/unsigned with no prompt.
+ //
+ // An unknown provider or routing value is REJECTED, never normalized: coercing
+ // "gitlab" to "generic" would mean UNSIGNED, and the operator would never be
+ // told. The provider list is duplicated as a literal rather than imported from
+ // server/orbs.cjs because this function must not pull in the Fly server's module
+ // graph; tests/netlify-parity.test.cjs asserts the two lists agree.
+ const ORB_PROVIDERS = ['generic', 'github', 'stripe'];
+ const ORB_ROUTING_MODES = ['new', 'thread'];
+ const provider = body?.provider === undefined ? 'generic' : String(body.provider || '').trim().toLowerCase();
+ if (!ORB_PROVIDERS.includes(provider)) {
+  return jsonError(400, new Error(`Unknown orb provider "${provider}". Supported: ${ORB_PROVIDERS.join(', ')}`));
+ }
+ const routing = body?.routing === undefined ? 'new' : String(body.routing || '').trim().toLowerCase();
+ if (!ORB_ROUTING_MODES.includes(routing)) {
+  return jsonError(400, new Error(`Unknown orb routing "${routing}". Supported: ${ORB_ROUTING_MODES.join(', ')}`));
+ }
+ // A non-generic provider needs a signing secret, and only the Fly config route
+ // can write one (it owns the workspace vault). Refuse here rather than create an
+ // orb whose every delivery would 503.
+ if (provider !== 'generic') {
+  return jsonError(400, new Error(
+   `Provider "${provider}" needs a signing secret, which is set from the orb's own panel. `
+   + 'Create the webhook as generic, then configure the provider and secret.',
+  ));
+ }
+ const prompt = typeof body?.prompt === 'string' ? body.prompt.slice(0, 4000) : '';
+ const payloadFields = (Array.isArray(body?.payload_fields) ? body.payload_fields : [])
+  .map((value) => String(value == null ? '' : value).trim())
+  .filter((value) => /^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,199}$/.test(value))
+  .slice(0, 40);
+ const rateLimit = Number(body?.rate_limit_per_hour);
+ const rateLimitPerHour = Number.isFinite(rateLimit) && rateLimit > 0 ? Math.min(10_000, Math.round(rateLimit)) : 60;
  const rows = await query(
-  `insert into agent_webhooks (workspace_id, agent_id, name, token)
-     values ($1, $2, $3, $4)
+  `insert into agent_webhooks
+     (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
      returning *`,
-  [workspaceId, agentId || null, name, hashAgentToken(token)],
+  // payload_fields is STRINGIFIED here and bound as an object on the Fly server.
+  // The drivers are opposite: @netlify/database sends a text param for the cast
+  // to parse, while porsager serializes the JS value itself (a pre-stringified
+  // value would land as a jsonb string scalar). Do not "sync" the two.
+  [workspaceId, agentId || null, name, hashAgentToken(token), provider, prompt, JSON.stringify(payloadFields), routing, rateLimitPerHour],
  );
  return json({ data: { ...rows[0], token }, error: null });
 }
@@ -1473,6 +1779,14 @@ async function handleAuth(pathname, req) {
 
   const policy = evaluatePasswordServerSide(password);
   if (!policy.valid) return jsonError(400, new Error(policy.message || 'Password must be at least 10 characters and include 3 of: lowercase, uppercase, number, symbol.'));
+
+  // The configured system owner's address cannot be claimed through public
+  // signup: Tenants-surface authority derives from the stored email, and
+  // signup never verifies mailbox ownership (shared/tenant-admin.cjs has the
+  // full story). Same status and message as the duplicate-account refusal
+  // below, on purpose — this response must not mark the address as special.
+  if (isReservedSignupEmail(email)) return jsonError(409, new Error('An account with that email already exists'));
+
   const existing = await query('select id from app_users where email = $1 limit 1', [email]);
   if (existing.length > 0) return jsonError(409, new Error('An account with that email already exists'));
 
@@ -1515,6 +1829,14 @@ async function handleOAuthAuth() {
  if (!email) return jsonError(401, new Error('Social login was not completed'));
 
  const existing = await query('select id, email, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
+ // This door CREATES accounts too, so the owner-address reservation applies
+ // here as well: the email is whatever the identity provider asserted, and
+ // providers differ on whether the mailbox was ever actually verified. Only
+ // creation is refused — an owner account that already exists signs in
+ // through OAuth exactly as before.
+ if (!existing[0] && isReservedSignupEmail(email)) {
+  return jsonError(409, new Error('An account with that email already exists'));
+ }
  const row = existing[0] || (await query(
   'insert into app_users (email, password_hash) values ($1, $2) returning id, email, display_name, accent_color, created_at, token_version',
   [email, `oauth:netlify:${identityUser.id}`],
@@ -1735,7 +2057,10 @@ async function handleDb(pathname, req, userId) {
    : buildWhereClause(filters, []);
   const { clause, params } = where;
   const limitSql = Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : '';
-  const rows = await query(`select ${normalizeColumns(columns)} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
+  // M7: project the requested columns through the shared per-table read
+  // allow-list first, so `columns: "*"` on app_users can never return the
+  // caller's password_hash / token_version.
+  const rows = await query(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
   return json({ data: single ? (rows[0] ?? null) : rows, error: null });
  }
 
@@ -1749,6 +2074,22 @@ async function handleDb(pathname, req, userId) {
    if (!row || typeof row !== 'object') return row;
    let next = stripPrivilegedDbValues(table, row);
    if (table === 'workspaces') next = { ...next, user_id: userId };
+   // Mirrors server/index.cjs — see the comment there for why this route
+   // strips the title but never infers parent_id from it.
+   if (table === 'tasks' && typeof next.title === 'string') {
+    const normalized = normalizeTaskTitle(next.title);
+    if (normalized.changed) next = { ...next, title: normalized.title };
+   }
+   // Mirrors server/index.cjs: @channel addresses every agent in a channel, so
+   // no agent may answer to `channel`. A guard on one backend only is a rule the
+   // other half of the deployment does not have.
+   if (table === 'workspace_agents' && isReservedAgentHandle(next.handle)) {
+    throw badRequest(reservedAgentHandleMessage(next.handle));
+   }
+   // Mirrors server/index.cjs: creation-time identity choices are HUMAN
+   // choices — synthesize the human_set locks server-side (discarding any
+   // client-supplied ones) so an agent's first connect cannot replace them.
+   next = synthesizeHumanIdentityInsert(table, next);
    return next;
   });
   if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
@@ -1784,13 +2125,29 @@ async function handleDb(pathname, req, userId) {
   const tableSql = ensureTable(table);
   if (!values || typeof values !== 'object') return jsonError(400, new Error('Update values are required'));
   await enforceDbOperationAccess({ userId, table, op: 'update', filters, payload: { values }, db: query });
+  // Mirrors server/index.cjs: renaming an agent INTO the reserved handle is the
+  // same door as creating one there.
+  if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
+   return jsonError(400, new Error(reservedAgentHandleMessage(values.handle)));
+  }
   const safeValues = stripPrivilegedDbValues(table, values);
-  const keys = Object.keys(safeValues);
+
+  // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded
+  // in identity.human_set, so the agent's next self-declaration on connect
+  // treats it as already chosen. The identity jsonb is NEVER written from the
+  // client's object — only a validated `voice` is grafted onto the STORED
+  // column in SQL — so a payload like {"identity":{"human_set":{...}}} (or
+  // {"identity":{}}) can neither forge a lock nor erase one.
+  // See shared/agentIdentity.cjs.
+  const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
+  const keys = Object.keys(markedValues);
 
   const params = [];
-  const setParts = keys.map((column) => {
-   return `${quoteIdent(column)} = ${bindDbParam(params, table, column, safeValues[column])}`;
-  });
+  const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+  if (lockPatch) {
+   const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
+   setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
+  }
   if (VERSIONED_TABLES.has(table) && values.version == null) {
    setParts.push('"version" = COALESCE("version", 0) + 1');
   }
@@ -1882,6 +2239,10 @@ async function handleAiChat(req, userId) {
    // upstream SSE frame or multibyte char split across two chunks isn't
    // dropped/corrupted (M12).
    let buffer = '';
+   // Token counts, read off the frames on their way past. The browser is only
+   // sent text deltas, so this relay is the sole place this turn's usage is
+   // ever visible — exactly as on the Fly lane, using the same accumulator.
+   const usage = createAnthropicUsageAccumulator();
    const handleLine = (raw) => {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if (!line.startsWith('data: ')) return;
@@ -1892,6 +2253,7 @@ async function handleAiChat(req, userId) {
     }
     try {
      const parsed = JSON.parse(data);
+     usage.event(parsed);
      if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`));
      }
@@ -1909,6 +2271,16 @@ async function handleAiChat(req, userId) {
    }
    buffer += decoder.decode();
    for (const line of buffer.split('\n')) handleLine(line);
+   // Never throws (fail-open), so it cannot break the stream it is closing.
+   // This lane runs NO DDL of its own: if `usage_events` does not exist yet
+   // because the Fly bootstrap has not run, the insert quietly does nothing
+   // rather than 500-ing a chat turn.
+   await recordAnthropicUsage(query, {
+    workspaceId,
+    model: resolvedModel,
+    kind: 'ai_chat',
+    counts: usage.result(),
+   });
    controller.close();
   },
  });
@@ -2003,6 +2375,14 @@ async function route(req) {
  if (req.method === 'GET' && workspaceUsageMatch) {
   return handleWorkspaceUsage(decodeURIComponent(workspaceUsageMatch[1]), await requireUserId(req));
  }
+ const voiceCapabilitiesMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/voice\/capabilities$/);
+ if (req.method === 'GET' && voiceCapabilitiesMatch) {
+  return handleVoiceCapabilities(decodeURIComponent(voiceCapabilitiesMatch[1]), await requireUserId(req));
+ }
+ const voiceTtsTokenMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/voice\/tts-token$/);
+ if (req.method === 'POST' && voiceTtsTokenMatch) {
+  return handleVoiceTtsToken(decodeURIComponent(voiceTtsTokenMatch[1]), await requireUserId(req));
+ }
  if (req.method === 'GET' && pathname === '/backend/cursorbuddy/connection-keys') {
   return handleCursorBuddyConnectionKeys(req, await requireUserId(req));
  }
@@ -2047,6 +2427,167 @@ async function route(req) {
   const blocked = await dbRateLimitBlock(dispatchRateLimiter, dispatchDbRateLimiter, userId || clientIpFromRequest(req));
   if (blocked) return blocked;
   return handleAgentDispatch(req, userId);
+ }
+ // In-app feedback. Mirrors server/index.cjs exactly — a route on only one
+ // backend is a live 404 for half the deployment.
+ //
+ // SUBMIT only. Reading a report is not a route: reports are ordinary rows of
+ // the System workspace, read through /backend/db, where
+ // enforceDbOperationAccess already requires 'read' on that workspace. The
+ // client never names the destination workspace; ensureSystemWorkspace resolves
+ // it server-side, so `workspaceId` in the body is context, never authority.
+ if (req.method === 'POST' && pathname === '/backend/feedback') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(feedbackRateLimiter, feedbackDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const body = await readBody(req);
+  // Re-validate, re-clamp and RE-REDACT server-side: the browser scrubbed the
+  // payload before sending, but a request that did not come from our client
+  // would not have.
+  const submission = normalizeFeedbackSubmission(body);
+  const result = await insertFeedbackReport({
+   db: query,
+   // node-postgres/Neon: bind the STRINGIFIED value. Binding a raw JS array
+   // here throws "invalid input syntax for type json" — the opposite of the
+   // Fly side, which must bind the object. Verified against the live database;
+   // see insertFeedbackReport in shared/backend-core.cjs.
+   jsonParam: (value) => JSON.stringify(value),
+   userId,
+   sourceWorkspaceId: String(body?.workspaceId || body?.workspace_id || '').trim() || null,
+   submission,
+  });
+  return json({ data: { ok: true, taskId: result.taskId }, error: null });
+ }
+ // Tenants (system-owner admin surface). Mirrors server/index.cjs exactly — a
+ // route on only one backend is a live 404 for half the deployment, and an
+ // ADMIN route present on one backend and absent on the other is worse: the
+ // half that has it is the half nobody remembers to re-audit.
+ //
+ // Authorization is `assertSystemOwner` and nothing else: the caller's email is
+ // read from app_users by their authenticated userId and compared to
+ // AGENSIS_SYSTEM_OWNER_EMAIL, which must be set. No email is ever taken from
+ // the request, and there is no workspace-membership path to this data.
+ // `/access` answers only about the CALLER: it runs the same gate and
+ // translates only its 403 into `{ owner: false }`, so an ordinary session is
+ // not a console error. Anything else propagates — a broken check is an
+ // error, not "not the owner".
+ if (req.method === 'GET' && pathname === '/backend/tenants/access') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  let owner = true;
+  try {
+   await assertSystemOwner({ userId, db: query });
+  } catch (error) {
+   if (error?.status !== 403) throw error;
+   owner = false;
+  }
+  return json({ data: { owner }, error: null });
+ }
+ if (req.method === 'GET' && pathname === '/backend/tenants') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({ data: await listTenantAccounts(query), error: null });
+ }
+ // Owner broadcasts. Mirrors server/index.cjs route for route — an admin WRITE
+ // route present on one backend and absent on the other is the worst version of
+ // the "one lane only" bug: the lane that has it is the one nobody re-audits.
+ //
+ // MATCHED BEFORE the '/backend/tenants/:id' regex below, which would otherwise
+ // swallow '/backend/tenants/campaigns' as an account id.
+ if (req.method === 'GET' && pathname === '/backend/tenants/campaigns/categories') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({
+   data: {
+    categories: CAMPAIGN_CATEGORIES.map(({ id, label, days }) => ({ id, label, days: days === true })),
+   },
+   error: null,
+  });
+ }
+ if (req.method === 'POST' && pathname === '/backend/tenants/campaigns/preview') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  const body = await readBody(req);
+  const segment = normalizeSegment(body?.segment);
+  return json({ data: buildSegmentPreview(segment, await loadTenantFacts(query)), error: null });
+ }
+ if (req.method === 'GET' && pathname === '/backend/tenants/campaigns') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({ data: await listCampaigns(query), error: null });
+ }
+ if (req.method === 'POST' && pathname === '/backend/tenants/campaigns') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const ownerId = await assertSystemOwner({ userId, db: query });
+  const body = await readBody(req);
+  const input = normalizeCampaignInput(body);
+  const matched = selectSegmentMatches(input.segment, await loadTenantFacts(query));
+  // The audience is recomputed here from the segment in THIS request, and the
+  // confirmed count must equal it — the preview's list is never trusted.
+  assertSendable(matched.length, body?.confirm_recipient_count);
+  const ownerRows = await query('select email from app_users where id = $1 limit 1', [ownerId]);
+  const campaign = await createCampaign(query, {
+   title: input.title,
+   body: input.body,
+   surface: input.surface,
+   // STRING, not the object: @netlify/database is the exact opposite of
+   // porsager and requires a stringified bind for a ::jsonb cast. The Fly
+   // server binds the object. See tests/jsonb-bind-hygiene.test.cjs.
+   segmentBind: JSON.stringify(input.segment),
+   summary: describeSegment(input.segment),
+   recipientIds: matched.map((account) => account.user_id),
+   createdBy: ownerId,
+   createdByEmail: ownerRows?.[0]?.email || '',
+  });
+  console.log('[campaign] sent', {
+   id: campaign.id,
+   by: ownerId,
+   surface: campaign.surface,
+   recipients: campaign.recipient_count,
+   segment: campaign.summary,
+  });
+  return json({ data: { campaign }, error: null });
+ }
+ const tenantDetailMatch = pathname.match(/^\/backend\/tenants\/([^/]+)$/);
+ if (req.method === 'GET' && tenantDetailMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  const detail = await getTenantAccount(query, decodeURIComponent(tenantDetailMatch[1]));
+  if (!detail) return jsonError(404, new Error('No such account'));
+  return json({ data: detail, error: null });
+ }
+
+ // The receiving end. NOT owner-gated, on a different path prefix so that stays
+ // obvious: any signed-in user reads and dismisses their OWN messages. The user
+ // id comes from the verified session and is bound into both statements.
+ if (req.method === 'GET' && pathname === '/backend/campaign-messages') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(campaignMessageRateLimiter, campaignMessageDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  return json({ data: await listUserCampaignMessages(query, userId), error: null });
+ }
+ const campaignDismissMatch = pathname.match(/^\/backend\/campaign-messages\/([^/]+)\/dismiss$/);
+ if (req.method === 'POST' && campaignDismissMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(campaignMessageRateLimiter, campaignMessageDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  return json({
+   data: await dismissCampaignMessage(query, userId, decodeURIComponent(campaignDismissMatch[1])),
+   error: null,
+  });
  }
  if (req.method === 'POST' && pathname === '/backend/agent-webhooks') {
   return handleCreateAgentWebhook(req, await requireUserId(req));
@@ -2096,7 +2637,14 @@ async function route(req) {
   const url = new URL(req.url);
   const workspaceId = String(url.searchParams.get('workspaceId') || '').trim() || null;
   // Managed secrets (ANTHROPIC_API_KEY etc.) require workspace manage rights.
-  if (workspaceId) await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+  // The workspaceId check is NOT optional: when it was, omitting the query param
+  // skipped authorization entirely and listManagedSecrets fell back to the
+  // app-level secret, handing any signed-up user a masked preview of the
+  // platform ANTHROPIC_API_KEY. Mirrors the POST handler directly below.
+  if (!workspaceId) {
+   return jsonError(403, new Error('App-level secret management is not available to users'));
+  }
+  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
   const keys = await listManagedSecrets(workspaceId);
   return json({ data: { keys }, error: null });
  }
@@ -2108,6 +2656,7 @@ async function route(req) {
   if (!workspaceId) {
    return jsonError(403, new Error('App-level secret management is not available to users'));
   }
+  if (!vaultWritesEnabled()) return vaultWriteUnavailable();
   await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
   const updates = {};
   for (const key of MANAGED_SECRET_KEYS) {
@@ -2122,6 +2671,58 @@ async function route(req) {
   const keys = await listManagedSecrets(workspaceId);
   return json({ data: { keys }, error: null });
  }
+
+ // --- The workspace vault (mirror) -------------------------------------------
+ // Same rows, same classification (shared/backend-core.cjs), same 'manage' gate as
+ // the Fly routes. WRITE-ONLY in the same sense: the list does not decrypt and its
+ // SQL never selects `value` or `secret_cipher`.
+ //
+ // Two deliberate differences from the primary:
+ //   * writes require SECRETS_ENCRYPTION_KEY here (see vaultWritesEnabled), because
+ //     divergent key material writes a secret nothing can read back;
+ //   * unset PROVIDER SLOTS are not listed. Slot enumeration comes from the sandbox
+ //     skill definitions, which live in the Fly server's module graph — and nothing
+ //     on this host makes a provider call, so it has no use for them.
+ if (pathname.startsWith('/backend/workspaces/') && pathname.includes('/vault')) {
+  const rest = pathname.slice('/backend/workspaces/'.length);
+  const [rawWorkspaceId, marker, ...keyParts] = rest.split('/');
+  const workspaceId = decodeURIComponent(rawWorkspaceId || '').trim();
+  if (marker === 'vault' && workspaceId) {
+   const userId = await requireUserId(req);
+   const key = decodeURIComponent(keyParts.join('/') || '').trim();
+
+   if (req.method === 'GET' && !key) {
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    await ensureSecretsTables();
+    const data = await listWorkspaceVaultEntries(workspaceId, { db: query, managedKeys: MANAGED_SECRET_KEYS });
+    return json({ data, error: null });
+   }
+
+   if ((req.method === 'PUT' || req.method === 'DELETE') && key) {
+    // The charset is the namespace guard: no colon, so this route can never reach
+    // a `sandbox:` or `orb:` entry however the caller spells it.
+    if (!VAULT_KEY_RE.test(key)) {
+     return jsonError(400, new Error(key.includes(':')
+      ? 'Namespaced vault entries are set by the surface that owns them.'
+      : 'key must be 1-128 chars of letters, digits, _ . -'));
+    }
+    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(400, new Error('That key is managed elsewhere'));
+    if (!vaultWritesEnabled()) return vaultWriteUnavailable();
+    await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
+    await ensureSecretsTables();
+    if (req.method === 'DELETE') {
+     await query('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
+     return json({ data: { key }, error: null });
+    }
+    const body = await readBody(req);
+    const value = typeof body?.value === 'string' ? body.value : '';
+    const description = typeof body?.description === 'string' ? body.description.slice(0, 300) : null;
+    await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId, description });
+    return json({ data: { key, configured: Boolean(value) }, error: null });
+   }
+  }
+ }
+
  if (req.method === 'POST' && pathname === '/backend/ai-chat') {
   const userId = await requireUserId(req);
   const blocked = await dbRateLimitBlock(aiChatRateLimiter, aiChatDbRateLimiter, userId || clientIpFromRequest(req));

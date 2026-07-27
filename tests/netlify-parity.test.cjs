@@ -41,6 +41,20 @@ let core;      // shared/backend-core.mjs
 let dbQueryImpl = null;
 
 test.before(async () => {
+  // H9 (2026-07 review): getAuthSecret() no longer falls back to a hardcoded
+  // placeholder just because NODE_ENV isn't 'production' — Netlify does not
+  // guarantee NODE_ENV in the Functions runtime, so an unconfigured deploy was
+  // signing sessions with a public constant. It now throws 500 unless a secret
+  // is configured, so these tests (which assert 401 for missing/garbage tokens)
+  // must configure one, exactly as a real deploy does.
+  // Own both names outright rather than branching on what the machine has. The
+  // backend reads `AGENSIS_AUTH_SECRET || AUTH_SECRET` (backend.mjs), so a
+  // machine that exported the ALIAS used to skip this literal entirely and sign
+  // every token below with the real production HMAC — or, if the two differed,
+  // 401 the whole file. The preload scrubs both; this makes the file correct on
+  // its own terms too.
+  delete process.env.AGENSIS_AUTH_SECRET;
+  process.env.AUTH_SECRET = 'netlify-parity-test-secret';
   mock.module('@netlify/database', {
     namedExports: {
       getDatabase: () => ({
@@ -83,6 +97,10 @@ const PROTECTED_ROUTES = [
   ['POST', '/backend/ai-chat'],
   ['POST', '/backend/agent-webhooks'],
   ['POST', '/backend/agents/agent-123/connection-command'],
+  // Feedback submission is open to ANY signed-in user, which makes it easy to
+  // mistake for a public endpoint. It is not: it writes a task into the System
+  // workspace, so it must still refuse an anonymous caller.
+  ['POST', '/backend/feedback'],
 ];
 
 for (const [method, pathname] of PROTECTED_ROUTES) {
@@ -261,5 +279,155 @@ test('POST /backend/users/me/change-password rejects a weak newPassword (validat
   } finally {
     if (prevSecret === undefined) delete process.env.AUTH_SECRET;
     else process.env.AUTH_SECRET = prevSecret;
+  }
+});
+
+// ----------------------------------------------------------------------------
+// 2026-07 release review — H9 / H3 / M6 / M7.
+// ----------------------------------------------------------------------------
+
+// H9: the insecure placeholder secret is now opt-in, and the AGENSIS_AUTH_SECRET
+// alias (which the Fly server already honours) is accepted.
+test('H9: Netlify auth secret fails closed without an explicit insecure opt-in', async () => {
+  const prev = {
+    auth: process.env.AUTH_SECRET,
+    alias: process.env.AGENSIS_AUTH_SECRET,
+    allow: process.env.AGENSIS_ALLOW_INSECURE_AUTH,
+    nodeEnv: process.env.NODE_ENV,
+  };
+  try {
+    delete process.env.AUTH_SECRET;
+    delete process.env.AGENSIS_AUTH_SECRET;
+    delete process.env.AGENSIS_ALLOW_INSECURE_AUTH;
+    delete process.env.NODE_ENV; // the old guard would have handed out the placeholder here
+
+    const unconfigured = await handler(makeRequest('POST', '/backend/db/select'));
+    assert.equal(unconfigured.status, 500);
+
+    // The alias alone is enough to configure auth (an operator who set only
+    // AGENSIS_AUTH_SECRET used to silently get the hardcoded placeholder).
+    process.env.AGENSIS_AUTH_SECRET = 'alias-only-secret';
+    const withAlias = await handler(makeRequest('POST', '/backend/db/select', { token: 'not-a-real-token' }));
+    assert.equal(withAlias.status, 401);
+    delete process.env.AGENSIS_AUTH_SECRET;
+
+    // Explicit opt-in keeps the local/preview sandbox working.
+    process.env.AGENSIS_ALLOW_INSECURE_AUTH = 'true';
+    const optedIn = await handler(makeRequest('POST', '/backend/db/select', { token: 'not-a-real-token' }));
+    assert.equal(optedIn.status, 401);
+  } finally {
+    for (const [key, value] of Object.entries({
+      AUTH_SECRET: prev.auth,
+      AGENSIS_AUTH_SECRET: prev.alias,
+      AGENSIS_ALLOW_INSECURE_AUTH: prev.allow,
+      NODE_ENV: prev.nodeEnv,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// H3: workspace_agents.metadata carries host_folders, which becomes `--add-dir`
+// for the agent's coding CLI — an editor ('write') must not be able to widen it.
+test('H3: setting agent metadata/sandbox columns requires manage, not just write', async () => {
+  const roles = { 'ws-1:user-editor': 'editor', 'ws-1:user-admin': 'admin' };
+  const rowWorkspaces = { workspace_agents: { 'agent-1': 'ws-1' } };
+  const db = async (sql, params = []) => {
+    const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) return [];
+    if (n.startsWith('select role from workspace_members where workspace_id = $1 and user_id = $2')) {
+      const role = roles[`${params[0]}:${params[1]}`];
+      return role ? [{ role }] : [];
+    }
+    const m = n.match(/^select workspace_id from "?([a-z_]+)"? where id = \$1 limit 1/);
+    if (m) {
+      const ws = rowWorkspaces[m[1]]?.[params[0]];
+      return ws ? [{ workspace_id: ws }] : [];
+    }
+    // Nested workspaces: the inherited-role ancestor walk (see
+    // shared/workspace-tree.cjs). Flat fixtures — nothing above to inherit.
+    if (n.includes('with recursive chain as')) return [];
+    throw new Error(`Unexpected SQL: ${sql}`);
+  };
+  const update = (userId, values) => core.enforceDbOperationAccess({
+    userId, table: 'workspace_agents', op: 'update',
+    filters: [{ column: 'id', operator: 'eq', value: 'agent-1' }],
+    payload: { values }, db,
+  });
+
+  await assert.rejects(
+    () => update('user-editor', { metadata: { host_folders: ['/', '/Users/owner/.ssh'] } }),
+    { status: 403, message: 'You do not have permission to manage this workspace' },
+  );
+  // A JSON string payload is the same write, so it must be gated too.
+  await assert.rejects(
+    () => update('user-editor', { metadata: '{"host_folders":["/"]}' }),
+    { status: 403 },
+  );
+  await assert.rejects(
+    () => update('user-editor', { sandbox_provider: 'e2b' }),
+    { status: 403 },
+  );
+  // The Agents window's host-folders editor still works — for an admin/owner.
+  await assert.doesNotReject(() => update('user-admin', { metadata: { host_folders: ['/tmp/project'] } }));
+  // Ordinary agent edits, and the empty sandbox defaults the create form always
+  // sends, stay at 'write'.
+  await assert.doesNotReject(() => update('user-editor', { name: 'Coder' }));
+  await assert.doesNotReject(
+    () => core.enforceDbOperationAccess({
+      userId: 'user-editor', table: 'workspace_agents', op: 'insert',
+      payload: { values: { workspace_id: 'ws-1', name: 'New', sandbox_provider: null, sandbox_config: {} } }, db,
+    }),
+  );
+});
+
+// M6: 'admin' is an invitable role that HAS 'manage', so a workspaces UPDATE
+// must not be able to carry ownership/credential columns.
+test('M6: workspaces ownership and MCP credential columns are stripped from generic writes', () => {
+  const values = core.stripPrivilegedDbValues('workspaces', {
+    name: 'Renamed',
+    user_id: 'attacker-uuid',
+    mcp_token_hash: 'deadbeef',
+    mcp_auto_approve: true,
+  });
+  assert.equal(values.name, 'Renamed');
+  assert.equal(Object.prototype.hasOwnProperty.call(values, 'user_id'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(values, 'mcp_token_hash'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(values, 'mcp_auto_approve'), false);
+});
+
+// M7: a self-scoped app_users SELECT is allowed, so the projection is what keeps
+// the scrypt password_hash (and the revocation counter) out of the response.
+test('M7: app_users selects are projected to a safe column set', () => {
+  assert.equal(core.safeSelectColumns('app_users', '*'), 'id, email, display_name, accent_color, created_at');
+  assert.equal(core.safeSelectColumns('app_users', undefined), 'id, email, display_name, accent_color, created_at');
+  assert.equal(core.safeSelectColumns('app_users', 'id, email'), 'id, email');
+  assert.throws(() => core.safeSelectColumns('app_users', 'password_hash'), { status: 403 });
+  assert.throws(() => core.safeSelectColumns('app_users', 'id,token_version'), { status: 403 });
+  // Tables without an allow-list are untouched.
+  assert.equal(core.safeSelectColumns('tasks', '*'), '*');
+  assert.equal(core.safeSelectColumns('tasks', 'id, title'), 'id, title');
+});
+
+// M7, parity half. The helper above is only a guard if BOTH backends actually
+// call it. During the 2026-07 review fix it was wired into the Netlify mirror
+// only, leaving the scrypt password_hash still selectable on the Fly server —
+// which is the backend agensis.io actually talks to. Assert the wiring itself,
+// because a helper nobody calls passes every unit test.
+test('M7 parity: both backends project db/select through safeSelectColumns', () => {
+  const fs = require('node:fs');
+  const read = (rel) => fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf8');
+
+  for (const rel of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
+    const source = read(rel);
+    assert.ok(
+      source.includes('normalizeColumns(safeSelectColumns(table, columns))'),
+      `${rel} must project /backend/db/select through safeSelectColumns`,
+    );
+    assert.ok(
+      !/select \$\{normalizeColumns\(columns\)\}/.test(source),
+      `${rel} still has an unprojected select — password_hash would leak`,
+    );
   }
 });

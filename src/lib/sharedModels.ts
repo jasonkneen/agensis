@@ -1,6 +1,6 @@
-import { AI_MODELS, type AIModel, type AgentConnection } from '../types';
+import { AI_MODELS, type AIModel, type AgentConnection, type GatewayConfig } from '../types';
 
-export function workspaceChatModels(workspaceId: string | null | undefined, connections: AgentConnection[]): AIModel[] {
+export function workspaceChatModels(workspaceId: string | null | undefined, connections: AgentConnection[], gateways: GatewayConfig[] = []): AIModel[] {
   const models = new Map(AI_MODELS.map(model => [model.id, model]));
   if (!workspaceId) return [...models.values()];
 
@@ -22,8 +22,26 @@ export function workspaceChatModels(workspaceId: string | null | undefined, conn
     }
   }
 
+  const gatewayOptions: AIModel[] = [];
+  for (const gateway of gateways) {
+    if (gateway.workspace_id !== workspaceId) continue;
+    const id = `gateway:${gateway.id}`;
+    if (models.has(id)) continue;
+    const option = {
+      id,
+      label: `${gateway.name} · gateway`,
+      description: `${gateway.model || 'model'} via ${gateway.base_url || 'custom endpoint'}`,
+    };
+    models.set(id, option);
+    gatewayOptions.push(option);
+  }
+
   const builtins = AI_MODELS.map(model => models.get(model.id) as AIModel);
-  return [...builtins, ...shared.sort((left, right) => left.label.localeCompare(right.label))];
+  return [
+    ...builtins,
+    ...gatewayOptions.sort((left, right) => left.label.localeCompare(right.label)),
+    ...shared.sort((left, right) => left.label.localeCompare(right.label)),
+  ];
 }
 
 export function availableChatModelId(modelId: string, models: AIModel[]): string {

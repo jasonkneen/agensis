@@ -172,6 +172,11 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     }
   }, [workspaceId]);
 
+  // Applet storage docs (folder === APPLETS_FOLDER) are real documents that also
+  // back the Canvas Apps picker (see CanvasTemplatePicker) — they're shown in
+  // Documents like any other doc (DocumentRow gives them a distinct icon and
+  // "Add to canvas" action), just routed to a code editor instead of the
+  // rich-text one (see WindowBodies.tsx / AppletDocWindowContent).
   const favorites = documents.filter(d => d.is_favorite);
   const recents = documents.slice(0, 5);
 

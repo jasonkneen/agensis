@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { useFidgetDrag } from '@/hooks/useFidgetDrag';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
@@ -9,6 +10,7 @@ import {
   Copy,
   Database,
   Globe,
+  HardDrive,
   KeyRound,
   Link2,
   LayoutGrid,
@@ -19,6 +21,7 @@ import {
   Power,
   RefreshCw,
   Rocket,
+  Rows2,
   Save,
   ShieldCheck,
   Share2,
@@ -27,12 +30,14 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Unplug,
   Upload,
+  Volume2,
   Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { AI_MODELS, type AgentConnection, type AgentWebhook, type WorkspaceAgent } from '../../types';
+import { AI_MODELS, type AgentConnection, type AgentWebhook, type ChatSession, type OrbConfigInput, type OrbProvider, type OrbRouting, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -61,17 +66,63 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from '@/components/ui/native-select';
+import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import {
+  MAX_SPEED,
+  MIN_SPEED,
+  VOICE_EMOTIONS,
+  assignAgentVoices,
+  describeVoice,
+  englishVoiceIds,
+  filterVoices,
+  readAgentVoice,
+  resolveAgentVoice,
+  type AgentVoicePreference,
+} from '../../lib/agentVoice';
+import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
+
+// 418 English voices in one <select> is a scroll nobody finishes; the search
+// box above it is the real control.
+const VOICE_OPTION_LIMIT = 60;
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
+import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
+import { MarkdownContent } from '../chat/MarkdownContent';
+import { SkillChipsInput } from '../agents/SkillChipsInput';
+import { buildSkillEntries } from '../../lib/skillsView';
+import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
+import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import {
+  AGENT_LAYOUT_VIEW_PREF,
+  AGENTS_SPLIT_HIDE_BELOW,
+  AGENTS_SPLIT_ONLY_BELOW,
+  agentFormBarPlacement,
+  toggleAgentSelection,
+  type AgentLayoutView,
+} from '../../lib/agentsView';
+
+// Remembered per workspace: how the roster is sliced and drawn (the layout
+// view codec lives in lib/agentsView with the rest of the view decisions).
+// The search box and which agent is open are NOT — those are where you are,
+// not how you look.
+const AGENT_OWNER_FILTER_PREF = oneOf<'all' | 'mine'>(['all', 'mine']);
+const AGENT_STATUS_FILTER_PREF = setOf<AgentPresence>(['busy', 'idle', 'disconnected', 'inactive']);
+const NO_STATUS_FILTER: Set<AgentPresence> = new Set();
 
 interface AgentsWindowContentProps {
   agents: WorkspaceAgent[];
   webhooks: AgentWebhook[];
   connections?: AgentConnection[];
+  /** Network view only: the sessions/tasks it drills through. Read-only. */
+  sessions?: ChatSession[];
+  tasks?: Task[];
+  workspaceId?: string | null;
+  workspaceName?: string;
   currentUserId?: string | null;
   focusedAgentKey?: string | null;
   onCreateAgent: (input: {
@@ -90,104 +141,19 @@ interface AgentsWindowContentProps {
     run_mode?: 'builtin' | 'daemon' | 'sandbox';
     sandbox_provider?: string | null;
     sandbox_config?: Record<string, unknown>;
-  }) => void;
+    // Resolves false when the agent was NOT created, so the form can stay put
+    // with the filled-in fields instead of returning to the list as if it had
+    // worked.
+  }) => Promise<boolean>;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onDeleteAgent: (id: string) => void;
+  onDisconnectAgent: (id: string) => Promise<unknown>;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  /** Orb config (plans/021) — goes through the dedicated validating route. */
+  onConfigureWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
   onOpenConnections: () => void;
 }
-
-interface AgentTemplate {
-  id: string;
-  name: string;
-  handle: string;
-  category: string;
-  description: string;
-  systemPrompt: string;
-  tools: string[];
-  skills: string[];
-  runMode: 'builtin' | 'daemon' | 'sandbox';
-  icon: LucideIcon;
-}
-
-// Starter templates shown in the create gallery. Picking one prefills the form —
-// nothing is created until the user reviews and submits, so these are honest
-// starting points, not hidden magic.
-const AGENT_TEMPLATES: AgentTemplate[] = [
-  {
-    id: 'researcher', name: 'Researcher', handle: 'researcher', category: 'Research',
-    description: 'Digs through docs and the web to answer questions with sources.',
-    systemPrompt: 'You are a thorough research assistant. Answer questions with concrete evidence, cite the documents or sources you used, and flag anything you are unsure about.',
-    tools: [], skills: [], runMode: 'builtin', icon: Brain,
-  },
-  {
-    id: 'analyst', name: 'Data Analyst', handle: 'analyst', category: 'Research',
-    description: 'Turns raw numbers and tables into clear findings and summaries.',
-    systemPrompt: 'You are a data analyst. Given numbers, tables, or CSV-like data, compute the relevant figures, surface the key trends, and explain them in plain language. Show your working and call out assumptions.',
-    tools: [], skills: [], runMode: 'builtin', icon: Database,
-  },
-  {
-    id: 'coder', name: 'Coder', handle: 'coder', category: 'Engineering',
-    description: 'A local coding agent that runs on your machine via the daemon.',
-    systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
-    tools: [], skills: [], runMode: 'daemon', icon: Terminal,
-  },
-  {
-    id: 'reviewer', name: 'Code Reviewer', handle: 'reviewer', category: 'Engineering',
-    description: 'Reviews diffs for bugs, risks, and style — reports only what matters.',
-    systemPrompt: 'You are a senior code reviewer. Review changes for correctness, security, and clarity. Report concrete, high-signal issues with file:line references; skip nitpicks and praise.',
-    tools: [], skills: [], runMode: 'daemon', icon: ShieldCheck,
-  },
-  {
-    id: 'devops', name: 'DevOps', handle: 'devops', category: 'Engineering',
-    description: 'Helps with deploys, CI, infra config, and debugging ops issues.',
-    systemPrompt: 'You are a pragmatic DevOps engineer. Help with CI/CD, deployment, infrastructure, and incident debugging. Prefer boring, reliable solutions and explain the blast radius of any change.',
-    tools: [], skills: [], runMode: 'daemon', icon: Rocket,
-  },
-  {
-    id: 'writer', name: 'Writer', handle: 'writer', category: 'Content',
-    description: 'Drafts and edits clear, on-brand copy for the team.',
-    systemPrompt: 'You are a sharp writing assistant. Draft and edit clear, concise copy. Match the requested tone, keep structure tight, and prefer plain language.',
-    tools: [], skills: [], runMode: 'builtin', icon: Sparkles,
-  },
-  {
-    id: 'editor', name: 'Editor', handle: 'editor', category: 'Content',
-    description: 'Tightens and proofreads writing without changing its voice.',
-    systemPrompt: 'You are a meticulous editor. Improve clarity, flow, grammar, and concision while preserving the author\u2019s voice and intent. Explain notable changes briefly.',
-    tools: [], skills: [], runMode: 'builtin', icon: Pencil,
-  },
-  {
-    id: 'summarizer', name: 'Summarizer', handle: 'summarizer', category: 'Content',
-    description: 'Condenses long threads, docs, or meetings into the key points.',
-    systemPrompt: 'You are a summarizer. Condense long content into the essential points, decisions, and action items. Be faithful to the source and never invent detail.',
-    tools: [], skills: [], runMode: 'builtin', icon: Command,
-  },
-  {
-    id: 'support', name: 'Support Agent', handle: 'support', category: 'Operations',
-    description: 'Answers questions from your docs in a friendly, accurate way.',
-    systemPrompt: 'You are a helpful support agent. Answer questions accurately using the workspace\u2019s documents and memory. Be warm and concise; if you don\u2019t know, say so and point to who might.',
-    tools: [], skills: [], runMode: 'builtin', icon: Bot,
-  },
-  {
-    id: 'pm', name: 'Project Manager', handle: 'pm', category: 'Operations',
-    description: 'Tracks tasks, drafts updates, and keeps work moving.',
-    systemPrompt: 'You are a project manager. Turn discussion into clear tasks (use TASK: <title> lines), draft crisp status updates, and surface blockers early. Keep everyone aligned.',
-    tools: [], skills: [], runMode: 'builtin', icon: Check,
-  },
-  {
-    id: 'qa', name: 'QA Tester', handle: 'qa', category: 'Engineering',
-    description: 'Designs test cases and hunts for edge cases and regressions.',
-    systemPrompt: 'You are a QA engineer. Design thorough test cases, probe edge cases and failure modes, and report reproducible steps. Think adversarially about what could break.',
-    tools: [], skills: [], runMode: 'daemon', icon: Wrench,
-  },
-  {
-    id: 'translator', name: 'Translator', handle: 'translator', category: 'Content',
-    description: 'Translates between languages while preserving tone and meaning.',
-    systemPrompt: 'You are a professional translator. Translate accurately while preserving tone, register, and intent. Note any phrases that don\u2019t translate cleanly.',
-    tools: [], skills: [], runMode: 'builtin', icon: Globe,
-  },
-];
 
 const TEMPLATE_CATEGORIES = ['All', ...Array.from(new Set(AGENT_TEMPLATES.map(t => t.category)))];
 
@@ -195,6 +161,47 @@ const TEMPLATE_CATEGORIES = ['All', ...Array.from(new Set(AGENT_TEMPLATES.map(t 
 // (the daemon defaults everything, so a bad draft must not block agent creation).
 function safeParseSandboxConfig(raw: string): Record<string, unknown> {
   try { const v = JSON.parse(raw || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+}
+
+// The raw strings the edit form holds for an agent.
+interface AgentEditForm {
+  name: string;
+  avatar: string;
+  openPetAvatarId: string;
+  accentColor: string;
+  handle: string;
+  description: string;
+  systemPrompt: string;
+  soul: string;
+  instructions: string;
+  tools: string;
+  skills: string;
+  model: string;
+  runMode: 'builtin' | 'daemon' | 'sandbox';
+  sandboxProvider: string;
+  sandboxConfig: string;
+}
+
+// One normalization for BOTH the save candidate and the baseline captured when
+// the form was seeded — handleSave diffs the two field-by-field, and they only
+// stay comparable if they went through the same trims and fallbacks.
+function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
+  return {
+    name: form.name.trim(),
+    avatar: form.avatar.trim() || DEFAULT_AGENT_AVATAR,
+    openpet_avatar_id: form.openPetAvatarId,
+    accent_color: validAgentAccentColor(form.accentColor),
+    handle: form.handle.trim() || agentHandle(form.name),
+    description: form.description.trim(),
+    system_prompt: form.systemPrompt.trim(),
+    soul: form.soul.trim(),
+    instructions: form.instructions.trim(),
+    tools: splitList(form.tools),
+    skills: splitList(form.skills),
+    model: form.model,
+    run_mode: form.runMode,
+    ...(form.runMode === 'sandbox' ? { sandbox_provider: form.sandboxProvider, sandbox_config: safeParseSandboxConfig(form.sandboxConfig) } : {}),
+  };
 }
 
 // Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
@@ -224,17 +231,33 @@ const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon
   { value: 'icon:monitor', label: 'Monitor', icon: Monitor },
 ];
 
+// How an agent's turns are actually served. 'external' means an MCP client
+// registered itself and works AS this agent (register_agent + claim_job) — it is
+// remote like a daemon, but there is no daemon CLI to connect, so offering the
+// daemon Connect flow for one is a wrong door.
+function agentTransportLabel(runMode?: string | null): string {
+  if (runMode === 'daemon' || runMode === 'sandbox') return 'Remote';
+  if (runMode === 'external') return 'MCP client';
+  return 'Built-in';
+}
+
 export const AgentsWindowContent = memo(function AgentsWindowContent({
   agents,
   webhooks,
   connections = [],
+  sessions = [],
+  tasks = [],
+  workspaceId = null,
+  workspaceName = 'agensis',
   currentUserId,
   focusedAgentKey,
   onCreateAgent,
   onUpdateAgent,
   onDeleteAgent,
+  onDisconnectAgent,
   onCreateWebhook,
   onUpdateWebhook,
+  onConfigureWebhook,
   onOpenConnections,
 }: AgentsWindowContentProps) {
   // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
@@ -258,15 +281,25 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
   const [newSandboxConfig, setNewSandboxConfig] = useState('{}');
+  const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
-  const [statusFilter, setStatusFilter] = useState<Set<AgentPresence>>(new Set());
+  const [statusFilter, setStatusFilter] = usePersistedPreference(
+    viewPreferenceKey('agents.status-filter', workspaceId), AGENT_STATUS_FILTER_PREF, NO_STATUS_FILTER,
+  );
   const [searchTerm, setSearchTerm] = useState('');
-  const [ownerFilter, setOwnerFilter] = useState<'all' | 'mine'>('all');
-  const [layoutView, setLayoutView] = useState<'grid' | 'network'>('grid');
+  const [ownerFilter, setOwnerFilter] = usePersistedPreference(
+    viewPreferenceKey('agents.owner-filter', workspaceId), AGENT_OWNER_FILTER_PREF, 'all' as 'all' | 'mine',
+  );
+  const [layoutView, setLayoutView] = usePersistedPreference(
+    viewPreferenceKey('agents.layout-view', workspaceId), AGENT_LAYOUT_VIEW_PREF, 'grid' as AgentLayoutView,
+  );
   const normalizedFocusedAgentKey = normalizeAgentKey(focusedAgentKey);
   const focusedAgent = agents.find(agent => agentMatchesKey(agent, normalizedFocusedAgentKey)) || null;
+  // Cards are draggable and spring back — a fidget, not a layout. One hook for
+  // the whole grid: a pointer drags one card at a time. See useFidgetDrag.
+  const fidget = useFidgetDrag();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
@@ -295,10 +328,17 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     return acc;
   }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
   presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
-  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId
-    ? agents.filter(agent => agent.created_by === currentUserId)
+  const mineAgents = currentUserId ? agents.filter(agent => agent.created_by === currentUserId) : [];
+  // A persisted 'mine' filter must never hide EVERYTHING. The toggle that
+  // clears it only renders when there is at least one of your own agents
+  // (below), so a workspace whose agents were all created by someone else —
+  // or by an older build that did not stamp created_by — showed "you haven't
+  // created any agents yet" over a full workspace, with no control on screen
+  // to undo it. The filter now yields only when it would match nothing.
+  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId && mineAgents.length > 0
+    ? mineAgents
     : agents;
-  const mineCount = currentUserId ? agents.filter(agent => agent.created_by === currentUserId).length : 0;
+  const mineCount = mineAgents.length;
   const statusVisibleAgents = statusFilter.size === 0
     ? ownerVisibleAgents
     : ownerVisibleAgents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
@@ -321,6 +361,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
   }, []);
 
+  // What the Skills field offers, computed once for BOTH forms. The union of
+  // everything the workspace knows a skill name for — advertised by a live
+  // daemon, configured on any agent, shipped by agensis, or a library on the
+  // backend host. The old field only ever knew the last of those, so a skill
+  // sitting on the agent next to this one couldn't be suggested.
+  const skillSuggestions = useMemo(
+    () => buildSkillSuggestions(buildSkillEntries(agents, connections), capabilities),
+    [agents, connections, capabilities],
+  );
+
   const resetNewAgentFields = () => {
     setNewName('');
     setNewAvatar(DEFAULT_AGENT_AVATAR);
@@ -336,24 +386,37 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewModel('auto');
     setNewRunMode('builtin');
   };
-  const handleCreate = () => {
-    if (!newName.trim()) return;
-    onCreateAgent({
-      name: newName.trim(),
-      avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
-      openpet_avatar_id: newOpenPetAvatarId,
-      accent_color: validAgentAccentColor(newAccentColor),
-      handle: newHandle.trim() || agentHandle(newName),
-      description: newDescription.trim(),
-      system_prompt: newSystemPrompt.trim(),
-      soul: newSoul.trim(),
-      instructions: newInstructions.trim(),
-      tools: splitList(newTools),
-      skills: splitList(newSkills),
-      model: newModel,
-      run_mode: newRunMode,
-      ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
-    });
+  // Awaits the write before resetting the form and going back to the list.
+  // Previously this fired and forgot, so a rejected create — or one that never
+  // even left the browser because the workspace hadn't loaded — landed you back
+  // on "No agents yet" looking exactly like a success.
+  const handleCreate = async () => {
+    if (!newName.trim() || creating) return;
+    setCreating(true);
+    let created = false;
+    try {
+      created = await onCreateAgent({
+        name: newName.trim(),
+        avatar: newAvatar.trim() || DEFAULT_AGENT_AVATAR,
+        openpet_avatar_id: newOpenPetAvatarId,
+        accent_color: validAgentAccentColor(newAccentColor),
+        handle: newHandle.trim() || agentHandle(newName),
+        description: newDescription.trim(),
+        system_prompt: newSystemPrompt.trim(),
+        soul: newSoul.trim(),
+        instructions: newInstructions.trim(),
+        tools: splitList(newTools),
+        skills: splitList(newSkills),
+        model: newModel,
+        run_mode: newRunMode,
+        ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
+      });
+    } finally {
+      setCreating(false);
+    }
+    // Not created: keep the form and everything typed into it. The caller has
+    // already said why.
+    if (!created) return;
     resetNewAgentFields();
     setCreateStep(null);
   };
@@ -401,13 +464,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           />
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!createStep && !selectedAgent && agents.length > 0 && (
+          {!createStep && agents.length > 0 && (
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
               <Button type="button" size="icon-sm" variant={layoutView === 'grid' ? 'default' : 'ghost'} onClick={() => setLayoutView('grid')} aria-label="Grid view" aria-pressed={layoutView === 'grid'} title="Grid view">
                 <LayoutGrid />
               </Button>
-              <Button type="button" size="icon-sm" variant={layoutView === 'network' ? 'default' : 'ghost'} onClick={() => setLayoutView('network')} aria-label="Network view" aria-pressed={layoutView === 'network'} title="Network diagram">
+              <Button type="button" size="icon-sm" variant={layoutView === 'network' ? 'default' : 'ghost'} onClick={() => setLayoutView('network')} aria-label="Map view" aria-pressed={layoutView === 'network'} title="Network map">
                 <Share2 />
+              </Button>
+              <Button type="button" size="icon-sm" variant={layoutView === 'both' ? 'default' : 'ghost'} onClick={() => setLayoutView('both')} aria-label="Grid and map view" aria-pressed={layoutView === 'both'} title="Grid and map">
+                <Rows2 />
               </Button>
             </div>
           )}
@@ -438,6 +504,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
         onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+        onConfigureWebhook={onConfigureWebhook}
       />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
@@ -482,7 +549,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     type="button"
                     onClick={() => setTemplateCategory(cat)}
                     className={cn(
-                      'rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                      'control-outer-ring rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                       templateCategory === cat
                         ? 'border-primary/60 bg-primary/15 text-foreground'
                         : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -532,7 +599,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               <Plus className="size-4 text-primary" />
               <span className="text-sm font-semibold">Create agent</span>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
               <AgentForm
                 name={newName}
                 avatar={newAvatar}
@@ -548,6 +614,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 model={newModel}
                 runMode={newRunMode}
                 capabilities={capabilities}
+                skillSuggestions={skillSuggestions}
                 onNameChange={setNewName}
                 onAvatarChange={(value) => {
                   setNewAvatar(value);
@@ -573,43 +640,27 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onSandboxConfigChange={setNewSandboxConfig}
                 onCancel={() => setCreateStep(null)}
                 onSubmit={handleCreate}
+                submitting={creating}
                 submitLabel="Create"
                 submitIcon={<Plus data-icon="inline-start" />}
               />
-            </div>
-          </div>
-        ) : selectedAgent ? (
-          <div className="flex h-full min-h-0 flex-col gap-2">
-            <div className="shrink-0">
-              <Button type="button" variant="ghost" size="sm" onClick={() => { setSelectedAgentId(null); setEditingId(null); }}>
-                <ArrowLeft data-icon="inline-start" />
-                All agents
-              </Button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card/55 backdrop-blur-md">
-              <AgentDetailPane
-                agent={selectedAgent}
-                isEditing={editingId === selectedAgent.id}
-                confirmDelete={confirmDeleteId === selectedAgent.id}
-                onEdit={() => setEditingId(selectedAgent.id)}
-                onCancelEdit={() => setEditingId(null)}
-                onSave={(updates) => {
-                  onUpdateAgent(selectedAgent.id, updates);
-                  setEditingId(null);
-                }}
-                onDelete={() => handleDelete(selectedAgent.id)}
-                onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
-                capabilities={capabilities}
-                webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
-                connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
-                onConnect={() => setConnectAgentId(selectedAgent.id)}
-                onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
-              />
-            </div>
           </div>
         ) : (
-          <div className="flex h-full min-h-0 flex-col">
-            {agents.length > 0 && mineCount > 0 && (
+          // Master-detail, the inbox's pattern: grid/map stays on the LEFT and
+          // the selected agent's detail opens beside it, one hairline between
+          // them. Below 42rem the detail replaces the list instead, with a
+          // back affordance — the threshold is stated in lib/agentsView.ts.
+          <div className="@container/agentswin flex h-full min-h-0">
+            <section
+              className={cn(
+                'flex min-h-0 min-w-0 flex-1 flex-col',
+                selectedAgent && cn('border-r border-border/60 pr-3', AGENTS_SPLIT_HIDE_BELOW),
+              )}
+            >
+            {/* Shown when there is something to filter TO, or when the filter is
+                already engaged — otherwise an active filter can hide its own
+                control. */}
+            {agents.length > 0 && (mineCount > 0 || ownerFilter === 'mine') && (
               <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
                 <button
                   type="button"
@@ -642,7 +693,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={() => setStatusFilter(new Set())}
                   aria-pressed={statusFilter.size === 0}
                   className={cn(
-                    'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                    'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                     statusFilter.size === 0
                       ? 'border-primary/60 bg-primary/15 text-foreground'
                       : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -660,7 +711,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
                       aria-pressed={isActiveFilter}
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                        'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                         isActiveFilter
                           ? 'border-primary/60 bg-primary/15 text-foreground'
                           : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -681,7 +732,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => toggleStatusFilter(filter.key)}
                       aria-pressed={active}
                       className={cn(
-                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                        'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                         active
                           ? 'border-primary/60 bg-primary/15 text-foreground'
                           : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
@@ -716,55 +767,138 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   <EmptyDescription>{searchQuery ? `No agents match "${searchTerm.trim()}".` : ownerFilter === 'mine' && statusFilter.size === 0 ? "You haven't created any agents yet." : `No agents are ${AGENT_PRESENCE_FILTERS.filter(f => statusFilter.has(f.key)).map(f => f.label.toLowerCase()).join(' or ')}. Adjust the filter above.`}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : layoutView === 'network' ? (
-              <div className="min-h-0 flex-1 overflow-hidden">
-                <AgentNetworkDiagram agents={visibleAgents} onSelectAgent={setSelectedAgentId} />
-              </div>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">
-                <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fill,minmax(210px,1fr))]">
+            ) : (() => {
+              // Grid, map, or both stacked — assembled once here so the three
+              // modes share the same live pieces instead of duplicating them.
+              const diagram = (
+                <AgentNetworkDiagram
+                  agents={visibleAgents}
+                  connections={connections}
+                  sessions={sessions}
+                  tasks={tasks}
+                  workspaceId={workspaceId}
+                  workspaceName={workspaceName}
+                  currentUserId={currentUserId}
+                  selectedAgentId={selectedAgentId}
+                  onSelectAgent={setSelectedAgentId}
+                />
+              );
+              if (layoutView === 'network') {
+                return <div className="min-h-0 flex-1 overflow-hidden">{diagram}</div>;
+              }
+              const grid = (
+                <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(148px,1fr))]">
                   {visibleAgents.map(agent => {
                     const accent = agentAccentColor(agent);
                     const presence = presenceByAgent.get(agent.id);
                     const live = presence === 'busy' || presence === 'idle';
                     const active = isAgentActive(agent);
+                    const selected = agent.id === selectedAgentId;
                     return (
                       <button
                         key={agent.id}
                         type="button"
-                        onClick={() => setSelectedAgentId(agent.id)}
+                        // The card is its own toggle: clicking the open agent
+                        // again closes the detail pane (lib/agentsView.ts).
+                        onClick={() => { setSelectedAgentId(prev => toggleAgentSelection(prev, agent.id)); setEditingId(null); }}
+                        {...fidget.handlers}
                         style={agentAccentStyle(agent)}
+                        data-agent-selected={selected ? 'true' : undefined}
+                        aria-pressed={selected}
+                        title={[
+                          `@${agent.handle || agentHandle(agent.name)}`,
+                          agentTransportLabel(agent.run_mode),
+                          agent.description,
+                        ].filter(Boolean).join(' · ')}
                         className={cn(
-                          'group relative flex min-h-[120px] flex-col gap-2 rounded-xl border bg-card/60 p-3 text-left shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          // agents-list-card carries the selected wash (accent
+                          // over card, index.css) and the neo depth treatment.
+                          'agents-list-card group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          selected && 'border-primary/50',
                           !active && 'opacity-60',
                         )}
                       >
-                        <div className="flex items-start gap-2.5">
-                          <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-muted text-base">
-                            <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
-                              <span className="truncate text-sm font-semibold">{agent.name}</span>
-                            </div>
-                            <span className="block truncate text-xs text-muted-foreground">@{agent.handle || agentHandle(agent.name)}</span>
+                        <span className="relative grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
+                          <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+                          {live && (
+                            <span
+                              className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-emerald-500 ring-2 ring-card"
+                              title="Connected"
+                              aria-hidden
+                            />
+                          )}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
+                            <span className="truncate text-sm font-semibold">{agent.name}</span>
                           </div>
-                          {live && <span className="mt-1 size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-hidden />}
-                        </div>
-                        <p className="line-clamp-2 text-xs text-muted-foreground">
-                          {agent.description || 'No description'}
-                        </p>
-                        <div className="mt-auto flex items-center gap-1.5 border-t pt-2 text-[11px] text-muted-foreground">
-                          {agent.run_mode === 'daemon' ? <Monitor className="size-3.5 shrink-0" /> : <Bot className="size-3.5 shrink-0" />}
-                          <span className="truncate">{agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'}</span>
-                          <span className="ml-auto truncate opacity-80">{displayModel(agent.model)}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
+                          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
                         </div>
                       </button>
                     );
                   })}
+                  <button
+                    type="button"
+                    onClick={() => setCreateStep('choose')}
+                    className="flex min-h-[124px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card/20 p-4 text-center text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/60 hover:text-foreground"
+                  >
+                    <span className="grid size-16 place-items-center rounded-2xl border-2 border-dashed border-border/70">
+                      <Plus className="size-6" />
+                    </span>
+                    <span className="text-sm font-medium">New agent</span>
+                  </button>
                 </div>
-              </div>
+              );
+              if (layoutView === 'both') {
+                // Stacked: the card grid with the live map under it, in ONE
+                // scroll container — a short window scrolls the pair rather
+                // than crushing both into slivers.
+                return (
+                  // The grid takes the height its cards need; the map takes
+                  // EVERYTHING left. A fixed map height left a dead band below
+                  // it in a tall window, which is the one thing a two-panel
+                  // view must not do. min-h keeps the map readable in a short
+                  // window, where the outer container scrolls instead.
+                  <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pt-1.5 pb-2">
+                    <div className="shrink-0">{grid}</div>
+                    <div className="mt-3 flex min-h-[18rem] flex-1 overflow-hidden rounded-xl border border-border bg-card/40">
+                      <div className="min-h-0 min-w-0 flex-1">{diagram}</div>
+                    </div>
+                  </div>
+                );
+              }
+              return <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">{grid}</div>;
+            })()}
+            </section>
+            {selectedAgent && (
+              <section className="flex min-h-0 w-[clamp(24rem,45%,34rem)] shrink-0 flex-col overflow-hidden pl-3 @max-2xl/agentswin:w-full @max-2xl/agentswin:pl-0">
+                <AgentDetailPane
+                  agent={selectedAgent}
+                  isEditing={editingId === selectedAgent.id}
+                  confirmDelete={confirmDeleteId === selectedAgent.id}
+                  onEdit={() => setEditingId(selectedAgent.id)}
+                  onCancelEdit={() => setEditingId(null)}
+                  onSave={(updates) => {
+                    onUpdateAgent(selectedAgent.id, updates);
+                    setEditingId(null);
+                  }}
+                  onDelete={() => handleDelete(selectedAgent.id)}
+                  onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
+                  capabilities={capabilities}
+                  skillSuggestions={skillSuggestions}
+                  webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
+                  connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
+                  roster={agents}
+                  onUpdateAgent={onUpdateAgent}
+                  onConnect={() => setConnectAgentId(selectedAgent.id)}
+                  onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
+                  onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+                  onClose={() => { setSelectedAgentId(null); setEditingId(null); }}
+                  backButtonClass={AGENTS_SPLIT_ONLY_BELOW}
+                />
+              </section>
             )}
           </div>
         )}
@@ -772,6 +906,116 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     </div>
   );
 });
+
+/**
+ * The agent form's runtime/model selects and its Cancel/Save pair — ONE
+ * definition, mounted twice (pinned to the top of the edit pane and to the
+ * bottom of it) so the two can never drift apart. Everything it shows is a
+ * prop, so both mounts read the same state and either one saves the same form.
+ *
+ * The dormant one is hidden with `visibility`, NOT `display: none`, and this is
+ * load-bearing rather than a style choice: `display: none` takes the bar out of
+ * the flow, which shortens the scrolled content, which makes the browser adjust
+ * `scrollTop` to anchor what you were looking at — and that adjustment feeds
+ * straight back into the decision that hid it. Measured in Chrome, the two bars
+ * flickered against each other around the swap point and settled on the wrong
+ * one. `visibility: hidden` keeps both boxes in the flow, so the swap changes no
+ * geometry at all and the decision is stable. It is still a real hide: an
+ * invisible bar paints nothing (the form scrolls under it as if it were not
+ * there), takes no clicks, takes no focus, and is not in the accessibility tree,
+ * so a screen reader is never offered two Save buttons.
+ */
+function AgentFormActionBar({
+  barRef,
+  placement,
+  dormant,
+  runMode,
+  model,
+  modelChoices,
+  canSubmit,
+  submitting,
+  submitLabel,
+  submitIcon,
+  onRunModeChange,
+  onModelChange,
+  onCancel,
+  onSubmit,
+}: {
+  barRef: React.RefObject<HTMLDivElement | null>;
+  placement: 'top' | 'bottom';
+  /** Initial state only — after mount the pane toggles `invisible` on the ref. */
+  dormant?: boolean;
+  runMode: 'builtin' | 'daemon' | 'sandbox';
+  model: string;
+  modelChoices: { id: string; label: string }[];
+  canSubmit: boolean;
+  submitting: boolean;
+  submitLabel: string;
+  submitIcon: React.ReactNode;
+  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
+  onModelChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div
+      ref={barRef}
+      // Pinned by the browser, not by measured offsets in JS: `sticky` against
+      // the pane's own scrollport. The negative margin cancels the pane's side
+      // padding so the bar spans the full width and nothing scrolls past it
+      // through a gutter. The pane deliberately carries NO vertical padding —
+      // that lives on the field group inside, so the sticky edge is the pane's
+      // own edge and no sliver of scrolling text shows above the pinned bar.
+      className={cn(
+        'sticky z-10 -mx-3 flex flex-wrap items-center gap-2 bg-card/85 px-3 py-2 backdrop-blur-md',
+        placement === 'top' ? 'top-0 border-b' : 'bottom-0 border-t',
+        dormant && 'invisible',
+      )}
+    >
+      <NativeSelect
+        value={runMode}
+        onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
+        size="sm"
+        className="max-w-48"
+        aria-label="Agent runtime"
+      >
+        <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
+        <NativeSelectOption value="daemon">Remote</NativeSelectOption>
+        {/* Not an offer — it is disabled, and only exists for a row that is
+            already one. Sandbox was withdrawn as a runtime you can choose, but
+            a <select> whose value matches no option silently falls back to the
+            FIRST one, so without this a sandbox agent would read as "Built-in"
+            while its sandbox settings sat open right below. Measured, not
+            assumed: selectedIndex came back 0. */}
+        {runMode === 'sandbox' && (
+          <NativeSelectOption value="sandbox" disabled>Sandbox (retired)</NativeSelectOption>
+        )}
+      </NativeSelect>
+      <NativeSelect
+        value={model}
+        onChange={e => onModelChange(e.target.value)}
+        size="sm"
+        className="max-w-56"
+        aria-label="Built-in agent model"
+      >
+        {modelChoices.map(option => (
+          <NativeSelectOption key={option.id} value={option.id}>
+            {option.label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <div className="flex-1" />
+      <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+        <X data-icon="inline-start" />
+        Cancel
+      </Button>
+      <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit || submitting}>
+        {submitIcon}
+        {submitLabel}
+      </Button>
+    </div>
+  );
+}
 
 function AgentForm({
   name,
@@ -788,6 +1032,7 @@ function AgentForm({
   model,
   runMode,
   capabilities,
+  skillSuggestions,
   onNameChange,
   onAvatarChange,
   onOpenPetAvatarChange,
@@ -807,8 +1052,10 @@ function AgentForm({
   onSandboxConfigChange,
   onCancel,
   onSubmit,
+  submitting = false,
   submitLabel,
   submitIcon,
+  extraSections = null,
 }: {
   name: string;
   avatar: string;
@@ -826,6 +1073,8 @@ function AgentForm({
   sandboxProvider: string;
   sandboxConfig: string;
   capabilities: SystemCapabilities | null;
+  /** Every skill name this workspace knows, for the Skills field's menu. */
+  skillSuggestions: SkillSuggestion[];
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
   onOpenPetAvatarChange: (pet: OpenPet) => void;
@@ -843,11 +1092,23 @@ function AgentForm({
   onSandboxConfigChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
+  /** Write in flight — the submit button must not fire a second one. */
+  submitting?: boolean;
   submitLabel: string;
   submitIcon: React.ReactNode;
+  /**
+   * Extra form sections rendered above the submit row — the edit screen slots
+   * the voice editor here so its draft is committed by the SAME Save button as
+   * every other field, instead of persisting on change from a view screen.
+   */
+  extraSections?: React.ReactNode;
 }) {
   const options = modelOptions(model);
   const canSubmit = Boolean(name.trim());
+  const paneRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
+  const bottomBarRef = useRef<HTMLDivElement>(null);
   const [openPets, setOpenPets] = useState<OpenPet[]>([]);
   const [avatarTab, setAvatarTab] = useState<'icon' | 'avatar' | 'openpets' | 'upload'>('icon');
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -864,6 +1125,47 @@ function AgentForm({
     };
   }, []);
 
+  // The action bar follows the scroll: top bar for the first half of the
+  // travel, bottom bar after it. Done by toggling one class on two refs rather
+  // than through React state, because this fires on every scroll frame of a
+  // pane that can be several screens long — a setState per frame would
+  // re-render every field in the form, and every controlled input in it, just
+  // to move one row. A ResizeObserver covers the two ways the geometry can
+  // change without a scroll: the window being resized, and the form growing or
+  // shrinking (the Advanced disclosure, the voice section, the avatar tabs).
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    const apply = () => {
+      const placement = agentFormBarPlacement(pane.scrollTop, pane.scrollHeight, pane.clientHeight);
+      topBarRef.current?.classList.toggle('invisible', placement !== 'top');
+      bottomBarRef.current?.classList.toggle('invisible', placement !== 'bottom');
+    };
+    apply();
+    pane.addEventListener('scroll', apply, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply);
+    observer?.observe(pane);
+    if (contentRef.current) observer?.observe(contentRef.current);
+    return () => {
+      pane.removeEventListener('scroll', apply);
+      observer?.disconnect();
+    };
+  }, []);
+
+  const actionBarProps = {
+    runMode,
+    model,
+    modelChoices: options,
+    canSubmit,
+    submitting,
+    submitLabel,
+    submitIcon,
+    onRunModeChange,
+    onModelChange,
+    onCancel,
+    onSubmit,
+  };
+
   const handleUploadAvatar = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
@@ -876,7 +1178,12 @@ function AgentForm({
   };
 
   return (
-    <FieldGroup className="agent-form-fields gap-3">
+    // The form OWNS its scroll pane, so the sticky bars have a scrollport to
+    // pin against and both call sites (create + edit) get the same behaviour
+    // from one place.
+    <div ref={paneRef} className="min-h-0 flex-1 overflow-y-auto px-3">
+    <FieldGroup ref={contentRef} className="agent-form-fields gap-3 py-3">
+      <AgentFormActionBar {...actionBarProps} barRef={topBarRef} placement="top" />
       <div className="grid grid-cols-[4.5rem_1fr_10rem] gap-2">
         <Field>
           <FieldLabel>Preview</FieldLabel>
@@ -1080,58 +1387,24 @@ function AgentForm({
 
       <Field>
         <FieldLabel htmlFor="agent-skills">Skills</FieldLabel>
-        <Input
+        {/* Chips, not a comma-separated string the human has to punctuate. The
+            row of quick-pick buttons this replaces offered only the backend
+            host's skill libraries; the menu below the field offers those AND
+            every skill the workspace's agents actually carry, and still accepts
+            a name nothing has heard of — this field is how a new one arrives. */}
+        <SkillChipsInput
           id="agent-skills"
           value={skills}
-          onChange={e => onSkillsChange(e.target.value)}
-          placeholder="codex-user-skills, claude-agents"
+          onChange={onSkillsChange}
+          suggestions={skillSuggestions}
         />
-        {capabilities && (
-          <div className="flex flex-wrap gap-1">
-            {capabilities.skills.filter(skill => skill.available).slice(0, 10).map(skill => (
-              <Button key={skill.id} type="button" variant="outline" size="xs" onClick={() => onSkillsChange(addToken(skills, skill.id))}>
-                {skill.label}
-              </Button>
-            ))}
-          </div>
-        )}
       </Field>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <NativeSelect
-          value={runMode}
-          onChange={e => { const v = e.target.value; onRunModeChange(v === 'daemon' ? 'daemon' : v === 'sandbox' ? 'sandbox' : 'builtin'); }}
-          size="sm"
-          className="max-w-48"
-          aria-label="Agent runtime"
-        >
-          <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
-          <NativeSelectOption value="daemon">Remote</NativeSelectOption>
-          <NativeSelectOption value="sandbox">Sandbox (isolated cloud)</NativeSelectOption>
-        </NativeSelect>
-        <NativeSelect
-          value={model}
-          onChange={e => onModelChange(e.target.value)}
-          size="sm"
-          className="max-w-56"
-          aria-label="Built-in agent model"
-        >
-          {options.map(option => (
-            <NativeSelectOption key={option.id} value={option.id}>
-              {option.label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        <div className="flex-1" />
-        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-          <X data-icon="inline-start" />
-          Cancel
-        </Button>
-        <Button type="button" size="sm" onClick={onSubmit} disabled={!canSubmit}>
-          {submitIcon}
-          {submitLabel}
-        </Button>
-      </div>
+      {extraSections}
+
+      {/* Unreachable from the runtime picker, which now offers Built-in and
+          Remote only — kept because an agent row saved as `sandbox` before the
+          option was removed must still show and round-trip its settings. */}
       {runMode === 'sandbox' && (
         <details className="rounded-lg border bg-card/40 px-3 py-2 text-sm">
           <summary className="cursor-pointer select-none font-medium text-muted-foreground">Advanced</summary>
@@ -1152,7 +1425,9 @@ function AgentForm({
           </div>
         </details>
       )}
+      <AgentFormActionBar {...actionBarProps} barRef={bottomBarRef} placement="bottom" dormant />
     </FieldGroup>
+    </div>
   );
 }
 
@@ -1166,10 +1441,16 @@ function AgentDetailPane({
   onDelete,
   onToggleEnabled,
   capabilities,
+  skillSuggestions,
   webhooks,
   connections,
+  roster,
+  onUpdateAgent,
   onConnect,
+  onDisconnect,
   onToggleWebhook,
+  onClose,
+  backButtonClass,
 }: {
   agent: WorkspaceAgent | null;
   isEditing: boolean;
@@ -1180,10 +1461,28 @@ function AgentDetailPane({
   onDelete: () => void;
   onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
+  /** Passed straight through to the Skills field; built once for both forms. */
+  skillSuggestions: SkillSuggestion[];
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
+  /**
+   * Every agent in the workspace, so the voice preview plays exactly what a
+   * huddle would play. Voice assignment is COORDINATED across the roster (two
+   * agents never share a voice while the device has a spare), so resolving this
+   * agent on its own would preview a voice it may not actually get.
+   */
+  roster: WorkspaceAgent[];
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onConnect: () => void;
+  onDisconnect: () => Promise<unknown>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+  /** Deselects the agent — the split view's close control. */
+  onClose?: () => void;
+  /**
+   * Classes for the back affordance, shown only when the detail has replaced
+   * the list (the narrow fallback) — same contract as InboxDetail's.
+   */
+  backButtonClass?: string;
 }) {
   const [editName, setEditName] = useState('');
   const [editAvatar, setEditAvatar] = useState(DEFAULT_AGENT_AVATAR);
@@ -1200,24 +1499,58 @@ function AgentDetailPane({
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
+  // The voice DRAFT for the edit form. The voice controls used to live in the
+  // read-only detail view and persisted on every change; they now render only
+  // while editing, and this draft is committed by Save like any other field.
+  const [editVoice, setEditVoice] = useState<AgentVoicePreference>({});
+  const [disconnecting, setDisconnecting] = useState(false);
+  // What the form was seeded from, normalized exactly like a save. handleSave
+  // diffs against this so it submits ONLY the fields the human changed in THIS
+  // edit session: an untouched identity field sent along for the ride would be
+  // recorded as a human choice (identity.human_set, shared/agentIdentity.cjs)
+  // and lock the field at its current — possibly empty — value forever.
+  const editBaseline = useRef<Partial<WorkspaceAgent>>({});
+  const voiceBaseline = useRef<AgentVoicePreference>({});
 
   useEffect(() => {
     if (!agent) return;
-    setEditName(agent.name);
-    setEditAvatar(agent.avatar || DEFAULT_AGENT_AVATAR);
-    setEditOpenPetAvatarId(agent.openpet_avatar_id || '');
-    setEditAccentColor(agentAccentColor(agent));
-    setEditHandle(agent.handle || agentHandle(agent.name));
-    setEditDescription(agent.description || '');
-    setEditSystemPrompt(agent.system_prompt || '');
-    setEditSoul(agent.soul || '');
-    setEditInstructions(agent.instructions || '');
-    setEditTools(joinList(agent.tools));
-    setEditSkills(joinList(agent.skills));
-    setEditModel(agent.model || 'auto');
-    setEditRunMode(agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin');
-    setEditSandboxProvider(agent.sandbox_provider || 'e2b');
-    setEditSandboxConfig(JSON.stringify(agent.sandbox_config || {}, null, 2));
+    const seed = {
+      name: agent.name,
+      avatar: agent.avatar || DEFAULT_AGENT_AVATAR,
+      openPetAvatarId: agent.openpet_avatar_id || '',
+      accentColor: agentAccentColor(agent),
+      handle: agent.handle || agentHandle(agent.name),
+      description: agent.description || '',
+      systemPrompt: agent.system_prompt || '',
+      soul: agent.soul || '',
+      instructions: agent.instructions || '',
+      tools: joinList(agent.tools),
+      skills: joinList(agent.skills),
+      model: agent.model || 'auto',
+      runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
+      sandboxProvider: agent.sandbox_provider || 'e2b',
+      sandboxConfig: JSON.stringify(agent.sandbox_config || {}, null, 2),
+    };
+    setEditName(seed.name);
+    setEditAvatar(seed.avatar);
+    setEditOpenPetAvatarId(seed.openPetAvatarId);
+    setEditAccentColor(seed.accentColor);
+    setEditHandle(seed.handle);
+    setEditDescription(seed.description);
+    setEditSystemPrompt(seed.systemPrompt);
+    setEditSoul(seed.soul);
+    setEditInstructions(seed.instructions);
+    setEditTools(seed.tools);
+    setEditSkills(seed.skills);
+    setEditModel(seed.model);
+    setEditRunMode(seed.runMode);
+    setEditSandboxProvider(seed.sandboxProvider);
+    setEditSandboxConfig(seed.sandboxConfig);
+    const seedVoice = readAgentVoice(agent);
+    setEditVoice(seedVoice);
+    voiceBaseline.current = seedVoice;
+    setDisconnecting(false);
+    editBaseline.current = agentFormUpdates(seed);
   }, [agent?.id]);
 
   if (!agent) {
@@ -1238,24 +1571,59 @@ function AgentDetailPane({
   const tools = normalizeList(agent.tools);
   const skills = normalizeList(agent.skills);
   const agentActive = isAgentActive(agent);
+  const isConnected = activeConnections.length > 0;
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    try {
+      await onDisconnect();
+    } finally {
+      setDisconnecting(false);
+    }
+  };
 
   const handleSave = () => {
-    onSave({
-      name: editName.trim(),
-      avatar: editAvatar.trim() || DEFAULT_AGENT_AVATAR,
-      openpet_avatar_id: editOpenPetAvatarId,
-      accent_color: validAgentAccentColor(editAccentColor),
-      handle: editHandle.trim() || agentHandle(editName),
-      description: editDescription.trim(),
-      system_prompt: editSystemPrompt.trim(),
-      soul: editSoul.trim(),
-      instructions: editInstructions.trim(),
-      tools: splitList(editTools),
-      skills: splitList(editSkills),
+    // A SPARSE diff against the seed baseline, not the full form. Submitting an
+    // untouched field would (a) human-lock identity fields the human never
+    // chose — permanently, and at '' when they were empty — and (b) overwrite
+    // a concurrent edit with the stale value this form was opened on.
+    const candidate = agentFormUpdates({
+      name: editName,
+      avatar: editAvatar,
+      openPetAvatarId: editOpenPetAvatarId,
+      accentColor: editAccentColor,
+      handle: editHandle,
+      description: editDescription,
+      systemPrompt: editSystemPrompt,
+      soul: editSoul,
+      instructions: editInstructions,
+      tools: editTools,
+      skills: editSkills,
       model: editModel,
-      run_mode: editRunMode,
-      ...(editRunMode === 'sandbox' ? { sandbox_provider: editSandboxProvider, sandbox_config: safeParseSandboxConfig(editSandboxConfig) } : {}),
+      runMode: editRunMode,
+      sandboxProvider: editSandboxProvider,
+      sandboxConfig: editSandboxConfig,
     });
+    const baseline = editBaseline.current as Record<string, unknown>;
+    const updates: Partial<WorkspaceAgent> = {};
+    for (const key of Object.keys(candidate) as (keyof WorkspaceAgent)[]) {
+      const next = (candidate as Record<string, unknown>)[key];
+      if (JSON.stringify(next) !== JSON.stringify(baseline[key])) {
+        (updates as Record<string, unknown>)[key] = next;
+      }
+    }
+    // The voice draft rides the same rule: only a CHANGED voice is sent, as
+    // `identity.voice` — the one identity key a client may write. The server
+    // grafts it onto the stored column and records the human's choice.
+    if (JSON.stringify(editVoice) !== JSON.stringify(voiceBaseline.current)) {
+      updates.identity = { voice: editVoice };
+    }
+    if (Object.keys(updates).length === 0) {
+      // Nothing changed — closing the editor without a write is the whole point.
+      onCancelEdit();
+      return;
+    }
+    onSave(updates);
   };
 
   if (isEditing) {
@@ -1268,7 +1636,6 @@ function AgentDetailPane({
             <X />
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <AgentForm
             name={editName}
             avatar={editAvatar}
@@ -1284,6 +1651,7 @@ function AgentDetailPane({
             model={editModel}
             runMode={editRunMode}
             capabilities={capabilities}
+            skillSuggestions={skillSuggestions}
             onNameChange={setEditName}
             onAvatarChange={(value) => {
               setEditAvatar(value);
@@ -1311,8 +1679,16 @@ function AgentDetailPane({
             onSubmit={handleSave}
             submitLabel="Save"
             submitIcon={<Save data-icon="inline-start" />}
+            extraSections={(
+              <VoiceSection
+                agent={agent}
+                roster={roster}
+                mode="edit"
+                draft={editVoice}
+                onDraftChange={setEditVoice}
+              />
+            )}
           />
-        </div>
       </div>
     );
   }
@@ -1320,11 +1696,21 @@ function AgentDetailPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        {onClose && backButtonClass && (
+          <Button type="button" variant="ghost" size="icon-xs" className={cn('shrink-0', backButtonClass)} onClick={onClose} aria-label="Back to all agents">
+            <ArrowLeft />
+          </Button>
+        )}
         <Bot className="size-4 text-primary" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">Agent details</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} aria-label={`Edit ${agent.name}`}>
           <Pencil />
         </Button>
+        {onClose && (
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close agent details">
+            <X />
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <div className="agent-detail-summary flex min-w-0 items-stretch gap-3 rounded-lg border bg-muted/25 p-3">
@@ -1337,7 +1723,7 @@ function AgentDetailPane({
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{agent.description || 'No description'}</p>
             <div className="mt-2 flex flex-wrap gap-1">
               <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
-                {agent.run_mode === 'daemon' ? 'remote daemon' : 'built-in'}
+                {agent.run_mode === 'daemon' ? 'remote daemon' : agent.run_mode === 'external' ? 'MCP client' : 'built-in'}
               </Badge>
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
               <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
@@ -1352,25 +1738,42 @@ function AgentDetailPane({
             variant={agentActive ? 'secondary' : 'outline'}
             size="sm"
             onClick={onToggleEnabled}
+            disabled={isConnected}
+            title={isConnected ? 'Disconnect before deactivating' : undefined}
           >
             <Power data-icon="inline-start" />
             {agentActive ? 'Deactivate' : 'Activate'}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onConnect}
-            disabled={!agentActive}
-          >
-            <Plug data-icon="inline-start" />
-            Connect
-          </Button>
+          {isConnected ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleDisconnect}
+              disabled={disconnecting}
+            >
+              <Unplug data-icon="inline-start" />
+              {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onConnect}
+              disabled={!agentActive}
+            >
+              <Plug data-icon="inline-start" />
+              Connect
+            </Button>
+          )}
           <Button
             type="button"
             variant={confirmDelete ? 'destructive' : 'ghost'}
             size="sm"
             onClick={onDelete}
+            disabled={isConnected || agentActive}
+            title={isConnected || agentActive ? 'Disconnect and deactivate before deleting' : undefined}
           >
             <Trash2 data-icon="inline-start" />
             {confirmDelete ? 'Confirm delete' : 'Delete'}
@@ -1379,10 +1782,16 @@ function AgentDetailPane({
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Mode" value={agent.run_mode === 'daemon' ? 'Remote' : 'Built-in'} />
+            <AgentDetailField label="Mode" value={agentTransportLabel(agent.run_mode)} />
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
           </AgentDetailSection>
+
+          <VoiceSection agent={agent} roster={roster} mode="view" />
+
+          {agent.run_mode === 'daemon' && (
+            <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
+          )}
 
           {activeConnections.length > 0 && (
             <AgentDetailSection title="Connections">
@@ -1460,19 +1869,38 @@ function AgentDetailPane({
           <AgentDetailTokenSection title="Tools" items={tools} empty="No tools configured" />
           <AgentDetailTokenSection title="Skills" items={skills} empty="No skills configured" />
 
+          {/* These three fields ARE markdown documents — soul especially, which
+              the daemon mirrors to disk as soul.md — and they were rendered as
+              raw pre-wrapped text, so headings, lists and emphasis showed as
+              literal #, - and **. Rendered through the app's own markdown
+              component (the one chat and the memory browser use, which builds
+              elements itself and never injects HTML — soul is agent-authored,
+              so that matters). Compact, because this is a narrow side pane and
+              not a message body. */}
           {agent.system_prompt && (
             <AgentDetailSection title="System prompt">
-              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.system_prompt}</p>
+              <div className="min-w-0 max-h-36 overflow-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.system_prompt} compact />
+              </div>
             </AgentDetailSection>
           )}
           {agent.instructions && (
             <AgentDetailSection title="Instructions">
-              <p className="max-h-36 overflow-auto whitespace-pre-wrap text-sm leading-relaxed">{agent.instructions}</p>
+              <div className="min-w-0 max-h-36 overflow-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.instructions} compact />
+              </div>
             </AgentDetailSection>
           )}
           {agent.soul && (
             <AgentDetailSection title="Soul">
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{agent.soul}</p>
+              {/* No height cap: a soul is the one field a human reads in full,
+                  and the pane already scrolls. min-w-0 + overflow-x matter
+                  because .chat-markdown is a GRID, whose children default to
+                  min-width:auto — a fenced code block would otherwise widen
+                  this fixed-width pane instead of scrolling inside it. */}
+              <div className="min-w-0 overflow-x-auto text-sm leading-relaxed">
+                <MarkdownContent content={agent.soul} compact />
+              </div>
             </AgentDetailSection>
           )}
 
@@ -1544,6 +1972,7 @@ function AgentConnectDialog({
   webhooks,
   onCreateWebhook,
   onToggleWebhook,
+  onConfigureWebhook,
 }: {
   agent: WorkspaceAgent | null;
   open: boolean;
@@ -1551,6 +1980,7 @@ function AgentConnectDialog({
   webhooks: AgentWebhook[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+  onConfigureWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
 }) {
   const [tab, setTab] = useState<ConnectTab>('cli');
 
@@ -1820,8 +2250,8 @@ function AgentConnectDialog({
             {/* Webhook */}
             <TabsContent value="webhook" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={`Trigger @${handle} over HTTP from anything — CI, cron, Zapier, a curl one-liner.`}
-                note="One-way fire-and-forget, not a live connection. Treat the URL as a secret — anyone with it can post to this agent."
+                benefit={`Wake @${handle} from an external event — CI failing, an issue opening, a monitor firing.`}
+                note="Set a provider and signing secret and the delivery is verified and de-duplicated. Leave it generic and the URL alone is the only authenticator, so treat it as a secret."
               />
               <McpDialogSection icon={Link2} title="Webhook URLs">
                 {webhooks.length > 0 ? (
@@ -1829,28 +2259,39 @@ function AgentConnectDialog({
                     {webhooks.map(webhook => {
                       const url = webhookUrl(webhook.token);
                       return (
-                        <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs">
-                          <Link2 className="size-3 shrink-0" />
-                          <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            onClick={() => void navigator.clipboard?.writeText(url)}
-                            aria-label={`Copy webhook for ${agent.name}`}
-                          >
-                            <Copy />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant={webhook.enabled ? 'secondary' : 'ghost'}
-                            size="icon-xs"
-                            onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
-                            aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
-                            title={webhook.enabled ? 'Enabled' : 'Disabled'}
-                          >
-                            <Power />
-                          </Button>
+                        <div key={webhook.id} className="space-y-1.5 rounded-md border bg-background px-2 py-1.5">
+                          <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                            <Link2 className="size-3 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
+                            {!webhook.has_signing_secret && (
+                              <span
+                                className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400"
+                                title="No signing secret: deliveries cannot be verified, and this agent will not run at elevated permissions from an unsigned event."
+                              >
+                                Unsigned
+                              </span>
+                            )}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => void navigator.clipboard?.writeText(url)}
+                              aria-label={`Copy webhook for ${agent.name}`}
+                            >
+                              <Copy />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={webhook.enabled ? 'secondary' : 'ghost'}
+                              size="icon-xs"
+                              onClick={() => onToggleWebhook(webhook, !webhook.enabled)}
+                              aria-label={webhook.enabled ? `Disable webhook for ${agent.name}` : `Enable webhook for ${agent.name}`}
+                              title={webhook.enabled ? 'Enabled' : 'Disabled'}
+                            >
+                              <Power />
+                            </Button>
+                          </div>
+                          <OrbConfigForm webhook={webhook} onConfigure={onConfigureWebhook} />
                         </div>
                       );
                     })}
@@ -1875,6 +2316,198 @@ function AgentConnectDialog({
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const ORB_PROVIDER_LABELS: Array<{ value: OrbProvider; label: string }> = [
+  { value: 'generic', label: 'Generic (agensis signature, or unsigned)' },
+  { value: 'github', label: 'GitHub (X-Hub-Signature-256)' },
+  { value: 'stripe', label: 'Stripe (Stripe-Signature)' },
+];
+
+const ORB_ROUTING_LABELS: Array<{ value: OrbRouting; label: string }> = [
+  { value: 'new', label: 'New session per event' },
+  { value: 'thread', label: 'One thread, appended to' },
+];
+
+// Orb configuration for one webhook (plans/021). Collapsed by default — most
+// webhooks are fire-and-forget, and these fields only start to matter when a real
+// provider is pointed at one.
+//
+// The draft is seeded from the row ONCE per webhook id, not on every change to it:
+// an orb firing mid-edit bumps last_triggered_at, and re-seeding on that would
+// wipe whatever the operator was typing.
+function OrbConfigForm({
+  webhook,
+  onConfigure,
+}: {
+  webhook: AgentWebhook;
+  onConfigure: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [provider, setProvider] = useState<OrbProvider>(webhook.provider || 'generic');
+  const [routing, setRouting] = useState<OrbRouting>(webhook.routing || 'new');
+  const [prompt, setPrompt] = useState(webhook.prompt || '');
+  const [payloadFields, setPayloadFields] = useState((webhook.payload_fields || []).join('\n'));
+  const [rateLimit, setRateLimit] = useState(String(webhook.rate_limit_per_hour ?? 60));
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  const seed = useCallback((row: AgentWebhook) => {
+    setProvider(row.provider || 'generic');
+    setRouting(row.routing || 'new');
+    setPrompt(row.prompt || '');
+    setPayloadFields((row.payload_fields || []).join('\n'));
+    setRateLimit(String(row.rate_limit_per_hour ?? 60));
+    setSecret('');
+  }, []);
+
+  useEffect(() => { seed(webhook); }, [webhook.id, seed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = useCallback(async (config: OrbConfigInput) => {
+    setBusy(true);
+    setError('');
+    setSaved(false);
+    const result = await onConfigure(webhook.id, config);
+    setBusy(false);
+    if (result.error || !result.webhook) {
+      setError(result.error || 'Could not save this orb');
+      return;
+    }
+    // Re-seed from what the server actually stored, so a clamped rate limit or a
+    // trimmed prompt is visible rather than only local.
+    seed(result.webhook);
+    setSaved(true);
+  }, [onConfigure, seed, webhook.id]);
+
+  if (!open) {
+    return (
+      <Button type="button" variant="ghost" size="xs" className="h-6 px-1.5 text-[11px]" onClick={() => setOpen(true)}>
+        <Wrench data-icon="inline-start" />
+        Configure orb
+      </Button>
+    );
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-2">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Provider
+          <NativeSelect
+            value={provider}
+            onChange={event => setProvider(event.target.value as OrbProvider)}
+            className="h-7 text-xs"
+          >
+            {ORB_PROVIDER_LABELS.map(option => (
+              <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Thread
+          <NativeSelect
+            value={routing}
+            onChange={event => setRouting(event.target.value as OrbRouting)}
+            className="h-7 text-xs"
+          >
+            {ORB_ROUTING_LABELS.map(option => (
+              <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </label>
+      </div>
+
+      <label className="block space-y-1 text-[11px] text-muted-foreground">
+        Instructions for the agent
+        <Textarea
+          value={prompt}
+          onChange={event => setPrompt(event.target.value)}
+          rows={2}
+          className="text-xs"
+          placeholder="What should the agent do when this event arrives?"
+        />
+        <span className="block text-[10px] text-muted-foreground/80">
+          This is the only instruction the agent is given. The event payload is passed
+          separately and marked untrusted.
+        </span>
+      </label>
+
+      <label className="block space-y-1 text-[11px] text-muted-foreground">
+        Payload fields (one per line, optional)
+        <Textarea
+          value={payloadFields}
+          onChange={event => setPayloadFields(event.target.value)}
+          rows={2}
+          className="font-mono text-[11px]"
+          placeholder={'repository.full_name\nworkflow_run.conclusion'}
+        />
+        <span className="block text-[10px] text-muted-foreground/80">
+          Narrows the payload to these paths. Leave empty to pass the whole body, truncated.
+        </span>
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Signing secret {webhook.has_signing_secret ? '(set)' : '(none)'}
+          <Input
+            type="password"
+            value={secret}
+            onChange={event => setSecret(event.target.value)}
+            className="h-7 text-xs"
+            placeholder={webhook.has_signing_secret ? 'Replace secret' : 'Paste the provider secret'}
+            autoComplete="off"
+          />
+        </label>
+        <label className="space-y-1 text-[11px] text-muted-foreground">
+          Max events per hour
+          <Input
+            type="number"
+            min={1}
+            value={rateLimit}
+            onChange={event => setRateLimit(event.target.value)}
+            className="h-7 text-xs"
+          />
+        </label>
+      </div>
+
+      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {saved && !error && <p className="text-[11px] text-muted-foreground">Saved.</p>}
+
+      <div className="flex items-center gap-1.5">
+        <Button
+          type="button"
+          size="xs"
+          disabled={busy}
+          onClick={() => void submit({
+            provider,
+            routing,
+            prompt,
+            payload_fields: payloadFields.split('\n').map(value => value.trim()).filter(Boolean),
+            rate_limit_per_hour: Number(rateLimit) || 60,
+            ...(secret ? { signing_secret: secret } : {}),
+          })}
+        >
+          <Save data-icon="inline-start" />
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+        {webhook.has_signing_secret && (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void submit({ provider, signing_secret: '' })}
+            title="Remove the signing secret. A non-generic provider will refuse this, since it could never verify a delivery without one."
+          >
+            Remove secret
+          </Button>
+        )}
+        <Button type="button" size="xs" variant="ghost" onClick={() => setOpen(false)}>Close</Button>
+      </div>
+    </div>
   );
 }
 
@@ -1924,7 +2557,11 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
     window.setTimeout(() => setCopied(false), 1400);
   };
   return (
-    <div className={cn('relative rounded-md border bg-background', className)}>
+    // flex + min-h-0 so a max-h-* passed via className actually caps the pre and
+    // scrolls it — the pre's former max-h-full resolved to `none` because
+    // percentage max-heights need a definite parent height, so long content
+    // painted straight past the border onto the sections below.
+    <div className={cn('relative flex flex-col overflow-hidden rounded-md border bg-background', className)}>
       <Button
         type="button"
         variant="ghost"
@@ -1935,7 +2572,7 @@ function CopyBlock({ value, className }: { value: string; className?: string }) 
       >
         {copied ? <Check /> : <Copy />}
       </Button>
-      <pre className="max-h-full overflow-auto whitespace-pre-wrap break-words p-2 pr-8 text-xs leading-relaxed">{value}</pre>
+      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-2 pr-8 text-xs leading-relaxed">{value}</pre>
     </div>
   );
 }
@@ -1961,6 +2598,319 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
   );
 }
 
+
+// Exported only so tests/unit/agentVoicePanel.test.ts can mount it on its own —
+// the surrounding detail pane needs a dozen props this section does not care
+// about, and "does the voice section actually render" is the question worth
+// asking.
+export function VoiceSection({
+  agent,
+  roster,
+  mode = 'view',
+  draft,
+  onDraftChange,
+}: {
+  agent: WorkspaceAgent;
+  roster: WorkspaceAgent[];
+  /**
+   * 'view' renders what a huddle will actually play — the resolved voice's
+   * name and a preview button, nothing editable. Live-persisting pickers on
+   * the read-only detail screen were a real complaint ("why is it allowing
+   * editing of voice when VIEWING the agent"): every other field there is
+   * display-only, and this one silently wrote to the row. 'edit' renders the
+   * full picker, but into `draft` via onDraftChange — NOTHING persists until
+   * the surrounding form's Save, which sends identity.voice only if it
+   * actually changed (the same sparse-diff rule as every other field).
+   */
+  mode?: 'view' | 'edit';
+  draft?: AgentVoicePreference;
+  onDraftChange?: (voice: AgentVoicePreference) => void;
+}) {
+  const editable = mode === 'edit';
+  const { voices, loading, configured } = useCartesiaVoices();
+  const [query, setQuery] = useState('');
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // What the controls edit and the preview speaks: the DRAFT in edit mode (so
+  // the preview plays what Save would keep), the stored row in view mode.
+  const preference = useMemo(
+    () => (editable ? (draft ?? {}) : readAgentVoice(agent)),
+    [agent, draft, editable],
+  );
+
+  // Resolved ACROSS THE WHOLE ROSTER, exactly as the pipeline will. Resolving
+  // this agent alone would be simpler and would sometimes lie: a derived
+  // default steps aside when another agent already holds that voice, so a
+  // preview that ignored its teammates could play a voice it never gets. In
+  // edit mode the draft is substituted for this agent's stored preference.
+  const resolved = useMemo(() => {
+    const self: WorkspaceAgent = editable
+      ? { ...agent, identity: { ...(agent.identity || {}), voice: preference } }
+      : agent;
+    const pool = roster.length > 0 ? roster.map(entry => (entry.id === agent.id ? self : entry)) : [self];
+    return assignAgentVoices(pool, englishVoiceIds(voices)).get(agent.id)
+      ?? resolveAgentVoice(self, englishVoiceIds(voices));
+  }, [agent, editable, preference, roster, voices]);
+
+  const chosen = voices.find(voice => voice.id === resolved.voiceId) || null;
+  const matches = useMemo(() => filterVoices(voices, query), [voices, query]);
+
+  const setVoice = (voice: AgentVoicePreference) => {
+    onDraftChange?.(voice);
+  };
+
+  // Pins the derived default as an explicit choice, which is the only way to
+  // stop it moving if Cartesia's catalogue changes under it.
+  const pinDefault = () => {
+    if (resolved.voiceId) setVoice({ ...preference, cartesia_voice_id: resolved.voiceId });
+  };
+
+  const stopPreview = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    // Revoking is what actually frees the decoded blob; pausing alone leaks one
+    // per press.
+    if (audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
+    audioRef.current = null;
+  }, []);
+
+  const speakPreview = async () => {
+    if (!resolved.voiceId) return;
+    stopPreview();
+    setPreviewError('');
+    setPreviewing(true);
+    try {
+      const response = await fetch(apiUrl('/backend/tts/preview'), {
+        method: 'POST',
+        headers: { ...apiAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cartesia_voice_id: resolved.voiceId,
+          speed: resolved.speed,
+          emotion: resolved.emotion,
+        }),
+      });
+      if (!response.ok) throw new Error(`Preview failed (${response.status})`);
+      const audio = new Audio(URL.createObjectURL(await response.blob()));
+      audioRef.current = audio;
+      audio.onended = () => { stopPreview(); setPreviewing(false); };
+      audio.onerror = () => { stopPreview(); setPreviewing(false); setPreviewError('Could not play the preview.'); };
+      await audio.play();
+    } catch (error) {
+      setPreviewing(false);
+      setPreviewError(error instanceof Error ? error.message : 'Preview failed.');
+    }
+  };
+
+  // Closing the panel mid-sentence must not leave audio playing.
+  useEffect(() => stopPreview, [stopPreview]);
+
+  return (
+    <AgentDetailSection title="Voice">
+      <p className="mb-2 text-xs text-muted-foreground">
+        How this agent sounds when a huddle reads its replies aloud. Leave it unset and
+        it gets a distinct voice of its own, derived from its id — two agents never share
+        one by accident.
+      </p>
+
+      {!configured ? (
+        <div className="text-sm text-muted-foreground">
+          Speech is not configured on this workspace's backend, so voices cannot be listed
+          or previewed.
+        </div>
+      ) : (
+        <>
+          {editable && (
+            <FieldGroup className="gap-2">
+              <Field>
+                <FieldLabel htmlFor={`voice-search-${agent.id}`}>Find a voice</FieldLabel>
+                <Input
+                  id={`voice-search-${agent.id}`}
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder={loading ? 'Loading voices…' : 'Name, accent or description'}
+                  className="h-8 text-xs"
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor={`voice-id-${agent.id}`}>Voice</FieldLabel>
+                <NativeSelect
+                  id={`voice-id-${agent.id}`}
+                  value={preference.cartesia_voice_id || ''}
+                  onChange={event => setVoice({ ...preference, cartesia_voice_id: event.target.value })}
+                  className="h-8 text-xs"
+                  disabled={loading}
+                >
+                  <NativeSelectOption value="">
+                    {resolved.voiceId && chosen
+                      ? `Automatic — ${describeVoice(chosen)}`
+                      : 'Automatic'}
+                  </NativeSelectOption>
+                  {/* Capped: 418 English voices in one select is a scroll nobody
+                      finishes, so the search box above is the real control and
+                      this shows the top of whatever it matched. */}
+                  {matches.slice(0, VOICE_OPTION_LIMIT).map(voice => (
+                    <NativeSelectOption key={voice.id} value={voice.id}>{describeVoice(voice)}</NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {matches.length > VOICE_OPTION_LIMIT && (
+                  <p className="mt-1 text-xs text-muted-foreground/70">
+                    Showing {VOICE_OPTION_LIMIT} of {matches.length} — narrow the search to see more.
+                  </p>
+                )}
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor={`voice-emotion-${agent.id}`}>Delivery</FieldLabel>
+                <NativeSelect
+                  id={`voice-emotion-${agent.id}`}
+                  value={resolved.emotion}
+                  onChange={event => setVoice({ ...preference, emotion: event.target.value })}
+                  className="h-8 text-xs"
+                >
+                  {VOICE_EMOTIONS.map(emotion => (
+                    <NativeSelectOption key={emotion} value={emotion}>
+                      {emotion.charAt(0).toUpperCase() + emotion.slice(1)}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                <p className="mt-1 text-xs text-muted-foreground/70">
+                  Changes how a line is delivered, not what the agent says. For persona, edit Soul.
+                </p>
+              </Field>
+
+              <VoiceSpeedField
+                id={`voice-speed-${agent.id}`}
+                value={resolved.speed}
+                onChange={value => setVoice({ ...preference, speed: value })}
+              />
+            </FieldGroup>
+          )}
+
+          <div className={cn('flex flex-wrap items-center gap-2', editable && 'mt-2')}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={speakPreview}
+              disabled={previewing || loading || !resolved.voiceId}
+            >
+              <Volume2 data-icon="inline-start" />
+              {previewing ? 'Speaking' : 'Preview'}
+            </Button>
+            {editable && resolved.isDefault && resolved.voiceId && (
+              <Button type="button" variant="ghost" size="sm" onClick={pinDefault}>
+                Keep this one
+              </Button>
+            )}
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={resolved.voiceId}>
+              {previewError
+                ? previewError
+                : loading
+                  ? 'Loading voices…'
+                  : chosen
+                    ? `${describeVoice(chosen)}${resolved.isDefault ? ' (automatic)' : ''}`
+                    : 'No voice available.'}
+            </span>
+          </div>
+        </>
+      )}
+    </AgentDetailSection>
+  );
+}
+
+function VoiceSpeedField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  // The thumb has to track the pointer, but the WRITE happens on release —
+  // binding onValueChange straight to onUpdateAgent would fire one round trip
+  // per pixel of drag. Hence a local draft, re-synced whenever the saved value
+  // changes underneath (a realtime update, or the agent re-declaring).
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>
+        Speed <span className="ml-1 tabular-nums font-normal text-muted-foreground">{draft.toFixed(2)}</span>
+      </FieldLabel>
+      <Slider
+        id={id}
+        value={[draft]}
+        min={MIN_SPEED}
+        max={MAX_SPEED}
+        step={0.05}
+        onValueChange={next => setDraft(Number(next[0]))}
+        onValueCommit={next => onChange(Number(next[0]))}
+      />
+    </Field>
+  );
+}
+
+function HostFoldersSection({
+  agent,
+  onUpdateAgent,
+}: {
+  agent: WorkspaceAgent;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+}) {
+  const stored = normalizeList((agent.metadata as Record<string, unknown> | null)?.host_folders);
+  const [draft, setDraft] = useState('');
+  const persist = (folders: string[]) => {
+    const metadata = { ...(agent.metadata || {}), host_folders: folders };
+    onUpdateAgent(agent.id, { metadata });
+  };
+  const addFolder = () => {
+    const folder = draft.trim();
+    if (!folder || stored.includes(folder)) { setDraft(''); return; }
+    persist([...stored, folder]);
+    setDraft('');
+  };
+  const removeFolder = (folder: string) => persist(stored.filter(f => f !== folder));
+  return (
+    <AgentDetailSection title="Host folders">
+      <p className="mb-2 text-xs text-muted-foreground">
+        Extra folders this silo's coding CLI may read and write beyond its working directory
+        (passed as <code>--add-dir</code> on the next job).
+      </p>
+      {stored.length > 0 ? (
+        <div className="mb-2 space-y-1.5">
+          {stored.map(folder => (
+            <div key={folder} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1 text-sm">
+              <HardDrive className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={folder}>{folder}</span>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => removeFolder(folder)} aria-label={`Remove ${folder}`}>
+                <X />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mb-2 text-xs text-muted-foreground/70">No host folders configured.</p>
+      )}
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addFolder(); } }}
+          placeholder="/Users/name/Documents/GitHub/project"
+          className="h-8 font-mono text-xs"
+        />
+        <Button type="button" variant="secondary" size="sm" onClick={addFolder} disabled={!draft.trim()}>
+          <Plus data-icon="inline-start" /> Add
+        </Button>
+      </div>
+    </AgentDetailSection>
+  );
+}
 
 function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (

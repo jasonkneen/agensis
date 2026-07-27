@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>404 — agensis</title>
+<meta name="robots" content="noindex" />
+<style>
+  :root {
+    --bg: #08090b;
+    --line: rgba(232, 230, 225, 0.09);
+    --text: #e8e6e1;
+    --muted: #8b909c;
+    --dim: #5c6170;
+    --accent: #4f9cf9;
+    --accent-soft: rgba(79, 156, 249, 0.14);
+    --serif: "Instrument Serif", Georgia, serif;
+    --sans: "Instrument Sans", -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background-image: radial-gradient(rgba(232,230,225,0.055) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  main { text-align: center; padding: 24px; max-width: 560px; }
+  .code {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 24px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(2.4rem, 7vw, 3.6rem); line-height: 1.06;
+    letter-spacing: -0.015em; margin-bottom: 18px;
+  }
+  h1 em { font-style: italic; color: var(--accent); }
+  p { color: var(--muted); font-size: 16px; line-height: 1.6; margin-bottom: 36px; }
+  .btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+    padding: 12px 24px; border: 1px solid var(--line); border-radius: 7px;
+    color: var(--text); text-decoration: none; transition: border-color 0.2s, background 0.2s;
+  }
+  .btn:hover { border-color: rgba(79,156,249,0.5); background: var(--accent-soft); }
+  .btn.primary { background: var(--accent); color: #06070a; border-color: var(--accent); }
+  .btn.primary:hover { background: #6cadfa; }
+</style>
+</head>
+<body>
+<main>
+  <div class="code">404 — page not found</div>
+  <h1>Nothing works <em>here.</em></h1>
+  <p>This page doesn't exist. The agents checked twice.</p>
+  <div class="btns">
+    <a href="/" class="btn primary">Back to agensis →</a>
+    <a href="/app" class="btn">Open the app</a>
+  </div>
+</main>
+</body>
+</html>
