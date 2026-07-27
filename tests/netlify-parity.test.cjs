@@ -47,9 +47,14 @@ test.before(async () => {
   // signing sessions with a public constant. It now throws 500 unless a secret
   // is configured, so these tests (which assert 401 for missing/garbage tokens)
   // must configure one, exactly as a real deploy does.
-  if (!process.env.AUTH_SECRET && !process.env.AGENSIS_AUTH_SECRET) {
-    process.env.AUTH_SECRET = 'netlify-parity-test-secret';
-  }
+  // Own both names outright rather than branching on what the machine has. The
+  // backend reads `AGENSIS_AUTH_SECRET || AUTH_SECRET` (backend.mjs), so a
+  // machine that exported the ALIAS used to skip this literal entirely and sign
+  // every token below with the real production HMAC — or, if the two differed,
+  // 401 the whole file. The preload scrubs both; this makes the file correct on
+  // its own terms too.
+  delete process.env.AGENSIS_AUTH_SECRET;
+  process.env.AUTH_SECRET = 'netlify-parity-test-secret';
   mock.module('@netlify/database', {
     namedExports: {
       getDatabase: () => ({

@@ -73,6 +73,19 @@ function minDetailPx(): number {
  */
 const SINGLE_COLUMN_HIDE = '@max-2xl/tenantswin:hidden';
 
+/**
+ * The list pane's width, as CLASSES driven by a custom property rather than an
+ * inline `width` — so the single-column container query below can override it
+ * in the ordinary cascade instead of fighting an inline style with `!`. Same
+ * shape as AgentsWindowContent's split pane.
+ */
+const LIST_PANE_WIDTH = [
+  // The 18rem here IS MIN_DETAIL_REM — Tailwind scans source text, so it cannot
+  // be interpolated. Change one and change the other.
+  'w-[var(--tenants-list-width)] max-w-[calc(100%-18rem)]',
+  '@max-2xl/tenantswin:w-full @max-2xl/tenantswin:max-w-none',
+].join(' ');
+
 function readStoredWidth(): number {
   if (typeof window === 'undefined') return DEFAULT_LIST_WIDTH;
   try {
@@ -149,10 +162,12 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
     >
       <section
         className={cn(
-          'relative flex min-h-0 min-w-0 flex-col',
-          selected ? cn('shrink-0 border-r border-border/60', SINGLE_COLUMN_HIDE) : 'flex-1',
+          'relative flex min-h-0 min-w-0 shrink-0 flex-col border-r border-border/60',
+          LIST_PANE_WIDTH,
+          // Only in single-column mode does an open account REPLACE the list.
+          selected && SINGLE_COLUMN_HIDE,
         )}
-        style={selected ? { width: listWidth, maxWidth: `calc(100% - ${MIN_DETAIL_REM}rem)` } : undefined}
+        style={{ '--tenants-list-width': `${listWidth}px` } as React.CSSProperties}
       >
         <div className={PANE_HEADER}>
           {/* The search field IS the header. There is one filter on this surface
@@ -208,32 +223,32 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
         />
 
         {/* An invisible 12px grab strip whose hairline only appears under the
-            pointer — the divider is the pane border, not this. */}
-        {selected && (
-          <button
-            type="button"
-            aria-label="Resize account list"
-            title="Drag to resize. Double-click to reset."
-            onPointerDown={handleResizeStart}
-            onPointerMove={handleResizeMove}
-            onPointerUp={handleResizeEnd}
-            onPointerCancel={handleResizeEnd}
-            onDoubleClick={resetWidth}
-            className={cn(
-              'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
-              SINGLE_COLUMN_HIDE,
-              FOCUS_RING,
-            )}
-          >
-            <span
-              aria-hidden="true"
-              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
-            />
-          </button>
-        )}
+            pointer — the divider is the pane border, not this. Present whenever
+            both panes are, which is now every width above the single-column
+            breakpoint, selection or not. */}
+        <button
+          type="button"
+          aria-label="Resize account list"
+          title="Drag to resize. Double-click to reset."
+          onPointerDown={handleResizeStart}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeEnd}
+          onPointerCancel={handleResizeEnd}
+          onDoubleClick={resetWidth}
+          className={cn(
+            'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
+            SINGLE_COLUMN_HIDE,
+            FOCUS_RING,
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
+          />
+        </button>
       </section>
 
-      {selected && (
+      {selected ? (
         <TenantDetailPane
           account={selected}
           detail={detail}
@@ -244,10 +259,41 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
           backButtonClass="hidden @max-2xl/tenantswin:inline-flex"
           onClose={() => select(null)}
         />
+      ) : (
+        <TenantDetailPlaceholder />
       )}
     </div>
   );
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * What sits where the account pane will be, before one is opened.
+ *
+ * It exists so this surface has the SAME two-pane geometry whether or not an
+ * account is open. Before it, nothing selected meant the list pane was
+ * `flex-1` — and the row column inside it is capped at `LIST_COLUMN_CLASS`'s
+ * 42rem, a cap written for the inbox, which lives in a floating window barely
+ * wider than that. Tenants is a full-bleed overlay across the whole canvas, so
+ * the same cap left a ~630px ribbon of rows marooned in the middle of a 1600px
+ * window under a full-width search bar. Hidden below the single-column
+ * breakpoint, where the list legitimately owns the whole width.
+ */
+function TenantDetailPlaceholder() {
+  return (
+    <section
+      className={cn(
+        'flex min-h-0 min-w-0 flex-1 items-center justify-center bg-card px-6 text-center',
+        SINGLE_COLUMN_HIDE,
+      )}
+    >
+      <p className={cn('max-w-[18rem] leading-relaxed text-muted-foreground', TEXT_BODY)}>
+        Select an account to see the workspaces it owns and the ones shared with it.
+      </p>
+    </section>
+  );
+}
 
 // ---------------------------------------------------------------------------
 

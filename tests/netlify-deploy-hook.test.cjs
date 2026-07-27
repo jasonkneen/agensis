@@ -104,7 +104,11 @@ test('production rejects unsigned deploy webhooks when secret is unset (fail-clo
       await new Promise((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }
   } finally {
-    process.env.NODE_ENV = prevEnv;
+    // Guarded like prevSecret below: NODE_ENV is normally unset under the test
+    // runner, and a bare assignment writes the STRING "undefined" — truthy, not
+    // 'production', and invisible until a test is appended after this one.
+    if (prevEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevEnv;
     if (prevSecret === undefined) delete process.env.NETLIFY_WEBHOOK_JWS_SECRET;
     else process.env.NETLIFY_WEBHOOK_JWS_SECRET = prevSecret;
     __test.resetTestState();

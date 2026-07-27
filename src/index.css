@@ -1429,11 +1429,24 @@
    undifferentiated list of buttons. */
 .sidebar-section-trigger {
  min-height: 1.35rem;
- /* 13px. It still sits under the item rows it introduces (14px), so the
-    hierarchy holds, but 11px was small enough that uppercase tracking made it
-    read as fine print rather than as a heading. Case, weight and colour are
-    what separate it from the rows now — not size alone. */
- font-size: 0.8125rem;
+ /* TWO STEPS BELOW THE UI FONT, measured on the app's own (Tailwind) type
+    scale: base 1rem -> sm 0.875rem -> xs 0.75rem.
+
+    Deliberately a rem, never a px. `html` is set to
+    `font-size: var(--agensis-ui-font-size)` (see the html rule near the end of
+    this file), so 1rem IS the size chosen in Settings -> Appearance -> UI font
+    size, clamped 12-18px. A rem therefore tracks that setting for free; a px
+    would only look right at the default.
+
+    That keeps the label a constant two steps under the base and one step under
+    the item rows it introduces (which are text-sm): 9px vs 10.5px at a 12px
+    setting, 11.25 vs 13.13 at 15, 13.5 vs 15.75 at 18 — smaller at every point
+    in the range.
+
+    Supersedes 0.8125rem, which was within a hair of the rows and so read as a
+    row rather than as their heading. Case, weight and colour still do most of
+    the separating; the size is what stops it competing. */
+ font-size: 0.75rem;
  /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
     heavier than the rows below it. The weight is what makes a small quiet
     label still parse as a HEADING rather than as smaller text. */
@@ -1557,6 +1570,41 @@
 }
 
 /* (The neo softening of that guide line went with the line itself.) */
+
+/* ── Rules that bracket the collapsible sections (Slack's pattern) ───────────
+   A hairline with room either side. Used TWICE, so the five collapsible
+   sections read as one band: once below the fixed top block (Inbox, Desktop,
+   Tasks, Memory) and once below ARCHIVE, above the remaining standalone rows
+   (Skills, Activity, Agents, Users, Schedules, Applets). Those standalone rows
+   belong to no section; sitting flush under the ARCHIVE header they read as
+   Archive's contents, which is what was reported. See the placement note at the
+   lower element in Sidebar.tsx for why it is a sibling of the Archive
+   collapsible rather than pinned to its header.
+
+   A border TOKEN mixed toward transparent, never a literal colour: the sidebar
+   paints bg-card/45 over the user's wallpaper, so anything fixed would either
+   vanish on a light image or scratch a dark one. --border already tracks every
+   theme and both light/dark, and 60% keeps this a separation cue rather than a
+   line you read. flex-basis is stated because the sidebar list is a flex
+   column — without it a 1px child is the first thing to get squeezed. */
+.sidebar-group-divider {
+ flex: 0 0 1px;
+ height: 1px;
+ margin: 0.5rem 0.35rem 0.45rem;
+ background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* The brutalist themes draw hard 2px edges everywhere else, so a 60% hairline
+   reads as a rendering artefact beside them. They also inset every sidebar row
+   6px on the right for offset-shadow clearance (see the width rules below), so
+   the rule ends where the rows do instead of overhanging them. */
+:root[data-ui-theme="neo"] .sidebar-group-divider,
+:root[data-ui-theme="tinyworld"] .sidebar-group-divider {
+ flex-basis: 2px;
+ height: 2px;
+ margin-inline: 0 6px;
+ background: var(--border);
+}
 
 .sidebar-action-row {
  /* 1.8rem, down from 2.15. These rows are most of the sidebar, so their height
@@ -2035,30 +2083,27 @@
 }
 
 /* Brief pulse when a widget item jumps the reader to its anchored message. */
-/* Floating thread widgets — macOS-style: hairline edge + a single soft,
-   theme-aware shadow. Kept deliberately tight (not the big --shadow-xl) so
-   stacked cards don't wash the gutter grey in light themes. */
-.thread-widget-card {
- box-shadow: var(--shadow-md);
-}
 
-.thread-widget-card:hover {
- box-shadow: var(--shadow-lg);
-}
+/* Thread widgets have NO FRAME. They used to be bordered, filled, rounded cards
+   with a --shadow-md (and a 2px ink border under [data-ui-theme="neo"], to match
+   [data-slot="card"]). The owner asked for the boxed treatment to go: the
+   widgets are sections of the rail, not three floating panels. What separates
+   one from the next is now a heading, a hairline under it and the grid's
+   gap-y-4 — all in ThreadWidgetRail.tsx. Nothing here re-adds a card, in ANY
+   theme scope, which is the point: a per-theme frame rule would put the box
+   back for exactly the people who chose that theme. */
 
 /* Too narrow to seat the rail beside the conversation (see
    RAIL_GUTTER_MIN_SURFACE_WIDTH in src/lib/threadWidgetRail.ts): rather than
-   squeezing the message column, the cards float ON TOP of it. Heavier
-   elevation is what tells the eye they're above the text, not in a column of
-   their own. */
-.thread-widget-overlay[data-rail-layout="overlay"] .thread-widget-card {
- box-shadow: var(--shadow-xl);
-}
+   squeezing the message column, the widgets float ON TOP of it. The wash below
+   is what tells the eye they're above the text.
 
-/* ...and a soft wash behind them, fading in from the left. Without it the
-   cards slice sentences mid-word and the result reads as broken text rather
-   than as a panel sitting on top of it. Painted before the cards (they're
-   position:relative and later in the DOM), so only the gaps get washed. */
+   It is now FULLY OPAQUE (it was 88%, over cards that each carried their own
+   bg-card). With the frames gone the wash is the only thing between a to-do and
+   the sentence underneath it, so a translucent one would show message text
+   through the widget. It still fades in from the left over 28px, so it reads as
+   a panel laid over the conversation rather than a hard vertical cut through
+   it. */
 .thread-widget-overlay[data-rail-layout="overlay"]::before {
  content: '';
  position: absolute;
@@ -2066,17 +2111,9 @@
  pointer-events: none;
  background: linear-gradient(to right,
    transparent,
-   color-mix(in srgb, var(--channel-surface, var(--card)) 88%, transparent) 28px);
+   var(--channel-surface, var(--card)) 28px);
  backdrop-filter: blur(3px);
  -webkit-backdrop-filter: blur(3px);
-}
-
-/* Neo/brutal: match the 2px ink border every other card surface gets
-   ([data-slot="card"], line ~638). These cards aren't data-slot cards, so
-   without this they stayed at Tailwind's 1px .border while the shadow already
-   resolved to the hard --neo-shadow-md offset — thin edge, heavy shadow. */
-:root[data-ui-theme="neo"] .thread-widget-card {
- border-width: 2px;
 }
 
 .chat-message-row[data-agent-message="true"] .chat-message-avatar,
@@ -2744,12 +2781,13 @@ button[data-slot="badge"][data-variant="default"]:hover {
  font-size: 0.78rem !important;
 }
 
-/* Section labels take the same 13px as every other theme. Split out because the
-   rule above is shared with folder triggers and item rows — raising that one
-   would have resized the whole neo sidebar — and it carries !important, so
-   nothing less wins here. */
+/* Section labels take the same two-steps-down 0.75rem as every other theme.
+   Split out because the rule above is shared with folder triggers and item rows
+   — moving that one would resize the whole neo sidebar — and it carries
+   !important, so nothing less wins here. Still clearly under neo's own rows
+   (0.78rem), which is the point. */
 :root[data-ui-theme="neo"] .sidebar-section-trigger {
- font-size: 0.8125rem !important;
+ font-size: 0.75rem !important;
 }
 
 .file-tree {
@@ -4123,9 +4161,10 @@ select {
     is the same tracked label as everywhere else, so section names read at one
     size across every theme. Kept in step with the base rule: this selector is
     more specific AND !important, so whatever it says is what neo actually
-    renders. It was 0.82rem once, which left neo with section names larger than
-    its own items. */
- font-size: 0.8125rem !important;
+    renders — if the base .sidebar-section-trigger size moves, move this too or
+    neo silently keeps the old one. It was 0.82rem once, which left neo with
+    section names larger than its own items. */
+ font-size: 0.75rem !important;
  letter-spacing: 0.07em;
 }
 

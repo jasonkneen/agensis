@@ -18,6 +18,7 @@ import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { MemorySection } from './components/memory/MemorySection';
 import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
+import { countOpenTasks } from './components/windows/taskSchedule';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedPanel } from './components/onboarding/GetStartedPanel';
 import CommandPalette from './components/search/CommandPalette';
@@ -926,7 +927,6 @@ function AppContent() {
 
   const {
     tasks,
-    openTasks,
     createTask,
     updateTask,
     toggleTaskStatus,
@@ -2003,7 +2003,19 @@ function AppContent() {
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
-            openTaskCount={openTasks.length}
+            openTaskCount={
+              // countOpenTasks, NOT useTasks' openTasks: that list includes
+              // subtasks, which are not rows in the Tasks window, so the badge
+              // counted work the list could not show. It also deliberately
+              // ignores the window's assignment filter (all/mine/others):
+              // usePersistedPreference reads storage once per mount and does
+              // not sync between components, so a badge wired to it would go
+              // stale the moment the filter changed in the window — the same
+              // disagreement in a harder-to-explain form. The badge is a "does
+              // this workspace need me" signal; the narrowed number is already
+              // shown next to the filter control that caused it.
+              countOpenTasks(tasks)
+            }
             inboxUnreadCount={inboxUnreadCount}
             recents={recents}
             sessions={sessions}

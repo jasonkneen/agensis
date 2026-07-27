@@ -58,4 +58,12 @@ npm run --silent test >/dev/null || fail "npm test"
 echo "pre-push: unit tests…"
 npm run --silent test:unit >/dev/null || fail "npm run test:unit"
 
-echo "pre-push: ✓ typecheck + both suites green"
+# The suites above prove the pieces are individually correct. None of them
+# renders anything, which is how a workspace holding 8 agents shipped showing
+# "you haven't created any agents yet" with everything green (2026-07-27).
+# The smoke gate mounts each main surface and fails if an empty state is on
+# screen while data exists. ~10s.
+echo "pre-push: surface smoke…"
+npm run --silent smoke >/dev/null || fail "npm run smoke"
+
+echo "pre-push: ✓ typecheck + both suites + smoke green"
