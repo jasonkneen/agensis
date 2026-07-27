@@ -22,8 +22,11 @@ const {
   PROVIDER_CALL_MAX_BODY_CHARS,
   SANDBOX_BOX_SKILL_ID,
   SANDBOX_DETAIL_FIELDS,
+  SANDBOX_MAX_INSTRUCTION_CHARS,
   SANDBOX_MAX_PROVIDER_OUTPUT_CHARS,
   SANDBOX_OVERALL_SKILL_ID,
+  SANDBOX_SETUP_E2B_SKILL_ID,
+  SANDBOX_SETUP_SKILL_ID,
   SANDBOX_VAULT_PREFIX,
   applyProviderCredential,
   describeProviderCall,
@@ -206,9 +209,13 @@ describe('isSafeProviderBaseUrl', () => {
 });
 
 describe('the bundled skill layer', () => {
-  it('ships an overall skill plus the Box provider, and both pass their own validator', () => {
+  it('ships both lanes — hosted provisioning and bring-your-own setup — and all pass their own validator', () => {
+    // Order matters to the tests below, which index Box positionally.
     expect(BUNDLED_SANDBOX_SKILLS.map((s: { id: string }) => s.id))
-      .toEqual([SANDBOX_OVERALL_SKILL_ID, SANDBOX_BOX_SKILL_ID]);
+      .toEqual([
+        SANDBOX_OVERALL_SKILL_ID, SANDBOX_BOX_SKILL_ID,
+        SANDBOX_SETUP_SKILL_ID, SANDBOX_SETUP_E2B_SKILL_ID,
+      ]);
     for (const raw of BUNDLED_SANDBOX_SKILLS) {
       expect(normalizeSandboxSkill(raw), `${raw.id} is a valid definition`).not.toBeNull();
     }
@@ -894,5 +901,111 @@ describe('renderSandboxSkillPrompt', () => {
     expect(prompt).toContain('MCP server `acme` (http): https://acme.example.com/mcp');
     expect(prompt).toContain('Script `provision.sh` (bash)');
     expect(prompt).toContain('curl -fsS https://acme.example.com/boxes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two lanes: hosted provisioning vs bring-your-own setup.
+//
+// These are separated by which skill ids an agent carries, NOT by `kind` (both
+// lanes use 'overall'/'provider'). So the invariants that keep them apart are
+// content invariants, and nothing but a test enforces them.
+// ---------------------------------------------------------------------------
+
+describe('bring-your-own setup lane', () => {
+  const bundledById = (id: string) =>
+    BUNDLED_SANDBOX_SKILLS.find((s: { id: string }) => s.id === id);
+
+  it('EVERY bundled skill fits under the instruction cap', () => {
+    // The cap is applied by silent truncation (`text(raw.instructions, CAP)`),
+    // with no marker appended — unlike the daemon's skill-body sync, which does
+    // append one. So a guide that grows past it loses its last steps and reads
+    // as complete. Since these guides end with the load-bearing parts (where the
+    // key goes, generate the link LAST), truncation would remove exactly the
+    // instructions that stop a setup failing.
+    for (const skill of BUNDLED_SANDBOX_SKILLS) {
+      expect(
+        skill.instructions.length,
+        `${skill.id} is at or over the ${SANDBOX_MAX_INSTRUCTION_CHARS}-char cap and will be silently cut`,
+      ).toBeLessThan(SANDBOX_MAX_INSTRUCTION_CHARS);
+    }
+  });
+
+  it('truncation really is silent, which is why the guard above exists', () => {
+    // Pins the premise of the previous test rather than trusting the comment:
+    // if normalizeSandboxSkill ever gains a truncation marker, this goes red and
+    // the cap stops being a silent hazard.
+    const over = normalizeSandboxSkill({
+      ...validProvider,
+      instructions: 'x'.repeat(SANDBOX_MAX_INSTRUCTION_CHARS + 500),
+    });
+    expect(over?.instructions).toHaveLength(SANDBOX_MAX_INSTRUCTION_CHARS);
+    expect(over?.instructions).toBe('x'.repeat(SANDBOX_MAX_INSTRUCTION_CHARS));
+  });
+
+  it('resolves as its own overall skill plus its own providers', () => {
+    const resolved = resolveSandboxSkills({
+      skillIds: [SANDBOX_SETUP_SKILL_ID, SANDBOX_SETUP_E2B_SKILL_ID],
+      authored: [],
+    });
+    expect(resolved.overall.map((s: { id: string }) => s.id)).toEqual([SANDBOX_SETUP_SKILL_ID]);
+    expect(resolved.providers.map((p: { id: string }) => p.id)).toEqual([SANDBOX_SETUP_E2B_SKILL_ID]);
+    expect(resolved.unresolved).toEqual([]);
+    // The hosted lane's skills are NOT dragged in by carrying the setup lane.
+    expect(resolved.skills.map((s: { id: string }) => s.id)).not.toContain(SANDBOX_OVERALL_SKILL_ID);
+    expect(resolved.skills.map((s: { id: string }) => s.id)).not.toContain(SANDBOX_BOX_SKILL_ID);
+  });
+
+  it('FORBIDS call_provider — the invariant that keeps the lanes apart', () => {
+    // The hosted lane's whole security model is that the agent never holds a
+    // credential and reaches a provider only through call_provider. The BYO lane
+    // is the opposite: the user holds everything and the agent drives their CLI.
+    // An agent told to do both would try to provision on a credential agensis
+    // does not have for it.
+    const setup = bundledById(SANDBOX_SETUP_SKILL_ID);
+    expect(setup?.instructions).toMatch(/never use `call_provider`/i);
+
+    const hosted = bundledById(SANDBOX_OVERALL_SKILL_ID);
+    expect(hosted?.instructions).toContain('call_provider');
+  });
+
+  it('holds no credential and declares no callable endpoint', () => {
+    // A BYO provider skill that grew a baseUrl/credential would silently become
+    // callable through the hosted machinery, which is the mistake this lane exists
+    // to avoid. The e2b key stays on the user's machine.
+    const e2b = bundledById(SANDBOX_SETUP_E2B_SKILL_ID);
+    expect(e2b?.credential).toBeUndefined();
+    expect(e2b?.baseUrl).toBeUndefined();
+    expect(e2b?.endpoints).toBeUndefined();
+    expect(sandboxCredentialKeysForSkills([e2b])).toEqual([]);
+  });
+
+  it('is what the Sandbox Setup template asks for by id, and it carries NEITHER hosted skill', () => {
+    const template = AGENT_TEMPLATES.find(t => t.id === 'sandbox-setup');
+    expect(template).toBeDefined();
+    // 'daemon' is load-bearing: the value of this agent is that it runs on the
+    // user's machine and can see PATH, install a CLI and drive a login. A builtin
+    // turn could only describe the steps.
+    expect(template!.runMode).toBe('daemon');
+    expect(template!.skills).toEqual([SANDBOX_SETUP_SKILL_ID, SANDBOX_SETUP_E2B_SKILL_ID]);
+    // Mixing the lanes would tell one agent both that it holds no credential and
+    // that it can call a provider on one agensis holds.
+    expect(template!.skills).not.toContain(SANDBOX_OVERALL_SKILL_ID);
+    expect(template!.skills).not.toContain(SANDBOX_BOX_SKILL_ID);
+    // Every id it names must resolve, or the agent ships inert.
+    const resolved = resolveSandboxSkills({ skillIds: template!.skills });
+    expect(resolved.unresolved).toEqual([]);
+    expect(resolved.providers.map((p: { provider: string }) => p.provider)).toEqual(['e2b']);
+  });
+
+  it('carries the two facts a setup actually fails on', () => {
+    const setup = bundledById(SANDBOX_SETUP_SKILL_ID);
+    // Join links are ~15 min and single use, and an expired one is deliberately
+    // indistinguishable from an invalid one — so a link made before a 20-minute
+    // install gives the user no usable error.
+    expect(setup?.instructions).toMatch(/link is last/i);
+    // A daemon reads the env of the process that launched it, so a key in
+    // ~/.zshrc is invisible to one started by launchd.
+    expect(setup?.instructions).toMatch(/process that launched it/i);
   });
 });

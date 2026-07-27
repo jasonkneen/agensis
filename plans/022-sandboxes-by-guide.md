@@ -1,10 +1,12 @@
 # 022 — Sandboxes by guide, not by integration
 
-Status: DESIGN AGREED, nothing built
+Status: LANE + WORKED EXAMPLE BUILT (`sandbox-setup` overall skill, `sandbox-setup-e2b`
+guide, the `Sandbox Setup` agent template, and the cap/lane tests). The remaining five
+guides — box, miosa, vercel, daytona, amp orb — are unwritten ON PURPOSE: see §4.1.
 Priority: P2
 Effort: S (content) + S (one scoping change) — no provider integration work
-Depends on: nothing. The join link (`ae700c0`) and skill-body sync (agent `0.1.32`)
-are both already shipped and are what make this cheap.
+Depends on: nothing. The join link (`ae700c0`) and `loadSandboxSkillNote` are both
+already shipped and are what make this cheap.
 Planned at: `worktree-sandbox-plan`, branch off `main` @ `c5cc317`
 
 Context: a design conversation about adding miosa.ai as a sandbox provider, which
@@ -85,9 +87,20 @@ in `ae700c0`.
 (`src/agensis.mjs:1548`) rides the capabilities blob, so the specialist can open
 with "you have the e2b CLI but not daytona" instead of asking.
 
-**Skill bodies — not just names — sync to the daemon** as of agent `0.1.32`
-(`902714b`). This is the delivery mechanism for the guides: they reach the
-specialist agent as content.
+**Server-authored instructions already reach daemon agents.**
+`loadSandboxSkillNote` (`server/index.cjs:5091`) composes the sandbox skill layer
+into one prompt block and — per its own comment — *"Both lanes get the same text
+— builtin through the system prompt, daemon through the daemon prompt."* That is
+the delivery path for the guides.
+
+> **Correction (2026-07-27, same day).** An earlier draft of this plan said skill
+> bodies sync *down* to the daemon as of agent `0.1.32`, and that this was the
+> delivery mechanism. **That is backwards.** `agent_skill_sync` carries bodies
+> **up**: the daemon scans the user's own skill directories and mirrors them to
+> `agent_skill_documents` (`agensis-cli/src/skills.mjs:5`). There is no
+> server→daemon skill-content push. Guides therefore belong in
+> `BUNDLED_SANDBOX_SKILLS`, not in a synced skills directory — which is also why
+> they inherit the 4000-char instruction cap in §5.1.
 
 **`run_mode='sandbox'` exists and works, but is narrow.** `createSandboxExecutor`
 (`agensis-cli/src/executor.mjs:64`) runs a full lifecycle — `ensureEnv → putRepo →
@@ -128,6 +141,22 @@ Two things every guide must get right:
 
 These guides have two consumers: a human reading docs, and the specialist agent
 using them as instructions. Write once.
+
+**Only e2b is written, deliberately.** The whole premise of §2 is that a maintained
+guide beats a model answering from memory about a CLI that changed. Writing five
+more guides from recollection of `vercel`/`daytona`/`miosa`/`amp` CLI syntax would
+reproduce the exact failure this plan exists to avoid — and would do it with more
+authority, because the wrong commands would arrive as a "verified" skill.
+
+e2b is written because its facts are grounded in code in this repo
+(`agensis-cli/src/sandbox/e2b.mjs`): the env var name, the Node floor, the
+`IS_SANDBOX` root behaviour, the claude install command. It is the worked example
+that proves the shape, exactly as Box is for the hosted lane.
+
+The pattern the e2b guide establishes — **carry the agensis-specific truth, and
+tell the agent to check the provider's live docs or `--help` for volatile syntax**
+— is what makes the remaining five cheap and safe. Each needs one doc-verification
+pass, and each is pure data: no deploy, no migration (see §1).
 
 ### 4.2 The sandbox specialist agent
 
@@ -180,6 +209,22 @@ and it means a legitimate user who was merely slow gets no useful error.
    link, and if so set it deliberately rather than leaving people to hit the wall.
 
 ---
+
+### 5.1 The second trap: guides are silently truncated at 4000 chars
+
+`normalizeSandboxSkill` clamps `instructions` to `SANDBOX_MAX_INSTRUCTION_CHARS`
+(4000) with **no truncation marker** — unlike the daemon's skill-body sync, which
+appends one. A guide that outgrows the cap loses its ending and still reads as
+complete.
+
+That is worse than it sounds here, because these guides put the load-bearing
+parts **last**: where the key goes, and generate the link last. Truncation would
+remove exactly the instructions that stop a setup failing.
+
+`tests/unit/sandboxSkills.test.ts` guards every bundled skill against the cap, and
+a second test pins the premise (that truncation really is silent), so if a marker
+is ever added the guard can be relaxed deliberately rather than by accident. Both
+were mutation-checked: padding a guide to 5559 chars turns the guard red.
 
 ## 6. Hosted (option 1) — what it would take, when we get to it
 

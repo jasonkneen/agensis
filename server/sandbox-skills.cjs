@@ -417,11 +417,29 @@ function normalizeSandboxSkill(raw) {
 }
 
 // ---------------------------------------------------------------------------
-// The bundled skill layer: one overall skill + one provider (Box).
+// The bundled skill layer: TWO LANES, and they must not be mixed.
+//
+//   HOSTED lane   — `sandbox-provisioning` (overall) + `sandbox-provider-*`.
+//     agensis holds the credential, the agent calls `call_provider`, and the
+//     box belongs to us. Everything in "THE PROVIDER CALL" above governs it.
+//
+//   BRING-YOUR-OWN lane — `sandbox-setup` (overall) + `sandbox-setup-*`.
+//     The user owns the box, the account and the bill. The agent runs on THEIR
+//     machine (a daemon agent), drives THEIR provider CLI, and agensis holds no
+//     credential at any point. `call_provider` is not part of this lane and the
+//     overall skill says so explicitly — an agent that reaches for it here is
+//     on the hosted path by mistake.
+//
+// The lanes are separated by which skill ids an agent carries, not by `kind`
+// (both use 'overall'/'provider'), so DO NOT put both overall skills on one
+// agent: it would receive two contradictory sets of instructions about whether
+// it holds a credential. See plans/022-sandboxes-by-guide.md §4.3.
 // ---------------------------------------------------------------------------
 
 const SANDBOX_OVERALL_SKILL_ID = 'sandbox-provisioning';
 const SANDBOX_BOX_SKILL_ID = 'sandbox-provider-box';
+const SANDBOX_SETUP_SKILL_ID = 'sandbox-setup';
+const SANDBOX_SETUP_E2B_SKILL_ID = 'sandbox-setup-e2b';
 
 const BUNDLED_SANDBOX_SKILLS = [
   {
@@ -512,6 +530,95 @@ const BUNDLED_SANDBOX_SKILLS = [
     notes: [
       'A TypeScript SDK exists with basePath https://ascii.dev/api/box/v1; the REST calls above are the contract either way.',
       'Fork costs a second running box. Only fork when asked.',
+    ],
+  },
+  {
+    id: SANDBOX_SETUP_SKILL_ID,
+    kind: 'overall',
+    name: 'Sandbox setup (bring your own)',
+    summary: 'Help someone stand up a cloud sandbox they own and connect it to this workspace as an agent.',
+    instructions: [
+      'You help someone stand up a cloud sandbox THEY own and connect it to this workspace as',
+      'an agent. You are running on their machine, so you can actually do this rather than only',
+      'describe it: see what is installed, install a CLI, drive a login, create the box, and hand',
+      'over a join link.',
+      '',
+      'THIS IS NOT THE HOSTED PATH. agensis holds no credential for their sandbox, and you must',
+      'never use `call_provider` here — that tool belongs to the hosted lane. Their provider',
+      'account, their billing, their keys, on their machine.',
+      '',
+      'DO THE STEPS IN THIS ORDER. The order is the load-bearing part:',
+      '  1. Look before you ask. You can see which CLIs are on PATH — say what is already there',
+      '     instead of asking them to tell you.',
+      '  2. Install the provider CLI and log in. That login is theirs; you never hold it.',
+      '  3. Create the sandbox and get a shell inside it.',
+      '  4. Install and launch the coding CLI inside the box.',
+      '  5. Put the keys where the DAEMON can read them (see below).',
+      '  6. ONLY NOW generate a join link, and paste it inside the box.',
+      '',
+      'WHY THE LINK IS LAST. A join link lasts about fifteen minutes and works exactly once.',
+      'Steps 1-4 routinely take longer than that. Worse, an expired link, an already-used one, a',
+      'revoked one and one that never existed are all answered IDENTICALLY on purpose, so a stale',
+      'link produces no diagnostic — the user will conclude the whole setup failed. If a link does',
+      'go stale, say plainly that it timed out and issue a new one. Do not let them debug the box.',
+      '',
+      'WHERE THE KEY GOES is the question that wastes the most time. A daemon reads the environment',
+      'of THE PROCESS THAT LAUNCHED IT. A key exported in ~/.zshrc is invisible to a daemon started',
+      'by launchd, a service manager, or a different shell. Put it where the daemon will actually be',
+      'started from, then CONFIRM the daemon can see it — check the variable is set, and never print',
+      'its value into the conversation.',
+      '',
+      'WHAT YOU CANNOT DO. You cannot stop a box you did not create. agensis has no stop button for',
+      'a sandbox on their own account, and an unstopped sandbox bills until somebody notices. Tell',
+      'them how to stop it themselves, in their provider\'s own terms, as part of reporting success',
+      'rather than as an afterthought.',
+      '',
+      'SUCCESS VERIFIES ITSELF. The box appearing in this workspace as a connected agent is the',
+      'proof. Do not claim success because a provider CLI printed "ready" — wait for the agent to',
+      'appear. If it never does, setup failed, and step 6 is where to look first.',
+      '',
+      'You are running real commands with their credentials on their own computer. Say what you are',
+      'about to run before you run it, and stop if a step needs a decision they have not made.',
+    ].join('\n'),
+    notes: [
+      'Adding a provider is authoring a skill, not a deploy: add a definition to this agent\'s metadata.sandbox_skills and its id to the agent\'s skills list.',
+      'Do not put this skill on the same agent as sandbox-provisioning — the two lanes give contradictory instructions about who holds the credential.',
+    ],
+  },
+  {
+    id: SANDBOX_SETUP_E2B_SKILL_ID,
+    kind: 'provider',
+    provider: 'e2b',
+    name: 'e2b sandboxes (bring your own)',
+    summary: 'Stand up an e2b sandbox on the user\'s own e2b account and connect it to this workspace.',
+    instructions: [
+      'e2b sandboxes, set up by the person who owns the e2b account. Follow the ordered steps in',
+      'the sandbox-setup skill; this skill carries only what is specific to e2b.',
+      '',
+      'VERIFIED FACTS (these come from agensis\'s own e2b integration, not from recollection):',
+      '- The credential is `E2B_API_KEY`.',
+      '- e2b requires Node >=20.18.1, and Node 21 is explicitly EXCLUDED (>=20.18.1 <21, or >=22).',
+      '  A daemon on Node 18 works fine for everything else and fails only here, so check the Node',
+      '  version before installing anything.',
+      '- Inside the box, the coding CLI installs with `npm i -g @anthropic-ai/claude-code`.',
+      '- e2b microVMs run as ROOT. Claude refuses `--dangerously-skip-permissions` as root unless',
+      '  `IS_SANDBOX=1` is set in the environment. If they hit "cannot be used with root/sudo',
+      '  privileges", that variable is the answer — and it is honest here, because the VM really',
+      '  is a sandbox.',
+      '',
+      'CHECK THE CURRENT CLI SYNTAX BEFORE YOU TYPE IT. e2b ships both a CLI and an SDK, and the',
+      'commands change between versions. Read their current documentation or run `e2b --help` in',
+      'the terminal rather than reciting syntax from memory. A confidently wrong command costs the',
+      'user more time than the lookup costs you.',
+      '',
+      'THE AWKWARD STEP is authenticating the coding CLI inside a fresh box. A browser OAuth flow',
+      'is painful on a headless VM, so an `ANTHROPIC_API_KEY` in the box environment is usually the',
+      'practical answer — and if they are treating boxes as disposable, it has to be set again for',
+      'every new box. Say that up front rather than letting them discover it on box number two.',
+    ].join('\n'),
+    notes: [
+      'This is the bring-your-own lane: agensis never holds their E2B_API_KEY and cannot stop a box they created.',
+      'Distinct from run_mode=\'sandbox\', where a daemon on their laptop supervises an e2b box remotely. Here the daemon runs INSIDE the box as an ordinary remote agent.',
     ],
   },
 ];
@@ -1268,9 +1375,15 @@ module.exports = {
   SANDBOX_SKILL_ID_RE,
   SANDBOX_VAULT_PREFIX,
   SANDBOX_MAX_SKILLS,
+  // Exported so a test can guard the bundled skills against it: the cap is applied
+  // by silent truncation, so a guide that outgrows it loses its end mid-sentence
+  // with nothing in the output to say so.
+  SANDBOX_MAX_INSTRUCTION_CHARS,
   SANDBOX_MAX_PROVIDER_OUTPUT_CHARS,
   SANDBOX_OVERALL_SKILL_ID,
   SANDBOX_BOX_SKILL_ID,
+  SANDBOX_SETUP_SKILL_ID,
+  SANDBOX_SETUP_E2B_SKILL_ID,
   SANDBOX_DETAIL_FIELDS,
   SANDBOX_DETAIL_UNKNOWN,
   PROVIDER_CALL_ARG_KEYS,
