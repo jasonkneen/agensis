@@ -17,6 +17,26 @@ export interface ThemePreset {
 
 const MANAGED_KEYS = ['--primary', '--primary-foreground', '--ring', '--sh-accent'];
 
+// ---------------------------------------------------------------------------
+// A preset sets a BRAND HUE, and nothing that has to differ between light and
+// dark may be a fixed value here.
+//
+// applyThemePreset writes these as INLINE styles on :root, and an inline
+// declaration beats every stylesheet rule — including the dark-mode scope. So
+// a literal `--sh-accent` froze the light-mode tint (L 0.93, near-white) into
+// dark mode, where --sh-accent-foreground is L 0.985. Near-white text on a
+// near-white surface: measured dL 0.055 against a healthy 0.72. Every accent
+// surface — hover states, muted rows — went unreadable the moment anyone
+// picked a colour.
+//
+// --sh-accent is therefore MIXED against var(--background), which the scope
+// itself defines, so it re-resolves per theme instead of being pinned.
+//
+// --primary IS deliberately pinned across both: a brand hue is the same hue in
+// dark mode, and --primary-foreground is chosen per preset to sit on it (white
+// on the mid-lightness hues, near-black on amber at L 0.77).
+// ---------------------------------------------------------------------------
+
 export const THEME_PRESETS: ThemePreset[] = [
   {
     id: 'neutral',
@@ -33,7 +53,7 @@ export const THEME_PRESETS: ThemePreset[] = [
       '--primary': 'oklch(0.62 0.19 256)',
       '--primary-foreground': 'oklch(0.985 0 0)',
       '--ring': 'oklch(0.62 0.19 256)',
-      '--sh-accent': 'oklch(0.93 0.03 256)',
+      '--sh-accent': 'color-mix(in oklch, var(--primary) 14%, var(--background))',
     },
   },
   {
@@ -44,7 +64,7 @@ export const THEME_PRESETS: ThemePreset[] = [
       '--primary': 'oklch(0.61 0.22 293)',
       '--primary-foreground': 'oklch(0.985 0 0)',
       '--ring': 'oklch(0.61 0.22 293)',
-      '--sh-accent': 'oklch(0.93 0.04 293)',
+      '--sh-accent': 'color-mix(in oklch, var(--primary) 14%, var(--background))',
     },
   },
   {
@@ -55,7 +75,7 @@ export const THEME_PRESETS: ThemePreset[] = [
       '--primary': 'oklch(0.6 0.17 152)',
       '--primary-foreground': 'oklch(0.985 0 0)',
       '--ring': 'oklch(0.6 0.17 152)',
-      '--sh-accent': 'oklch(0.93 0.04 152)',
+      '--sh-accent': 'color-mix(in oklch, var(--primary) 14%, var(--background))',
     },
   },
   {
@@ -66,7 +86,7 @@ export const THEME_PRESETS: ThemePreset[] = [
       '--primary': 'oklch(0.64 0.24 17)',
       '--primary-foreground': 'oklch(0.985 0 0)',
       '--ring': 'oklch(0.64 0.24 17)',
-      '--sh-accent': 'oklch(0.94 0.03 17)',
+      '--sh-accent': 'color-mix(in oklch, var(--primary) 14%, var(--background))',
     },
   },
   {
@@ -77,7 +97,7 @@ export const THEME_PRESETS: ThemePreset[] = [
       '--primary': 'oklch(0.77 0.16 70)',
       '--primary-foreground': 'oklch(0.205 0 0)',
       '--ring': 'oklch(0.77 0.16 70)',
-      '--sh-accent': 'oklch(0.94 0.05 70)',
+      '--sh-accent': 'color-mix(in oklch, var(--primary) 14%, var(--background))',
     },
   },
 ];
