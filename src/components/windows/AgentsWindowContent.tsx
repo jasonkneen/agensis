@@ -328,10 +328,17 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     return acc;
   }, { busy: 0, idle: 0, disconnected: 0, inactive: 0 });
   presenceByAgent.forEach(status => { presenceCounts[status] += 1; });
-  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId
-    ? agents.filter(agent => agent.created_by === currentUserId)
+  const mineAgents = currentUserId ? agents.filter(agent => agent.created_by === currentUserId) : [];
+  // A persisted 'mine' filter must never hide EVERYTHING. The toggle that
+  // clears it only renders when there is at least one of your own agents
+  // (below), so a workspace whose agents were all created by someone else —
+  // or by an older build that did not stamp created_by — showed "you haven't
+  // created any agents yet" over a full workspace, with no control on screen
+  // to undo it. The filter now yields only when it would match nothing.
+  const ownerVisibleAgents = ownerFilter === 'mine' && currentUserId && mineAgents.length > 0
+    ? mineAgents
     : agents;
-  const mineCount = currentUserId ? agents.filter(agent => agent.created_by === currentUserId).length : 0;
+  const mineCount = mineAgents.length;
   const statusVisibleAgents = statusFilter.size === 0
     ? ownerVisibleAgents
     : ownerVisibleAgents.filter(agent => statusFilter.has(presenceByAgent.get(agent.id) as AgentPresence));
@@ -650,7 +657,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 selectedAgent && cn('border-r border-border/60 pr-3', AGENTS_SPLIT_HIDE_BELOW),
               )}
             >
-            {agents.length > 0 && mineCount > 0 && (
+            {/* Shown when there is something to filter TO, or when the filter is
+                already engaged — otherwise an active filter can hide its own
+                control. */}
+            {agents.length > 0 && (mineCount > 0 || ownerFilter === 'mine') && (
               <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
                 <button
                   type="button"
