@@ -27,6 +27,19 @@
 ]
   },
   {
+    "version": "agent-edit-bar",
+    "date": "2026-07-27",
+    "title": "Save is always in reach while editing an agent",
+    "summary": "Editing an agent is a long form, and Cancel and Save sat at the very bottom of it — so on a short window you had to scroll past everything you had just written to reach them. The row with the runtime, the model, Cancel and Save now follows you: it stays pinned to the top of the pane while you are working through the first half of the form, then hands over to the bottom edge once you are nearer the end. There is always exactly one of it, wherever you are, and it works the same in the create form. The runtime picker also drops the \"Sandbox (isolated cloud)\" choice — sandboxes are not a runtime you switch an agent to any more; you ask the Sandbox agent for one.",
+    "highlights": [
+      "Cancel and Save stay on screen while you scroll the agent edit form, instead of only at the bottom",
+      "The bar pins to the top for the first half of the form and to the bottom after that",
+      "A form short enough not to scroll keeps its buttons where they have always been",
+      "Same behaviour when creating an agent as when editing one",
+      "Runtime is Built-in or Remote — the unused Sandbox option is gone from the picker"
+]
+  },
+  {
     "version": "one-daemon-per-agent",
     "date": "2026-07-26",
     "title": "An agent appears once, on the machine actually doing the work",

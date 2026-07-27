@@ -4,6 +4,7 @@ import {
   AGENT_LAYOUT_VIEW_PREF,
   AGENTS_SPLIT_MIN_REM,
   agentDetailPlacement,
+  agentFormBarPlacement,
   toggleAgentSelection,
 } from '../../src/lib/agentsView';
 import { readPreference, type PreferenceStorage } from '../../src/lib/viewPreferences';
@@ -81,5 +82,52 @@ describe('agentDetailPlacement', () => {
   it('keeps the normal two-pane arrangement when the width is unknowable', () => {
     expect(agentDetailPlacement(Number.NaN)).toBe('beside');
     expect(agentDetailPlacement(Number.POSITIVE_INFINITY)).toBe('beside');
+  });
+});
+
+describe('agentFormBarPlacement', () => {
+  // A long form: 1200px of content in a 400px pane, so 800px of travel.
+  const long = (scrollTop: number) => agentFormBarPlacement(scrollTop, 1200, 400);
+
+  it('keeps the bar at the top for the first half of the travel', () => {
+    expect(long(0)).toBe('top');
+    expect(long(1)).toBe('top');
+    expect(long(399)).toBe('top');
+  });
+
+  it('hands over to the bottom bar at the halfway point and past it', () => {
+    expect(long(400)).toBe('bottom');
+    expect(long(401)).toBe('bottom');
+    expect(long(700)).toBe('bottom');
+  });
+
+  it('is on the bottom bar at the very end of the scroll', () => {
+    expect(long(800)).toBe('bottom');
+    // Overscroll (rubber-banding, sub-pixel rounding) must not flip it back.
+    expect(long(812)).toBe('bottom');
+  });
+
+  it('KEEPS THE TOP BAR when the pane has nothing to scroll', () => {
+    // The short-window case: content fits, so there is no halfway to reach and
+    // hiding the top bar would leave the form with no Save button at all.
+    expect(agentFormBarPlacement(0, 400, 400)).toBe('top');
+    expect(agentFormBarPlacement(0, 180, 400)).toBe('top');
+    // Even if a browser hands back a stale scrollTop for an unscrollable pane.
+    expect(agentFormBarPlacement(120, 400, 400)).toBe('top');
+  });
+
+  it('takes the safe answer on unmeasurable geometry', () => {
+    expect(agentFormBarPlacement(Number.NaN, 1200, 400)).toBe('top');
+    expect(agentFormBarPlacement(0, Number.NaN, 400)).toBe('top');
+    expect(agentFormBarPlacement(0, 1200, Number.NaN)).toBe('top');
+    // A negative scrollTop is iOS overscroll at the top of the pane.
+    expect(agentFormBarPlacement(-40, 1200, 400)).toBe('top');
+  });
+
+  it('measures halfway against the scrollable distance, not the content height', () => {
+    // 1200px of content, but only 200px of travel in a 1000px-tall pane: the
+    // swap lands at 100px, not at 600px.
+    expect(agentFormBarPlacement(99, 1200, 1000)).toBe('top');
+    expect(agentFormBarPlacement(100, 1200, 1000)).toBe('bottom');
   });
 });
