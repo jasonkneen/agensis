@@ -24,6 +24,20 @@
       "Narrow windows are unchanged — the list still takes the whole width and an open account still replaces it",
       "To-do, Plan and Blockers widgets lose their card frames; a heading, a hairline and more space between them do the separating",
       "No more \"Huddle ended\" strip after a call — the huddle's own line in the conversation is what remains"
+  ]
+  },
+  {
+    "version": "sidebar-section-headers",
+    "date": "2026-07-27",
+    "title": "Tasks and Memory move to the top, quieter headings, and a Tasks badge you can trust",
+    "summary": "Tasks and Memory now sit in a fixed block at the top of the sidebar with Inbox and Desktop, above the collapsible sections, so they stop moving around as you open and close Threads or Channels. Thin lines mark that block off from the sections and the sections off from Skills, Activity, Agents, Users, Schedules and Applets — those were sitting flush under the Archive heading and looked like they were inside it. The section names themselves (THREADS, CHANNELS, DOCUMENTS, DIRECT MESSAGES, ARCHIVE) were set barely smaller than the rows beneath them; they are now two steps down from your UI font size and scale with that setting rather than only looking right at the default. And the number on the Tasks row was counting subtasks, so it could promise more work than the list could show — click through and there was less there than the badge said. It now counts exactly the tasks the Tasks window lists.",
+    "highlights": [
+      "Tasks and Memory join Inbox and Desktop in a fixed block at the top of the sidebar",
+      "Dividers separate that block from the collapsible sections, and the sections from Skills, Activity, Agents, Users, Schedules and Applets",
+      "Section headings are two steps smaller than the UI font, so they read as headings rather than rows",
+      "They scale with the UI font size setting, and are the same size on every theme",
+      "The Tasks badge no longer counts subtasks — it matches the window's own open count",
+      "The collapsed sidebar rail keeps the same order as the expanded one"
 ]
   },
   {

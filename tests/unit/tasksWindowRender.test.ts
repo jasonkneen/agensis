@@ -3,6 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Task } from '../../src/types';
 import { TasksWindowContent } from '../../src/components/windows/TasksWindowContent';
+import { countOpenTasks } from '../../src/components/windows/taskSchedule';
 
 // The task window is the part of this feature a human has to LOOK at to judge,
 // so this file asserts what it actually renders in a DOM:
@@ -506,5 +507,76 @@ describe('the toolbar remembers how you left it', () => {
 
     reopen('ws-1');
     expect(toolbarButtonLabels()).toContain('Show done');
+  });
+});
+
+// The sidebar's Tasks badge and the window's own "N open" badge are two
+// renderings of the same sentence, and they disagreed: reported as "why is
+// tasks showing 3? click and nothing to see". The badge came from useTasks'
+// `openTasks`, which counts EVERY open row including subtasks; a subtask is not
+// a list row, it lives inside its parent's expanded detail. In production one
+// workspace had 5 open tasks but 3 top-level, another 4 open but 1.
+//
+// These assert the badge against what the window actually presents, not against
+// a reimplementation of the rule.
+describe('open-task count matches what the window lists', () => {
+  // Two top-level open, one top-level closed, and three subtasks — the shape
+  // that produced the bug. `openTasks`-style counting says 5 here.
+  const WITH_SUBTASKS: Task[] = [
+    makeTask({ id: 'p1', title: 'Parent one' }),
+    makeTask({ id: 'p1a', title: 'Sub one A', parent_id: 'p1' }),
+    makeTask({ id: 'p1b', title: 'Sub one B', parent_id: 'p1' }),
+    makeTask({ id: 'p2', title: 'Parent two', status: 'in_progress' }),
+    makeTask({ id: 'p2a', title: 'Sub two A', parent_id: 'p2' }),
+    makeTask({ id: 'p3', title: 'Parent three', status: 'done' }),
+  ];
+
+  /** Top-level rows actually in the list, by their `task-row-<id>` element. */
+  function listedRowIds(): string[] {
+    return Array.from(container.querySelectorAll('[id^="task-row-"]'))
+      .map(node => node.id.replace('task-row-', ''));
+  }
+
+  it('counts top-level tasks only — a subtask is not a row', () => {
+    // The old rule, for contrast: every open task, subtasks included.
+    const everyOpen = WITH_SUBTASKS.filter(t => t.status !== 'done' && t.status !== 'cancelled').length;
+    expect(everyOpen).toBe(5);
+    expect(countOpenTasks(WITH_SUBTASKS)).toBe(2);
+  });
+
+  it('equals the number of open rows the window lists', () => {
+    render(WITH_SUBTASKS);
+    const listedOpen = listedRowIds()
+      .map(id => WITH_SUBTASKS.find(t => t.id === id)!)
+      .filter(task => task.status !== 'done' && task.status !== 'cancelled');
+    expect(listedOpen.map(t => t.id).sort()).toEqual(['p1', 'p2']);
+    expect(countOpenTasks(WITH_SUBTASKS)).toBe(listedOpen.length);
+  });
+
+  it("equals the window's own N-open badge", () => {
+    render(WITH_SUBTASKS);
+    expect(container.textContent).toContain(`${countOpenTasks(WITH_SUBTASKS)} open`);
+  });
+
+  it('is unchanged by Hide done, which can only remove closed tasks', () => {
+    render(WITH_SUBTASKS);
+    expect(container.textContent).toContain('2 open');
+    click(hideDoneButton());
+    // The closed top-level row leaves the list; the open count cannot move.
+    expect(container.textContent).not.toContain('Parent three');
+    expect(container.textContent).toContain('2 open');
+    expect(countOpenTasks(WITH_SUBTASKS)).toBe(2);
+  });
+
+  it('is workspace-scoped by the caller, and counts what it is given', () => {
+    // useTasks selects on workspace_id, so scoping is upstream of this helper.
+    // What it must not do is count a row from another workspace it was handed.
+    const otherWorkspace = makeTask({ id: 'x', title: 'Elsewhere', workspace_id: 'ws-2' });
+    expect(countOpenTasks([...WITH_SUBTASKS, otherWorkspace])).toBe(3);
+    expect(countOpenTasks(WITH_SUBTASKS.filter(t => t.workspace_id === 'ws-1'))).toBe(2);
+  });
+
+  it('ignores an empty list rather than throwing', () => {
+    expect(countOpenTasks([])).toBe(0);
   });
 });
