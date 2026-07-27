@@ -37,6 +37,10 @@ const STICKY_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff', '#
 type DragSnapshotObject = {
   x: number;
   y: number;
+  // Carried so a live DRAG can reposition the selection handles, which need the
+  // box size to place the ne/sw/se corners — not just the origin.
+  width: number;
+  height: number;
   type: CanvasObjectType;
   points?: Array<{ x: number; y: number }>;
 };
@@ -201,8 +205,25 @@ export function DrawingLayer({
 
     const tx = (dx / 100) * snapshot.canvasRect.width;
     const ty = (dy / 100) * snapshot.canvasRect.height;
-    snapshot.moveIds.forEach(id => setCanvasItemTransform(id, `translate3d(${tx}px, ${ty}px, 0)`));
-  }, [setCanvasItemTransform]);
+    snapshot.moveIds.forEach(id => {
+      setCanvasItemTransform(id, `translate3d(${tx}px, ${ty}px, 0)`);
+
+      // The item moves by TRANSFORM; its selection handles are React-positioned
+      // siblings, so they stayed at the pre-drag corners and only caught up when
+      // the commit re-rendered — the item appeared to slide out of its own
+      // handles. The resize path already solved this (positionResizeHandles);
+      // drag never called it. Same pixel space as resize, so no jump on commit.
+      const start = snapshot.objects.get(id);
+      if (!start) return;
+      positionResizeHandles(
+        id,
+        ((start.x + dx) / 100) * snapshot.canvasRect.width,
+        ((start.y + dy) / 100) * snapshot.canvasRect.height,
+        (start.width / 100) * snapshot.canvasRect.width,
+        (start.height / 100) * snapshot.canvasRect.height,
+      );
+    });
+  }, [positionResizeHandles, setCanvasItemTransform]);
 
   const commitDrag = useCallback(() => {
     const snapshot = dragSnapshotRef.current;
@@ -218,8 +239,12 @@ export function DrawingLayer({
       onUpdateObject(id, { x: start.x + dx, y: start.y + dy, ...pointUpdates });
     });
     clearCanvasItemTransforms(snapshot.moveIds);
+    // Inline handle offsets are a DRAG-ONLY override. Left behind they would pin
+    // the handles to the last previewed corner while React re-renders them at
+    // the committed one — the same desync, frozen instead of lagging.
+    snapshot.moveIds.forEach(id => clearResizeHandlePositions(id));
     dragSnapshotRef.current = null;
-  }, [clearCanvasItemTransforms, onUpdateObject]);
+  }, [clearCanvasItemTransforms, clearResizeHandlePositions, onUpdateObject]);
 
   const endDrag = useCallback((commit = true) => {
     const snapshot = dragSnapshotRef.current;
@@ -227,12 +252,13 @@ export function DrawingLayer({
       if (commit) commitDrag();
       else {
         clearCanvasItemTransforms(snapshot.moveIds);
+        snapshot.moveIds.forEach(id => clearResizeHandlePositions(id));
         dragSnapshotRef.current = null;
       }
     }
     setIsDragging(false);
     setHostInteractionLocked(false);
-  }, [clearCanvasItemTransforms, commitDrag, setHostInteractionLocked]);
+  }, [clearCanvasItemTransforms, clearResizeHandlePositions, commitDrag, setHostInteractionLocked]);
 
   const computeResizeRect = useCallback((snapshot: ResizeSnapshot, pos: { x: number; y: number }) => {
     const { startMouse, startRect, handle } = snapshot;
@@ -621,6 +647,8 @@ export function DrawingLayer({
       snapshotObjects.set(moveId, {
         x: item.x,
         y: item.y,
+        width: item.width,
+        height: item.height,
         type: item.type,
         points: item.points?.map(point => ({ ...point })),
       });
