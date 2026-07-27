@@ -1327,9 +1327,14 @@ function DirectAgentRow({
      <span className={`absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background ${statusColor}`} />
     </span>
     <span className="min-w-0 flex-1">
-     <span className="block truncate text-sm font-medium leading-tight text-foreground">{agent.name}</span>
-     <span className="block truncate text-xs leading-tight text-muted-foreground">
-      {handle ? `@${handle}` : 'agent'}
+     {/* ONE line: name and handle side by side, not stacked. Two block spans
+         made every DM row double height, and the name wrapped the moment it
+         was long — which is most of them. */}
+     <span className="flex min-w-0 items-baseline gap-1.5">
+      <span className="truncate text-sm font-medium leading-tight text-foreground">{agent.name}</span>
+      <span className="shrink-0 truncate text-xs leading-tight text-muted-foreground">
+       {handle ? `@${handle}` : 'agent'}
+      </span>
      </span>
     </span>
    </button>
