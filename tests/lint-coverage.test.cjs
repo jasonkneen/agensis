@@ -81,6 +81,11 @@ const MUST_BE_LINTED = [
   // SSRF gate for link preview cards, including the per-redirect re-validation.
   // Anyone who can post a message picks the URL.
   'server/link-preview.cjs',
+  // Holds the path-traversal containment for every upload read and write, and
+  // the extension→Content-Type allowlist that neutralizes .html/.svg. Both are
+  // decided by an attacker-supplied filename. Extracted from server/index.cjs,
+  // which is on this list — moving code must not move it out of coverage.
+  'server/lib/storage-paths.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
