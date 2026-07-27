@@ -183,7 +183,12 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   mock DBs). 334 tests. Note the glob is **top-level only** — a `.test.cjs` in a
   subdirectory is never run (`visual-editor/test/` is invisible to both runners).
 - `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure). 205.
-- Keep both green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
+- `npm run smoke` — Vitest over `tests/smoke/**/*.smoke.ts` (jsdom, its own
+  config). Mounts each main surface with data in it and fails if an **empty
+  state is showing while data exists**, plus a trap-state layer proving a
+  persisted filter cannot hide the control that clears it. See
+  [tests/smoke/README.md](tests/smoke/README.md). ~10 s.
+- Keep all three green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
   selectors exist in source — if you remove/rename a selector it references,
   update the tour JSON (`public/.well-known/cursorbuddy.json`) + that test.
 - `npm run lint` is now clean and exits 0. The 6 previously-documented
@@ -215,11 +220,22 @@ tell that you forgot to write one.
 ## Verify before you ship (every change)
 
 ```bash
-npm run ci                   # typecheck + both suites + lint, in that order
+npm run ci                   # typecheck + both suites + smoke + lint, in that order
 node --check server/index.cjs                # if you touched the server
 node --check netlify/functions/backend.mjs   # if you touched netlify
 npm run build                                # if you touched the frontend
 ```
+
+**`npm run smoke` is in that chain, and is not optional.** It exists because on
+2026-07-27 a workspace holding 8 agents rendered "No agents match — You haven't
+created any agents yet" over the full list, with no control on screen to undo
+it: `ownerFilter` is persisted, and the Mine/All toggle only rendered when the
+filter had matches. typecheck, eslint, both suites and the build were all green,
+because **none of them renders the app**. The smoke gate does, and asserts the
+one thing they structurally cannot: an empty state must not be showing while
+data exists, and a persisted filter must never hide the control that clears it.
+Dropping it means that class of bug is unguarded again — it was verified failing
+against the pre-fix code before it was added.
 
 `npm run ci` is the single gate. Run it locally — **do not infer "tests passed"
 from GitHub Actions.** Actions is not currently a working gate on this repo: runs
@@ -229,7 +245,8 @@ Confirm with `gh run view <id> --json jobs` — `steps: []` is the signature.
 
 ### Optional pre-push hook
 
-`.githooks/pre-push` runs typecheck + both suites before a push. Enable it with:
+`.githooks/pre-push` runs typecheck + both suites + the smoke gate before a
+push. Enable it with:
 
 ```bash
 npm run hooks:install        # git config core.hooksPath .githooks
