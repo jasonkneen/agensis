@@ -109,6 +109,10 @@ const MUST_BE_LINTED = [
   // authorizeRealtimeBinding is the only thing standing between a subscribe
   // frame and another workspace's data. Extracted from server/index.cjs.
   'server/realtime.cjs',
+  // Owns the live-daemon map and the one-live-connection-per-agent invariant.
+  // A mistake here delivers a dispatch to a dead process, or lets a superseded
+  // daemon keep answering. Extracted from server/index.cjs.
+  'server/agent-connections.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
