@@ -2,6 +2,7 @@ import { Headphones, Radio } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useHuddleSession } from './HuddleSessionContext';
+import { useHuddleDock } from './HuddleDockContext';
 
 // The huddle trigger, sized to sit in the channel toolbar next to Messages /
 // Files / Threads. It replaces the idle state of the old full-width strip.
@@ -11,8 +12,19 @@ import { useHuddleSession } from './HuddleSessionContext';
 // which has room for them — a h-11 toolbar row does not, and cramming them in
 // is how the caption line ends up squeezing the tabs off the edge.
 
-export function HuddleToolbarButton({ className }: { className?: string }) {
+export function HuddleToolbarButton({
+  className,
+  workspaceId,
+  sessionId,
+  title,
+}: {
+  className?: string;
+  workspaceId?: string | null;
+  sessionId?: string | null;
+  title?: string;
+}) {
   const huddle = useHuddleSession();
+  const dock = useHuddleDock();
   if (!huddle) return null;
 
   const { state, configured, busy, connection, startOrJoin } = huddle;
@@ -43,7 +55,16 @@ export function HuddleToolbarButton({ className }: { className?: string }) {
       size="sm"
       className={cn('h-8 shrink-0 px-2', className)}
       disabled={busy}
-      onClick={() => void startOrJoin()}
+      onClick={() => {
+        // The app-level dock owns the connection from here: it is mounted
+        // above every view, so navigating away no longer ends the call. The
+        // channel-scoped session below still supplies this button's label.
+        if (dock && workspaceId && sessionId) {
+          dock.openHuddle({ workspaceId, sessionId, title: title || 'this conversation' });
+          return;
+        }
+        void startOrJoin();
+      }}
       title={live ? 'Join the huddle in this channel' : 'Start a voice huddle in this channel'}
     >
       <Headphones data-icon="inline-start" />

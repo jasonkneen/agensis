@@ -1,5 +1,18 @@
 [
   {
+    "version": "huddle-panel",
+    "date": "2026-07-27",
+    "title": "A huddle is its own panel now, and it follows you",
+    "summary": "Starting a huddle opens one floating panel that stays with you. Walk to another channel, open a document, look at your agents — the call keeps running and the panel stays put, because it no longer lives inside the channel you started it from. It holds everyone in the call, the conversation, and a captions switch, and it collapses to a single line when you want the screen back.",
+    "highlights": [
+      "The call survives navigation — moving around the app no longer hangs up on you",
+      "One huddle at a time, so there is never a second call running somewhere you cannot see",
+      "Everyone in the call as chips, agents included — they are in the call even though they never hold a connection",
+      "Chat and transcript in the same panel, with captions you can show or hide",
+      "Collapse it to a single line and the call keeps going"
+    ]
+  },
+  {
     "version": "whats-new-gallery",
     "date": "2026-07-27",
     "title": "What's new, with demos you can watch",
@@ -37,7 +50,7 @@
       "Narrow windows are unchanged — the list still takes the whole width and an open account still replaces it",
       "To-do, Plan and Blockers widgets lose their card frames; a heading, a hairline and more space between them do the separating",
       "No more \"Huddle ended\" strip after a call — the huddle's own line in the conversation is what remains"
-  ]
+    ]
   },
   {
     "version": "sidebar-section-headers",
@@ -51,7 +64,7 @@
       "They scale with the UI font size setting, and are the same size on every theme",
       "The Tasks badge no longer counts subtasks — it matches the window's own open count",
       "The collapsed sidebar rail keeps the same order as the expanded one"
-]
+    ]
   },
   {
     "version": "show-desktop",
@@ -97,11 +110,11 @@
     "version": "tenant-usage",
     "date": "2026-07-27",
     "title": "The Tenants screen now shows what each account uses, and what it costs",
-    "summary": "The owner-only Tenants view listed an account, a workspace count and a date, and repeated the same email address as both the heading and the line under it. It now leads with the name where there is one and puts real information on the second line, and every account carries what it actually does: channels, DMs and threads, messages split into the ones people wrote and the ones agents wrote, huddles and the time spent in them, agents, connected daemons, documents, and when anything last happened. Underneath that is the new part. agensis now records the tokens every model call spends, per workspace, and turns them into an estimated cost. Nothing was recorded before this release and none of it can be filled in afterwards, so every figure says which date it counts from \u2014 and a provider that is measured but has no price attached is named rather than quietly counted as free. The figures are estimates from our own counts against published list prices, not a bill.",
+    "summary": "The owner-only Tenants view listed an account, a workspace count and a date, and repeated the same email address as both the heading and the line under it. It now leads with the name where there is one and puts real information on the second line, and every account carries what it actually does: channels, DMs and threads, messages split into the ones people wrote and the ones agents wrote, huddles and the time spent in them, agents, connected daemons, documents, and when anything last happened. Underneath that is the new part. agensis now records the tokens every model call spends, per workspace, and turns them into an estimated cost. Nothing was recorded before this release and none of it can be filled in afterwards, so every figure says which date it counts from — and a provider that is measured but has no price attached is named rather than quietly counted as free. The figures are estimates from our own counts against published list prices, not a bill.",
     "highlights": [
       "Per-account and per-workspace stats: channels, DMs, threads, messages by people vs agents, huddles and their duration, agents, live daemons, documents",
       "Estimated model spend per account and per workspace, from recorded token counts",
-      "Every cost figure is labelled with the date metering started \u2014 there is no earlier data and it cannot be back-filled",
+      "Every cost figure is labelled with the date metering started — there is no earlier data and it cannot be back-filled",
       "Voice providers are recorded but not yet priced, and say so instead of showing zero",
       "The account heading no longer prints the same email address twice"
     ]
