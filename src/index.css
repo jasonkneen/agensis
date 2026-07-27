@@ -633,7 +633,7 @@
   var(--tw-control-shadow);
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-action-row,
+/* THE SEARCH FIELD is a control and keeps the full treatment. Rows do not. */
 :root[data-ui-theme="tinyworld"] .sidebar-search {
  position: relative;
  overflow: hidden;
@@ -648,6 +648,22 @@
   inset 0 1px 0 var(--tw-control-inset),
   inset 0 -3px 0 var(--tw-control-bevel),
   var(--tw-control-shadow) !important;
+}
+
+/* SIDEBAR ROWS ARE A FLAT LIST. The owner asked twice: no frame on the rows,
+   the button look ONLY when selected. Framing every row turned the sidebar into
+   a stack of identical pills with no hierarchy and nothing to distinguish the
+   row you are actually on — which is the one thing the frame is FOR.
+   Hover and selected (below) put the treatment back. */
+:root[data-ui-theme="tinyworld"] .sidebar-action-row {
+ position: relative;
+ overflow: hidden;
+ border-width: 1px !important;
+ border-style: solid !important;
+ border-color: transparent !important;
+ color: var(--text-secondary) !important;
+ background: transparent !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="tinyworld"] .sidebar-rail-button::before {
@@ -4332,13 +4348,8 @@ select {
  border-radius: 10px !important;
  min-height: 2rem;
  color: var(--text-secondary) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
-  var(--tw-control-fill) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow) !important;
+ background: transparent !important;
+ box-shadow: none !important;
  padding-inline: 0.3rem 0.2rem !important;
 }
 
