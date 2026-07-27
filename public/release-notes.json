@@ -1,5 +1,19 @@
 [
   {
+    "version": "reaction-events",
+    "date": "2026-07-27",
+    "title": "Reactions can now trigger an integration",
+    "summary": "Reacting to a message was a signal only people could see — nothing outside Agensis could act on it. A Flows connection with a webhook is now told when someone reacts to a message, and when they take the reaction back, so a tick can approve something, acknowledge it, or hand it on. The event says which message, which reaction, who reacted, and when; it deliberately does not carry the message text.",
+    "highlights": [
+      "Adding a reaction sends a reaction.created event to your Flows webhook",
+      "Taking a reaction back sends reaction.removed, so an approval can be withdrawn",
+      "Reacting again with a reaction you already have sends nothing — no duplicates",
+      "The event names the message, not its contents",
+      "Only connections in that workspace are told, and a channel-scoped connection only hears about its own channel",
+      "Flows connections created before this update need to be recreated to receive the new events"
+    ]
+  },
+  {
     "version": "huddle-connect",
     "date": "2026-07-27",
     "title": "Huddles connect again, and there is only one of them on screen",

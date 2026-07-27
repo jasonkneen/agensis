@@ -20,6 +20,12 @@ const {
  normalizeFlowWebhookUrl,
  signFlowWebhook,
 } = require('./flow-integration.cjs');
+// Reactions are written through the generic /backend/db/update route as a whole
+// jsonb map, so their flow events come from diffing that map — see the module
+// header. Shared with netlify/functions/backend.mjs; the two lanes differ only
+// in the `encodeJsonb` bind (porsager wants the object, @netlify/database the
+// string).
+const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  PROVIDER_CALL_REDIRECT_NOTE,
@@ -14162,6 +14168,23 @@ function createApp() {
     ).catch(() => []);
    }
 
+   // Same shape, same reason as the assignee read above: a reaction event is the
+   // DIFFERENCE between the stored map and the one being written, and the write
+   // replaces the whole column, so the before-image has to be read first. Only
+   // for the writes that actually touch `reactions` — an ordinary message edit
+   // must not pay for a second query. `.catch(() => [])` because a reaction that
+   // saves without an event is a missing signal; a reaction that fails to save
+   // because the event machinery could not read is a lost user action.
+   let priorReactionRows = [];
+   if (table === 'messages' && Object.prototype.hasOwnProperty.call(safeValues, 'reactions')) {
+    const priorWhere = buildWhereClause(filters, []);
+    priorReactionRows = await getDb().unsafe(
+     `select id, session_id, reactions, sender_kind, sender_id, sender_name, thread_parent_id, created_at
+        from ${tableSql}${priorWhere.clause}`,
+     priorWhere.params,
+    ).catch(() => []);
+   }
+
    const where = buildWhereClause(filters, params);
    const result = await getDb().unsafe(
     `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
@@ -14169,6 +14192,25 @@ function createApp() {
    );
 
    notifyDbSubscribers(table, 'UPDATE', result);
+
+   // Fire-and-forget, AFTER the row is written and broadcast: an integration
+   // that cannot be told about a reaction must never cost somebody the
+   // reaction. Fails open, exactly like the enqueue inside notifyDbSubscribers.
+   if (priorReactionRows.length > 0) {
+    void emitReactionFlowEventsForUpdate({
+     db: (sql, sqlParams) => getDb().unsafe(sql, sqlParams),
+     // porsager: bind the OBJECT. A JSON.stringify here becomes a jsonb string
+     // scalar (tests/jsonb-bind-hygiene.test.cjs).
+     encodeJsonb: (payload) => payload,
+     priorRows: priorReactionRows,
+     updatedRows: result,
+     nextReactions: safeValues.reactions,
+     actorUserId: req.userId,
+     onWarn: (message) => console.warn('[flows] reaction events:', message),
+    }).catch((error) => {
+     console.error('[flows] failed to queue reaction event:', error.message || error);
+    });
+   }
 
    // Assigning a task to an agent runs it — the same flow a task-comment @mention
    // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed

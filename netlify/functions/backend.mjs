@@ -62,6 +62,13 @@ import {
  slugMentionHandle,
 } from '../../shared/channelMentions.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
+// Reaction flow events. This lane can write `messages.reactions` through the
+// same generic /backend/db/update route the Fly lane serves, so it queues the
+// same deliveries into the same `flow_webhook_deliveries` table — the Fly
+// delivery worker drains it. Wired into one lane and silently missing from the
+// other is this repo's most repeated bug. Shared implementation; the ONLY
+// difference is the jsonb bind (see encodeJsonb at the call site).
+import { emitReactionFlowEventsForUpdate } from '../../shared/reaction-events.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -2155,11 +2162,51 @@ async function handleDb(pathname, req, userId) {
    return jsonError(400, new Error('No updatable fields provided'));
   }
   const setClause = setParts.join(', ');
+
+  // Mirrors server/index.cjs: a reaction event is the DIFFERENCE between the
+  // stored map and the one being written, and the write replaces the whole
+  // column — so the before-image has to be read first, and only for the writes
+  // that actually touch `reactions`. Swallowed on failure: a reaction that
+  // saves without an event is a missing signal, but a reaction that fails to
+  // save because the event machinery could not read is a lost user action.
+  let priorReactionRows = [];
+  if (table === 'messages' && Object.prototype.hasOwnProperty.call(safeValues, 'reactions')) {
+   const priorWhere = buildWhereClause(filters, []);
+   priorReactionRows = await query(
+    `select id, session_id, reactions, sender_kind, sender_id, sender_name, thread_parent_id, created_at
+       from ${tableSql}${priorWhere.clause}`,
+    priorWhere.params,
+   ).catch(() => []);
+  }
+
   const where = buildWhereClause(filters, params);
   const result = await query(
    `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
    where.params,
   );
+
+  // AFTER the row is written, and awaited only so the serverless container is
+  // not frozen mid-insert — a failure here is logged and dropped, never
+  // returned. The reaction is already saved.
+  if (priorReactionRows.length > 0) {
+   try {
+    await emitReactionFlowEventsForUpdate({
+     db: query,
+     // @netlify/database REQUIRES the stringified form for a $n::jsonb bind —
+     // the exact opposite of the Fly lane's porsager driver. Deliberately not
+     // unified; see tests/jsonb-bind-hygiene.test.cjs.
+     encodeJsonb: (payload) => JSON.stringify(payload),
+     priorRows: priorReactionRows,
+     updatedRows: result,
+     nextReactions: safeValues.reactions,
+     actorUserId: userId,
+     onWarn: (message) => console.warn('[flows] reaction events:', message),
+    });
+   } catch (error) {
+    console.error('[flows] failed to queue reaction event:', error?.message || error);
+   }
+  }
+
   return json({ data: single ? (result[0] ?? null) : result, error: null });
  }
 
