@@ -283,6 +283,61 @@ function Teams() {
   );
 }
 
+// The three plans from docs/pricing — Free, Pro, Team. Prices are the ANNUAL
+// per-seat rate with the month-to-month figure alongside, because quoting only
+// the lower number and burying the real one is the thing that makes pricing
+// pages feel dishonest. Numbers live in one array so a change is one edit.
+const PLANS = [
+  {
+    name: 'Free',
+    price: '$0',
+    cadence: 'forever',
+    note: 'Everything you need to try it properly.',
+    features: [
+      '1 workspace, 1 seat',
+      '2 connected daemons — your key, unlimited inference',
+      'Managed inference: auto-interject only (~200 calls/mo)',
+      '7-day history · 100 MB uploads',
+      'Community support',
+    ],
+    cta: 'Download',
+    highlighted: false,
+  },
+  {
+    name: 'Pro',
+    price: '$20',
+    cadence: 'per month, billed annually',
+    aside: '$24 month-to-month',
+    note: 'For one person running a lot of agents.',
+    features: [
+      'Unlimited workspaces',
+      'Unlimited connected daemons — your key',
+      'Managed inference: $5/mo token allowance, then bring your key',
+      'Full history · 5 GB uploads',
+      'Split / merge, thread widgets, memory palace',
+      'Email support',
+    ],
+    cta: 'Start with Pro',
+    highlighted: true,
+  },
+  {
+    name: 'Team',
+    price: '$50',
+    cadence: 'per seat / month, billed annually',
+    aside: '$60 month-to-month · min 3 seats',
+    note: 'Shared agents, shared memory, one bill.',
+    features: [
+      'Everything in Pro',
+      'Pooled inference allowance across the team, plus your own key',
+      'SSO, roles and audit log',
+      '50 GB uploads · durable object storage',
+      'Priority support and onboarding',
+    ],
+    cta: 'Talk to us',
+    highlighted: false,
+  },
+];
+
 function Pricing() {
   return (
     <section id="pricing" className="relative border-t border-agensis-border">
@@ -290,83 +345,67 @@ function Pricing() {
         <div className="mx-auto max-w-2xl text-center">
           <div className="text-xs uppercase tracking-wider text-agensis-accent">Pricing</div>
           <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
-            The app is free. Always.
+            Your inference stays free.
           </h2>
           <p className="mt-4 text-agensis-muted">
-            Download agensis and run it on your own infrastructure at no cost. Need somewhere to
-            keep everyone's files? Add cloud storage when you're ready.
+            Connect your own key and the model calls are yours, on every plan including the free
+            one. You are paying for the workspace around them, not for the tokens.
           </p>
         </div>
 
-        <div className="mx-auto mt-14 grid max-w-4xl gap-6 md:grid-cols-2">
-          <div className="rounded-xl border border-agensis-border bg-agensis-panel p-8">
-            <div className="text-sm text-agensis-muted">Local</div>
-            <div className="mt-2 flex items-baseline gap-1">
-              <span className="text-4xl font-semibold text-white">Free</span>
-              <span className="text-agensis-muted">forever</span>
-            </div>
-            <p className="mt-3 text-sm text-agensis-muted">
-              Clone, install, run. Bring your own Supabase project. All features included.
-            </p>
-            <ul className="mt-6 space-y-2.5 text-sm text-white/90">
-              {[
-                'Full app, no feature gates',
-                'Realtime canvas, chat, docs, memory',
-                'Self-hosted — your data, your rules',
-              ].map((line) => (
-                <li key={line} className="flex items-start gap-2.5">
-                  <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-agensis-accent" />
-                  {line}
-                </li>
-              ))}
-            </ul>
-            <a
-              href={REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-sm font-medium text-black hover:bg-white/90 transition-colors"
+        <div className="mx-auto mt-14 grid max-w-5xl items-start gap-6 md:grid-cols-3">
+          {PLANS.map((plan) => (
+            <div
+              key={plan.name}
+              className={
+                plan.highlighted
+                  ? 'relative rounded-xl border border-agensis-accent/40 bg-agensis-panel p-8'
+                  : 'rounded-xl border border-agensis-border bg-agensis-panel p-8'
+              }
             >
-              <Download className="h-4 w-4" />
-              Download
-            </a>
-          </div>
-
-          <div className="relative rounded-xl border border-agensis-accent/40 bg-agensis-panel p-8">
-            <div className="absolute right-5 top-5 rounded-full border border-agensis-accent/40 bg-agensis-accent/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-agensis-accent">
-              Optional
+              {plan.highlighted && (
+                <div className="absolute right-5 top-5 rounded-full border border-agensis-accent/40 bg-agensis-accent/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-agensis-accent">
+                  Most picked
+                </div>
+              )}
+              <div className="text-sm text-agensis-muted">{plan.name}</div>
+              <div className="mt-2 flex items-baseline gap-1">
+                <span className="text-4xl font-semibold text-white">{plan.price}</span>
+              </div>
+              <div className="mt-1 text-sm text-agensis-muted">{plan.cadence}</div>
+              {plan.aside && (
+                <div className="mt-0.5 text-xs text-agensis-muted/80">{plan.aside}</div>
+              )}
+              <p className="mt-3 text-sm text-agensis-muted">{plan.note}</p>
+              <ul className="mt-6 space-y-2.5 text-sm text-white/90">
+                {plan.features.map((line) => (
+                  <li key={line} className="flex items-start gap-2.5">
+                    <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-agensis-accent" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className={
+                  plan.highlighted
+                    ? 'mt-8 inline-flex w-full items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-sm font-medium text-black hover:bg-white/90 transition-colors'
+                    : 'mt-8 inline-flex w-full items-center justify-center gap-2 rounded-md border border-agensis-border bg-agensis-bg px-4 py-2.5 text-sm font-medium text-white hover:border-agensis-accent/60 transition-colors'
+                }
+              >
+                {plan.cta}
+                <ArrowRight className="h-4 w-4" />
+              </a>
             </div>
-            <div className="text-sm text-agensis-muted">Cloud storage</div>
-            <div className="mt-2 flex items-baseline gap-1">
-              <span className="text-4xl font-semibold text-white">$6</span>
-              <span className="text-agensis-muted">/ user / month</span>
-            </div>
-            <p className="mt-3 text-sm text-agensis-muted">
-              Managed storage for files, uploads and snapshots. Skip the self-hosting for the
-              heaviest bit.
-            </p>
-            <ul className="mt-6 space-y-2.5 text-sm text-white/90">
-              {[
-                '100 GB per user, pooled across the team',
-                'Automatic backups & versioning',
-                'Drop-in — no code changes',
-              ].map((line) => (
-                <li key={line} className="flex items-start gap-2.5">
-                  <span className="mt-1.5 h-1.5 w-1.5 flex-none rounded-full bg-agensis-accent" />
-                  {line}
-                </li>
-              ))}
-            </ul>
-            <a
-              href={REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-md border border-agensis-border bg-agensis-bg px-4 py-2.5 text-sm font-medium text-white hover:border-agensis-accent/60 transition-colors"
-            >
-              Join the waitlist
-              <ArrowRight className="h-4 w-4" />
-            </a>
-          </div>
+          ))}
         </div>
+
+        <p className="mx-auto mt-10 max-w-2xl text-center text-sm text-agensis-muted">
+          Self-hosting stays free and ungated — clone it, bring your own database, and every
+          feature is there. Paid plans are the hosted version.
+        </p>
       </div>
     </section>
   );
