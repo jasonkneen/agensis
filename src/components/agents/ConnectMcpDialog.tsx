@@ -66,7 +66,14 @@ export function ConnectMcpDialog({ workspaceId, open, onOpenChange }: { workspac
             <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
           ) : (
             <div className="space-y-3 overflow-hidden">
+              {/* The command carries a PLACEHOLDER token, never the live one: it is
+                  shown in full and copied to the clipboard as plain text, which is
+                  how a real token ended up pasted into a transcript. Copy the token
+                  from its own row below and substitute it. */}
               <Row label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+              <p className="pl-[7.5rem] text-xs text-muted-foreground">
+                Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token below.
+              </p>
               <Row label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
               <Row label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
               <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">

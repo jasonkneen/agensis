@@ -13990,7 +13990,13 @@ function createApp() {
      autoApprove: Boolean(rows[0].mcp_auto_approve),
      endpoint: mcpEndpoint(baseUrl),
      config: configBlock(baseUrl, token),
-     claudeMcpAdd: claudeMcpAddCommand(baseUrl, token),
+     // PLACEHOLDER, not the live token. This one-liner is displayed in full and
+     // has a copy button, so embedding the real bearer token put it on the
+     // clipboard as plain text — and it has already been pasted into a
+     // transcript that way. The endpoint and the token are separate fields
+     // right beside it (the token masked, copied deliberately), so nothing is
+     // lost by making the convenience string non-secret.
+     claudeMcpAdd: claudeMcpAddCommand(baseUrl),
     },
     error: null,
    });
