@@ -97,7 +97,11 @@ export function EditChannelDialog({ open, onOpenChange, baseline, onSave, status
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] max-w-lg overflow-hidden">
+      {/* Wider than the default max-w-lg: this dialog carries a 16-icon grid and
+          three full-sentence reply-timing cards, and at 32rem the cards wrapped to
+          three lines each and the icons to two rows, which made a short form read
+          as a long one. */}
+      <DialogContent className="max-h-[calc(100svh-2rem)] max-w-2xl overflow-hidden">
         <DialogHeader>
           <DialogTitle>Edit channel</DialogTitle>
           <DialogDescription>
