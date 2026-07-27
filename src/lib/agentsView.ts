@@ -3,7 +3,7 @@
 // stored value is still valid), what clicking a card does to the selection,
 // and at what width the detail pane stops fitting beside the grid.
 
-import { oneOf, type PreferenceCodec } from './viewPreferences';
+import { oneOf, pixelPreference, type PreferenceCodec } from './viewPreferences';
 
 /**
  * The three ways the roster can be drawn: the card grid, the drillable network
@@ -14,6 +14,78 @@ import { oneOf, type PreferenceCodec } from './viewPreferences';
 export const AGENT_LAYOUT_VIEWS = ['grid', 'network', 'both'] as const;
 export type AgentLayoutView = (typeof AGENT_LAYOUT_VIEWS)[number];
 export const AGENT_LAYOUT_VIEW_PREF: PreferenceCodec<AgentLayoutView> = oneOf(AGENT_LAYOUT_VIEWS);
+
+// ---------------------------------------------------------------------------
+// The Both view's horizontal split
+//
+// `both` stacks the card grid over the network map with a draggable divider
+// between them, and where that divider sits is remembered per workspace. That
+// is precisely how a stored preference turns into a trap: a split chosen in a
+// tall window and restored in a short one can leave a pane at zero height,
+// showing nothing and saying nothing about why.
+//
+// So the stored number is never used as the layout. It is a REQUEST, and
+// `agentSplitGridHeight` is the answer, recomputed from the live container
+// height on every render. A ResizeObserver keeps that height current, which is
+// what makes a window resize re-clamp — and because the clamp is derived rather
+// than written back, shrinking the window and growing it again returns the
+// split the user actually chose.
+// ---------------------------------------------------------------------------
+
+/**
+ * Floor for the card grid, px. About one row of cards: below this the grid has
+ * stopped being a grid, and seeing both is the entire point of the mode.
+ */
+export const AGENT_SPLIT_MIN_GRID_PX = 132;
+
+/** Floor for the map, px. Under this the mesh has no legible ring left. */
+export const AGENT_SPLIT_MIN_MAP_PX = 176;
+
+/** The grid's share of the height before anyone has touched the divider. */
+export const AGENT_SPLIT_DEFAULT_GRID_RATIO = 0.45;
+
+/** Sanity ceiling on the stored height; the real clamp is the container. */
+export const AGENT_SPLIT_PREF: PreferenceCodec<number> = pixelPreference(4000);
+
+/** A stored value that is actually a measurement, or null for "never dragged". */
+function requestedSplit(stored: number | null): number | null {
+  return typeof stored === 'number' && Number.isFinite(stored) && stored > 0 ? stored : null;
+}
+
+/**
+ * The height the card grid gets, in px, from what was stored and the height the
+ * two panes have to share (`containerPx` — the grid pane plus the map pane, so
+ * the map simply takes the remainder).
+ *
+ * - No stored request (null, 0, NaN, a negative) means never dragged, and the
+ *   default ratio applies — which also means a taller window opens with a
+ *   proportionally taller grid rather than a fixed one.
+ * - Both floors are honoured, and THE MAP'S FLOOR WINS over the grid's request:
+ *   dragging down can never push the map off the bottom edge.
+ * - When the container cannot hold both floors, the two shrink in proportion
+ *   rather than one of them taking everything. Both panes stay on screen and
+ *   scroll internally; the alternative is a pane of zero height, which is the
+ *   invisible-content failure this function exists to prevent.
+ * - An unmeasured container (0, NaN — the first frame, or jsdom) answers the
+ *   grid floor rather than 0, so a pane is never painted with no height at all.
+ */
+export function agentSplitGridHeight(stored: number | null, containerPx: number): number {
+  const container = Number.isFinite(containerPx) ? containerPx : 0;
+  const requested = requestedSplit(stored);
+
+  if (container <= 0) {
+    return Math.round(Math.max(AGENT_SPLIT_MIN_GRID_PX, requested ?? 0));
+  }
+
+  const floors = AGENT_SPLIT_MIN_GRID_PX + AGENT_SPLIT_MIN_MAP_PX;
+  if (container <= floors) {
+    return Math.round(container * (AGENT_SPLIT_MIN_GRID_PX / floors));
+  }
+
+  const want = requested ?? container * AGENT_SPLIT_DEFAULT_GRID_RATIO;
+  const ceiling = container - AGENT_SPLIT_MIN_MAP_PX;
+  return Math.round(Math.min(Math.max(want, AGENT_SPLIT_MIN_GRID_PX), ceiling));
+}
 
 /**
  * ONE selection shared by every surface: the grid card, the map node and the

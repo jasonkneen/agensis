@@ -6,7 +6,10 @@ import {
   drillOut,
   idleOffset,
   meshChildren,
+  meshContentExtent,
+  meshLayout,
   meshLevel,
+  meshViewBox,
   motionConfig,
   openTaskCount,
   popupTarget,
@@ -352,6 +355,69 @@ describe('ring layout', () => {
   it('gives every rendered node a slot', () => {
     const view = buildMeshView(SOURCE, []);
     for (const node of view.nodes) expect(view.slots.has(node.id)).toBe(true);
+  });
+});
+
+describe('fitting the drawing to its pane', () => {
+  const layout = meshLayout(6);
+  const bare = meshContentExtent(layout, 0);
+  const withProviders = meshContentExtent(layout, 3);
+
+  it('reaches further sideways than down once endpoints are on screen', () => {
+    // A provider is a pill up to 190 wide and 30 tall. A single bounding circle
+    // would reserve that sideways room in every direction, and the graph would
+    // sit small in a box mostly made of its own margin.
+    expect(withProviders.halfWidth).toBeGreaterThan(withProviders.halfHeight);
+    expect(withProviders.halfWidth).toBeGreaterThan(bare.halfWidth);
+  });
+
+  it('covers the ring nodes and their labels when there are no endpoints', () => {
+    expect(bare.halfWidth).toBe(bare.halfHeight);
+    expect(bare.halfWidth).toBeGreaterThan(layout.ring + layout.nodeR);
+  });
+
+  it('stays centred on the hub whatever the pane is shaped like', () => {
+    for (const [w, h] of [[1200, 300], [300, 1200], [700, 700], [0, 0]] as const) {
+      const box = meshViewBox(layout, withProviders, w, h);
+      expect(box.x + box.width / 2).toBeCloseTo(layout.cx, 6);
+      expect(box.y + box.height / 2).toBeCloseTo(layout.cy, 6);
+    }
+  });
+
+  it('takes the pane\'s aspect ratio, so the graph fills it instead of letterboxing', () => {
+    // The split view's shape: wide and short. The old fixed 1000x840 box scaled
+    // the whole diagram down to the height and left the width empty.
+    const wide = meshViewBox(layout, withProviders, 1200, 300);
+    expect(wide.width / wide.height).toBeCloseTo(4, 6);
+    const tall = meshViewBox(layout, withProviders, 300, 1200);
+    expect(tall.width / tall.height).toBeCloseTo(0.25, 6);
+  });
+
+  it('never clips the graph — the tighter axis decides the scale', () => {
+    for (const [w, h] of [[1200, 300], [300, 1200], [700, 700], [1000, 840]] as const) {
+      const box = meshViewBox(layout, withProviders, w, h);
+      expect(box.width).toBeGreaterThanOrEqual(withProviders.halfWidth * 2 - 0.01);
+      expect(box.height).toBeGreaterThanOrEqual(withProviders.halfHeight * 2 - 0.01);
+    }
+    // …and exactly one axis is tight, so there is no slack on both at once.
+    const wide = meshViewBox(layout, withProviders, 1200, 300);
+    expect(wide.height).toBeCloseTo(withProviders.halfHeight * 2, 1);
+  });
+
+  it('falls back to a box hugging the graph when the pane is unmeasurable', () => {
+    // First frame, and jsdom, where clientWidth/Height are 0.
+    for (const [w, h] of [[0, 0], [0, 400], [400, 0], [Number.NaN, 400], [-10, -10]] as const) {
+      const box = meshViewBox(layout, withProviders, w, h);
+      expect(box.width).toBeCloseTo(withProviders.halfWidth * 2, 6);
+      expect(box.height).toBeCloseTo(withProviders.halfHeight * 2, 6);
+    }
+  });
+
+  it('grows the window as the level fills up, so a crowded ring still fits', () => {
+    const crowded = meshLayout(24);
+    const box = meshViewBox(crowded, meshContentExtent(crowded, 2), 800, 600);
+    const small = meshViewBox(layout, withProviders, 800, 600);
+    expect(box.width).toBeGreaterThan(small.width);
   });
 });
 

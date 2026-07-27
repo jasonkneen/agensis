@@ -151,6 +151,32 @@ export const booleanPreference: PreferenceCodec<boolean> = {
 };
 
 /**
+ * A dragged measurement in CSS pixels — a pane height or width someone set by
+ * hauling a divider. Stored as a plain integer.
+ *
+ * `max` is a sanity ceiling, NOT the layout clamp. What a stored measurement is
+ * allowed to be depends on the container it is restored into, which this module
+ * knows nothing about, so the clamp lives with the layout (e.g.
+ * `agentSplitGridHeight`) and runs on every render. All this rejects is a value
+ * that is not a measurement at all: an empty string, a NaN, a negative, a JSON
+ * blob, or a number so large it could only be corruption.
+ *
+ * `0` is deliberately not a valid measurement — it is the "never dragged"
+ * fallback everywhere this is used, so a zero in storage reads back as "no
+ * choice made" rather than as a pane with no height.
+ */
+export function pixelPreference(max: number): PreferenceCodec<number> {
+  return {
+    parse: raw => {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value <= 0 || value > max) return null;
+      return Math.round(value);
+    },
+    serialize: value => String(Math.round(value)),
+  };
+}
+
+/**
  * A multi-select over a closed set (the Agents window's status chips).
  *
  * Anything that is not a JSON array of strings is garbage and falls back to the

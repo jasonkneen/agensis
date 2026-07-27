@@ -222,6 +222,16 @@ describe('smoke: a stored preference cannot strand the user', () => {
 
 const NOT_A_FILTER: Record<string, string> = {
   'agents.layout-view': 'chooses grid/network/both — every mode shows the same agents',
+  // The Both view's divider position, in px of grid height. It decides how the
+  // height is DIVIDED, never which agents exist — and it is the same class of
+  // hazard as 'feedback.anchor' rather than of ownerFilter: a stored number
+  // that could, unclamped, leave a pane at zero height. It cannot, because
+  // agentSplitGridHeight re-derives it from the measured container on every
+  // render (never from storage directly) and holds both panes above their
+  // floors, shrinking them proportionally when the window is too short to seat
+  // both. Pinned by the "stored in a tall window, restored in a short one" and
+  // "neither pane below its minimum" cases in tests/unit/agentsView.test.ts.
+  'agents.split': 'grid/map divider position, re-clamped against the live container every render — hides no data',
   'tasks.view': 'chooses list/kanban/gantt — every view shows the same tasks',
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
