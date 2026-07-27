@@ -914,6 +914,44 @@ CREATE TABLE IF NOT EXISTS inbox_read_state (
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
 
+-- Owner broadcasts (shared/tenant-campaigns.cjs). The only rows here addressed
+-- to ACCOUNTS rather than scoped to a workspace, which is why neither table is
+-- in the backendClient allowlists — the dedicated owner-gated routes are the
+-- only door. Mirrors ensureRuntimeSchema in server/index.cjs.
+--
+-- The campaign row IS the audit trail: who sent it (created_by, plus the email
+-- as it read at send time so a later rename cannot rewrite history), what it
+-- said, the segment and its plain-English summary, and how many accounts it
+-- reached.
+CREATE TABLE IF NOT EXISTS tenant_campaigns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title text NOT NULL DEFAULT '',
+  body text NOT NULL DEFAULT '',
+  surface text NOT NULL DEFAULT 'tip',
+  segment jsonb NOT NULL DEFAULT '{}'::jsonb,
+  segment_summary text NOT NULL DEFAULT '',
+  recipient_count integer NOT NULL DEFAULT 0,
+  created_by uuid,
+  created_by_email text NOT NULL DEFAULT '',
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_campaigns_created_at ON tenant_campaigns(created_at DESC);
+
+-- The FROZEN audience, written once at send time, and the per-user dismissal
+-- record. Both jobs in one table on purpose: a user can only dismiss a message
+-- that was actually sent to them, because the row they update is the row that
+-- made them a recipient. Server-side rather than a localStorage key so a
+-- dismissal survives a different browser and two accounts sharing one browser
+-- never share one dismissal. The composite PK is the delivery index.
+CREATE TABLE IF NOT EXISTS tenant_campaign_recipients (
+  campaign_id uuid NOT NULL REFERENCES tenant_campaigns(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  dismissed_at timestamptz,
+  PRIMARY KEY (user_id, campaign_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_campaign_recipients_campaign
+  ON tenant_campaign_recipients(campaign_id);
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.

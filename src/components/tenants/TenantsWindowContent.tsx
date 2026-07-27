@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { RotateCw, Search, X } from 'lucide-react';
+import { Megaphone, RotateCw, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -27,6 +27,7 @@ import {
   formatUsd,
   type TenantMeteringWindow,
 } from '../../lib/tenantStats';
+import { CampaignComposer } from './CampaignComposer';
 import { TenantDetailPane } from './TenantDetailPane';
 import { TenantRow } from './TenantRow';
 
@@ -105,6 +106,10 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
 
   const [query, setQuery] = useState('');
   const [listWidth, setListWidth] = useState(readStoredWidth);
+  // The composer is a MODE of this window rather than a dialog over it: it
+  // replaces the master-detail entirely, because the thing it needs the room for
+  // is the list of who matched.
+  const [composing, setComposing] = useState(false);
 
   // Search and ordering are pure (src/lib/tenants.ts) and run over the loaded
   // list, so typing costs no round-trip and there is no second server-side
@@ -155,6 +160,14 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
 
   const resetWidth = useCallback(() => setListWidth(DEFAULT_LIST_WIDTH), []);
 
+  if (composing) {
+    return (
+      <div className="@container/tenantswin flex h-full min-h-0 bg-card text-card-foreground">
+        <CampaignComposer onClose={() => setComposing(false)} />
+      </div>
+    );
+  }
+
   return (
     <div
       ref={rootRef}
@@ -196,6 +209,16 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
               <X />
             </Button>
           )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setComposing(true)}
+            aria-label="Message accounts"
+            title="Message accounts"
+          >
+            <Megaphone />
+          </Button>
           <Button
             type="button"
             variant="ghost"

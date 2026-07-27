@@ -226,7 +226,13 @@ const NOT_A_FILTER: Record<string, string> = {
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
   'tips.dismissed': 'onboarding tips, not a data list',
-  'tips.collapsed': 'onboarding tips, not a data list',
+  // Also collapses an owner broadcast in that same slot (OwnerMessageCard), so
+  // a stored `true` means a message can ARRIVE collapsed. Not a filter and not a
+  // trap: the header, the FOR YOU marker and the expand chevron all still
+  // render, so the message announces itself and one click opens it. Pinned by
+  // "arrives collapsed if the user had collapsed a tip" in
+  // tests/unit/ownerMessageRender.test.ts.
+  'tips.collapsed': 'collapses the tip / owner-message card to its header — the expander stays visible',
   // A dragged position, not a filter: it moves the feedback button, it never
   // decides which rows exist. It IS clamped back into the viewport on resize
   // (feedbackButtonDrag tests), so a stored position cannot strand the control

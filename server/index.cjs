@@ -151,6 +151,20 @@ const {
  createAnthropicUsageAccumulator,
 } = require('../shared/usage-metering.cjs');
 const {
+ CAMPAIGN_CATEGORIES,
+ normalizeSegment,
+ normalizeCampaignInput,
+ assertSendable,
+ selectSegmentMatches,
+ describeSegment,
+ loadTenantFacts,
+ buildSegmentPreview,
+ createCampaign,
+ listCampaigns,
+ listUserCampaignMessages,
+ dismissCampaignMessage,
+} = require('../shared/tenant-campaigns.cjs');
+const {
  CHANNEL_MENTION_HANDLE,
  CHANNEL_MENTION_MAX_AGENTS,
  agentMentionHandles,
@@ -1227,6 +1241,48 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
   `);
+ // Owner broadcasts (shared/tenant-campaigns.cjs). The only rows in this
+ // database addressed to ACCOUNTS rather than scoped to a workspace, which is why
+ // neither table is in the backendClient allowlists — the dedicated owner-gated
+ // routes are the only door.
+ //
+ // The campaign row IS the audit trail: who sent it (created_by plus the email as
+ // it read at send time, so a later rename cannot rewrite history), what it said,
+ // the segment and its plain-English summary, and how many accounts it reached.
+ //
+ // The comments stay OUT of the SQL string on purpose: several tests mock the DB
+ // and classify a bootstrap statement by its first keyword, so a block beginning
+ // with `--` reads as an unknown query rather than as DDL.
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS tenant_campaigns (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      title text NOT NULL DEFAULT '',
+      body text NOT NULL DEFAULT '',
+      surface text NOT NULL DEFAULT 'tip',
+      segment jsonb NOT NULL DEFAULT '{}'::jsonb,
+      segment_summary text NOT NULL DEFAULT '',
+      recipient_count integer NOT NULL DEFAULT 0,
+      created_by uuid,
+      created_by_email text NOT NULL DEFAULT '',
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenant_campaigns_created_at ON tenant_campaigns(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS tenant_campaign_recipients (
+      campaign_id uuid NOT NULL REFERENCES tenant_campaigns(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      dismissed_at timestamptz,
+      PRIMARY KEY (user_id, campaign_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tenant_campaign_recipients_campaign
+      ON tenant_campaign_recipients(campaign_id);
+  `);
+ // tenant_campaign_recipients above is BOTH the frozen audience (written once at
+ // send time) and the per-user dismissal record. One table on purpose: a user can
+ // only dismiss a message that was actually sent to them, because the row they
+ // update is the row that made them a recipient. Server-side rather than a
+ // localStorage key so a dismissal survives a different browser and two accounts
+ // sharing one browser never share one. The composite PK is the delivery index.
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS workspace_secrets (
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -2052,6 +2108,12 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // authenticated non-owner turning the 403 into a free query loop. Keyed per
 // caller, and low: the owner browses a list, they do not poll it.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// The DELIVERY side of owner broadcasts — read by EVERY signed-in session on
+// load, not by the operator. Separate budget from tenantsRateLimiter for that
+// reason: one operator browsing an admin list and every user in the deployment
+// asking "is there a message for me" are not the same traffic, and sharing a
+// bucket would let ordinary polling starve the admin surface (or vice versa).
+const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // Voice: minting a Cartesia token and opening a Deepgram stream both cost money
 // at a provider we do not control, so both are bounded per user. 20/min is far
 // above a real huddle (one token per socket connect, one stream per mic unmute)
@@ -2082,6 +2144,7 @@ const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, d
 // list. Tight on purpose — nobody files five genuine bug reports a minute.
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'tenants' });
+const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'campaign-messages' });
 // Outbound fetches cost this machine's time and put its IP in someone else's
 // logs, so the unfurl budget is enforced across instances too, not only per warm
 // process.
@@ -12435,8 +12498,10 @@ function createApp() {
  // nicety. THESE THREE CHECKS are the access control, and each route runs its
  // own — a curl with a valid non-owner token gets 403 from every one of them.
  //
- // Read-only, on purpose: upgrades and credits are a later pass and will need
- // their own audit trail. There is no tenant write route to get wrong yet.
+ // The read routes are read-only: upgrades and credits are still a later pass.
+ // The ONE thing this surface can now write is an owner broadcast — see the
+ // campaign routes below, which carry their own audit trail and cannot change
+ // anybody's account, only add a dismissible message to their UI.
 
  // Whether the CALLER is the owner. Answers for the caller and nobody else, so
  // it is safe for any signed-in user to ask — it is how the client decides
@@ -12472,6 +12537,114 @@ function createApp() {
   }
  });
 
+ // --- Owner broadcasts ----------------------------------------------------
+ //
+ // The ONLY write routes on this surface, and the first thing in the product
+ // that puts one person's words into everybody else's UI. Every one of them
+ // runs `assertSystemOwner` — the same gate, in the same place in the handler,
+ // as the read routes above.
+ //
+ // REGISTERED BEFORE '/backend/tenants/:id'. Express matches in order, so
+ // '/backend/tenants/campaigns' registered after the parameterised route would
+ // be swallowed as an account id and answer 404 for the owner.
+ //
+ // The audit trail is the tenant_campaigns row itself: created_by, the sender's
+ // email as it read at send time, the segment, its plain-English summary, the
+ // recipient count, and the frozen recipient list in tenant_campaign_recipients.
+ // Not an activity_events row — those are workspace-scoped, and a broadcast
+ // belongs to no workspace.
+
+ /** The filters the composer may offer. Ids and labels only — no predicates. */
+ app.get('/backend/tenants/campaigns/categories', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   res.json({
+    data: {
+     categories: CAMPAIGN_CATEGORIES.map(({ id, label, days }) => ({ id, label, days: days === true })),
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ /**
+  * WHO WOULD RECEIVE THIS. The segment is evaluated server-side and the matched
+  * accounts are returned in full, so the owner can read the list before sending
+  * rather than trusting a number. Nothing is written.
+  */
+ app.post('/backend/tenants/campaigns/preview', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const segment = normalizeSegment(req.body?.segment);
+   const facts = await loadTenantFacts(dbQuery);
+   res.json({ data: buildSegmentPreview(segment, facts), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants/campaigns', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   res.json({ data: await listCampaigns(dbQuery), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ /**
+  * SEND. Two refusals stand between a mis-click and the whole deployment:
+  *
+  *   1. the audience is recomputed HERE, from the segment in this request — the
+  *      preview's list is never trusted, so a client cannot post a segment of
+  *      one and a recipient list of four hundred;
+  *   2. `assertSendable` refuses an empty match (nobody to send to) and refuses
+  *      a `confirm_recipient_count` that is not exactly the number just
+  *      computed — so the count the owner agreed to in the confirm dialog is
+  *      the count that actually goes out, and a segment that grew while they
+  *      were reading it comes back as a 409 to re-confirm.
+  *
+  * The jsonb bind is the OBJECT, not a string: porsager turns a stringified
+  * bind into a jsonb string scalar even under an explicit cast (see
+  * tests/jsonb-bind-hygiene.test.cjs). The Netlify mirror binds the string.
+  */
+ app.post('/backend/tenants/campaigns', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const ownerId = await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const input = normalizeCampaignInput(req.body);
+   const facts = await loadTenantFacts(dbQuery);
+   const matched = selectSegmentMatches(input.segment, facts);
+   assertSendable(matched.length, req.body?.confirm_recipient_count);
+   const ownerRows = await dbQuery('select email from app_users where id = $1 limit 1', [ownerId]);
+   const campaign = await createCampaign(dbQuery, {
+    title: input.title,
+    body: input.body,
+    surface: input.surface,
+    segmentBind: input.segment,
+    summary: describeSegment(input.segment),
+    recipientIds: matched.map((account) => account.user_id),
+    createdBy: ownerId,
+    createdByEmail: ownerRows?.[0]?.email || '',
+   });
+   console.log('[campaign] sent', {
+    id: campaign.id,
+    by: ownerId,
+    surface: campaign.surface,
+    recipients: campaign.recipient_count,
+    segment: campaign.summary,
+   });
+   res.json({ data: { campaign }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.get('/backend/tenants/:id', requireAuth, async (req, res) => {
   try {
    if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
@@ -12479,6 +12652,32 @@ function createApp() {
    const detail = await getTenantAccount(dbQuery, String(req.params.id || ''));
    if (!detail) return jsonError(res, 404, new Error('No such account'));
    res.json({ data: detail, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // --- Owner broadcasts, the receiving end -----------------------------------
+ //
+ // NOT owner-gated, and deliberately on a different path prefix so that stays
+ // obvious: every signed-in user reads their OWN messages here. Authorization is
+ // the user id from the verified session, bound into both statements — there is
+ // no request shape that reads or dismisses somebody else's message, and no
+ // route here can create, edit or delete a campaign.
+
+ app.get('/backend/campaign-messages', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, campaignMessageRateLimiter, campaignMessageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   res.json({ data: await listUserCampaignMessages(dbQuery, req.userId), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/campaign-messages/:id/dismiss', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, campaignMessageRateLimiter, campaignMessageDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   res.json({ data: await dismissCampaignMessage(dbQuery, req.userId, String(req.params.id || '')), error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

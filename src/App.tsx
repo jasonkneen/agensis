@@ -21,6 +21,8 @@ import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
 import { countOpenTasks } from './components/windows/taskSchedule';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedPanel } from './components/onboarding/GetStartedPanel';
+import { OwnerMessageDialog } from './components/onboarding/OwnerMessageDialog';
+import { OwnerMessageProvider } from './components/onboarding/OwnerMessageProvider';
 import CommandPalette from './components/search/CommandPalette';
 import { AuthPage } from './components/auth/AuthPage';
 import { ShareDialog } from './components/sharing/ShareDialog';
@@ -1924,6 +1926,11 @@ function AppContent() {
 
   return (
     <TooltipProvider>
+      {/* Owner broadcasts: ONE fetch here, consumed by all three surfaces (the
+          sidebar-footer card, the dialog below, the home banner). Inside the
+          signed-in branch because the messages are addressed to this account —
+          there is nothing to fetch for a logged-out visitor. */}
+      <OwnerMessageProvider userId={user.id}>
       <div className="relative flex h-screen overflow-hidden bg-background">
         <img
           src={workspaceBackdropImage}
@@ -2464,7 +2471,11 @@ function AppContent() {
       />
       <HuddleDock />
       <AppUpdateManager />
+      {/* Renders nothing unless an owner broadcast for the 'dialog' surface is
+          waiting; closing it is the server-side dismissal. */}
+      <OwnerMessageDialog />
       <Toaster />
+      </OwnerMessageProvider>
     </TooltipProvider>
   );
 }

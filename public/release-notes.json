@@ -81,6 +81,18 @@
     ]
   },
   {
+    "version": "owner-messages",
+    "date": "2026-07-27",
+    "title": "A message from the people who run agensis, in the app rather than your inbox",
+    "summary": "Whoever runs this deployment can now send you a short note inside agensis instead of by email — a card in the sidebar marked FOR YOU, a dialog the next time you load the app, or a banner under the composer on the home screen. Every one of them has an x, and dismissing it is remembered against your account rather than your browser, so it will not follow you to another machine and it is not shared with anyone else signing in on this one. Nothing in a message can be a link, and none of it is ever sent to you outside the app.",
+    "highlights": [
+      "Three places a message can appear: a sidebar card, a dialog on next load, or a banner on the home screen",
+      "Dismiss any of them once and it stays dismissed, on every device you sign in from",
+      "A message can never carry a link, and is only ever shown as plain text",
+      "Nothing is emailed — these are in-app only"
+]
+  },
+  {
     "version": "skills-chips",
     "date": "2026-07-27",
     "title": "Skills on an agent are chips now, and the field suggests as you type",
