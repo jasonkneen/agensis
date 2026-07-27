@@ -121,6 +121,10 @@ const MUST_BE_LINTED = [
   // constraint-invalid status was swallowed and left jobs 'running' forever,
   // which made DMs stop responding. Extracted from server/index.cjs.
   'server/agent-jobs.cjs',
+  // The builtin agent turn: the tool loop, its three bounds, and the toolset an
+  // in-process agent reaches — shared verbatim with the external MCP door, so a
+  // mistake here changes what BOTH can do. Extracted from server/index.cjs.
+  'server/builtin-turn.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
