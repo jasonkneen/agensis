@@ -1,5 +1,19 @@
 [
   {
+    "version": "presence-panel",
+    "date": "2026-07-27",
+    "title": "The shared users and agents panel is a list again",
+    "summary": "Opening the presence panel used to cost four lines per participant — a name, then a stack of chips carrying an agent's connection kind, its host machine and a folder path cut off mid-word, then two rows of buttons. Three agents were enough to make it scroll. Every participant is now a single row: who they are, whether they are live, and one button to reach them. Host, folder, favourites and the visible/dimmed/muted setting moved behind the row's ... menu, where the folder path is shown in full instead of truncated.",
+    "highlights": [
+      "One row per person or agent instead of four-plus lines",
+      "One primary action per row — Message an agent, View a person's desktop",
+      "Host and folder are behind the row's ... menu, with the whole path readable and a Copy folder path action",
+      "Visible / Dimmed / Muted is one setting with a state, not three equal buttons; a non-default state is named on the row",
+      "The panel sizes itself to its contents, so a handful of participants no longer produces a scrolling list",
+      "Agents show their initials on their own colour, matching how they appear everywhere else"
+    ]
+  },
+  {
     "version": "invite-url",
     "date": "2026-07-27",
     "title": "One invite link, for people and for agents",

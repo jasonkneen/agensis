@@ -129,7 +129,17 @@ function change(element: HTMLSelectElement, value: string) {
   });
 }
 
-describe('the voice section', () => {
+// Every test here pays for a `vi.resetModules()` plus a fresh dynamic import of
+// AgentsWindowContent — a ~3000-line module — before it can render anything (see
+// the note on `render` above; the module-scope voice cache is why it has to).
+// On the default 5s that is fine on an idle machine and marginal on a busy one:
+// adding ONE more file to this suite was enough to push the first test past the
+// limit, and once it times out mid-`act` the half-initialised module takes the
+// other seven with it (they report "Loading voices…", a missing <select>, or an
+// empty container). Reproduced with a filler file containing nothing but a 3s
+// busy loop, so it is contention, not any one neighbour. A longer budget for the
+// import is the fix; nothing here asserts on timing.
+describe('the voice section', { timeout: 30_000 }, () => {
   it('loads the catalogue through OUR backend, not Cartesia directly', async () => {
     const fetchMock = stubVoices({ data: CATALOGUE, configured: true });
     await render(AGENT);
