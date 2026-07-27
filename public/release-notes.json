@@ -37,7 +37,20 @@
       "A form short enough not to scroll keeps its buttons where they have always been",
       "Same behaviour when creating an agent as when editing one",
       "Runtime is Built-in or Remote — the unused Sandbox option is gone from the picker"
-]
+    ]
+  },
+  {
+    "version": "tenant-usage",
+    "date": "2026-07-27",
+    "title": "The Tenants screen now shows what each account uses, and what it costs",
+    "summary": "The owner-only Tenants view listed an account, a workspace count and a date, and repeated the same email address as both the heading and the line under it. It now leads with the name where there is one and puts real information on the second line, and every account carries what it actually does: channels, DMs and threads, messages split into the ones people wrote and the ones agents wrote, huddles and the time spent in them, agents, connected daemons, documents, and when anything last happened. Underneath that is the new part. agensis now records the tokens every model call spends, per workspace, and turns them into an estimated cost. Nothing was recorded before this release and none of it can be filled in afterwards, so every figure says which date it counts from \u2014 and a provider that is measured but has no price attached is named rather than quietly counted as free. The figures are estimates from our own counts against published list prices, not a bill.",
+    "highlights": [
+      "Per-account and per-workspace stats: channels, DMs, threads, messages by people vs agents, huddles and their duration, agents, live daemons, documents",
+      "Estimated model spend per account and per workspace, from recorded token counts",
+      "Every cost figure is labelled with the date metering started \u2014 there is no earlier data and it cannot be back-filled",
+      "Voice providers are recorded but not yet priced, and say so instead of showing zero",
+      "The account heading no longer prints the same email address twice"
+    ]
   },
   {
     "version": "one-daemon-per-agent",

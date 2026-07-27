@@ -54,6 +54,60 @@ const EMAIL_BY_USER = {
  [NEAR_MISS_ID]: 'owner@example.test.evil.test',
 };
 
+// --- Fixtures for the usage/stats half -------------------------------------
+// Counts come back from Postgres as bigint STRINGS on both drivers, so they are
+// strings here — a shaping bug that only shows up against a real database is
+// the exact thing this fixture exists to catch.
+const METERING_STARTED_AT = '2026-07-01T00:00:00.000Z';
+
+const WORKSPACE_STATS_ROW = {
+ workspace_id: 'ws-1',
+ user_id: OWNER_ID,
+ channel_count: '4',
+ dm_count: '2',
+ thread_count: '3',
+ message_count: '120',
+ agent_message_count: '80',
+ human_message_count: '40',
+ huddle_count: '2',
+ live_huddle_count: '1',
+ huddle_seconds: '3600',
+ agent_count: '5',
+ live_daemon_count: '1',
+ document_count: '7',
+ member_count: '2',
+ last_activity_at: '2026-07-20T00:00:00.000Z',
+};
+
+const USAGE_ROWS = [
+ {
+  workspace_id: 'ws-1',
+  provider: 'anthropic',
+  resource: 'claude-opus-4-5',
+  calls: '10',
+  input_units: '1000000',
+  output_units: '200000',
+  cache_write_units: '0',
+  cache_read_units: '0',
+  first_at: '2026-07-02T00:00:00.000Z',
+  last_at: '2026-07-20T00:00:00.000Z',
+ },
+ // Metered, but with no rate configured: its spend must NOT land in the total
+ // and the response has to name it so the UI can say the figure is short.
+ {
+  workspace_id: 'ws-1',
+  provider: 'deepgram',
+  resource: 'flux',
+  calls: '4',
+  input_units: '600',
+  output_units: '0',
+  cache_write_units: '0',
+  cache_read_units: '0',
+  first_at: '2026-07-05T00:00:00.000Z',
+  last_at: '2026-07-06T00:00:00.000Z',
+ },
+];
+
 let handler;      // the real netlify handler
 let authSecret;
 /** Every SQL string the handler issued, newest last — inspected for leaks. */
@@ -139,6 +193,30 @@ test.before(async () => {
        };
       }
       if (/from workspace_members m join workspaces w/.test(sql)) return { rows: [] };
+      // The batched per-workspace activity aggregate (WORKSPACE_STATS_SQL). ONE
+      // query for the whole list — the detail route runs the same SQL with a
+      // `where ws.user_id = $1` appended, which is why both land here.
+      if (/^with ws as \(/.test(sql)) {
+       const scoped = /where ws\.user_id = \$1/.test(sql);
+       if (scoped && params?.[0] !== OWNER_ID) return { rows: [] };
+       return { rows: [WORKSPACE_STATS_ROW] };
+      }
+      // The usage ledger, grouped per workspace and per (provider, resource).
+      if (/from usage_events/.test(sql) && /group by/.test(sql)) {
+       const scoped = /join workspaces w/.test(sql);
+       if (scoped && params?.[0] !== OWNER_ID) return { rows: [] };
+       return { rows: USAGE_ROWS };
+      }
+      // The metering window: when metering started, and what it has seen.
+      if (/usage\.metering_started_at/.test(sql)) {
+       return {
+        rows: [{
+         configured_start: METERING_STARTED_AT,
+         first_event_at: '2026-07-02T00:00:00.000Z',
+         last_event_at: '2026-07-20T00:00:00.000Z',
+        }],
+       };
+      }
       throw new Error(`Unexpected DB query in tenants-admin test: ${sql}`);
      },
     },
@@ -488,6 +566,173 @@ test('listTenantAccounts caps its limit and reports the true total', async () =>
  assert.equal(bound[0][0], tenantAdmin.TENANT_LIST_LIMIT);
  assert.equal(result.total, 4212);
  assert.equal(result.truncated, true, 'a capped list must say so rather than under-report');
+});
+
+// ---------------------------------------------------------------------------
+// 5b. Statistics and cost, on the SAME owner gate
+//
+// These are new projections over new tables, reached through the existing
+// owner-gated routes and no other door. Two things are pinned: the numbers
+// actually arrive, and the cost half never claims more than it knows.
+// ---------------------------------------------------------------------------
+
+/**
+ * A db stub that answers the list route's five queries and COUNTS them.
+ * The count is the point: the whole design of the stats query is that it is
+ * flat in round trips no matter how many accounts there are, and the only way
+ * that stays true is if somebody asserts it.
+ */
+function statsDb({ accounts = 3, workspacesPerAccount = 2 } = {}) {
+ const issued = [];
+ const db = async (sql, params = []) => {
+  const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+  issued.push(text);
+  if (/count\(\*\) as total from app_users/.test(text)) return [{ total: String(accounts) }];
+  if (/usage\.metering_started_at/.test(text)) {
+   return [{ configured_start: '2026-07-01T00:00:00.000Z', first_event_at: null, last_event_at: null }];
+  }
+  if (text.startsWith('with ws as (')) {
+   const rows = [];
+   for (let a = 0; a < accounts; a += 1) {
+    for (let w = 0; w < workspacesPerAccount; w += 1) {
+     rows.push({
+      workspace_id: `ws-${a}-${w}`,
+      user_id: `acc-${a}`,
+      channel_count: '2', dm_count: '1', thread_count: '1',
+      message_count: '10', agent_message_count: '6', human_message_count: '4',
+      huddle_count: '1', live_huddle_count: '0', huddle_seconds: '60',
+      agent_count: '1', live_daemon_count: '0',
+      document_count: '1', member_count: '1',
+      last_activity_at: '2026-07-20T00:00:00.000Z',
+     });
+    }
+   }
+   return rows;
+  }
+  if (/from usage_events/.test(text)) {
+   return [{
+    workspace_id: 'ws-0-0', provider: 'anthropic', resource: 'claude-haiku-4-5',
+    calls: '2', input_units: '1000000', output_units: '0',
+    cache_write_units: '0', cache_read_units: '0',
+   }];
+  }
+  return Array.from({ length: accounts }, (_unused, index) => ({
+   id: `acc-${index}`, email: `a${index}@x.test`,
+   owned_workspace_count: String(workspacesPerAccount), membership_count: '0',
+  }));
+ };
+ return { db, issued, params: [] };
+}
+
+test('the account list is FLAT in round trips — no per-account counting', async () => {
+ // The naive version of this feature is a scalar sub-select per account per
+ // statistic. This asserts the shape that avoids it: one grouped pass over the
+ // workspaces, one over the usage ledger, and nothing that scales with N.
+ const small = statsDb({ accounts: 2 });
+ await tenantAdmin.listTenantAccounts(small.db);
+ const large = statsDb({ accounts: 400 });
+ await tenantAdmin.listTenantAccounts(large.db);
+ assert.equal(
+  small.issued.length,
+  large.issued.length,
+  'the number of queries must not depend on the number of accounts',
+ );
+ assert.equal(large.issued.length, 5, `expected 5 queries for the whole list, got ${large.issued.length}`);
+});
+
+test('per-workspace rows roll up to the OWNING account, never to every member', async () => {
+ // Counting a shared workspace against every member would make the deployment
+ // look several times busier than it is, and would bill the same tokens twice.
+ const { db } = statsDb({ accounts: 2, workspacesPerAccount: 3 });
+ const { accounts } = await tenantAdmin.listTenantAccounts(db);
+ assert.equal(accounts.length, 2);
+ assert.equal(accounts[0].stats.workspace_count, 3);
+ assert.equal(accounts[0].stats.message_count, 30);
+ assert.equal(accounts[0].stats.agent_message_count, 18);
+});
+
+test('an ownerless workspace is dropped rather than attributed to someone', () => {
+ const rolled = tenantAdmin.rollUpAccountStats(
+  [
+   { workspace_id: 'ws-1', user_id: 'acc-1', message_count: '5' },
+   { workspace_id: 'ws-2', user_id: null, message_count: '99' },
+  ],
+  [],
+ );
+ assert.equal(rolled.size, 1);
+ assert.equal(rolled.get('acc-1').message_count, 5);
+});
+
+test('an account with no workspaces still gets a full zero-filled stats block', async () => {
+ const { db } = statsDb({ accounts: 1, workspacesPerAccount: 0 });
+ const { accounts } = await tenantAdmin.listTenantAccounts(db);
+ // A missing `stats` would make every consumer write the same defensive
+ // fallback, and one of them would eventually get it wrong.
+ assert.deepEqual(Object.keys(accounts[0].stats).sort(), [
+  ...Object.keys(tenantAdmin.emptyWorkspaceStats()),
+  'usage',
+  'workspace_count',
+ ].sort());
+ assert.equal(accounts[0].stats.usage.calls, 0);
+});
+
+test('the response carries the metering window, so a total can be labelled honestly', async () => {
+ const { db } = statsDb();
+ const result = await tenantAdmin.listTenantAccounts(db);
+ assert.equal(result.metering.started_at, '2026-07-01T00:00:00.000Z');
+ assert.match(result.metering.rates_as_of, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test('a database with no usage_events table reports "not started", not an error', async () => {
+ // The Netlify lane runs no DDL of its own, so it can serve a request against a
+ // database whose bootstrap has not run. That must degrade to an honest empty
+ // window rather than 500-ing the only screen an operator has.
+ const db = async (sql) => {
+  const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/usage_events/.test(text)) throw new Error('relation "usage_events" does not exist');
+  if (/count\(\*\) as total from app_users/.test(text)) return [{ total: '1' }];
+  if (text.startsWith('with ws as (')) return [];
+  return [{ id: 'acc-1', email: 'a@x.test', owned_workspace_count: '0', membership_count: '0' }];
+ };
+ const result = await tenantAdmin.listTenantAccounts(db);
+ assert.equal(result.metering.started_at, null);
+ assert.equal(result.accounts[0].stats.usage.calls, 0);
+});
+
+test('the owner sees stats and cost; the numbers survive bigint strings', async () => {
+ const { body } = await call('GET', '/backend/tenants', { token: tokenFor(OWNER_ID) });
+ const owner = body.data.accounts.find((account) => account.id === OWNER_ID);
+ assert.equal(owner.stats.message_count, 120);
+ assert.equal(owner.stats.agent_message_count, 80);
+ assert.equal(owner.stats.huddle_seconds, 3600);
+ // 1M input tokens of Opus at $5/MTok.
+ assert.equal(owner.stats.usage.usd, 5 + (200000 * 25 / 1e6));
+ // Deepgram is metered but has no rate — its spend is NOT in the figure, and
+ // the response says so rather than letting the total look complete.
+ assert.deepEqual(owner.stats.usage.unpriced_providers, ['deepgram']);
+ assert.equal(body.data.metering.started_at, METERING_STARTED_AT);
+});
+
+test('the detail pane gets per-workspace stats, and shared workspaces get NONE', async () => {
+ const { body } = await call('GET', `/backend/tenants/${OWNER_ID}`, { token: tokenFor(OWNER_ID) });
+ assert.equal(body.data.owned_workspaces.length, 1);
+ assert.equal(body.data.owned_workspaces[0].stats.message_count, 120);
+ assert.ok(body.data.owned_workspaces[0].usage);
+ // A shared workspace's activity and bill belong to the account that OWNS it.
+ // Repeating them here would let one workspace's spend be counted twice.
+ for (const shared of body.data.member_workspaces) {
+  assert.equal(shared.stats, undefined);
+  assert.equal(shared.usage, undefined);
+ }
+});
+
+test('no stats or cost route exists outside the owner gate', async () => {
+ // The numbers ride the SAME three routes, which is why there is nothing new to
+ // authorize. Any /usage or /stats path would be a second door to re-audit.
+ assert.equal(/\/backend\/(tenants\/[^']*\/)?usage/.test(serverSource), false);
+ assert.equal(/\/backend\/(tenants\/[^']*\/)?usage/.test(netlifySource), false);
+ const { res } = await call('GET', '/backend/tenants', { token: tokenFor(MEMBER_ID) });
+ assert.equal(res.status, 403);
 });
 
 // ---------------------------------------------------------------------------

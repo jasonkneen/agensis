@@ -1087,3 +1087,55 @@ CREATE TABLE IF NOT EXISTS feedback_reports (
 CREATE INDEX IF NOT EXISTS idx_feedback_reports_workspace_id ON feedback_reports(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_reports_task_id ON feedback_reports(task_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_reports_reporter_id ON feedback_reports(reporter_id);
+
+-- ---------------------------------------------------------------------------
+-- COST METERING
+--
+-- One row per paid provider call, recording COUNTS ONLY: tokens, characters or
+-- seconds (`unit` says which), plus the provider and the resource that was
+-- billed (the model id, the voice model, the room). NEVER a price — rates move,
+-- and a price written into a row on the day of the call becomes a lie that
+-- cannot be told apart from a current one. Money is computed at display time
+-- from shared/usage-rates.cjs, which is the single place a rate may be edited.
+--
+-- Every column is a scalar. There is deliberately no jsonb here: this table
+-- cannot then reproduce the bind bug where Fly needs an object and Netlify
+-- needs the string.
+--
+-- workspace_id is ON DELETE SET NULL rather than CASCADE — deleting a workspace
+-- must not delete the record of what it cost. Such a row leaves the per-account
+-- rollup (nothing to attribute it to) and stays in the deployment total.
+--
+-- There is NO historical data before this table existed and none can be
+-- invented, so app_settings.'usage.metering_started_at' stamps the epoch and
+-- every figure on the Tenants screen is labelled "since" that date.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usage_events (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  -- 'anthropic' | 'deepgram' | 'cartesia' | 'livekit' | 'sandbox'
+  provider text NOT NULL,
+  -- What was billed: a model id, a voice model, a room. Free text on purpose —
+  -- a new model must not need a migration to be metered.
+  resource text NOT NULL DEFAULT '',
+  -- Which code path spent it ('ai_chat', 'builtin_turn', 'auto_interject'…).
+  kind text NOT NULL DEFAULT '',
+  -- 'tokens' | 'characters' | 'seconds'
+  unit text NOT NULL DEFAULT 'tokens',
+  input_units bigint NOT NULL DEFAULT 0,
+  output_units bigint NOT NULL DEFAULT 0,
+  -- Kept apart from input_units because they are priced differently (a 5-minute
+  -- cache write is 1.25x base input, a read 0.1x). Summing them would
+  -- under-report writes and over-report reads.
+  cache_write_units bigint NOT NULL DEFAULT 0,
+  cache_read_units bigint NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_created ON usage_events(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created ON usage_events(provider, created_at DESC);
+
+INSERT INTO app_settings (key, value)
+     VALUES ('usage.metering_started_at', now()::text)
+ON CONFLICT (key) DO NOTHING;

@@ -6,7 +6,9 @@ import {
   matchesTenantSearch,
   sortTenants,
   tenantCountLabel,
+  tenantDeploymentTotals,
   tenantDisplayName,
+  tenantIdentityHeader,
   tenantInitials,
   tenantJoinedLabel,
   tenantListFooter,
@@ -19,6 +21,7 @@ import {
   type TenantMemberWorkspace,
   type TenantWorkspace,
 } from '../../src/lib/tenants';
+import { EMPTY_STATS } from '../../src/lib/tenantStats';
 
 // The tenant list, as pure data — search, order and row copy. Everything the
 // component renders comes from here, so the list can be checked without a DOM.
@@ -245,5 +248,103 @@ describe('workspace rows', () => {
   it('marks the System workspace and names an untitled one', () => {
     expect(buildTenantWorkspaceRow(workspace({ is_system: true })).isSystem).toBe(true);
     expect(buildTenantWorkspaceRow(workspace({ name: '  ' })).name).toBe('Untitled workspace');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The account header — the redundancy the owner called out first.
+//
+// The bug: the title fell back to the email when there was no display name, and
+// the line beneath it was the email unconditionally. In the overwhelmingly
+// common case (nobody sets a display name) that rendered
+// `trumanfuller@gmail.com` as BOTH lines, spending the pane's two most valuable
+// lines saying one thing.
+// ---------------------------------------------------------------------------
+
+describe('tenantIdentityHeader', () => {
+  it('never repeats the title on the second line', () => {
+    const named = tenantIdentityHeader(account());
+    const unnamed = tenantIdentityHeader(account({ display_name: '' }));
+    expect(named.subtitle).not.toBe(named.title);
+    expect(unnamed.subtitle).not.toBe(unnamed.title);
+  });
+
+  it('shows the name over the email when the account has a name', () => {
+    expect(tenantIdentityHeader(account())).toEqual({
+      title: 'Jason Kneen',
+      subtitle: 'jason@bouncingfish.com',
+    });
+  });
+
+  it('carries real facts, not a repeat, when the email IS the title', () => {
+    const header = tenantIdentityHeader(account({ display_name: '' }));
+    expect(header.title).toBe('jason@bouncingfish.com');
+    expect(header.subtitle).toContain('Registered');
+    expect(header.subtitle).not.toContain('@');
+  });
+
+  it('leaves the workspace count to the activity line rather than saying it twice', () => {
+    // The line directly below the subtitle opens with "3 workspaces". Printing
+    // it here as well is the same duplication this function removes, moved down
+    // one row.
+    const active = account({ display_name: '', stats: { ...EMPTY_STATS, workspace_count: 3 } });
+    expect(tenantIdentityHeader(active).subtitle).not.toContain('workspace');
+    expect(buildTenantRows([active])[0].activity).toContain('3 workspaces');
+  });
+
+  it('keeps the workspace count in the subtitle when the activity line has none', () => {
+    // A response with no stats block at all (an older deploy) must not lose the
+    // one size figure the row had before this feature existed.
+    const header = tenantIdentityHeader(account({ display_name: '' }));
+    expect(header.subtitle).toContain('3 workspaces');
+    expect(buildTenantRows([account({ display_name: '' })])[0].activity).toBe('No activity');
+  });
+
+  it('falls back to the workspace count when there is no date to show at all', () => {
+    const header = tenantIdentityHeader(account({ display_name: '', created_at: null }));
+    expect(header.subtitle).toBe('3 workspaces');
+  });
+
+  it('adds last-active to the fact line when the account has been metered', () => {
+    const header = tenantIdentityHeader(account({
+      display_name: '',
+      stats: { ...EMPTY_STATS, last_activity_at: '2026-07-20T00:00:00.000Z' },
+    }));
+    expect(header.subtitle).toContain('last active');
+  });
+
+  it('still produces two usable lines for an account with no email and no name', () => {
+    const header = tenantIdentityHeader(account({ display_name: '', email: '' }));
+    expect(header.title).toBe('Unnamed account');
+    expect(header.subtitle).toContain('workspaces');
+  });
+});
+
+describe('a list row carries activity and cost', () => {
+  it('shows what the tenant uses, and blanks the cost chip when nothing was metered', () => {
+    const [row] = buildTenantRows([account()]);
+    expect(row.activity).toBe('No activity');
+    // Not "$0.00": an unmetered account and a free one must not read the same.
+    expect(row.cost).toBe('');
+  });
+
+  it('sums the deployment from the SAME blocks the rows render', () => {
+    const totals = tenantDeploymentTotals([
+      account({ id: 'a', stats: { ...EMPTY_STATS, message_count: 100, huddle_count: 2 } }),
+      account({
+        id: 'b',
+        stats: {
+          ...EMPTY_STATS,
+          message_count: 50,
+          usage: { ...EMPTY_STATS.usage, usd: 3.5, calls: 9, unpriced_providers: ['deepgram'] },
+        },
+      }),
+    ]);
+    expect(totals.messages).toBe(150);
+    expect(totals.huddles).toBe(2);
+    expect(totals.usd).toBe(3.5);
+    expect(totals.calls).toBe(9);
+    // A provider with no rate is named so the footer can say the figure is short.
+    expect(totals.unpricedProviders).toEqual(['deepgram']);
   });
 });
