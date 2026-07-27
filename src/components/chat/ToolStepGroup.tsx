@@ -57,7 +57,7 @@ const COMPACT_INDENT = 'pl-11 pr-2';
 // themes --muted is oklch(97%) and --sh-border oklch(92.2%); knocking those back to
 // 40%/60% over a white surface leaves a chip about 1% off the background — i.e.
 // invisible. Full strength reads as a quiet chip in light and dark alike.
-const CHIP_BASE = 'inline-flex max-w-full items-center gap-1.5 rounded-full border py-1 font-mono text-[13px] font-semibold leading-4';
+const CHIP_BASE = 'inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 font-mono text-[11px] font-semibold leading-4';
 const CHIP_IDLE = 'border-border bg-muted text-muted-foreground';
 // Hover lights up the EDGE (--ring is mid-grey in every theme), so it reads the same
 // way whether the surface is dark or light — a background shift would have to invert.
@@ -128,10 +128,10 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
               // points assistive tech at nothing.
               aria-controls={expanded ? panelId : undefined}
               onClick={() => setExpanded(value => !value)}
-              className={cn(CHIP_BASE, 'pl-1 pr-2.5', CHIP_IDLE, CHIP_INTERACTIVE)}
+              className={cn(CHIP_BASE, 'pl-1 pr-2', CHIP_IDLE, CHIP_INTERACTIVE)}
             >
               <ChevronRight
-                className={cn('size-3.5 shrink-0 transition-transform duration-150', expanded && 'rotate-90')}
+                className={cn('size-3 shrink-0 transition-transform duration-150', expanded && 'rotate-90')}
               />
               <span className="truncate">{callCountLabel(count)}</span>
             </button>
@@ -156,12 +156,12 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
                     onClick={() => toggleTool(bucket.name)}
                     className={cn(
                       CHIP_BASE,
-                      'pl-2 pr-2.5',
+                      'pl-1.5 pr-2',
                       CHIP_INTERACTIVE,
                       open ? 'border-ring bg-muted text-foreground' : CHIP_IDLE,
                     )}
                   >
-                    <Icon className="size-3.5 shrink-0 opacity-70" />
+                    <Icon className="size-3 shrink-0 opacity-70" />
                     <span className="truncate">
                       {bucket.steps.length} {bucket.name}
                     </span>
@@ -215,12 +215,12 @@ function ThinkingChip({ placeholder }: { placeholder: ChatMessage }) {
     <span
       className={cn(
         CHIP_BASE,
-        'max-w-full pl-2 pr-2.5 whitespace-nowrap',
+        'max-w-full pl-1.5 pr-2 whitespace-nowrap',
         'border-[color:var(--accent-border)] bg-[color:var(--accent-subtle)]',
         'animate-in fade-in-0 duration-200',
       )}
     >
-      <Brain className="size-3.5 shrink-0 text-[color:var(--accent)]" />
+      <Brain className="size-3 shrink-0 text-[color:var(--accent)]" />
       {/* The shimmer is the only motion — it reads as alive without a second
           spinner competing with the chip's own ticking number. Weight comes
           from CHIP_BASE now, so this matches the tool-call chip exactly
@@ -234,8 +234,8 @@ function ThinkingChip({ placeholder }: { placeholder: ChatMessage }) {
 function ThoughtChip({ thought }: { thought: ThoughtChipData }) {
   const label = thoughtChipLabel(thought.elapsed);
   return (
-    <span title={label} className={cn(CHIP_BASE, 'max-w-full pl-2 pr-2.5 whitespace-nowrap', CHIP_IDLE)}>
-      <Brain className="size-3.5 shrink-0 opacity-70" />
+    <span title={label} className={cn(CHIP_BASE, 'max-w-full pl-1.5 pr-2 whitespace-nowrap', CHIP_IDLE)}>
+      <Brain className="size-3 shrink-0 opacity-70" />
       <span className="truncate">{label}</span>
     </span>
   );
@@ -254,12 +254,12 @@ function ToolStepChip({ step }: { step: ChatMessage }) {
       title={toolStepLabel(step)}
       className={cn(
         CHIP_BASE,
-        'max-w-[22rem] pl-2 pr-2.5 whitespace-nowrap',
+        'max-w-[22rem] pl-1.5 pr-2 whitespace-nowrap',
         'animate-in fade-in-0 slide-in-from-left-1 duration-200',
         CHIP_IDLE,
       )}
     >
-      <Icon className="size-3.5 shrink-0 opacity-70" />
+      <Icon className="size-3 shrink-0 opacity-70" />
       {name && <span className="shrink-0 font-medium text-foreground/70">{name}</span>}
       {detail && <span className="truncate opacity-80">{detail}</span>}
     </span>
