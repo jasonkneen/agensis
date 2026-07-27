@@ -36,7 +36,19 @@ const {
 const { estimateUsd, summarizeUsage, anthropicRateFor, RATES_AS_OF } = require('../shared/usage-rates.cjs');
 const core = require('../shared/backend-core.cjs');
 
-const serverSource = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+// The Fly lane spans index.cjs plus the server/*-routes.cjs modules extracted
+// from it (Wave 2 of the index.cjs reduction). These assertions count Anthropic
+// spend points across the LANE — /backend/ai-chat is one of the three — so the
+// source has to be the whole lane, not one file.
+const serverSource = ['server/index.cjs']
+ .concat(
+  fs.readdirSync(path.join(root, 'server'))
+   .filter((name) => name.endsWith('-routes.cjs'))
+   .sort()
+   .map((name) => `server/${name}`),
+ )
+ .map((relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8'))
+ .join('\n');
 const netlifySource = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 // ---------------------------------------------------------------------------
