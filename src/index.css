@@ -4263,6 +4263,28 @@ body {
  user-select: none;
 }
 
+/* ...but prose is for reading, and reading means copying.
+ *
+ * The rule above exists so dragging a window by its chrome moves the window
+ * instead of painting a selection across it. It is set on the whole window, so
+ * it inherits into the message list and made every message in the app
+ * unselectable — you could not copy what an agent said to you.
+ *
+ * These are the surfaces whose content is the point rather than the frame. A
+ * directly-matching declaration beats an inherited one, so each of these turns
+ * selection back on for itself and its subtree without weakening the drag
+ * behaviour of the chrome around it.
+ */
+.chat-message-row,
+.chat-markdown,
+.chat-thread-message,
+.doc-preview-body,
+.memory-file-body,
+pre,
+code {
+ user-select: text;
+}
+
 html {
  font-size: var(--agensis-ui-font-size, 15px);
 }

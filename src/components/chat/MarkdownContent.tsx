@@ -120,9 +120,29 @@ function renderBlock(block: Block, index: number, onMentionClick?: (mention: str
   }
 }
 
+/**
+ * Drop characters that a writer meant as punctuation from the end of a matched
+ * URL. A closing bracket is only dropped when the URL does not contain the
+ * matching opener, so paths that legitimately carry brackets survive.
+ */
+export function trimUrlTail(url: string): string {
+  let end = url.length;
+  while (end > 0) {
+    const char = url[end - 1];
+    if ('.,;:!?"\''.includes(char)) { end -= 1; continue; }
+    const opener = char === ')' ? '(' : char === ']' ? '[' : char === '}' ? '{' : '';
+    if (opener && !url.slice(0, end - 1).includes(opener)) { end -= 1; continue; }
+    break;
+  }
+  // Never return an empty href: a match that is all punctuation keeps its text.
+  return end > 'https://'.length ? url.slice(0, end) : url;
+}
+
 function renderInline(text: string, onMentionClick?: (mention: string) => void): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g;
+  // Bare URLs are last in the alternation so `[label](href)` and `` `code` ``
+  // still win over the http:// inside them.
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s<>`]+)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -132,18 +152,35 @@ function renderInline(text: string, onMentionClick?: (mention: string) => void):
     }
     const token = match[0];
     if (token.startsWith('`')) {
-      parts.push(<code key={parts.length}>{token.slice(1, -1)}</code>);
+      // Agents write URLs inside backticks constantly. Keep the code styling —
+      // that is what the author asked for — but a link you cannot click is not
+      // a link, so wrap it in an anchor.
+      const inner = token.slice(1, -1);
+      const codeUrl = /^https?:\/\/[^\s<>`]+$/.test(inner.trim()) ? trimUrlTail(inner.trim()) : '';
+      parts.push(codeUrl
+        ? <a key={parts.length} href={codeUrl} target="_blank" rel="noreferrer"><code>{inner}</code></a>
+        : <code key={parts.length}>{inner}</code>);
     } else if (token.startsWith('**')) {
       parts.push(<strong key={parts.length}>{renderInline(token.slice(2, -2), onMentionClick)}</strong>);
     } else if (token.startsWith('*')) {
       parts.push(<em key={parts.length}>{renderInline(token.slice(1, -1), onMentionClick)}</em>);
-    } else {
+    } else if (token.startsWith('[')) {
       const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       const href = link?.[2] || '';
       const safeHref = /^https?:\/\//i.test(href) ? href : undefined;
       parts.push(safeHref
         ? <a key={parts.length} href={safeHref} target="_blank" rel="noreferrer">{link?.[1]}</a>
         : <span key={parts.length}>{link?.[1] || token}</span>);
+    } else {
+      // A bare URL. Sentence punctuation that happens to sit against the end of
+      // one is not part of it — "see https://x.dev/a." links the URL and leaves
+      // the full stop as text. Unbalanced closing brackets go back too, so a URL
+      // written inside (parentheses) does not swallow the one that closes them.
+      const url = trimUrlTail(token);
+      parts.push(<a key={parts.length} href={url} target="_blank" rel="noreferrer">{url}</a>);
+      lastIndex = match.index + url.length;
+      pattern.lastIndex = lastIndex;
+      continue;
     }
     lastIndex = match.index + token.length;
   }

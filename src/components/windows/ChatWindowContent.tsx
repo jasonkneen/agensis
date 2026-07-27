@@ -2676,7 +2676,7 @@ function ChatMessageBubble({
 
   return (
     <div
-      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20 hover:bg-muted/40"
+      className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20"
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >
