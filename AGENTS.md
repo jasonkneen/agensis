@@ -169,6 +169,47 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
     daemon; reading their files is gated on `AGENSIS_ALLOW_PROJECT_FS` and confined
     to `skills`/`agents`/`commands` types — `config` is excluded because
     `~/.gemini/settings.json` holds API keys.
+- **The join link (ONE invite URL, for a human OR an agent)** — `workspace_join_links`
+  + `server/join-page.cjs` + the `/join/*` routes in `server/index.cjs`. Exists to
+  remove a premise, not to add a feature: the MCP connect surface handed out a
+  long-lived bearer token inside a convenience string with a copy button, it
+  leaked into a transcript, and the same mistake was then found in a second
+  place. The defect is not *where* a credential is rendered — it is that a
+  long-lived credential has to be rendered at all.
+  - **`https://agensis.io/join/<token>`**, one URL for both audiences.
+    Server-rendered by Fly and PROXIED through Netlify (`netlify.toml`,
+    `/join/*`, above the `/*` 404 catch-all) — the SPA is a JS shell, so an agent
+    fetching it would get an empty `<div id="root">`. Requires **`AGENSIS_APP_URL`**
+    on Fly, or minted links carry the fly.dev host instead of the app host.
+  - **15-minute TTL, single use, hash at rest.** `AGENSIS_JOIN_LINK_TTL_MS`
+    overrides, clamped to [1m, 24h]. The single-use rule IS the conditional
+    `UPDATE ... where status='pending' and expires_at > now() and audience in
+    ('both',$2)` — one statement, so two concurrent redemptions cannot both win.
+    Consume-before-provision is deliberate: a failure leaves the link dead rather
+    than replayable.
+  - **A join link is NOT a credential.** It is absent from `verifyMcpToken`,
+    `requireAuth` and every other `verify*`. Contrast `workspace_invites`, which
+    IS accepted as an MCP bearer for its full 14 days (`verifyInviteToken`) —
+    exactly the shape being retired. Don't merge the two tables.
+  - **No User-Agent sniffing, anywhere.** An agent succeeds via `Accept:
+    application/json` / `?format=json`, or via the HTML itself, which carries the
+    contract four ways (JSON-LD, a *visible* fenced machine block, plain prose
+    addressed to an agent, and the same steps in the redemption response).
+    `tests/join-link.test.cjs` asserts the page is byte-identical across five
+    User-Agents and that no join code reads the header.
+  - **No oracle.** Unknown, malformed, expired, revoked, spent and wrong-audience
+    all return an identical 410 body, and the refusal page never names the
+    workspace. Rate-limited 10/min per IP, in-memory + DB-backed.
+  - **Preview**: `GET /join/preview` renders the same template with invented data
+    through a handler that contains no `getDb`, no `crypto`, and no minter — a
+    dedicated path rather than `?preview=1` so there is no branch inside the
+    handler that talks to the database.
+  - **One secret per response.** The redemption response carries the agent's
+    bearer token in exactly one field (`data.credential.token`); the config block
+    beside it uses `TOKEN_PLACEHOLDER`, like `server/skills.cjs`. A test asserts
+    the token appears exactly once. The same rule was applied retroactively to
+    `/backend/workspaces/:id/mcp-token`, which was still passing the live token
+    into `configBlock`.
 - **Inference gateways** — `gateway_configs` table (workspace-scoped; API key
   stored AES-256-GCM-encrypted in `api_key_cipher` via the workspace vault, NEVER
   returned to the client — only `has_key`). Managed in Settings → AI. Selecting a
@@ -304,7 +345,8 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `WORKSPACE_STORAGE_QUOTA_BYTES` | — | ✓ | Per-workspace upload quota (default 2 GB) |
 | `AGENSIS_CAPABILITIES_TTL_MS` | — | ✓ | TTL for the `/system/capabilities` cache (default 30 s) |
 | `AGENSIS_RUNTIME_SCHEMA` | — | ✓ | Set `false` to disable runtime DDL bootstrap (migrations become the sole schema source) |
-| `AGENSIS_PUBLIC_URL` / `AGENSIS_APP_URL` | — | ✓ | Public origin for links the server emits |
+| `AGENSIS_PUBLIC_URL` / `AGENSIS_APP_URL` | — | ✓ | Public origin for links the server emits. **`AGENSIS_APP_URL` must be `https://agensis.io` for join links** — unset, a minted `/join/<token>` URL carries the fly.dev host, which works but is not the one URL people are meant to be handed |
+| `AGENSIS_JOIN_LINK_TTL_MS` | — | ✓ | Join-link lifetime (default 15 min; clamped to 1 min – 24 h) |
 | `NETLIFY_WEBHOOK_JWS_SECRET` | — | ✓ | Verifies Netlify deploy webhooks that trigger the update banner |
 | `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-4-8`) |
 | `CARTESIA_API_KEY` | ✓ | ✓ | Huddle text-to-speech (sonic-3.5). **Never sent to the browser** — exchanged for a 120s `tts`-only access token by `/voice/tts-token`. Unset ⇒ huddles fall back to `speechSynthesis` and say so |

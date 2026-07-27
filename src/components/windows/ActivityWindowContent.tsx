@@ -68,6 +68,9 @@ function iconFor(type: ActivityEventType): React.ReactNode {
       return <Palette />;
     case 'provider_call':
       return <KeyRound />;
+    case 'join_link_created':
+    case 'join_link_redeemed':
+      return <UserPlus />;
     default:
       return <Activity />;
   }
@@ -125,6 +128,11 @@ const ACTIVITY_FAMILY: Record<ActivityEventType, Exclude<ActivityFilter, 'all'>>
   // Agents because that is what the reader is auditing — which agent spent a
   // provider credential, on what, and what came back.
   provider_call: 'agents',
+  // Filed under People for both lanes. The reader auditing a join link is asking
+  // "who got into this workspace, and how" — the answer belongs beside
+  // member_joined whether the joiner was a person or an agent.
+  join_link_created: 'people',
+  join_link_redeemed: 'people',
 };
 
 // Remembered per workspace. The tab list is also filtered down to families that

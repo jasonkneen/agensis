@@ -28,6 +28,15 @@ const {
 const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
+ agentNextSteps,
+ joinDescriptor,
+ previewDescriptor,
+ invalidDescriptor,
+ machinePayload,
+ renderJoinHtml,
+ joinUrlFor,
+} = require('./join-page.cjs');
+const {
  PROVIDER_CALL_REDIRECT_NOTE,
  SANDBOX_VAULT_PREFIX,
  applyProviderCredential,
@@ -1386,6 +1395,48 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
 
+    -- The ONE join link: a single URL a human OR an agent can redeem, which
+    -- provisions the real credential server-side and never displays it.
+    -- (Deliberately kept inside THIS statement block rather than opening a new
+    -- db.unsafe: a block whose text begins with a comment breaks every strict
+    -- mock database in tests/, all of which dispatch on the leading keyword.)
+    --
+    -- Deliberately a separate table from workspace_invites rather than more
+    -- columns on it, because the two have opposite security properties and
+    -- merging them would have meant one row type with two lifetimes:
+    --   * workspace_invites lives 14 DAYS and is itself a usable MCP bearer for
+    --     that whole window (verifyInviteToken) — a long-lived credential that
+    --     has to be rendered somewhere, which is the exact shape of the leak
+    --     this feature exists to remove.
+    --   * a join link lives MINUTES, works exactly once, and is never a bearer
+    --     anywhere: it is not in verifyMcpToken's chain and cannot authenticate
+    --     a single API call. The only thing it can do is be redeemed, once, at
+    --     its own endpoint.
+    --
+    -- Only the HASH is stored, like connect_token_hash / mcp_token_hash. The
+    -- plaintext exists in the mint response and in the URL its creator copies;
+    -- nothing can recover it afterwards, including us.
+    CREATE TABLE IF NOT EXISTS workspace_join_links (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      token_hash text NOT NULL UNIQUE,
+      label text NOT NULL DEFAULT '',
+      -- The role a HUMAN gets on redeeming. An agent's abilities are governed by
+      -- agent RBAC (kinds: ['agent']), not by this.
+      role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
+      audience text NOT NULL DEFAULT 'both' CHECK (audience IN ('both', 'human', 'agent')),
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'redeemed', 'revoked')),
+      redeemed_as text NOT NULL DEFAULT '' CHECK (redeemed_as IN ('', 'human', 'agent')),
+      redeemed_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      redeemed_agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      redeemed_at timestamptz,
+      expires_at timestamptz NOT NULL,
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_join_links_workspace_id ON workspace_join_links(workspace_id, created_at DESC);
+
     -- MCP "connect a client" model. ONE workspace token (or your agensis login, or an
     -- invite link) authenticates an MCP client; it then calls register_agent to become an
     -- agent (new or existing). You approve via a popup unless auto-approve / invite link.
@@ -2100,6 +2151,17 @@ const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 })
 // voices needs and far less than a stuck retry loop would cost.
 const ttsPreviewRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Join links. Two budgets, because the two halves are different risks:
+//   * the PAGE is unauthenticated and public, but reading it changes nothing —
+//     120/min per IP is generous and only there to stop a scrape.
+//   * REDEEM is a credential-issuing surface reached with no authentication at
+//     all beyond the URL itself. 10/min per IP is far above any real join (a
+//     link works once, so a caller needs at most one success) and low enough
+//     that guessing is hopeless: the token is 256 bits of base64url, so even
+//     unlimited attempts would not find one, but the limiter is what keeps a
+//     brute-force attempt from being free load on the database.
+const joinLinkRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+const joinRedeemRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
@@ -2163,6 +2225,10 @@ const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max
 // process.
 const linkPreviewDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'link-preview' });
 const linkPreviewImageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: dbQuery, namespace: 'link-preview-image' });
+// Redemption issues a long-lived credential with no authentication in front of
+// it, so its budget must hold across every Fly machine, not per warm process.
+// This is the one limiter here where a single-instance bound would be a real gap.
+const joinRedeemDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 10, db: dbQuery, namespace: 'join-redeem' });
 
 // Async layered gate: returns true (and writes 429) when EITHER layer blocks.
 // Callers MUST `await` this — an un-awaited call returns a truthy Promise and
@@ -2385,6 +2451,124 @@ async function logOrbRejection({ orb, status, bodyHash = '', eventType = '', det
 
 function createAgentConnectToken() {
  return `aga_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+// --- Join links -------------------------------------------------------------
+// A join link is NOT a credential. It authenticates nothing: it is absent from
+// verifyMcpToken's chain, from requireAuth, and from every other verify* in this
+// file. The only thing holding one lets you do is redeem it, once, at its own
+// endpoint — which then provisions the real credential server-side.
+//
+// The `agj_` prefix is not decoration. It makes a leaked link greppable in a
+// transcript, a CI log or a secret scanner, and it lets a malformed token be
+// rejected before it costs a database round trip.
+
+function createJoinLinkToken() {
+ return `agj_${crypto.randomBytes(32).toString('base64url')}`;
+}
+
+// Shape check only — cheap, and it means garbage in the URL path never reaches
+// Postgres. A token that fails this is treated EXACTLY like one that fails the
+// lookup: same status, same body, same page. (See joinLinkRefused.)
+function isJoinLinkToken(value) {
+ return /^agj_[A-Za-z0-9_-]{32,128}$/.test(String(value || ''));
+}
+
+// How long a join link lives.
+//
+// FIFTEEN MINUTES, and the reasoning is the whole point of this feature:
+//
+// A join link is handed over in a live exchange — pasted into a chat, read out
+// in a call, dropped into an agent's prompt. Every one of those completes in
+// well under fifteen minutes. Nothing legitimate needs longer, because the link
+// is not something you keep: the moment it works, it is spent, and what you keep
+// afterwards is your own session (human) or your own bearer token (agent).
+//
+// What the short window buys is the failure case. The incident that produced
+// this feature was a credential pasted into a transcript. Transcripts get saved,
+// summarised, replayed into other models, and read by people days later. A
+// 14-day invite link (which is what workspace_invites still is, AND which is a
+// live MCP bearer for that whole window) pasted into one is a standing door. The
+// same paste of a join link is, fifteen minutes later, a dead string.
+//
+// Overridable for deployments that need a courier window, clamped to [1m, 24h]:
+// below a minute it would fail honest users on a slow sign-up, and a link that
+// outlives a day has stopped being short-lived in any meaningful sense.
+const JOIN_LINK_DEFAULT_TTL_MS = 15 * 60_000;
+const JOIN_LINK_MIN_TTL_MS = 60_000;
+const JOIN_LINK_MAX_TTL_MS = 24 * 60 * 60_000;
+function joinLinkTtlMs() {
+ const raw = Number(process.env.AGENSIS_JOIN_LINK_TTL_MS);
+ if (!Number.isFinite(raw) || raw <= 0) return JOIN_LINK_DEFAULT_TTL_MS;
+ return Math.min(JOIN_LINK_MAX_TTL_MS, Math.max(JOIN_LINK_MIN_TTL_MS, Math.round(raw)));
+}
+
+// Read a join link for DISPLAY only. Returns a row only for a link that is still
+// live; expired / revoked / already-redeemed all come back null, so the page
+// route has one nullish branch and therefore one rendering for every way a link
+// can be dead. Selects no token column: only the hash is stored, and even that
+// stays here.
+async function loadJoinLinkForDisplay(token) {
+ const rows = await getDb().unsafe(
+  `select l.id, l.workspace_id, l.role, l.label, l.audience, l.expires_at,
+            w.name as workspace_name
+       from workspace_join_links l
+       join workspaces w on w.id = l.workspace_id
+      where l.token_hash = $1
+        and l.status = 'pending'
+        and l.expires_at > now()
+      limit 1`,
+  [hashAgentToken(token)],
+ );
+ return rows[0] || null;
+}
+
+// Pick a handle that is not already taken in this workspace.
+//
+// workspace_agents has an INDEX on (workspace_id, handle) but no unique
+// constraint, so a collision does not throw — it silently creates a second
+// @backend, and every @mention of it becomes ambiguous. That risk is specific to
+// self-service joining: the farm enrolment path takes an operator-supplied
+// handle, whereas a join link is redeemed by whoever holds the URL, choosing
+// their own name, with nobody looking. Hence the dedupe lives here.
+//
+// Capped at 50 attempts and then allowed through: an unresolvable handle must
+// not fail a redemption that has already consumed the link.
+async function uniqueAgentHandle(workspaceId, desired) {
+ const base = slugHandle(desired) || 'agent';
+ const rows = await getDb().unsafe(
+  'select handle, name from workspace_agents where workspace_id = $1',
+  [workspaceId],
+ );
+ const taken = new Set(rows.map((row) => slugHandle(row.handle || row.name)));
+ if (!taken.has(base)) return base;
+ for (let n = 2; n <= 50; n += 1) {
+  const candidate = `${base}-${n}`;
+  if (!taken.has(candidate)) return candidate;
+ }
+ return base;
+}
+
+// Audit. Records the link's ID, never its token — the id is a database key that
+// grants nothing, the token is the credential. Fire-and-forget in the sense that
+// a failed audit write must not fail a redemption the user already completed,
+// but it is awaited so an ordinary failure still surfaces in the server log.
+async function logJoinLinkActivity({ workspaceId, userId = null, eventType, title, metadata = {} }) {
+ try {
+  if (!workspaceId) return;
+  const inserted = await getDb().unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, $2, $3, 'join_link', $4, $5, $6::jsonb, now())
+      returning *`,
+   // Bind the OBJECT: a stringified ::jsonb bind lands as a jsonb string scalar
+   // on porsager (tests/jsonb-bind-hygiene.test.cjs).
+   [workspaceId, userId, eventType, metadata.join_link_id || null, String(title).slice(0, 120), metadata],
+  );
+  if (inserted.length > 0) notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  // No token is in scope here to leak, and none is passed in.
+  console.error('[agensis] join link activity write failed:', error?.message || error);
+ }
 }
 
 function createCursorBuddyConnectionKey(surface = 'machine') {
@@ -9961,6 +10145,11 @@ const REALTIME_HEAVY_FIELDS = {
  agent_memory_files: ['content_cache'],
  agent_jobs: ['prompt', 'response'],
  workspace_secrets: VAULT_SECRET_COLUMNS,
+ // Nothing broadcasts workspace_join_links today — the mint/list/revoke routes
+ // deliberately do not call notifyDbSubscribers. This entry is here for the day
+ // someone adds one: workspace_invites IS broadcast, so copying that pattern
+ // across is the obvious next edit, and it would put token_hash on the wire.
+ workspace_join_links: ['token_hash'],
 };
 function sanitizeRealtimeRow(table, row) {
  const heavy = REALTIME_HEAVY_FIELDS[table];
@@ -13885,6 +14074,455 @@ function createApp() {
   }
  });
 
+ // ==========================================================================
+ // Join links — ONE short-lived, single-use URL for a human OR an agent.
+ // ==========================================================================
+ //
+ // Why this exists (plans: single invite URL):
+ //
+ // The "Configure MCP" surface handed out a long-lived bearer token inside a
+ // convenience string with a copy button; it leaked into a transcript. The
+ // narrow fix shipped, then the same mistake turned up in a second place. The
+ // real defect is not WHERE the token was rendered — it is that a long-lived
+ // credential had to be rendered at all. Whatever is guarded gets a masked
+ // field; whatever is convenient hands over the raw value; people use the
+ // convenient one. Two instances of one bug means a third is coming.
+ //
+ // So the premise is removed. Nothing here ever displays a long-lived
+ // credential. The link is short-lived and single-use, and redeeming it is what
+ // provisions access — server-side, at that moment, returned once.
+ //
+ // The rules, all enforced below rather than merely documented:
+ //
+ //   * NO USER-AGENT SNIFFING, anywhere in this block. UA is a hint at best and
+ //     wrong constantly. An agent succeeds through the CONTENT of its request
+ //     (Accept, or ?format=json) or, failing that, through the rendered HTML
+ //     itself, which carries the full contract as visible text.
+ //   * WHICH LANE you get is decided by what you PRESENT, not by who you look
+ //     like: a valid user session on the redeem call means the human lane, no
+ //     session means the agent lane.
+ //   * NO ORACLE. Unknown, malformed, expired, revoked, already-redeemed and
+ //     wrong-audience all produce byte-identical refusals (joinLinkRefused /
+ //     renderJoinRefusalPage). "Did this link ever exist?" is unanswerable.
+ //   * SINGLE USE is a conditional UPDATE, not a check-then-write. The WHERE
+ //     clause IS the guard, so two concurrent redemptions cannot both win.
+ //   * THE TOKEN IS NEVER LOGGED. It is not put in an Error message, a console
+ //     line, an activity row, or a realtime broadcast. Only its hash is stored.
+ //   * The link is NOT A BEARER. It appears in no verify* function in this file.
+ //     Contrast workspace_invites, which IS accepted as an MCP bearer for its
+ //     full 14 days (verifyInviteToken) — precisely the shape being retired.
+
+ // The origin a human is expected to see. The app origin, not the backend host:
+ // /join/* is proxied there (netlify.toml) so one URL works for both audiences
+ // and for both hosts.
+ function joinPublicBaseUrl(req) {
+  return normalizeBaseUrl(process.env.AGENSIS_APP_URL || '') || requestBaseUrl(req);
+ }
+
+ // The origin that actually serves /backend/*. On the deployed split this is
+ // Fly, and it is NOT the same host as the app: https://agensis.io/backend/... is
+ // a 404 (netlify.toml routes only /join/* through). So the redeem endpoint and
+ // the MCP endpoint are built from here, and only the human-facing page and
+ // accept links are built from joinPublicBaseUrl.
+ function joinApiBaseUrl(req) {
+  return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || requestBaseUrl(req);
+ }
+
+ // The single refusal. Every failure mode routes through here, so there is one
+ // status code and one message and no way to tell them apart. 410 rather than
+ // 404 for all of them, including "never existed": a 404/410 split would be the
+ // oracle.
+ const JOIN_REFUSAL_MESSAGE =
+  'This join link is no longer valid. It may have expired, been used, or been revoked.';
+
+ function joinLinkRefused(res) {
+  return res.status(410).json({
+   data: null,
+   error: { message: JOIN_REFUSAL_MESSAGE, code: 'join_link_invalid' },
+  });
+ }
+
+ // Headers every join response carries.
+ //
+ // Referrer-Policy is load-bearing, not boilerplate: the token is IN THE URL, so
+ // without `no-referrer` a click on "Sign in and join" would send the whole
+ // secret URL to the next origin in a Referer header. no-store keeps it out of
+ // shared caches for the same reason. The CSP is achievable only because the
+ // page has no script, no image and no external asset of any kind.
+ function setJoinPageHeaders(res) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader(
+   'Content-Security-Policy',
+   "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  );
+ }
+
+ function setJoinJsonHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+ }
+
+ // Content negotiation, and nothing else. `?format=json` is the explicit escape
+ // hatch for a client that cannot set headers. An Accept of `*/*` (curl's
+ // default, and most HTTP libraries') deliberately gets HTML: the HTML carries
+ // the same instructions in readable text, so the fallback is never a dead end.
+ function joinWantsJson(req) {
+  if (String(req.query?.format || '').toLowerCase() === 'json') return true;
+  const accept = String(req.headers?.accept || '');
+  return /application\/json/i.test(accept) && !/text\/html/i.test(accept);
+ }
+
+ // --- The owner's preview ---------------------------------------------------
+ //
+ // "I want to see that." So: GET /join/preview renders the exact same template
+ // through the exact same renderer, with invented data.
+ //
+ // Why a dedicated PATH and not `?preview=1` on the token route: a query flag
+ // would put the preview branch inside the handler that takes a token and talks
+ // to the database, one mistaken condition away from a preview that performs a
+ // real lookup — or a real mint. This route accepts NO token. There is nothing
+ // to leak because there is nothing to look up: the handler calls a pure
+ // function and returns. It touches no database, mints nothing, and reads no
+ // workspace. tests/join-link.test.cjs asserts that structurally, by reading the
+ // handler's source for getDb / crypto / token minting, so it cannot regress
+ // into one quietly.
+ //
+ // It also serves BOTH views: the page as a human sees it, and — with
+ // `Accept: application/json` or `?format=json` — byte-for-byte what an agent
+ // gets, from the same descriptor.
+ app.get(['/backend/join/preview', '/join/preview'], (req, res) => {
+  if (rateLimitBlocked(res, joinLinkRateLimiter, `join:${clientIpFromReq(req)}`)) return;
+  const descriptor = previewDescriptor({
+   publicBaseUrl: joinPublicBaseUrl(req),
+   apiBaseUrl: joinApiBaseUrl(req),
+   mcpEndpoint: mcpEndpoint(joinApiBaseUrl(req)),
+  });
+  if (joinWantsJson(req)) {
+   setJoinJsonHeaders(res);
+   return res.json({ data: machinePayload(descriptor), error: null });
+  }
+  setJoinPageHeaders(res);
+  return res.send(renderJoinHtml(descriptor));
+ });
+
+ // --- The join page ---------------------------------------------------------
+ // Public and unauthenticated by design: a human who has not signed up yet must
+ // be able to read what they are being invited to, and an agent must be able to
+ // read its instructions before it has any credential at all. Reading changes
+ // nothing — redemption is a separate POST.
+ app.get(['/backend/join/:token', '/join/:token'], async (req, res) => {
+  try {
+   if (rateLimitBlocked(res, joinLinkRateLimiter, `join:${clientIpFromReq(req)}`)) return;
+   const token = String(req.params.token || '');
+   const publicBaseUrl = joinPublicBaseUrl(req);
+   // Shape check first: garbage in the path never reaches Postgres, and it is
+   // refused with the same response a real-but-spent link gets.
+   const row = isJoinLinkToken(token) ? await loadJoinLinkForDisplay(token) : null;
+   const descriptor = row
+    ? joinDescriptor({
+     token,
+     publicBaseUrl,
+     apiBaseUrl: joinApiBaseUrl(req),
+     mcpEndpoint: mcpEndpoint(joinApiBaseUrl(req)),
+     workspaceName: row.workspace_name,
+     role: row.role,
+     label: row.label,
+     audience: row.audience,
+     expiresAt: row.expires_at,
+     status: 'open',
+    })
+    : invalidDescriptor({ publicBaseUrl });
+   // 410 for every invalid link, whatever made it invalid.
+   const status = descriptor.status === 'open' ? 200 : 410;
+   if (joinWantsJson(req)) {
+    setJoinJsonHeaders(res);
+    return res.status(status).json({ data: machinePayload(descriptor), error: null });
+   }
+   setJoinPageHeaders(res);
+   return res.status(status).send(renderJoinHtml(descriptor));
+  } catch (error) {
+   // Note what is NOT here: the token. `error` is whatever Postgres or the
+   // renderer threw; jsonError never sees the path parameter, and no console
+   // line in this block interpolates one.
+   return jsonError(res, error.status || 500, new Error('Join link could not be read'));
+  }
+ });
+
+ // --- Redemption ------------------------------------------------------------
+ // The only thing holding a join link lets you do. Two lanes, one route, chosen
+ // by what the caller PRESENTS:
+ //
+ //   human — a valid agensis session token in Authorization. Adds the user to
+ //           the workspace as a member. Returns NO credential: their own
+ //           sign-in is their access, and there is nothing new to show them.
+ //   agent — no session. Creates a workspace agent and mints its bearer token,
+ //           returned ONCE, in this response, in exactly one field.
+ //
+ // No User-Agent is read. A browser with a session and a CLI with a session take
+ // the same lane; a browser without one and a curl without one take the same
+ // other lane.
+ app.post(['/backend/join/:token/redeem', '/join/:token/redeem'], async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, joinRedeemRateLimiter, joinRedeemDbRateLimiter, `join-redeem:${clientIpFromReq(req)}`)) return;
+   const token = String(req.params.token || '');
+   if (!isJoinLinkToken(token)) return joinLinkRefused(res);
+
+   // Which lane? Purely "did they present a valid session".
+   //
+   // An INVALID Authorization header — an expired session, or an agent's own
+   // aga_ token — resolves to null and therefore takes the agent lane. That is
+   // the right default: the alternative is refusing the request outright, and
+   // the caller who most often arrives without a usable session is exactly the
+   // agent this route exists for. A person whose session has expired gets an
+   // agent record rather than a membership, and the response says `as: 'agent'`
+   // in so many words.
+   const userId = await verifyToken(bearerToken(req)).catch(() => null);
+   const lane = userId ? 'human' : 'agent';
+
+   // THE guard. Single statement, so the row lock makes it atomic: two
+   // concurrent redemptions of the same link cannot both return a row. The
+   // audience predicate is folded in deliberately — a wrong-lane caller matches
+   // nothing and gets the same refusal as an unknown token, rather than a
+   // distinct error that would confirm the link exists.
+   const claimed = await getDb().unsafe(
+    `update workspace_join_links
+        set status = 'redeemed',
+            redeemed_as = $2,
+            redeemed_by = $3,
+            redeemed_at = now(),
+            updated_at = now()
+      where token_hash = $1
+        and status = 'pending'
+        and expires_at > now()
+        and audience in ('both', $2)
+      returning *`,
+    [hashAgentToken(token), lane, userId || null],
+   );
+   const link = claimed[0];
+   if (!link) return joinLinkRefused(res);
+
+   // From here the link is SPENT, before any provisioning runs. That ordering is
+   // deliberate: if the work below fails, the link stays dead. A half-completed
+   // redemption that can be replayed is a worse outcome than one that has to be
+   // re-issued, and re-issuing costs the owner one click.
+   const wsRows = await getDb().unsafe('select id, name from workspaces where id = $1 limit 1', [link.workspace_id]);
+   const workspace = wsRows[0] || null;
+
+   setJoinJsonHeaders(res);
+
+   if (lane === 'human') {
+    const owns = await getDb().unsafe('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [link.workspace_id, userId]);
+    if (owns.length === 0) {
+     const existing = await getDb().unsafe(
+      'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+      [link.workspace_id, userId],
+     );
+     if (existing.length === 0) {
+      const memberRows = await getDb().unsafe(
+       `insert into workspace_members (workspace_id, user_id, role, invited_by)
+             values ($1, $2, $3, $4) returning *`,
+       [link.workspace_id, userId, link.role, link.created_by],
+      );
+      notifyDbSubscribers('workspace_members', 'INSERT', memberRows);
+     }
+    }
+    await logJoinLinkActivity({
+     workspaceId: link.workspace_id,
+     userId,
+     eventType: 'join_link_redeemed',
+     title: 'A person joined through a join link',
+     metadata: { join_link_id: String(link.id), lane: 'human', role: link.role, audience: link.audience },
+    });
+    // No `credential` key at all — not empty, ABSENT. A human's access is their
+    // own session, so there is nothing here for anyone to copy.
+    return res.json({
+     data: {
+      redeemed: true,
+      as: 'human',
+      workspace,
+      role: link.role,
+      next: `You are now a member of ${workspace?.name || 'the workspace'}. Open the app to start.`,
+     },
+     error: null,
+    });
+   }
+
+   // --- agent lane ---
+   const name = String(req.body?.name || '').trim().slice(0, 120) || 'MCP agent';
+   const handle = await uniqueAgentHandle(link.workspace_id, req.body?.handle || name);
+   const description = String(req.body?.description || '').trim().slice(0, 500);
+   const agentToken = createAgentConnectToken();
+   const agentRows = await getDb().unsafe(
+    `insert into workspace_agents
+        (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode,
+         enabled, mcp_approved, connect_token_hash, metadata, created_by)
+        values ($1, $2, $3, $4, '', 'auto', 'external', 'default', true, true, $5, $6::jsonb, $7)
+        returning *`,
+    [
+     link.workspace_id,
+     name,
+     handle,
+     description,
+     hashAgentToken(agentToken),
+     // Bind the OBJECT, not a string: porsager turns a stringified ::jsonb bind
+     // into a jsonb STRING SCALAR (tests/jsonb-bind-hygiene.test.cjs).
+     { joinLinkId: String(link.id), joinedVia: 'join_link' },
+     link.created_by || null,
+    ],
+   );
+   const agent = agentRows[0];
+   // publicFarmEnrolledAgent strips connect_token_hash before the row goes out
+   // over realtime. The plaintext token was never in the row to begin with.
+   notifyDbSubscribers('workspace_agents', 'INSERT', agentRows.map(publicFarmEnrolledAgent));
+   await getDb().unsafe(
+    'update workspace_join_links set redeemed_agent_id = $2, updated_at = now() where id = $1',
+    [link.id, agent.id],
+   );
+   await logJoinLinkActivity({
+    workspaceId: link.workspace_id,
+    userId: null,
+    eventType: 'join_link_redeemed',
+    title: `@${agent.handle} joined through a join link`,
+    metadata: {
+     join_link_id: String(link.id),
+     lane: 'agent',
+     agent_id: String(agent.id),
+     agent_handle: agent.handle,
+     audience: link.audience,
+    },
+   });
+
+   const backendBaseUrl = joinApiBaseUrl(req);
+   return res.json({
+    data: {
+     redeemed: true,
+     as: 'agent',
+     workspace,
+     agent: { id: agent.id, name: agent.name, handle: agent.handle },
+     // ONE field, and only one, carries the secret. Everything else describing
+     // the connection uses the placeholder — the same rule server/skills.cjs
+     // follows and the same rule the mcp-token route now follows. It means an
+     // agent has exactly one thing to store, a test can assert the token
+     // appears exactly once in this response, and there is no second,
+     // more-convenient string that also happens to contain it.
+     credential: {
+      token: agentToken,
+      type: 'bearer',
+      shown_once: true,
+      note: 'Store this now. It is not recoverable and this link will not work again.',
+     },
+     mcp: {
+      endpoint: mcpEndpoint(backendBaseUrl),
+      transport: 'http',
+      config: configBlock(backendBaseUrl),
+     },
+     next: agentNextSteps(),
+    },
+    error: null,
+   });
+  } catch (error) {
+   // Same rule as the page route: the token is never in an error we construct,
+   // and a provisioning failure must not describe the link it failed on.
+   return jsonError(res, error.status || 500, new Error('This join link could not be redeemed'));
+  }
+ });
+
+ // --- Managing join links (workspace owner / admin) -------------------------
+
+ app.get('/backend/workspaces/:id/join-links', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // Columns listed explicitly. `select *` would ship token_hash to the browser,
+   // and while a hash is not a usable credential it is a lookup key that has no
+   // business leaving the server.
+   const rows = await getDb().unsafe(
+    `select l.id, l.workspace_id, l.label, l.role, l.audience, l.status,
+                l.redeemed_as, l.redeemed_by, l.redeemed_agent_id, l.redeemed_at,
+                l.expires_at, l.created_by, l.created_at,
+                cu.email as created_by_email
+           from workspace_join_links l
+           left join app_users cu on cu.id = l.created_by
+          where l.workspace_id = $1
+          order by l.created_at desc
+          limit 100`,
+    [workspaceId],
+   );
+   res.json({ data: rows, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:id/join-links', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const allowedRoles = ['admin', 'editor', 'commenter', 'viewer'];
+   const role = allowedRoles.includes(req.body?.role) ? req.body.role : 'editor';
+   const audience = ['both', 'human', 'agent'].includes(req.body?.audience) ? req.body.audience : 'both';
+   const label = String(req.body?.label || '').trim().slice(0, 120);
+   const ttlMs = joinLinkTtlMs();
+   const token = createJoinLinkToken();
+   const rows = await getDb().unsafe(
+    `insert into workspace_join_links
+        (workspace_id, token_hash, label, role, audience, status, expires_at, created_by)
+        values ($1, $2, $3, $4, $5, 'pending', $6, $7)
+        returning id, workspace_id, label, role, audience, status, expires_at, created_by, created_at`,
+    [workspaceId, hashAgentToken(token), label, role, audience, new Date(Date.now() + ttlMs), req.userId],
+   );
+   // NOT broadcast over realtime. The row is harmless (hash only), but this
+   // table is not in the backendClient allowlists and nothing subscribes to it;
+   // a fanout would only create a way for it to end up somewhere it isn't needed.
+   await logJoinLinkActivity({
+    workspaceId,
+    userId: req.userId,
+    eventType: 'join_link_created',
+    title: 'A join link was created',
+    metadata: { join_link_id: String(rows[0].id), audience, role, ttl_ms: ttlMs },
+   });
+   // The URL — and therefore the token — is returned exactly ONCE, here, to the
+   // manage-role caller who asked for it. Nothing can recover it afterwards: the
+   // row holds only a SHA-256 hash. The list route above cannot rebuild it, the
+   // page route cannot echo it, and we cannot reissue it.
+   res.json({
+    data: {
+     ...rows[0],
+     url: joinUrlFor(joinPublicBaseUrl(req), token),
+     expiresInMs: ttlMs,
+     singleUse: true,
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/workspaces/:id/join-links/:linkId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const linkId = String(req.params.linkId || '').trim();
+   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   const rows = await getDb().unsafe(
+    `update workspace_join_links set status = 'revoked', updated_at = now()
+          where id = $1 and workspace_id = $2 and status = 'pending'
+          returning id, workspace_id, status, expires_at`,
+    [linkId, workspaceId],
+   );
+   res.json({ data: rows[0] ?? null, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  // --- Connect an MCP client (one workspace token) + agent-registration approvals ---
 
  app.post('/backend/workspaces/:id/flow-connections', requireAuth, async (req, res) => {
@@ -13989,7 +14627,16 @@ function createApp() {
      token,
      autoApprove: Boolean(rows[0].mcp_auto_approve),
      endpoint: mcpEndpoint(baseUrl),
-     config: configBlock(baseUrl, token),
+     // PLACEHOLDER too, matching `claudeMcpAdd` below and matching every other
+     // caller of configBlock (server/skills.cjs passes TOKEN_PLACEHOLDER at all
+     // three of its call sites). This was built with the LIVE token: it carries
+     // no copy button, so it is not the leak that was reported — it is the same
+     // mistake in a second place, shipping a working credential inside a
+     // convenience payload the UI is free to render anywhere it likes. `token`
+     // is returned as its own field two lines up, masked on screen and copied
+     // deliberately, so this response now has exactly ONE field a secret can be
+     // taken from.
+     config: configBlock(baseUrl),
      // PLACEHOLDER, not the live token. This one-liner is displayed in full and
      // has a copy button, so embedding the real bearer token put it on the
      // clipboard as plain text — and it has already been pasted into a
@@ -14897,6 +15544,16 @@ module.exports = {
   callProviderOperation,
   readCappedResponseText,
   providerCallRateLimiter,
+  // Join links. The limiters are exported so tests can reset them between
+  // cases — a redeem budget of 10/min is deliberately low, and a suite that
+  // redeems more than that would otherwise start measuring the limiter instead
+  // of the thing under test.
+  joinLinkRateLimiter,
+  joinRedeemRateLimiter,
+  isJoinLinkToken,
+  createJoinLinkToken,
+  joinLinkTtlMs,
+  JOIN_LINK_DEFAULT_TTL_MS,
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
