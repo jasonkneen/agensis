@@ -25,6 +25,7 @@ import {
 } from './inboxPresentation';
 import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { useSplitResize } from '../../hooks/useSplitResize';
 import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
 import {
   NO_SELECTION,
@@ -255,10 +256,12 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     }
   }, [busy, groups, selection, markRead, resolveBlocker]);
 
-  // Drag-to-resize, via pointer capture so it needs no window listeners and
-  // cannot leak a handler if the window unmounts mid-drag.
+  // Drag-to-resize. The gesture is `useSplitResize` — pointer capture (so it
+  // needs no window listeners and cannot leak a handler if the window unmounts
+  // mid-drag, and with the guard for a capture that throws NotFoundError),
+  // arrow keys, and double-click to reset — shared with Tenants and the Agents
+  // and Memory dividers. The clamp below is what is specific to this split.
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ x: number; width: number } | null>(null);
 
   /**
    * Clamped against the CONTAINER, not against two absolute constants. 240..520
@@ -274,30 +277,23 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     return Math.min(ceiling, Math.max(MIN_LIST_WIDTH, Math.round(value)));
   }, []);
 
-  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { x: event.clientX, width: listWidth };
-  }, [listWidth]);
-
-  const handleResizeMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    setListWidth(clampWidth(drag.width + (event.clientX - drag.x)));
-  }, [clampWidth]);
-
-  const handleResizeEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    try {
-      window.sessionStorage.setItem(LIST_WIDTH_KEY, String(listWidth));
-    } catch {
-      // Width is a nicety; a storage-denied browser just gets the default back.
-    }
-  }, [listWidth]);
-
-  const resetWidth = useCallback(() => setListWidth(DEFAULT_LIST_WIDTH), []);
+  const { handlers: resizeHandlers } = useSplitResize({
+    axis: 'x',
+    size: listWidth,
+    clamp: clampWidth,
+    // Clamped on the way in here, because the pane width IS this state — there
+    // is no separate draft to re-derive from.
+    onPreview: value => setListWidth(clampWidth(value)),
+    onCommit: value => {
+      setListWidth(value);
+      try {
+        window.sessionStorage.setItem(LIST_WIDTH_KEY, String(value));
+      } catch {
+        // Width is a nicety; a storage-denied browser just gets the default back.
+      }
+    },
+    onReset: () => setListWidth(DEFAULT_LIST_WIDTH),
+  });
 
   return (
     <div
@@ -403,11 +399,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
             type="button"
             aria-label="Resize inbox list"
             title="Drag to resize. Double-click to reset."
-            onPointerDown={handleResizeStart}
-            onPointerMove={handleResizeMove}
-            onPointerUp={handleResizeEnd}
-            onPointerCancel={handleResizeEnd}
-            onDoubleClick={resetWidth}
+            {...resizeHandlers}
             className={cn(
               'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
               SINGLE_COLUMN_HIDE,

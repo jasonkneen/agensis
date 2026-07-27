@@ -1,5 +1,18 @@
 [
   {
+    "version": "memory-pane",
+    "date": "2026-07-27",
+    "title": "The Memory file browser opens with both panes, and you can resize them",
+    "summary": "Agent files used to show only the list until you clicked something, and the reading pane appeared underneath your pointer and shoved the list sideways. Both panes are now there from the moment the window opens, and the divider between them drags — where you leave it is remembered. A width you chose in a wide window is re-fitted to a narrow one rather than squeezing either pane out of sight.",
+    "highlights": [
+      "The reading pane is on screen from the start, so opening a file no longer moves the list",
+      "Drag the divider between the file list and the file; double-click it to go back to the default",
+      "Arrow keys move the divider too, so it works without a mouse",
+      "Where you left it is remembered per workspace, and re-fitted if the window is a different size next time",
+      "With nothing open the pane suggests a few files to start with, and offers the Memory tips"
+    ]
+  },
+  {
     "version": "presence-panel",
     "date": "2026-07-27",
     "title": "The shared users and agents panel is a list again",
