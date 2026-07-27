@@ -134,7 +134,9 @@ exactly as before and JSX files simply report that they need it.
 - **Toolbar** — Select-mode toggle (also the `V` key), Move up / Move
   down, Delete, Undo, live-layout-preview toggle (see Drag-and-drop), dock
   toggle (pushes the page aside via root margins instead of overlapping it —
-  fixed-position page elements may not shift), animated save status, close.
+  fixed-position page elements may not shift), persistent Light/Dark editor
+  theme toggle, animated save status, close. The theme changes only the editor
+  chrome; the page being edited is never restyled.
 - **Resizable panels** — drag the inner edge of either panel to resize it;
   double-click that edge to snap it back to its default width. Widths are
   clamped (190–720px, and always leaving at least 220px of page between the
