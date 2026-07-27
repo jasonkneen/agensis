@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDockParticipants,
   DEFAULT_HUDDLE_DOCK_TAB,
+  IDLE_HUDDLE_LOCAL,
   normalizeHuddleDockTab,
   participantInitials,
+  sameHuddleLocalState,
   shouldShowHuddleDock,
 } from '../../src/lib/huddleDock';
 
@@ -34,6 +36,13 @@ describe('shouldShowHuddleDock', () => {
 
   it('closes once there is no connection, no call and no error', () => {
     expect(shouldShowHuddleDock(base)).toBe(false);
+  });
+
+  it('stays up for a RECORD, which is neither live nor connected', () => {
+    // Reading an ended huddle from a channel marker. The huddle side panel is
+    // gone, so this is the only place that transcript can appear — without this
+    // the panel would open and vanish in the same frame.
+    expect(shouldShowHuddleDock({ ...base, record: true })).toBe(true);
   });
 });
 
@@ -142,5 +151,42 @@ describe('joining once per target', () => {
 
   it('never joins without a target', () => {
     expect(joinsFor([null, '', null])).toBe(0);
+  });
+});
+
+// The dock drives speech off what LiveKit says about OUR OWN connection, and
+// LiveKit re-renders constantly. Comparing the values is what stops a room
+// re-render from tearing the microphone down and back up.
+describe('sameHuddleLocalState', () => {
+  it('is unchanged when the room reports the same thing again', () => {
+    expect(sameHuddleLocalState(
+      { connected: true, micEnabled: true, speaker: 'Jason', failed: '' },
+      { connected: true, micEnabled: true, speaker: 'Jason', failed: '' },
+    )).toBe(true);
+  });
+
+  it('notices the mic being muted — the gate on transcribing anything', () => {
+    expect(sameHuddleLocalState(
+      { connected: true, micEnabled: true, speaker: '', failed: '' },
+      { connected: true, micEnabled: false, speaker: '', failed: '' },
+    )).toBe(false);
+  });
+
+  it('notices the session coming up, which is what confirms our join', () => {
+    expect(sameHuddleLocalState(
+      IDLE_HUDDLE_LOCAL,
+      { ...IDLE_HUDDLE_LOCAL, connected: true },
+    )).toBe(false);
+  });
+
+  it('notices a failure, which is the one thing the panel must keep on screen', () => {
+    expect(sameHuddleLocalState(
+      IDLE_HUDDLE_LOCAL,
+      { ...IDLE_HUDDLE_LOCAL, failed: 'Could not connect' },
+    )).toBe(false);
+  });
+
+  it('starts idle: nothing connected, nothing publishing, nothing wrong', () => {
+    expect(IDLE_HUDDLE_LOCAL).toEqual({ connected: false, micEnabled: false, speaker: '', failed: '' });
   });
 });

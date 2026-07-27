@@ -20,7 +20,11 @@ export type HuddleSession = ReturnType<typeof useHuddle>;
 // the huddle genuinely changed, but there is still no reason to re-render the
 // transcript when someone joins a call.
 
-const HuddleSessionContext = createContext<HuddleSession | null>(null);
+// Exported because the app-level dock provides it directly from the session it
+// already owns: the dock is mounted OUTSIDE this channel-scoped provider, so
+// without it the panel inside the dock had no session and fell back to a
+// one-shot fetch that never saw the huddle change again.
+export const HuddleSessionContext = createContext<HuddleSession | null>(null);
 
 interface HuddleSessionProviderProps {
   workspaceId: string | null;

@@ -1,5 +1,6 @@
 import { createContext, useEffect, useRef, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { useHuddle } from '@/hooks/useHuddle';
+import { sameHuddleAgents, type HuddleAgentOption } from '@/lib/huddleAgents';
 
 // ---------------------------------------------------------------------------
 // THE HUDDLE LIVES AT APP LEVEL, NOT INSIDE A CHANNEL.
@@ -19,12 +20,40 @@ import { useHuddle } from '@/hooks/useHuddle';
 // needed a rule for what happens on the second join; a single slot does not.
 // ---------------------------------------------------------------------------
 
-/** Which conversation's huddle this app is currently in, or null. */
+/**
+ * What the dock is showing, or null.
+ *
+ * TWO MODES, one slot. A `sessionId` means a CALL in that conversation: the
+ * hook below joins it and the dock mounts LiveKit. A `huddleId` with no
+ * sessionId means a RECORD — someone clicked "You were in a huddle" on a call
+ * that ended, possibly months ago. The huddle hook is inert for a record (its
+ * base path needs a session), so nothing joins, nothing subscribes and no
+ * token is ever minted; the panel fetches the one huddle by id and renders its
+ * transcript.
+ *
+ * One slot rather than two because the dock is one panel. Opening a record
+ * while a call is running replaces it — and `openHuddleRecord` posts the leave
+ * on the way out rather than letting the connection be dropped silently.
+ */
 export interface HuddleTarget {
   workspaceId: string;
+  /** The conversation whose call this is. '' for a record. */
   sessionId: string;
   /** For the panel header, so it can say WHERE the call is without a lookup. */
   title: string;
+  /** One specific, usually ended, huddle to READ. Set only in record mode. */
+  huddleId?: string;
+  /**
+   * The conversation's agents, in roster order. Carried on the target because
+   * the dock is mounted above every view and cannot see a channel's
+   * participants — but it needs them for two things a call is useless without:
+   * the @mention that makes a spoken sentence wake anybody in a channel, and
+   * the participant chips (an agent never holds a LiveKit connection, so a
+   * three-agent call built from presence alone looks empty).
+   *
+   * Empty in a DM, where the single agent already answers a plain message.
+   */
+  agents?: HuddleAgentOption[];
 }
 
 export type HuddleDockSession = ReturnType<typeof useHuddle>;
@@ -34,6 +63,23 @@ interface HuddleDockValue {
   session: HuddleDockSession | null;
   /** Enter (or switch to) a conversation's huddle. */
   openHuddle: (target: HuddleTarget) => void;
+  /**
+   * READ one huddle, live or long finished — what a channel marker links to.
+   *
+   * The huddle used to open in a side panel inside the channel. That panel is
+   * gone: the dock is the only place a huddle is shown, so there is one answer
+   * to "where is the huddle" instead of two surfaces that could disagree.
+   */
+  openHuddleRecord: (record: { workspaceId: string; huddleId: string; title: string }) => void;
+  /**
+   * Keep the target's agent roster current while the channel is on screen.
+   *
+   * A snapshot taken at open time is wrong twice over: the participant list is
+   * still loading when the button is clicked (so the call starts agent-less and
+   * every spoken sentence wakes nobody), and an agent added mid-call would
+   * never appear. Ignored for any session that is not the current target.
+   */
+  setTargetAgents: (sessionId: string, agents: HuddleAgentOption[]) => void;
   /** Drop the panel entirely — used after leaving or ending. */
   closeHuddle: () => void;
   /** Panel visibility, independent of connection: you can collapse a live call. */
@@ -72,11 +118,46 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
   const startOrJoin = session?.startOrJoin;
   useEffect(() => {
     const sessionId = target?.sessionId || '';
+    // A record has no sessionId, so reading an ended huddle can never start a
+    // new one in the channel it happened in — which is exactly what a naive
+    // "open this huddle" would have done.
     if (!sessionId || !startOrJoin) return;
     if (joinedRef.current === sessionId) return;
     joinedRef.current = sessionId;
     void startOrJoin();
   }, [target?.sessionId, startOrJoin]);
+
+  // Held in a ref so openHuddleRecord can hang up without depending on the
+  // session object, which useHuddle rebuilds on every render.
+  const leaveRef = useRef(session?.leave);
+  leaveRef.current = session?.leave;
+
+  const openHuddleRecord = useCallback((record: { workspaceId: string; huddleId: string; title: string }) => {
+    // Reading an old huddle takes the dock's one slot. Post the leave first so
+    // presence is cleaned up now rather than by the server's staleness reaper —
+    // re-keying the hook alone drops the connection silently and leaves the
+    // roster claiming someone is still in a call they walked out of.
+    leaveRef.current?.();
+    joinedRef.current = '';
+    setTarget({
+      workspaceId: record.workspaceId,
+      sessionId: '',
+      title: record.title,
+      huddleId: record.huddleId,
+    });
+    setCollapsed(false);
+  }, []);
+
+  const setTargetAgents = useCallback((sessionId: string, agents: HuddleAgentOption[]) => {
+    setTarget(current => {
+      if (!current || current.sessionId !== sessionId) return current;
+      // Identity-stable when nothing changed: the roster is recomputed on every
+      // render of the channel, and returning a new target object each time would
+      // re-render the whole dock (and its speech hooks) for no reason.
+      if (sameHuddleAgents(current.agents ?? [], agents)) return current;
+      return { ...current, agents };
+    });
+  }, []);
 
   const closeHuddle = useCallback(() => {
     setTarget(null);
@@ -87,8 +168,8 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<HuddleDockValue>(
-    () => ({ target, session, openHuddle, closeHuddle, collapsed, setCollapsed }),
-    [target, session, openHuddle, closeHuddle, collapsed],
+    () => ({ target, session, openHuddle, openHuddleRecord, closeHuddle, setTargetAgents, collapsed, setCollapsed }),
+    [target, session, openHuddle, openHuddleRecord, closeHuddle, setTargetAgents, collapsed],
   );
 
   return <HuddleDockContext.Provider value={value}>{children}</HuddleDockContext.Provider>;

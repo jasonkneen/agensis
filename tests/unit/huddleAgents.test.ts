@@ -4,6 +4,7 @@ import {
   huddleShortcutIndex,
   isTextEntryTarget,
   matchLeadingAgentName,
+  sameHuddleAgents,
   withAgentMention,
   type HuddleAgentOption,
 } from '../../src/lib/huddleAgents';
@@ -234,7 +235,7 @@ describe('huddleAgentOptions', () => {
 });
 
 // The huddle speaks as whichever agent is ACTIVE, and the strip switches that
-// mid-call. HuddleCard passed a hardcoded voiceId of '', so every agent came
+// mid-call. The huddle passed a hardcoded voiceId of '', so every agent came
 // out in the same derived default and the voices chosen in the agent panel were
 // never used at all.
 describe('huddleAgentOptions carries the agent voice', () => {
@@ -284,11 +285,49 @@ describe('huddleAgentOptions for a one-agent (DM) roster', () => {
   });
 
   it('the first option is the implicit active agent, so no click is needed', () => {
-    // HuddleCard resolves `agents.find(selected) || agents[0]`, so a populated
+    // The dock resolves `agents.find(selected) || agents[0]`, so a populated
     // one-agent roster speaks in the right voice with no interaction at all.
     const options = huddleAgentOptions([boris] as never, [
       { id: 'agent:b1', kind: 'agent', name: 'boris', agent_id: 'b1' },
     ] as never);
     expect(options[0]?.id).toBe('b1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The roster reaches the dock, which cannot see a channel for itself.
+// ---------------------------------------------------------------------------
+
+describe('sameHuddleAgents', () => {
+  const boris: HuddleAgentOption = {
+    id: 'a1', name: 'boris', handle: 'boris', avatar: '', accent: '#111111', voiceId: 'v1',
+  };
+
+  it('treats a rebuilt-but-identical roster as unchanged', () => {
+    // huddleAgentOptions() returns a new array on every render of the channel.
+    // A reference check would report a change constantly, and each "change"
+    // rebuilds the dock's target — which re-renders the call and restarts the
+    // speech effects that own the microphone.
+    expect(sameHuddleAgents([{ ...boris }], [{ ...boris }])).toBe(true);
+  });
+
+  it('notices an agent joining or leaving the channel mid-call', () => {
+    expect(sameHuddleAgents([boris], [])).toBe(false);
+    expect(sameHuddleAgents([], [boris])).toBe(false);
+  });
+
+  it('notices a voice being chosen for an agent that had none', () => {
+    // The huddle speaks as whichever agent is active, so a voice picked in the
+    // agent panel has to reach a call that is already running.
+    expect(sameHuddleAgents([boris], [{ ...boris, voiceId: '' }])).toBe(false);
+  });
+
+  it('notices a renamed handle, which is what a mention has to use', () => {
+    expect(sameHuddleAgents([boris], [{ ...boris, handle: 'boris-2' }])).toBe(false);
+  });
+
+  it('notices a reorder — position is the ⌘1…⌘9 binding', () => {
+    const coder: HuddleAgentOption = { ...boris, id: 'a2', name: 'Coder', handle: 'coder' };
+    expect(sameHuddleAgents([boris, coder], [coder, boris])).toBe(false);
   });
 });
