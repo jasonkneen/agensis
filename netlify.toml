@@ -38,6 +38,20 @@
   to = "/index.html"
   status = 200
 
+# The blog's files live at /landing/blog/ beside the landing page, but /blog is
+# what people type. A 301 rather than a 200 rewrite on purpose: one URL owns the
+# content (the one in the sitemap and the canonical tags), and the short form
+# forwards to it instead of becoming a second copy of every post.
+[[redirects]]
+  from = "/blog"
+  to = "/landing/blog/"
+  status = 301
+
+[[redirects]]
+  from = "/blog/*"
+  to = "/landing/blog/:splat"
+  status = 301
+
 # Anything else that isn't a real static file is a genuine 404 — never the
 # 200 app shell. (The old catch-all made every unknown path a soft-404:
 # /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)

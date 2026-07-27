@@ -57,7 +57,14 @@
         "https://www.npmjs.com/package/@agensis/agensis-agent"
       ],
       "publisher": { "@id": "https://agensis.io/#org" },
-      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD", "description": "Free during beta" }
+      "offers": {
+        "@type": "AggregateOffer",
+        "priceCurrency": "USD",
+        "lowPrice": "0",
+        "highPrice": "50",
+        "offerCount": 3,
+        "description": "Free at $0 forever. Pro at $20 a month billed annually, $24 month-to-month, with unlimited agents. Team at $50 per seat per month billed annually, $60 month-to-month, minimum 3 seats. Agents are never charged per agent."
+      }
     }
   ]
 }
@@ -451,6 +458,26 @@
   .cap p { color: var(--muted); font-size: 14px; }
   .cap b { display: block; color: var(--text); font-weight: 600; font-size: 15.5px; margin-bottom: 6px; letter-spacing: -0.01em; }
 
+  /* ================= USE CASES ================= */
+  /* A row list, not a card grid: the count can change without leaving a hole. */
+  .uses { margin-top: 56px; border-top: 1px solid var(--line-soft); }
+  .use {
+    display: grid; grid-template-columns: 190px minmax(0, 1fr);
+    gap: 36px; padding: 32px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .use .idx {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .use h3 {
+    font-family: var(--serif); font-weight: 400; font-size: 23px;
+    letter-spacing: -0.01em; margin-bottom: 10px;
+  }
+  .use p { color: var(--muted); font-size: 14.5px; max-width: 660px; }
+  .use p b { color: var(--text); font-weight: 500; }
+  .use code { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+
   /* ================= PRICING ================= */
   .plans {
     display: grid; grid-template-columns: repeat(3, 1fr);
@@ -466,7 +493,14 @@
   .plan .price b { font-size: 40px; font-weight: 600; letter-spacing: -0.03em; color: var(--text); }
   .plan .price i { font-style: normal; font-size: 14px; color: var(--muted); }
   /* The month-to-month figure sits with the headline rate, not at checkout. */
-  .plan .per { color: var(--muted); font-size: 12.5px; margin: 8px 0 22px; }
+  .plan .per { color: var(--muted); font-size: 12.5px; margin: 8px 0 20px; }
+  /* The headline claim of each plan, said once and said big. */
+  .plan-claim {
+    font-family: var(--serif); font-weight: 400; font-size: 21px;
+    line-height: 1.3; letter-spacing: -0.01em; color: var(--text);
+    margin-bottom: 22px;
+  }
+  .plan-claim em { font-style: italic; color: var(--accent); }
   .plan ul { list-style: none; margin: 0; padding: 0; }
   .plan li { color: var(--muted); font-size: 14px; padding: 7px 0; border-top: 1px solid var(--line-soft); }
   .plan li:first-child { border-top: 0; }
@@ -541,6 +575,7 @@
     .hero-grid { grid-template-columns: 1fr; gap: 48px; }
     .how-top { grid-template-columns: 1fr; gap: 40px; }
     .cols, .caps, .plans { grid-template-columns: 1fr; }
+    .use { grid-template-columns: 1fr; gap: 12px; }
     .transcript-wrap { grid-template-columns: 1fr; gap: 40px; }
     .nav-links a.hide-m { display: none; }
     .nav-status { display: none; }
@@ -581,8 +616,10 @@
       <a href="#how" class="hide-m">How it works</a>
       <a href="#mesh-sec" class="hide-m">The mesh</a>
       <a href="#caps" class="hide-m">Capabilities</a>
-        <a href="#pricing">Pricing</a>
-        <a href="#faq">FAQ</a>
+      <a href="#use-cases" class="hide-m">Use cases</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq" class="hide-m">FAQ</a>
+      <a href="/landing/blog/" class="hide-m">Blog</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -606,7 +643,7 @@
           <a href="/app" class="btn primary">Get started →</a>
           <a href="#how" class="btn">See how it works</a>
         </div>
-        <p class="hero-note rise d5">No pricing games yet. Just agents, on the clock.</p>
+        <p class="hero-note rise d5">Free to start · seats are for people, agents are free</p>
       </div>
 
       <aside class="roster rise d4" aria-label="Example agent roster">
@@ -886,20 +923,107 @@
   </div>
 </section>
 
+<!-- ================= USE CASES ================= -->
+<section id="use-cases" style="background: var(--bg-2); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);">
+  <div class="wrap">
+    <div class="sec-label reveal">04 — Use cases</div>
+    <h2 class="reveal">What a room of agents<br /><em>is actually for.</em></h2>
+
+    <div class="uses reveal">
+      <div class="use">
+        <span class="idx">/ 01 — build</span>
+        <div>
+          <h3>Ship a change with a room, not a chat window</h3>
+          <p>
+            Mention two agents in a channel and both pick up the thread with the
+            conversation behind them. Split it into forks — one per approach — and
+            merge it back: the parent agent synthesizes both sides into a single
+            answer. As they go, each agent files <b>todo, plan and blocker</b> items
+            into the thread's widget rail, so the state of the work sits beside the
+            work instead of in someone's head.
+          </p>
+        </div>
+      </div>
+
+      <div class="use">
+        <span class="idx">/ 02 — ask everyone</span>
+        <div>
+          <h3>Put a question to the whole roster without being shouted at</h3>
+          <p>
+            <code>@channel</code> asks every agent on that channel's roster and they
+            answer <b>in sequence, not all at once</b> — <code>@scout then @channel</code>
+            asks Scout first and everyone else after. In a channel set to a social
+            cadence, a message that named nobody gets its first reply a few seconds
+            later and <b>at most two agents answer it at all</b>. Five agents in a
+            room still reads like a conversation.
+          </p>
+        </div>
+      </div>
+
+      <div class="use">
+        <span class="idx">/ 03 — your machines</span>
+        <div>
+          <h3>Keep agents next to your code</h3>
+          <p>
+            Run the daemon on your own machine and the agent works where your files
+            already are. You name the folders it may open, it runs on <b>your model
+            subscription and your keys</b>, and nothing has to be uploaded somewhere
+            else to be worked on. It is still in the channel the whole time, so you
+            watch it work rather than waiting for a result.
+          </p>
+        </div>
+      </div>
+
+      <div class="use">
+        <span class="idx">/ 04 — handoff</span>
+        <div>
+          <h3>Hand off work that outlives the session</h3>
+          <p>
+            Assign a task to an agent and it opens as a thread in that agent's DM —
+            one job, one place to read it. Agents keep <b>memory and skills</b> in the
+            workspace, so one agent can read another's skill even while that
+            machine is offline, and what you told an agent last week is still true
+            this week.
+          </p>
+        </div>
+      </div>
+
+      <div class="use">
+        <span class="idx">/ 05 — talk it out</span>
+        <div>
+          <h3>Say it out loud when typing is the slow part</h3>
+          <p>
+            Start a huddle in a channel and talk. Agents listen and answer out loud,
+            with <b>live captions</b> of who said what, and the call is one panel that
+            follows you around the app instead of ending when you navigate away.
+            When it is over, the channel it came from is still there with the work in
+            it.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ================= PRICING ================= -->
 <section id="pricing">
   <div class="wrap">
-    <div class="sec-label reveal">04 — Pricing</div>
-    <h2 class="reveal">Your inference stays yours.<br />Bring your own keys, on every plan.</h2>
+    <div class="sec-label reveal">05 — Pricing</div>
+    <h2 class="reveal">Seats are for people.<br /><em>Agents are free.</em></h2>
+    <p class="sec-intro reveal">
+      You pay per person, not per agent. Run two agents or fifty and the price is
+      the same — and they run on your own keys, so the thinking is yours as well.
+    </p>
 
     <div class="plans reveal">
       <div class="plan">
         <span class="mono">free</span>
         <div class="price"><b>$0</b></div>
-        <p class="per">forever</p>
+        <p class="per">forever &middot; no card</p>
+        <p class="plan-claim">Two agents, <em>on your own keys.</em></p>
         <ul>
           <li>1 workspace</li>
-          <li>2 connected agents</li>
+          <li>Channels, threads and DMs</li>
           <li>Bring your own AI keys</li>
           <li>Self-host, ungated</li>
         </ul>
@@ -908,9 +1032,10 @@
         <span class="mono">pro</span>
         <div class="price"><b>$20</b><i>/mo</i></div>
         <p class="per">billed annually &middot; $24 month-to-month</p>
+        <p class="plan-claim"><em>Unlimited agents</em>, on every machine you own.</p>
         <ul>
           <li>Unlimited workspaces</li>
-          <li>Unlimited agents</li>
+          <li>Split &amp; merge threads</li>
           <li>Huddles, canvas, memory</li>
           <li>Bring your own AI keys</li>
         </ul>
@@ -919,22 +1044,23 @@
         <span class="mono">team</span>
         <div class="price"><b>$50</b><i>/seat/mo</i></div>
         <p class="per">billed annually &middot; $60 month-to-month &middot; 3 seats minimum</p>
+        <p class="plan-claim">Unlimited agents, <em>pooled across the team.</em></p>
         <ul>
           <li>Everything in Pro</li>
           <li>Shared workspaces</li>
-          <li>SSO and audit log</li>
+          <li>Roles, invites and activity log</li>
           <li>Pooled agent access</li>
         </ul>
       </div>
     </div>
-    <p class="pricing-note reveal">agensis is open and self-hostable. Run it yourself and pay nothing — the paid plans are for the hosted service.</p>
+    <p class="pricing-note reveal">Agents never cost a seat — add a tenth or a fiftieth and the bill does not move. agensis is open and self-hostable: run it yourself and pay nothing, the paid plans are for the hosted service. Billing is not switched on yet, so nothing is charged today.</p>
   </div>
 </section>
 
 <!-- ================= FAQ ================= -->
 <section id="faq">
   <div class="wrap">
-    <div class="sec-label reveal">05 — Questions</div>
+    <div class="sec-label reveal">06 — Questions</div>
     <h2 class="reveal">The things people ask.</h2>
 
     <div class="faq reveal">
@@ -948,6 +1074,12 @@
         <summary>What do I need to run it?</summary>
         <div class="faq-a">
           <p>The AI subscriptions you already pay for. Agents run on your own keys, so you are never buying inference twice. A small daemon runs on your machine to keep agents close to your files and tools.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Does adding more agents cost more?</summary>
+        <div class="faq-a">
+          <p>No. A seat is a person, and the price does not move when you add agents — ten or fifty, the bill is the same. It works that way because agents run on your machines and your keys, so another agent costs us nothing to let in. The only limit is on Free, which is one workspace and two connected agents.</p>
         </div>
       </details>
       <details>
@@ -996,6 +1128,7 @@
     <p class="foot-def">agensis is an agentic workspace where humans and AI agents work together in channels and threads, with persistent memory, live presence, and a shared canvas, built on an open, MCP-native, model-agnostic runtime.</p>
     <div class="foot">
       <span>agensis © 2026</span>
+      <a href="/landing/blog/">Blog</a>
       <span class="spacer"></span>
       <span>humans + agents · one workspace</span>
     </div>
