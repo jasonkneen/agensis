@@ -733,6 +733,17 @@ export function useWindows() {
     );
   }, []);
 
+  // Explicit bulk form of minimizeWindow, for callers that know which way they
+  // want the flag to go rather than "the other way". minimizeWindow TOGGLES, so
+  // putting several windows away one call at a time is only correct while every
+  // id happens to be on the same side — the Show desktop button drives whole
+  // sets, and one already-minimized id in the list would pop back up.
+  const setWindowsMinimized = useCallback((ids: readonly string[], minimized: boolean) => {
+    if (ids.length === 0) return;
+    const target = new Set(ids);
+    setWindows(prev => prev.map(w => (target.has(w.id) ? { ...w, minimized } : w)));
+  }, []);
+
   // Enter full-expand focused on `id`: raise it to the top so it becomes the
   // single visible window, un-minimize it, and switch the workspace into full
   // mode. Every other open window stays mounted (cached) for instant switching.
@@ -773,5 +784,5 @@ export function useWindows() {
     if (viewMode === 'multi' && prefersFullExpandRef.current) setViewMode('full');
   }, [viewMode, hasVisibleWindow]);
 
-  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
+  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
 }
