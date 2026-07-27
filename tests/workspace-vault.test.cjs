@@ -39,6 +39,10 @@ const http = require('node:http');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
+const { withEnv } = require('./helpers/test-env.cjs');
+
+// The preload has already scrubbed AUTH_SECRET, so this is now always the
+// literal below — never the machine's real HMAC secret.
 process.env.AUTH_SECRET = process.env.AUTH_SECRET || 'workspace-vault-test-secret';
 
 const { createApp, __test } = require('../server/index.cjs');
@@ -584,16 +588,9 @@ async function callBox(db) {
   }
 }
 
-function withEnv(name, value, fn) {
-  const previous = process.env[name];
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-  const restore = () => {
-    if (previous === undefined) delete process.env[name];
-    else process.env[name] = previous;
-  };
-  return Promise.resolve().then(fn).finally(restore);
-}
+// `withEnv` is shared (tests/helpers/test-env.cjs) and asserts the pin held on
+// both sides of the call — the local copy could not tell the difference between
+// "the refusal path is broken" and "something re-read `.env` mid-test".
 
 test('with a Box key in the vault, the Sandbox Agent\'s Box operations work', async () => {
   const db = sandboxAgentDb({ vaultValue: SECRET_VALUE });

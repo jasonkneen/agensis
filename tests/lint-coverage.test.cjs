@@ -88,6 +88,11 @@ const MUST_BE_LINTED = [
   'server/farm-integration.cjs',
   'server/flow-integration.cjs',
   'netlify/functions/backend.mjs',
+  // Not a backend entry point, but it is what keeps a developer's real
+  // credentials — DATABASE_URL, AUTH_SECRET, every provider key — out of every
+  // test process. If it silently stops being linted it silently stops being
+  // reviewed, and a mistake here re-points the suite at production data.
+  'tests/helpers/test-env.cjs',
 ];
 
 test('every security-critical backend file is matched by an eslint config block', async () => {

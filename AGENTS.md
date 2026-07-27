@@ -189,6 +189,24 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   persisted filter cannot hide the control that clears it. See
   [tests/smoke/README.md](tests/smoke/README.md). ~10 s.
 - Keep all three green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
+- **A test process never sees your `.env`.** `tests/helpers/test-env.cjs` is
+  preloaded by both runners (`--require` in the `test` script, `setupFiles` in
+  `vitest.config.ts`): it sets `AGENSIS_TEST=1`, which makes `loadEnvFile()` in
+  `server/index.cjs` inert, and deletes every credential-bearing name plus
+  everything a local `.env` declares. Without it the suite's result depended on
+  the machine — three vault tests that `delete process.env.BOX_API_KEY` to
+  exercise the "credential not configured" refusal had it handed back by
+  `loadEnvFile()` and went red the day someone added a real Box key. `DATABASE_URL`
+  stays unset on purpose: `getWorkspaceSecretValue`/`setWorkspaceSecretValue` take
+  no db argument and always use the module-level `dbUnsafe`, so a missing
+  `setTestDb` used to build a live **production** Neon client inside a test run
+  (six per run, via `notifyDbSubscribers` → `enqueueFlowWebhookEvents`, swallowed
+  by a fire-and-forget `.catch`). Unset, `getDb()` throws where somebody sees it.
+  Use the shared `withEnv(name, value, fn)` from that helper to pin a variable —
+  it asserts the pin held on both sides of the call, and never puts a value in a
+  failure message (node's reporter prints `actual`). `tests/env-isolation.test.cjs`
+  fails loudly if any of this comes undone.
+- Keep both green. `tests/cursorbuddy-manifest.test.cjs` asserts guided-tour
   selectors exist in source — if you remove/rename a selector it references,
   update the tour JSON (`public/.well-known/cursorbuddy.json`) + that test.
 - `npm run lint` is now clean and exits 0. The 6 previously-documented

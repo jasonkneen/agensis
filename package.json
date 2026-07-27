@@ -11,7 +11,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --experimental-test-module-mocks --test tests/*.test.cjs",
+    "test": "node --require ./tests/helpers/test-env.cjs --experimental-test-module-mocks --test tests/*.test.cjs",
     "test:unit": "vitest run",
     "smoke": "vitest run --config vitest.smoke.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",

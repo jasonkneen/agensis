@@ -114,10 +114,13 @@ let authSecret;
 let issuedSql = [];
 
 test.before(async () => {
- if (!process.env.AUTH_SECRET && !process.env.AGENSIS_AUTH_SECRET) {
-  process.env.AUTH_SECRET = 'tenants-admin-test-secret';
- }
- authSecret = process.env.AUTH_SECRET || process.env.AGENSIS_AUTH_SECRET;
+ // Own both names outright. The backend reads `AGENSIS_AUTH_SECRET ||
+ // AUTH_SECRET`, the opposite precedence to the `||` this used to sign with, so
+ // a machine with both set signed every token here with the wrong key and 401'd
+ // the file. The preload scrubs both; this makes the file correct on its own.
+ delete process.env.AGENSIS_AUTH_SECRET;
+ process.env.AUTH_SECRET = 'tenants-admin-test-secret';
+ authSecret = process.env.AUTH_SECRET;
  // The owner address the gate compares against. Set here rather than read from
  // the environment so the tests never depend on the developer's own .env — and
  // so the "unset" case below can clear it deliberately.
