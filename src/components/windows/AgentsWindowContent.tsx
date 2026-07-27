@@ -92,6 +92,9 @@ import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { SkillChipsInput } from '../agents/SkillChipsInput';
+import { buildSkillEntries } from '../../lib/skillsView';
+import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import {
@@ -350,6 +353,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     getSystemCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
   }, []);
 
+  // What the Skills field offers, computed once for BOTH forms. The union of
+  // everything the workspace knows a skill name for — advertised by a live
+  // daemon, configured on any agent, shipped by agensis, or a library on the
+  // backend host. The old field only ever knew the last of those, so a skill
+  // sitting on the agent next to this one couldn't be suggested.
+  const skillSuggestions = useMemo(
+    () => buildSkillSuggestions(buildSkillEntries(agents, connections), capabilities),
+    [agents, connections, capabilities],
+  );
+
   const resetNewAgentFields = () => {
     setNewName('');
     setNewAvatar(DEFAULT_AGENT_AVATAR);
@@ -594,6 +607,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 model={newModel}
                 runMode={newRunMode}
                 capabilities={capabilities}
+                skillSuggestions={skillSuggestions}
                 onNameChange={setNewName}
                 onAvatarChange={(value) => {
                   setNewAvatar(value);
@@ -864,6 +878,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onDelete={() => handleDelete(selectedAgent.id)}
                   onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
                   capabilities={capabilities}
+                  skillSuggestions={skillSuggestions}
                   webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                   connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
                   roster={agents}
@@ -898,6 +913,7 @@ function AgentForm({
   model,
   runMode,
   capabilities,
+  skillSuggestions,
   onNameChange,
   onAvatarChange,
   onOpenPetAvatarChange,
@@ -938,6 +954,8 @@ function AgentForm({
   sandboxProvider: string;
   sandboxConfig: string;
   capabilities: SystemCapabilities | null;
+  /** Every skill name this workspace knows, for the Skills field's menu. */
+  skillSuggestions: SkillSuggestion[];
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
   onOpenPetAvatarChange: (pet: OpenPet) => void;
@@ -1200,21 +1218,17 @@ function AgentForm({
 
       <Field>
         <FieldLabel htmlFor="agent-skills">Skills</FieldLabel>
-        <Input
+        {/* Chips, not a comma-separated string the human has to punctuate. The
+            row of quick-pick buttons this replaces offered only the backend
+            host's skill libraries; the menu below the field offers those AND
+            every skill the workspace's agents actually carry, and still accepts
+            a name nothing has heard of — this field is how a new one arrives. */}
+        <SkillChipsInput
           id="agent-skills"
           value={skills}
-          onChange={e => onSkillsChange(e.target.value)}
-          placeholder="codex-user-skills, claude-agents"
+          onChange={onSkillsChange}
+          suggestions={skillSuggestions}
         />
-        {capabilities && (
-          <div className="flex flex-wrap gap-1">
-            {capabilities.skills.filter(skill => skill.available).slice(0, 10).map(skill => (
-              <Button key={skill.id} type="button" variant="outline" size="xs" onClick={() => onSkillsChange(addToken(skills, skill.id))}>
-                {skill.label}
-              </Button>
-            ))}
-          </div>
-        )}
       </Field>
 
       {extraSections}
@@ -1288,6 +1302,7 @@ function AgentDetailPane({
   onDelete,
   onToggleEnabled,
   capabilities,
+  skillSuggestions,
   webhooks,
   connections,
   roster,
@@ -1307,6 +1322,8 @@ function AgentDetailPane({
   onDelete: () => void;
   onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
+  /** Passed straight through to the Skills field; built once for both forms. */
+  skillSuggestions: SkillSuggestion[];
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
   /**
@@ -1496,6 +1513,7 @@ function AgentDetailPane({
             model={editModel}
             runMode={editRunMode}
             capabilities={capabilities}
+            skillSuggestions={skillSuggestions}
             onNameChange={setEditName}
             onAvatarChange={(value) => {
               setEditAvatar(value);
