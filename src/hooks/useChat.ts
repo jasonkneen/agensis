@@ -511,6 +511,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         messageId: userMsg.id,
         content,
         threadParentId: threadParentId ?? null,
+        // Option A: main-box messages (threadParentId null) auto-thread the agent's
+        // reply under this message server-side; follow-ups already pass threadParentId.
+        // The sub-thread panel (useSubThreads) omits this flag, so it stays flat.
+        autoThread: true,
         messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
         memory: memoryContext,
         documents: docContext,

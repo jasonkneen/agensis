@@ -4012,6 +4012,21 @@ function taskStatusOnDispatch(current) {
  return current === 'todo' ? 'in_progress' : current;
 }
 
+// Option A auto-threading decision: resolve the thread_parent_id an agent's reply
+// should be written under for a dispatch request. An explicit `threadParentId`
+// (a follow-up typed in an open thread panel) always wins. Otherwise, when the
+// chat UI flags a plain main-box message with `autoThread` and supplies the
+// just-posted `messageId`, thread the reply under that message so the main
+// timeline stays a list of topics with each answer tucked beneath — only
+// genuinely new (unrelated) messages stay on the main timeline. Callers that omit
+// `autoThread` (sub-thread sessions, MCP, legacy clients) keep flat replies.
+// Returns null when there's nothing to thread under.
+function resolveDispatchThreadParent({ threadParentId, autoThread, messageId } = {}) {
+ if (threadParentId) return threadParentId;
+ if (autoThread && messageId) return String(messageId);
+ return null;
+}
+
 // Whether a just-written message should be mirrored back to a task's comments:
 // only a REAL agent reply that lives inside a subthread (thread_parent_id set)
 // qualifies. Humans, main-timeline (non-subthread) replies, and the streaming
@@ -12939,7 +12954,7 @@ function createApp() {
  app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
   try {
    if (await dbRateLimitBlocked(res, dispatchRateLimiter, dispatchDbRateLimiter, req.userId || clientIpFromReq(req))) return;
-   const { workspaceId, sessionId, content, threadParentId } = req.body || {};
+   const { workspaceId, sessionId, content, threadParentId, messageId, autoThread } = req.body || {};
    if (!workspaceId || !sessionId || !content) {
     return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
    }
@@ -12998,10 +13013,14 @@ function createApp() {
    if (!willDispatch) {
     return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
    }
+   // Option A auto-threading: thread the agent's reply under the human's main-box
+   // message when the UI asks for it (see resolveDispatchThreadParent). Follow-ups
+   // already carry threadParentId; sub-thread/MCP/legacy callers stay flat.
+   const effectiveThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
    // Fire and forget: the conversation advances in the background as each agent
    // message lands and is streamed to clients over realtime. Holding the POST
    // open for the whole multi-turn chain would block the user's UI.
-   void continueConversation({ workspaceId, sessionId, threadParentId: threadParentId || null })
+   void continueConversation({ workspaceId, sessionId, threadParentId: effectiveThreadParentId })
     .catch((error) => console.error('continueConversation (dispatch) failed', error));
    // Diagnostic only (nothing branches on it), but ordered the way
    // pickMentionNextAgent actually decides: an explicit mention outranks the
@@ -14887,6 +14906,7 @@ module.exports = {
   agentRuntimePayload,
   resolveRunTarget,
   taskStatusOnDispatch,
+  resolveDispatchThreadParent,
   shouldMirrorAgentMessage,
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
