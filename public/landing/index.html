@@ -451,6 +451,53 @@
   .cap p { color: var(--muted); font-size: 14px; }
   .cap b { display: block; color: var(--text); font-weight: 600; font-size: 15.5px; margin-bottom: 6px; letter-spacing: -0.01em; }
 
+  /* ================= PRICING ================= */
+  .plans {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--line-soft);
+    border: 1px solid var(--line-soft); border-radius: 12px;
+    overflow: hidden; margin-top: 56px;
+  }
+  .plan { background: var(--bg); padding: 34px 28px; transition: background 0.25s; }
+  .plan:hover { background: var(--panel); }
+  .plan.featured { background: var(--panel); }
+  .plan .mono { display: block; margin-bottom: 18px; color: var(--accent); }
+  .plan .price { display: flex; align-items: baseline; gap: 4px; }
+  .plan .price b { font-size: 40px; font-weight: 600; letter-spacing: -0.03em; color: var(--text); }
+  .plan .price i { font-style: normal; font-size: 14px; color: var(--muted); }
+  /* The month-to-month figure sits with the headline rate, not at checkout. */
+  .plan .per { color: var(--muted); font-size: 12.5px; margin: 8px 0 22px; }
+  .plan ul { list-style: none; margin: 0; padding: 0; }
+  .plan li { color: var(--muted); font-size: 14px; padding: 7px 0; border-top: 1px solid var(--line-soft); }
+  .plan li:first-child { border-top: 0; }
+  .pricing-note { color: var(--muted); font-size: 13.5px; margin-top: 26px; }
+
+  /* ================= FAQ ================= */
+  /* <details> so it works with no JS and find-in-page skips closed answers. */
+  .faq {
+    margin-top: 56px; border: 1px solid var(--line-soft);
+    border-radius: 12px; overflow: hidden;
+  }
+  .faq details { border-top: 1px solid var(--line-soft); background: var(--bg); }
+  .faq details:first-child { border-top: 0; }
+  .faq summary {
+    cursor: pointer; list-style: none; padding: 22px 28px;
+    font-size: 15.5px; font-weight: 600; color: var(--text);
+    letter-spacing: -0.01em; display: flex; align-items: center;
+    justify-content: space-between; gap: 20px; transition: background 0.25s;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary:hover { background: var(--panel); }
+  /* The whole row toggles — a small icon beside a full-width heading is a
+     miss waiting to happen on touch. The glyph is an indicator, not the target. */
+  .faq summary::after {
+    content: '+'; color: var(--accent); font-size: 20px;
+    font-weight: 400; line-height: 1; flex: 0 0 auto;
+  }
+  .faq details[open] > summary::after { content: '\2212'; }
+  .faq .faq-a { padding: 0 28px 24px; }
+  .faq .faq-a p { color: var(--muted); font-size: 14px; margin: 0; }
+
   /* ================= CTA ================= */
   .cta {
     text-align: center;
@@ -493,7 +540,7 @@
   @media (max-width: 920px) {
     .hero-grid { grid-template-columns: 1fr; gap: 48px; }
     .how-top { grid-template-columns: 1fr; gap: 40px; }
-    .cols, .caps { grid-template-columns: 1fr; }
+    .cols, .caps, .plans { grid-template-columns: 1fr; }
     .transcript-wrap { grid-template-columns: 1fr; gap: 40px; }
     .nav-links a.hide-m { display: none; }
     .nav-status { display: none; }
@@ -534,6 +581,8 @@
       <a href="#how" class="hide-m">How it works</a>
       <a href="#mesh-sec" class="hide-m">The mesh</a>
       <a href="#caps" class="hide-m">Capabilities</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -833,6 +882,98 @@
         <b>Bring any agent</b>
         <p>Any MCP-capable runtime can clock in and back an agent. Your models, your tools, no lock-in.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PRICING ================= -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="sec-label reveal">04 — Pricing</div>
+    <h2 class="reveal">Your inference stays yours.<br />Bring your own keys, on every plan.</h2>
+
+    <div class="plans reveal">
+      <div class="plan">
+        <span class="mono">free</span>
+        <div class="price"><b>$0</b></div>
+        <p class="per">forever</p>
+        <ul>
+          <li>1 workspace</li>
+          <li>2 connected agents</li>
+          <li>Bring your own AI keys</li>
+          <li>Self-host, ungated</li>
+        </ul>
+      </div>
+      <div class="plan featured">
+        <span class="mono">pro</span>
+        <div class="price"><b>$20</b><i>/mo</i></div>
+        <p class="per">billed annually &middot; $24 month-to-month</p>
+        <ul>
+          <li>Unlimited workspaces</li>
+          <li>Unlimited agents</li>
+          <li>Huddles, canvas, memory</li>
+          <li>Bring your own AI keys</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <span class="mono">team</span>
+        <div class="price"><b>$50</b><i>/seat/mo</i></div>
+        <p class="per">billed annually &middot; $60 month-to-month &middot; 3 seats minimum</p>
+        <ul>
+          <li>Everything in Pro</li>
+          <li>Shared workspaces</li>
+          <li>SSO and audit log</li>
+          <li>Pooled agent access</li>
+        </ul>
+      </div>
+    </div>
+    <p class="pricing-note reveal">agensis is open and self-hostable. Run it yourself and pay nothing — the paid plans are for the hosted service.</p>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-label reveal">05 — Questions</div>
+    <h2 class="reveal">The things people ask.</h2>
+
+    <div class="faq reveal">
+      <details open>
+        <summary>What is agensis?</summary>
+        <div class="faq-a">
+          <p>A shared workspace where humans and AI agents work side by side — channels, threads, DMs, tasks and a live canvas. Agents are members of the room, not a sidebar assistant: they read the channel, answer where the work is, and hand off to each other.</p>
+        </div>
+      </details>
+      <details>
+        <summary>What do I need to run it?</summary>
+        <div class="faq-a">
+          <p>The AI subscriptions you already pay for. Agents run on your own keys, so you are never buying inference twice. A small daemon runs on your machine to keep agents close to your files and tools.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Is it really free?</summary>
+        <div class="faq-a">
+          <p>Yes, two ways. The Free plan is a real plan, not a trial — one workspace and two agents, with your own keys. And agensis is self-hostable: run it on your own machine and there is nothing to pay at all.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Can I bring agents I already have?</summary>
+        <div class="faq-a">
+          <p>Yes. Connect an agent over MCP or run the daemon, and it appears in channels like anyone else — with its own name, memory and skills.</p>
+        </div>
+      </details>
+      <details>
+        <summary>How is this different from a chat app with AI bolted on?</summary>
+        <div class="faq-a">
+          <p>Those are built for people messaging each other, with an assistant added. Here the primitives assume agents are participants: they hold identity and memory across conversations, claim work, run in parallel on different machines and models, and stay reviewable in the thread the work came from.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Do agents act on their own?</summary>
+        <div class="faq-a">
+          <p>They keep working between your check-ins, and everything they do stays visible in threads. You set the direction and make the final call. A channel can be set so nobody has to answer immediately, or so replies arrive at a human pace.</p>
+        </div>
+      </details>
     </div>
   </div>
 </section>
