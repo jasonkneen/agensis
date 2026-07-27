@@ -1618,7 +1618,9 @@
  /* 1.8rem, down from 2.15. These rows are most of the sidebar, so their height
     IS the sidebar's vertical rhythm — trimming anything else first would have
     moved almost nothing. ~29px still clears a comfortable pointer target. */
- min-height: 1.8rem;
+ /* 1.55, not 1.8: with ten of these stacked the extra 0.25rem each is most of
+    a screenful of empty nav. The icon is 1rem, so this still clears it. */
+ min-height: 1.55rem;
  gap: 0.6rem;
  justify-content: flex-start !important;
  padding-inline: 0.75rem;
@@ -1661,7 +1663,9 @@
  display: grid !important;
  grid-template-columns: minmax(0, 1fr) auto;
  align-items: center;
- min-height: 3.25rem;
+ /* ONE line. 3.25rem was sized for a stacked name-over-handle row, which wraps
+    the moment a name is long and makes the DM list twice the height it needs. */
+ min-height: 2.1rem;
  overflow: hidden;
  padding: 0.2rem 0.35rem;
 }
@@ -2159,10 +2163,14 @@
    elsewhere gets its own edge too (sidebar cards, avatars), so a plain
    unbordered row here read as an inconsistency rather than "quiet by design". */
 :root[data-ui-theme="neo"] .thread-widget-item-row {
- border: 1.5px solid var(--neo-edge);
- border-radius: 8px;
- background: var(--card);
- margin-bottom: 3px;
+ /* NO per-item border. The card around the widget already carries neo's edge;
+    boxing every to-do inside it made a list of six items read as six nested
+    cards. The rows keep their own background and hover so they are still
+    distinct rows, just not framed ones. */
+ border: 0;
+ border-radius: 6px;
+ background: transparent;
+ margin-bottom: 1px;
 }
 
 :root[data-ui-theme="neo"] .thread-widget-item-row:hover {
@@ -4307,6 +4315,10 @@ select {
 
 /* ── TinyWorld: section-header card ── */
 :root[data-ui-theme="tinyworld"] .sidebar-section-header {
+ /* A SECTION HEADING IS NOT A CONTROL. tinyworld frames its controls, and
+    applying that to every heading turned the sidebar into a stack of identical
+    boxes with no hierarchy left. Selections keep their frame — that is what the
+    frame is FOR: showing which one you are on. */
  position: relative;
  overflow: hidden;
  box-sizing: border-box;
@@ -4314,9 +4326,9 @@ select {
  max-width: calc(100% - 6px) !important;
  margin-right: 6px !important;
  margin-bottom: 4px !important;
- border-width: 1px !important;
+ border-width: 0 !important;
  border-style: solid !important;
- border-color: var(--tw-control-outline) !important;
+ border-color: transparent !important;
  border-radius: 10px !important;
  min-height: 2rem;
  color: var(--text-secondary) !important;
@@ -4747,6 +4759,13 @@ select {
    disagreeing about whether the wallpaper shows through, which is exactly the
    seam you see first. Brutal is flat ink on flat colour; a translucent rail is
    a different design language sharing an edge with this one. */
+:root[data-ui-theme="neo"] [data-workspace-rail] {
+ /* One flat colour for the whole rail rather than the page background showing
+    through it. The rail is a distinct column of chrome; sharing the canvas
+    colour made it read as part of the page it sits beside. */
+ background: var(--secondary) !important;
+}
+
 :root[data-ui-theme="neo"] [data-workspace-rail],
 /* `.agensis-glass-panel` is the SHARED floating-panel surface (the command
    palette, the mention pickers, the composer, and the presence popover — the

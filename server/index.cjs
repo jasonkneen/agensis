@@ -8495,13 +8495,25 @@ async function handleAgentJobStep(ws, message) {
  // Missing responseMessageId means the reply bubble is unknown; post the step at
  // the top level rather than dropping it.
  const responseMessageId = metadata.responseMessageId || null;
- let threadParentId = responseMessageId;
+ // responseMessageId comes from JOB METADATA, i.e. from the daemon, i.e. from a
+ // client. The lookup below asked whether that row has a PARENT, and answered
+ // "no parent" identically whether the row has none or the row does not exist —
+ // so a stale or optimistic id fell through and was written straight into
+ // thread_parent_id, which is a foreign key. Every tool step in the job then
+ // died on messages_thread_parent_id_fkey.
+ //
+ // Now existence and parentage are one question: no row means no parent id at
+ // all, and the step posts at the top level. A step that cannot be nested is
+ // still worth showing; a step that cannot be WRITTEN is lost.
+ let threadParentId = null;
  if (responseMessageId) {
   const parentRows = await getDb().unsafe(
    'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
    [responseMessageId, job.session_id],
   );
-  if (parentRows[0] && parentRows[0].thread_parent_id) threadParentId = parentRows[0].thread_parent_id;
+  if (parentRows[0]) {
+   threadParentId = parentRows[0].thread_parent_id || responseMessageId;
+  }
  }
  // A tool step is the agent demonstrably doing work, so — unlike a content-free
  // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
@@ -8609,7 +8621,14 @@ async function handleAgentJobSegment(ws, message) {
  // its final answer is broadcast, so falling back to metadata.threadParentId (null
  // for a channel turn) would drop every intermediate block into the channel. The
  // row-derived parent below still wins whenever a placeholder exists.
- let threadParentId = metadata.workThreadParentId || metadata.threadParentId || null;
+ // Same disease as the tool-step path: these ids come from job metadata, i.e.
+ // from the daemon. Verified against a real row in THIS session before any of
+ // them reaches the foreign key; an unknown id posts flat rather than killing
+ // the write.
+ let threadParentId = await verifyThreadParent(
+  metadata.workThreadParentId || metadata.threadParentId || null,
+  job.session_id,
+ );
  if (responseMessageId) {
   const finalizedRows = await getDb().unsafe(
    `update messages

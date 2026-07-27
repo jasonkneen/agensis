@@ -55,7 +55,7 @@ function SidebarElapsed({ anchorAt, jobs }: { anchorAt: number; jobs: number }) 
       title={workingTitle(jobs, elapsed)}
     >
       <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-primary" />
-      <span className="text-[12px] font-semibold tabular-nums leading-none">{elapsed}</span>
+      <span className="text-[11.5px] font-bold tabular-nums leading-none tracking-tight">{elapsed}</span>
     </span>
   );
 }
