@@ -645,13 +645,15 @@ function codeOnly(source) {
 }
 
 test('no join code branches on User-Agent', () => {
-  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
-  const start = source.indexOf('// Join links — ONE short-lived, single-use URL');
-  const end = source.indexOf('// --- Connect an MCP client (one workspace token)');
-  assert.ok(start > 0 && end > start, 'the join link block must still be findable');
+  // The join routes are now their own module (Wave 2 of the index.cjs
+  // reduction), so this is the whole file rather than a slice between two
+  // comment markers — the old end marker stayed in index.cjs when the start
+  // marker moved, which put `end` BEFORE `start` in the concatenated lane and
+  // silently emptied the block being checked.
+  const joinRoutes = fs.readFileSync(path.join(root, 'server/join-pages-routes.cjs'), 'utf8');
 
   for (const [where, block] of [
-    ['the join routes', codeOnly(source.slice(start, end))],
+    ['the join routes', codeOnly(joinRoutes)],
     ['the renderer', codeOnly(fs.readFileSync(path.join(root, 'server/join-page.cjs'), 'utf8'))],
   ]) {
     // Every way an Express handler can reach the header.

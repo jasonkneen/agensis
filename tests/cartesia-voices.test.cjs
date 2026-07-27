@@ -184,7 +184,7 @@ test('the preview route never takes its transcript from the request body', async
   // The one property that stops an authenticated button being a free metered
   // TTS endpoint. Asserted against the source because the guarantee is the
   // ABSENCE of a read, which no runtime call can demonstrate.
-  const src = await readFile(path.join(root, 'server/index.cjs'), 'utf8');
+  const src = require('./helpers/fly-lane.cjs').flyLaneSource();
   const route = src.slice(src.indexOf("app.post('/backend/tts/preview'"));
   const handler = route.slice(0, route.indexOf('app.post(', 10));
   assert.doesNotMatch(handler, /\btranscript\b/, 'the preview must not accept caller-supplied text');
@@ -193,7 +193,7 @@ test('the preview route never takes its transcript from the request body', async
 });
 
 test('the voice routes require auth and report a missing key as configuration', async () => {
-  const src = await readFile(path.join(root, 'server/index.cjs'), 'utf8');
+  const src = require('./helpers/fly-lane.cjs').flyLaneSource();
   assert.match(src, /app\.get\('\/backend\/tts\/voices', requireAuth/);
   assert.match(src, /app\.post\('\/backend\/tts\/preview', requireAuth/);
   // An unconfigured backend must render an explanatory panel, not an error.
@@ -201,7 +201,7 @@ test('the voice routes require auth and report a missing key as configuration', 
 });
 
 test('the API key is never sent to the browser', async () => {
-  const src = await readFile(path.join(root, 'server/index.cjs'), 'utf8');
+  const src = require('./helpers/fly-lane.cjs').flyLaneSource();
   // The env var may be READ in exactly one place (comments do not count), and
   // the only thing that value is ever put into is the outbound header.
   const reads = src.match(/process\.env\.CARTESIA_API_KEY/g) || [];

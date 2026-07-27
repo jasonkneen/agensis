@@ -122,6 +122,13 @@ const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
 const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
 const { mountOrbWebhooksRoutes } = require('./orb-webhooks-routes.cjs');
+const { mountTtsRoutes } = require('./tts-routes.cjs');
+const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
+const { mountConnectionsRoutes } = require('./connections-routes.cjs');
+const { mountSessionsRoutes } = require('./sessions-routes.cjs');
+const { mountAgentWebhooksRoutes } = require('./agent-webhooks-routes.cjs');
+const { mountPetsRoutes } = require('./pets-routes.cjs');
+const { mountHealthRoutes } = require('./health-routes.cjs');
 const {
  detectSkillLibraries,
  mergeSlashCommands,
@@ -10193,105 +10200,14 @@ function createApp() {
  // Auth is enforced at the route boundary and again per workspace-scoped
  // operation. Keep this server-side; client filters are only UX hints.
 
- app.get('/backend/health', async (_req, res) => {
-  try {
-   await getDb().unsafe('select 1');
-   // The DB answering is not enough: if the runtime schema migration failed every
-   // route behind the gate below is broken, so a 200 here would keep Fly routing
-   // traffic to a dead instance. fly.toml's check only looks at the HTTP status.
-   if (runtimeSchemaError) {
-    return res.status(503).json({ ok: false, schema: 'failed', error: runtimeSchemaError.message || String(runtimeSchemaError) });
-   }
-   res.json({ ok: true });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // CSP violation sink. The Content-Security-Policy-Report-Only header on the
- // Netlify side is inert without somewhere to report TO — without this, "ship
- // report-only, watch the violations, then enforce" collects nothing and the
- // policy can never be safely promoted. Deliberately:
- //  - unauthenticated: the browser posts these with no credentials, by spec;
- //  - registered ABOVE the runtime-schema gate: it needs no DB, and a violation
- //    report is most interesting precisely when the rest of the API is broken;
- //  - rate limited per IP and body-capped, since it is an open endpoint;
- //  - always 204, so a misbehaving report can never surface to a user.
- app.post(
-  '/backend/csp-report',
-  express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '16kb' }),
-  (req, res) => {
-   if (rateLimitBlocked(res, cspReportRateLimiter, clientIpFromReq(req))) return;
-   try {
-    const body = req.body || {};
-    // Level 2 sends {"csp-report": {...}}; the Reporting API sends an array.
-    const reports = Array.isArray(body) ? body : [body['csp-report'] || body];
-    for (const report of reports.slice(0, 10)) {
-     if (!report || typeof report !== 'object') continue;
-     const directive = report['effective-directive'] || report['violated-directive'] || report.effectiveDirective || '';
-     const blocked = report['blocked-uri'] || report.blockedURL || '';
-     const documentUri = report['document-uri'] || report.documentURL || '';
-     console.warn('[csp] violation:', JSON.stringify({ directive, blocked, documentUri }));
-    }
-   } catch (error) {
-    console.warn('[csp] malformed report:', error?.message || error);
-   }
-   res.status(204).end();
-  },
- );
-
- app.use('/backend', async (_req, res, next) => {
-  try {
-   await runtimeSchemaReady;
-   next();
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
+ mountHealthRoutes(app, {
+  ...coreDeps(), cspReportRateLimiter,
+  getRuntimeSchemaError: () => runtimeSchemaError,
  });
 
  mountFarmRoutes(app, { ...coreDeps(), cancelFarmAgentJob, createAgentConnectToken, createPostgresFarmIntegrationStore, disableFarmIntegrationAgents, disconnectAgentDaemons, dispatchFarmAgentJob, farmDeviceRateLimiter, getFarmAgentJob, getFarmIntegrationCore, hashAgentToken, isConnectionSocketLive, normalizeAgentBackendBaseUrl, normalizeAgentPermissionMode, normalizeBaseUrl, publicAgentConnection, publicFarmEnrolledAgent, requestBaseUrl });
 
- app.get('/backend/openpets/catalog', requireAuth, async (_req, res) => {
-  try {
-   let payload = { version: 3, page: 0, pageSize: 0, pets: [] };
-   let remoteError = null;
-   try {
-    const response = await fetch(OPENPETS_CATALOG_URL, {
-     headers: { 'User-Agent': 'agensis/1.0 (+https://openpets.dev)' },
-    });
-    if (!response.ok) {
-     remoteError = new Error(`OpenPets catalog returned ${response.status}`);
-    } else {
-     payload = await response.json();
-    }
-   } catch (error) {
-    remoteError = error;
-   }
-
-   const merged = mergeLocalCodexPets(payload);
-   if (remoteError && merged.pets.length === 0) return jsonError(res, 502, remoteError);
-   res.setHeader('Cache-Control', 'public, max-age=120');
-   res.json({ data: merged, error: null });
-  } catch (error) {
-   jsonError(res, 502, error);
-  }
- });
-
- app.get('/backend/codex-pets/:petDir/:asset', async (req, res) => {
-  try {
-   const petDir = path.resolve(CODEX_PETS_ROOT, String(req.params.petDir || ''));
-   const assetName = path.basename(String(req.params.asset || ''));
-   const assetPath = path.resolve(petDir, assetName);
-   if (!assetName || !/\.(webp|png|gif|jpe?g)$/i.test(assetName)) return jsonError(res, 404, new Error('Pet asset not found'));
-   if (!isPathInside(CODEX_PETS_ROOT, petDir) || !isPathInside(petDir, assetPath)) return jsonError(res, 404, new Error('Pet asset not found'));
-   if (!fs.existsSync(path.join(petDir, 'pet.json')) || !fs.existsSync(assetPath)) return jsonError(res, 404, new Error('Pet asset not found'));
-   res.setHeader('Content-Type', contentTypeForImageAsset(assetPath));
-   res.setHeader('Cache-Control', 'public, max-age=3600');
-   fs.createReadStream(assetPath).pipe(res);
-  } catch (error) {
-   jsonError(res, 500, error);
-  }
- });
+ mountPetsRoutes(app, { ...coreDeps(), CODEX_PETS_ROOT, OPENPETS_CATALOG_URL, contentTypeForImageAsset, isPathInside, mergeLocalCodexPets });
 
  mountSystemRoutes(app, { ...coreDeps(), detectCapabilities, inspectProjectPath, mergeSlashCommands, skillContentPayload, skillLibraryPayload, skillRateLimiter });
 
@@ -10301,172 +10217,7 @@ function createApp() {
   ...coreDeps(),
   isWithinAllowedProjectRoot, listProjectFiles, workspaceProjectFileSources,
  });
- app.post('/backend/netlify-deploy-hook', (req, res) => {
-  try {
-   const secret = process.env.NETLIFY_WEBHOOK_JWS_SECRET || '';
-   const signature = req.get('X-Webhook-Signature') || req.get('x-webhook-signature') || '';
-   if (secret) {
-    if (!verifyNetlifyDeploySignature(signature, req.rawBody, secret)) {
-     return res.status(401).json({ data: null, error: 'Invalid signature' });
-    }
-   } else if (process.env.NODE_ENV === 'production') {
-    // Fail closed in production: unsigned deploy webhooks would let anyone
-    // spoof "new version — reload" to all connected clients.
-    console.error('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — rejecting (production fail-closed)');
-    return res.status(503).json({
-     data: null,
-     error: 'Deploy webhook secret is not configured',
-    });
-   } else {
-    // Dev/test only: accept so local wiring works before the secret is set.
-    console.warn('[netlify-hook] NETLIFY_WEBHOOK_JWS_SECRET not set — accepting unsigned deploy webhook (non-production)');
-   }
-
-   const deploy = req.body || {};
-   // Netlify's "Deploy succeeded" event is the published-and-live signal; its body
-   // reports state 'ready'. If some other event is wired here, only broadcast on a
-   // ready/published state so we never nag on a build-started or failed hook.
-   const state = typeof deploy.state === 'string' ? deploy.state.toLowerCase() : '';
-   const isPublished = state === '' || state === 'ready' || state === 'current';
-   if (!isPublished) {
-    return res.status(200).json({ data: { ignored: true, state }, error: null });
-   }
-
-   const payload = {
-    commit: deploy.commit_ref || deploy.commit_url || null,
-    branch: deploy.branch || null,
-    site: deploy.name || null,
-    url: deploy.deploy_ssl_url || deploy.ssl_url || deploy.url || null,
-    at: deploy.published_at || deploy.updated_at || null,
-   };
-   const delivered = broadcastGlobal({ type: 'system', event: 'deploy_published', payload });
-   console.log(`[netlify-hook] deploy_published broadcast to ${delivered} client(s)`, payload.commit || '');
-   return res.status(200).json({ data: { broadcast: delivered }, error: null });
-  } catch (error) {
-   // Never 500 on Netlify's own request — that risks the hook being auto-disabled.
-   console.error('[netlify-hook] handler error', error);
-   return res.status(200).json({ data: { error: 'handled' }, error: null });
-  }
- });
-
- app.post('/backend/agent-webhooks', requireAuth, async (req, res) => {
-  try {
-   const { workspace_id: workspaceId, agent_id: agentId, name } = req.body || {};
-   if (!workspaceId || !name) return jsonError(res, 400, new Error('workspace_id and name are required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
-   if (agentId) {
-    const agentRows = await getDb().unsafe(
-     'select id from workspace_agents where id = $1 and workspace_id = $2 limit 1',
-     [agentId, workspaceId],
-    );
-    if (!agentRows[0]) return jsonError(res, 404, new Error('Agent not found in this workspace'));
-   }
-   // F10: store only the hash — the trigger route below does a dual-path lookup
-   // (inviteTokenLookupParams) so legacy plaintext rows keep working during the
-   // transition. The plaintext is returned ONCE here, on creation.
-   const token = crypto.randomBytes(32).toString('base64url');
-   // Orb config is optional on create (an omitted field keeps the column default,
-   // which reproduces the pre-orb behaviour) but must be settable here, or an orb
-   // created while the config route is unreachable comes back generic/unsigned
-   // with no prompt and the operator cannot tell why.
-   const config = normalizeOrbConfigInput(req.body || {});
-   const rows = await getDb().unsafe(
-    `insert into agent_webhooks
-         (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
-         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
-         returning *`,
-    [
-     workspaceId,
-     agentId || null,
-     String(name).trim(),
-     hashAgentToken(token),
-     config.provider,
-     config.prompt,
-     config.payloadFields,
-     config.routing,
-     config.rateLimitPerHour,
-    ],
-   );
-   notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
-   res.json({ data: { ...rows[0], token }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Orb configuration (plans/021). Guards are deliberately identical to the create
- // route above — requireAuth plus enforceWorkspaceRole(..., 'manage') — rather
- // than a new limiter: 'manage' is already the access level agent_webhooks
- // carries in DB_TABLE_ACCESS, and the only unauthenticated surface in this
- // feature is the trigger route, which has webhookRateLimiter plus its own
- // per-orb hourly cap.
- //
- // `signing_secret` is WRITE-ONLY. It goes to the workspace vault, never to a
- // column on agent_webhooks (which the frontend reads with select('*')), and is
- // never returned. An empty string clears it.
- app.put('/backend/agent-webhooks/:id', requireAuth, async (req, res) => {
-  try {
-   const webhookId = String(req.params.id || '').trim();
-   if (!webhookId) return jsonError(res, 400, new Error('webhook id is required'));
-   const existing = await getDb().unsafe('select * from agent_webhooks where id = $1 limit 1', [webhookId]);
-   const orb = existing[0];
-   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
-   await enforceWorkspaceRole(req.userId, orb.workspace_id, 'manage');
-
-   const config = normalizeOrbConfigInput(req.body || {}, orb);
-   let hasSecret = orb.has_signing_secret === true;
-   if (typeof req.body?.signing_secret === 'string') {
-    const secret = req.body.signing_secret.trim();
-    if (secret && secret.length < 16) {
-     return jsonError(res, 400, new Error('A signing secret must be at least 16 characters'));
-    }
-    await setWorkspaceSecretValue(
-     orb.workspace_id,
-     orbSecretKey(orb.id),
-     secret,
-     req.userId,
-     `Signing secret for orb "${String(orb.name || '').slice(0, 80)}"`,
-    );
-    hasSecret = Boolean(secret);
-   }
-   // A non-generic provider with no secret can never verify a delivery, so the
-   // trigger route answers 503. Refuse the configuration that guarantees that
-   // instead of letting the operator discover it from a provider's retry log.
-   if (config.provider !== 'generic' && !hasSecret) {
-    return jsonError(res, 400, new Error(
-     `Provider "${config.provider}" signs its deliveries, so this orb needs a signing secret. `
-     + 'Set signing_secret in the same request, or leave the provider as generic.',
-    ));
-   }
-
-   const name = typeof req.body?.name === 'string' && req.body.name.trim()
-    ? req.body.name.trim().slice(0, 200)
-    : orb.name;
-   const enabled = typeof req.body?.enabled === 'boolean' ? req.body.enabled : orb.enabled;
-   const rows = await getDb().unsafe(
-    `update agent_webhooks
-          set name = $2, enabled = $3, provider = $4, prompt = $5, payload_fields = $6::jsonb,
-              routing = $7, rate_limit_per_hour = $8, has_signing_secret = $9, updated_at = now()
-        where id = $1
-        returning *`,
-    [
-     orb.id,
-     name,
-     enabled,
-     config.provider,
-     config.prompt,
-     config.payloadFields,
-     config.routing,
-     config.rateLimitPerHour,
-     hasSecret,
-    ],
-   );
-   notifyDbSubscribers('agent_webhooks', 'UPDATE', rows);
-   res.json({ data: rows[0], error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
+ mountAgentWebhooksRoutes(app, { ...coreDeps(), DB_TABLE_ACCESS, broadcastGlobal, hashAgentToken, inviteTokenLookupParams, normalizeOrbConfigInput, orbSecretKey, setWorkspaceSecretValue, verifyNetlifyDeploySignature, webhookRateLimiter });
 
  mountWorkspacesRoutes(app, {
   ...coreDeps(),
@@ -10483,217 +10234,13 @@ function createApp() {
  // come from stored upload sizes (uploaded_files.size) plus agent memory file
  // content (agent_memory_files.byte_size); counts are workspace-scoped. Messages
  // have no workspace_id column, so they are scoped via their chat_sessions.
- app.get('/backend/workspace/:id/usage', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    `select
-        (select coalesce(sum(size), 0)::bigint from uploaded_files where workspace_id = $1) as upload_bytes,
-        (select count(*)::bigint from uploaded_files where workspace_id = $1) as file_count,
-        (select coalesce(sum(byte_size), 0)::bigint from agent_memory_files where workspace_id = $1) as memory_bytes,
-        (select count(*)::bigint from agent_memory_files where workspace_id = $1) as memory_file_count,
-        (select count(*)::bigint from documents where workspace_id = $1) as document_count,
-        (select count(*)::bigint from tasks where workspace_id = $1) as task_count,
-        (select count(*)::bigint from workspace_agents where workspace_id = $1) as agent_count,
-        (select count(*)::bigint
-           from messages m
-           join chat_sessions s on s.id = m.session_id
-          where s.workspace_id = $1 and s.deleted_at is null and m.deleted_at is null) as message_count`,
-    [workspaceId],
-   );
-   const row = rows[0] || {};
-   const uploadBytes = Number(row.upload_bytes || 0);
-   const memoryBytes = Number(row.memory_bytes || 0);
-   res.json({
-    data: {
-     workspaceId,
-     uploadBytes,
-     memoryBytes,
-     totalBytes: uploadBytes + memoryBytes,
-     counts: {
-      files: Number(row.file_count || 0),
-      memoryFiles: Number(row.memory_file_count || 0),
-      documents: Number(row.document_count || 0),
-      tasks: Number(row.task_count || 0),
-      agents: Number(row.agent_count || 0),
-      messages: Number(row.message_count || 0),
-     },
-    },
-    error: null,
-   });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // Cold-load snapshot: one round-trip for the heaviest workspace-scoped lists
- // so the SPA does not open ~15 parallel queries before first paint.
- app.get('/backend/workspaces/:id/bootstrap', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.params.id || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const data = await buildWorkspaceBootstrap(workspaceId, req.userId);
-   res.json({ data, error: null });
-  } catch (error) {
-   const status = error.status || 500;
-   // jsonError only ships a sanitized message to the client, so a 5xx here otherwise leaves
-   // no server-side trace. Log the stack + who/where so the (reproduced-only-on-connect)
-   // bootstrap 500 is diagnosable from fly logs next time instead of invisible.
-   if (status >= 500) {
-    console.error('[bootstrap] %d for workspace=%s user=%s:', status, req.params?.id, req.userId, error);
-   }
-   jsonError(res, status, error);
-  }
- });
-
- // Paginated message history for a session. The client loads the newest page on
- // open (bounded) and calls this with `before=<oldest loaded created_at>` to page
- // backwards on demand — so opening a channel with thousands of messages no longer
- // pulls the entire transcript at once (NET-05). Returns rows ASCENDING (oldest
- // first within the page) plus `hasMore` so the UI can show a "Load earlier" affordance.
- app.get('/backend/sessions/:id/messages', requireAuth, async (req, res) => {
-  try {
-   const sessionId = String(req.params.id || '').trim();
-   if (!sessionId) return jsonError(res, 400, new Error('sessionId is required'));
-   const workspaceId = await resolveWorkspaceIdForSession(sessionId);
-   if (!workspaceId) return jsonError(res, 404, new Error('Session not found'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const limit = Math.min(500, Math.max(1, Math.trunc(Number(req.query.limit)) || 200));
-   const before = String(req.query.before || '').trim();
-   const beforeId = String(req.query.beforeId || '').trim();
-   // Compound cursor on (created_at, id): messages can share a millisecond, so a
-   // bare `created_at < before` would skip same-timestamp rows at the page
-   // boundary. Ordering + cursor on (created_at, id) is total and stable.
-   // Fetch limit+1 (DESC) to detect hasMore, then reverse to ascending.
-   const params = [sessionId];
-   let beforeClause = '';
-   if (before) {
-    if (beforeId) {
-     params.push(before, beforeId);
-     beforeClause = ' and (created_at < $2 or (created_at = $2 and id < $3))';
-    } else {
-     params.push(before);
-     beforeClause = ' and created_at < $2';
-    }
-   }
-   const rows = await getDb().unsafe(
-    `select * from messages
-       where session_id = $1 and deleted_at is null${beforeClause}
-       order by created_at desc, id desc
-       limit ${limit + 1}`,
-    params,
-   );
-   const hasMore = rows.length > limit;
-   const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
-   res.json({ data: { messages: page, hasMore }, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- app.post('/backend/agensis/setup/connect', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = await resolveSetupWorkspace(req.userId, req.body?.workspaceId || req.body?.workspace_id);
-   const host = String(req.body?.host || '').trim().slice(0, 160);
-   const cwd = String(req.body?.cwd || '').trim().slice(0, 500);
-   const agent = await ensurePrimaryDaemonAgent({
-    workspaceId,
-    userId: req.userId,
-    handle: req.body?.handle,
-    name: req.body?.name || host || 'Agensis daemon',
-    host,
-    cwd,
-    permissionMode: req.body?.permissionMode || req.body?.permission_mode,
-   });
-   const baseUrl = normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
-    || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
-    || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
-   const payload = await buildAgentConnectionCommand({
-    agentId: agent.id,
-    workspaceId,
-    handle: req.body?.handle || agent.handle || agent.name,
-    model: req.body?.model || agent.model,
-    permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
-    baseUrl,
-    profile: false,
-   });
-   const daemonArgs = {
-    command: 'connect',
-    url: payload.baseUrl || baseUrl || requestBaseUrl(req),
-    token: payload.token,
-    workspace: workspaceId,
-    agent: agent.id,
-    handle: payload.handle || agent.handle,
-    name: payload.agent?.name || agent.name,
-    cwd: cwd || '',
-    model: payload.model,
-    permissionMode: payload.permissionMode,
-   };
-   res.json({
-    data: {
-     workspaceId,
-     agentId: agent.id,
-     workspace_id: workspaceId,
-     agent_id: agent.id,
-     agent: payload.agent,
-     token: payload.token,
-     command: payload.command,
-     daemonArgs,
-    },
-    error: null,
-   });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
+ mountSessionsRoutes(app, { ...coreDeps(), buildAgentConnectionCommand, buildWorkspaceBootstrap, ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl, resolveSetupWorkspace, resolveWorkspaceIdForSession });
 
  mountCursorbuddyRoutes(app, { ...coreDeps(), agentRuntimePayload, buildAgentConnectionCommand, createCursorBuddyConnectionKey, ensureCursorBuddyAgentForKey, ensureCursorBuddyProviderAgent, hashAgentToken, normalizeAgentBackendBaseUrl, normalizeCursorBuddyDomain, normalizeCursorBuddyScope, normalizeCursorBuddySurface, publicCursorBuddyConnectionKey, requestBaseUrl, shellQuote });
 
  mountInferenceRoutes(app, { ...coreDeps(), authorizeUserOrFarmWorkspace, bindInferenceAbort, createOpenAIInferenceStreamRelay, inferenceBroker, liveSharedModelRoutes, publicInferenceModel });
 
- app.get('/backend/agents/connections', requireAuth, async (req, res) => {
-  try {
-   const workspaceId = String(req.query.workspaceId || '').trim();
-   if (!workspaceId) return jsonError(res, 400, new Error('workspaceId is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    `select *
-         from agent_connections
-         where workspace_id = $1
-           and last_seen_at > now() - interval '24 hours'
-         order by status = 'online' desc, status = 'busy' desc, last_seen_at desc`,
-    [workspaceId],
-   );
-   // The DB status lags reality: an ungraceful drop stays 'online'/'busy' until
-   // the heartbeat terminates the socket. Reconcile each row against the live
-   // socket so the badge never claims an agent is reachable when dispatch would
-   // find no live connection. Pessimistic: only socket-OPEN + pong-answered rows
-   // keep their online/busy status; everything else reads offline.
-   const reconciled = rows.map((row) => {
-    const connection = publicAgentConnection(row);
-    if ((connection.status === 'online' || connection.status === 'busy') && !isConnectionSocketLive(connection.id)) {
-     return { ...connection, status: 'offline' };
-    }
-    return connection;
-   });
-   res.json({ data: reconciled, error: null });
-  } catch (error) {
-   jsonError(res, error.status || 500, error);
-  }
- });
-
- // --- Inbox (triage surface) ----------------------------------------------
- // Aggregates the five existing "this needs a human" sources into one
- // newest-first list. See buildInboxSql for the visibility + boundedness
- // reasoning. Membership is enforced exactly as every sibling workspace route
- // does (enforceWorkspaceRole 'read'); getting this wrong leaks one tenant's
- // inbox into another's.
- // The sidebar's Threads section: message threads this person follows, newest
- // reply first, each carrying whether it has been read. See server/thread-inbox.cjs
- // for what counts as a thread and what counts as following one.
+ mountConnectionsRoutes(app, { ...coreDeps(), buildInboxSql, isConnectionSocketLive, publicAgentConnection });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
@@ -10730,59 +10277,7 @@ function createApp() {
   serverVersion: '1.0.0',
  });
 
- app.post(['/backend/mcp', '/api/mcp', '/mcp'], mcpHandler);
- app.get(['/backend/mcp', '/api/mcp', '/mcp'], (_req, res) => {
-  res.status(405).json({
-   error: { message: 'MCP endpoint: use HTTP POST with JSON-RPC 2.0 and an Authorization: Bearer <agent token> header.' },
-  });
- });
-
- // Skill / marketplace endpoints (agentskills.io format). Public + token-free:
- // they serve generic instructions for joining a workspace over the MCP server
- // above. The per-agent Bearer token is delivered separately via the Configure
- // MCP dialog (connection-command). The MCP host is the WS-capable backend
- // (AGENSIS_DAEMON_BASE_URL when set, e.g. Fly), mirroring connection-command.
- function skillBaseUrl(req) {
-  return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || requestBaseUrl(req);
- }
- app.get(['/backend/skill', '/api/skill', '/skill', '/.well-known/agent-skill'], (req, res) => {
-  if (rateLimitBlocked(res, skillRateLimiter, `skill:${clientIpFromReq(req)}`)) return;
-  const manifest = skillManifest({
-   baseUrl: skillBaseUrl(req),
-   name: typeof req.query?.name === 'string' ? req.query.name : undefined,
-   handle: typeof req.query?.handle === 'string' ? req.query.handle : undefined,
-  });
-  res.json({ data: manifest, error: null });
- });
- app.get(['/backend/skill/SKILL.md', '/api/skill/SKILL.md', '/skill/SKILL.md'], (req, res) => {
-  if (rateLimitBlocked(res, skillRateLimiter, `skill:${clientIpFromReq(req)}`)) return;
-  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-  res.send(renderSkillMd({ baseUrl: skillBaseUrl(req) }));
- });
-
- // --- Orbs: the event-driven webhook trigger --------------------------------
- // (plans/021-event-driven-orbs.md)
- //
- // What this route used to do, and why all of it had to change:
- //
- //   1. It built the prompt as
- //      `req.body.prompt || .text || .message || JSON.stringify(req.body)` —
- //      the attacker-controlled payload WAS the entire user turn, delivered to an
- //      agent whose permission_mode may be 'yolo' (--no-sandbox --yolo).
- //   2. It called runAnthropicCompletion INLINE, so a daemon or sandbox agent
- //      never actually ran in its runtime: it got a one-shot built-in completion
- //      with no tools, no filesystem and no agent_jobs row. The orb never woke.
- //   3. It awaited that completion before responding, routinely blowing past
- //      GitHub's ~10s delivery timeout — so the provider retried, and with no
- //      deduplication each retry created another session and another billed run.
- //      The synchronous response shape was the retry-storm generator.
- //   4. Nothing was verified. The token was the only authenticator, so a URL
- //      leaked into a CI log was an unlimited agent-run button.
- //
- // Unauthenticated, so every gate below is load-bearing. The order is
- // cheap-before-expensive with one deliberate exception: the IP rate limiter runs
- // FIRST, ahead of the free header checks, because it is the only defence against
- // volume and a malformed flood is still load.
+ mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, runAnthropicCompletion, skillManifest, skillRateLimiter });
  mountOrbWebhooksRoutes(app, { ...coreDeps(), ORB_MAX_BODY_BYTES, claimTaskDispatch, composeOrbMessage, continueConversation, findOrCreateDirectSession, getWorkspaceSecretValue, inviteTokenLookupParams, logOrbRejection, normalizeAgentPermissionMode, normalizeOrbProvider, normalizeOrbRateLimit, normalizeOrbRouting, orbDispatchRefusal, orbSecretKey, parseOrbBody, postTaskSubthreadMention, verifyOrbDelivery, webhookRateLimiter });
 
  mountAuthRoutes(app, {
@@ -10793,44 +10288,6 @@ function createApp() {
  });
 
  mountMembersInvitesRoutes(app, { ...coreDeps(), hashAgentToken, inviteTokenLookupParams });
-
- // ==========================================================================
- // Join links — ONE short-lived, single-use URL for a human OR an agent.
- // ==========================================================================
- //
- // Why this exists (plans: single invite URL):
- //
- // The "Configure MCP" surface handed out a long-lived bearer token inside a
- // convenience string with a copy button; it leaked into a transcript. The
- // narrow fix shipped, then the same mistake turned up in a second place. The
- // real defect is not WHERE the token was rendered — it is that a long-lived
- // credential had to be rendered at all. Whatever is guarded gets a masked
- // field; whatever is convenient hands over the raw value; people use the
- // convenient one. Two instances of one bug means a third is coming.
- //
- // So the premise is removed. Nothing here ever displays a long-lived
- // credential. The link is short-lived and single-use, and redeeming it is what
- // provisions access — server-side, at that moment, returned once.
- //
- // The rules, all enforced below rather than merely documented:
- //
- //   * NO USER-AGENT SNIFFING, anywhere in this block. UA is a hint at best and
- //     wrong constantly. An agent succeeds through the CONTENT of its request
- //     (Accept, or ?format=json) or, failing that, through the rendered HTML
- //     itself, which carries the full contract as visible text.
- //   * WHICH LANE you get is decided by what you PRESENT, not by who you look
- //     like: a valid user session on the redeem call means the human lane, no
- //     session means the agent lane.
- //   * NO ORACLE. Unknown, malformed, expired, revoked, already-redeemed and
- //     wrong-audience all produce byte-identical refusals (joinLinkRefused /
- //     renderJoinRefusalPage). "Did this link ever exist?" is unanswerable.
- //   * SINGLE USE is a conditional UPDATE, not a check-then-write. The WHERE
- //     clause IS the guard, so two concurrent redemptions cannot both win.
- //   * THE TOKEN IS NEVER LOGGED. It is not put in an Error message, a console
- //     line, an activity row, or a realtime broadcast. Only its hash is stored.
- //   * The link is NOT A BEARER. It appears in no verify* function in this file.
- //     Contrast workspace_invites, which IS accepted as an MCP bearer for its
- //     full 14 days (verifyInviteToken) — precisely the shape being retired.
 
  // The origin a human is expected to see. The app origin, not the backend host:
  // /join/* is proxied there (netlify.toml) so one URL works for both audiences
@@ -10897,25 +10354,16 @@ function createApp() {
   return /application\/json/i.test(accept) && !/text\/html/i.test(accept);
  }
 
- // --- The owner's preview ---------------------------------------------------
- //
- // "I want to see that." So: GET /join/preview renders the exact same template
- // through the exact same renderer, with invented data.
- //
- // Why a dedicated PATH and not `?preview=1` on the token route: a query flag
- // would put the preview branch inside the handler that takes a token and talks
- // to the database, one mistaken condition away from a preview that performs a
- // real lookup — or a real mint. This route accepts NO token. There is nothing
- // to leak because there is nothing to look up: the handler calls a pure
- // function and returns. It touches no database, mints nothing, and reads no
- // workspace. tests/join-link.test.cjs asserts that structurally, by reading the
- // handler's source for getDb / crypto / token minting, so it cannot regress
- // into one quietly.
- //
- // It also serves BOTH views: the page as a human sees it, and — with
- // `Accept: application/json` or `?format=json` — byte-for-byte what an agent
- // gets, from the same descriptor.
- mountJoinPagesRoutes(app, { ...coreDeps(), agentNextSteps, bearerToken, configBlock, createAgentConnectToken, hashAgentToken, invalidDescriptor, isJoinLinkToken, joinApiBaseUrl, joinDescriptor, joinLinkRateLimiter, joinLinkRefused, joinPublicBaseUrl, joinRedeemDbRateLimiter, joinRedeemRateLimiter, joinWantsJson, loadJoinLinkForDisplay, logJoinLinkActivity, machinePayload, mcpEndpoint, previewDescriptor, publicFarmEnrolledAgent, renderJoinHtml, setJoinJsonHeaders, setJoinPageHeaders, uniqueAgentHandle, verifyToken });
+ mountJoinPagesRoutes(app, {
+  ...coreDeps(),
+  agentNextSteps, bearerToken, configBlock, createAgentConnectToken,
+  hashAgentToken, invalidDescriptor, isJoinLinkToken, joinApiBaseUrl,
+  joinDescriptor, joinLinkRateLimiter, joinLinkRefused, joinPublicBaseUrl,
+  joinRedeemDbRateLimiter, joinRedeemRateLimiter, joinWantsJson,
+  loadJoinLinkForDisplay, logJoinLinkActivity, machinePayload, mcpEndpoint,
+  previewDescriptor, publicFarmEnrolledAgent, renderJoinHtml,
+  setJoinJsonHeaders, setJoinPageHeaders, uniqueAgentHandle, verifyToken,
+ });
 
  mountJoinLinksRoutes(app, { ...coreDeps(), createJoinLinkToken, hashAgentToken, joinLinkTtlMs, joinPublicBaseUrl, joinUrlFor, logJoinLinkActivity });
 
@@ -11191,44 +10639,7 @@ function createApp() {
  // NOT the huddle playback pipeline — that is a separate piece of work. This is
  // only "which voices exist" and "let me hear this one".
 
- app.get('/backend/tts/voices', requireAuth, async (req, res) => {
-  try {
-   if (!cartesiaApiKey()) {
-    // A missing key is a configuration state, not a failure: the panel shows
-    // "voices unavailable" and every agent keeps its stored id.
-    return res.json({ data: [], error: null, configured: false });
-   }
-   const voices = await cartesiaVoices();
-   res.json({ data: voices, error: null, configured: true });
-  } catch (error) {
-   jsonError(res, error.status || 502, error);
-  }
- });
-
- app.post('/backend/tts/preview', requireAuth, async (req, res) => {
-  try {
-   if (rateLimitBlocked(res, ttsPreviewRateLimiter, req.userId || clientIpFromReq(req))) return;
-   if (!cartesiaApiKey()) return jsonError(res, 503, new Error('Cartesia is not configured'));
-
-   // Only the voice settings come from the client. The TRANSCRIPT does not:
-   // this route bills per character, and accepting arbitrary text would turn an
-   // authenticated preview button into a metered text-to-speech endpoint for
-   // anyone with an account.
-   const settings = normalizeVoicePreference(req.body || {});
-   if (!settings.cartesia_voice_id) return jsonError(res, 400, new Error('A Cartesia voice id is required'));
-
-   const audio = await cartesiaSpeak({
-    voiceId: settings.cartesia_voice_id,
-    speed: settings.speed ?? 1,
-    emotion: settings.emotion || 'neutral',
-   });
-   res.setHeader('Content-Type', 'audio/mpeg');
-   res.setHeader('Cache-Control', 'no-store');
-   res.send(audio);
-  } catch (error) {
-   jsonError(res, error.status || 502, error);
-  }
- });
+ mountTtsRoutes(app, { ...coreDeps(), cartesiaApiKey, cartesiaSpeak, cartesiaVoices, normalizeVoicePreference, ttsPreviewRateLimiter });
 
  mountAiChatRoutes(app, {
   ...coreDeps(),
