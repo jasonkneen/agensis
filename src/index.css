@@ -3111,6 +3111,15 @@ body {
  font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
  font-size: 14px;
  line-height: 1.5;
+ /* 500, matching the settings nav the owner pointed at as the reference
+    thickness — those rows are Buttons, which carry font-medium. Body text sat
+    at the browser default of 400 and read as thin beside them.
+
+    This is the NORMAL weight, deliberately not the unread/bold treatment:
+    those use 600/700, so raising the baseline by one step keeps the same gap
+    between read and unread. Smoothing is left as antialiased — the reference
+    renders with it too, so changing both would have been two variables. */
+ font-weight: 500;
  -webkit-font-smoothing: antialiased;
  -moz-osx-font-smoothing: grayscale;
 }
