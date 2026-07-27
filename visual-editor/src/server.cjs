@@ -11,12 +11,14 @@
  * Routes:
  *   GET  /__visual-editor/client.js  — the browser editor bundle
  *   POST /__visual-editor/edit       — apply one edit op to an HTML source file
+ *   GET  /__visual-editor/palette    — what the host project is made of
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const parse5 = require('parse5');
+const { discover } = require('./discover.cjs');
 
 const CLIENT_JS_PATH = path.join(__dirname, 'client.js');
 const ATTR_NAME_RE = /^[a-zA-Z][a-zA-Z0-9\-_:.]*$/;
@@ -96,6 +98,13 @@ function sameOrigin(req) {
 function isJsonBody(req) {
   const ct = req.headers['content-type'] || '';
   return ct.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+/** Gate for read-only routes: no body, so no content-type to require. */
+function rejectReadReason(req) {
+  if (!hostIsLoopback(req)) return 'this editor only accepts loopback requests';
+  if (!sameOrigin(req)) return 'cross-origin requests are not accepted';
+  return null;
 }
 
 /** Returns an error string when the request must be refused, else null. */
@@ -437,36 +446,115 @@ function opMoveTo(source, doc, op) {
     throw new Error('index ' + op.index + ' out of range (parent has ' + kids.length + ' element children)');
   }
 
-  let out = cut.source;
-  if (op.index < kids.length) {
+  return placeInside(cut.source, parent, op.index, cut.text);
+}
+
+/**
+ * Splice `text` in as child `index` of `parent`, matching the surrounding
+ * indentation. Shared by moveTo and insert so both land identically — the
+ * indentation rules here are the fiddly part and only want testing once.
+ *
+ * `parent` must come from a parse of the SAME string being spliced, since it
+ * is used for source offsets.
+ */
+/**
+ * Re-indent a multi-line snippet for its new depth.
+ *
+ * A template lifted from elsewhere in the page carries that spot's
+ * indentation on every line but the first (the first is placed by the caller).
+ * Without this, inserting a card three levels deep writes its children at the
+ * old depth and the file reads as garbage even though it parses.
+ */
+function reindent(text, indent) {
+  const lines = text.split('\n');
+  if (lines.length === 1) return text;
+  let common = null;
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const lead = /^[ \t]*/.exec(lines[i])[0];
+    if (common === null || lead.length < common.length) common = lead;
+  }
+  if (common === null) return text;
+  const rest = lines.slice(1).map((l) => (l.trim() ? indent + l.slice(common.length) : l));
+  return [lines[0]].concat(rest).join('\n');
+}
+
+function placeInside(source, parent, index, text) {
+  const pl = loc(parent);
+  if (!pl.endTag) throw new Error('target parent cannot contain children');
+  const kids = elementChildren(parent);
+  if (index > kids.length) {
+    throw new Error('index ' + index + ' out of range (parent has ' + kids.length + ' element children)');
+  }
+  if (index < kids.length) {
     // Insert before reference child R, on its own line at R's indent,
     // leaving R (including its leading indent) byte-unchanged.
-    const R = kids[op.index];
-    const rl = loc(R);
-    const line = lineIndentBefore(out, rl.startOffset);
-    out = line
-      ? splice(out, rl.startOffset, rl.startOffset, cut.text + '\n' + line.indent)
-      : splice(out, rl.startOffset, rl.startOffset, cut.text);
-  } else {
-    // Append as last child, before the parent's endTag.
-    const endTagStart = pl.endTag.startOffset;
-    const line = lineIndentBefore(out, endTagStart);
-    if (line) {
-      const parentIndent = line.indent;
-      let childIndent = parentIndent + '  ';
-      if (kids.length) {
-        const lastLine = lineIndentBefore(out, loc(kids[kids.length - 1]).startOffset);
-        if (lastLine) childIndent = lastLine.indent;
-      }
-      // Insert right after the newline that starts the endTag's line:
-      // <childIndent><elementText>\n then the existing <parentIndent></tag>.
-      out = splice(out, line.pos, line.pos, childIndent + cut.text + '\n');
-    } else {
-      // One-liner parent: keep it a one-liner.
-      out = splice(out, endTagStart, endTagStart, cut.text);
-    }
+    const rl = loc(kids[index]);
+    const line = lineIndentBefore(source, rl.startOffset);
+    return line
+      ? splice(source, rl.startOffset, rl.startOffset, reindent(text, line.indent) + '\n' + line.indent)
+      : splice(source, rl.startOffset, rl.startOffset, text);
   }
-  return out;
+  // Append as last child, before the parent's endTag.
+  const endTagStart = pl.endTag.startOffset;
+  const line = lineIndentBefore(source, endTagStart);
+  if (!line) {
+    // One-liner parent: keep it a one-liner.
+    return splice(source, endTagStart, endTagStart, text);
+  }
+  let childIndent = line.indent + '  ';
+  if (kids.length) {
+    const lastLine = lineIndentBefore(source, loc(kids[kids.length - 1]).startOffset);
+    if (lastLine) childIndent = lastLine.indent;
+  }
+  // Insert right after the newline that starts the endTag's line:
+  // <childIndent><text>\n then the existing <parentIndent></tag>.
+  return splice(source, line.pos, line.pos, childIndent + reindent(text, childIndent) + '\n');
+}
+
+/**
+ * insert op — add NEW markup as child `index` of `parentPath`.
+ *
+ * This is what makes the editor able to create, not just rearrange. The markup
+ * is validated to be exactly one well-formed element before anything is
+ * written; combined with the element-count guard in applyEdit, a malformed
+ * snippet can never leave a half-open tag in the file.
+ */
+function opInsert(source, doc, op) {
+  if (!Array.isArray(op.parentPath)) throw new Error('missing parentPath');
+  if (typeof op.index !== 'number' || op.index < 0) throw new Error('invalid index');
+  if (typeof op.html !== 'string' || !op.html.trim()) throw new Error('insert requires html');
+
+  const text = op.html.trim();
+  const frag = parse5.parseFragment(text);
+  const roots = elementChildren(frag);
+  if (roots.length !== 1) {
+    throw new Error('insert requires exactly one root element (got ' + roots.length + ')');
+  }
+  // parseFragment is lenient: "<li>x</li_WRONG>" or "<li>x</div>" parses fine
+  // because an unmatched end tag is simply discarded, and the element count is
+  // unchanged either way. Compare which tags the caller CLOSED against which
+  // ones parse5 understood to be closed — that is the mismatch that would
+  // splice an unbalanced tag into the file.
+  if (closingTags(text) !== closingTags(parse5.serialize(frag))) {
+    throw new Error('insert markup is not well formed (unbalanced tags)');
+  }
+
+  const parent = findNode(doc, op.parentPath);
+  return placeInside(source, parent, op.index, text);
+}
+
+/** Sorted, lowercased list of the tags a snippet closes. */
+function closingTags(html) {
+  return (String(html).match(/<\/\s*[a-zA-Z][\w:-]*/g) || [])
+    .map((t) => t.replace(/<\/\s*/, '').toLowerCase())
+    .sort()
+    .join(',');
+}
+
+/** Element count of a snippet, used to predict the insert's structural delta. */
+function snippetElementCount(html) {
+  return countElements(parse5.parseFragment(String(html).trim()));
 }
 
 /** Total number of elements in a subtree, excluding the node itself. */
@@ -489,6 +577,9 @@ function applyEdit(source, op) {
   let expectedDelta = 0;
   if (op.op === 'remove') {
     expectedDelta = -(1 + countElements(findNode(doc, op.path)));
+  } else if (op.op === 'insert') {
+    // countElements() on a fragment already counts the root element.
+    expectedDelta = snippetElementCount(op.html);
   }
 
   let out;
@@ -499,6 +590,7 @@ function applyEdit(source, op) {
     case 'move': out = opMove(source, doc, op); break;
     case 'moveTo': out = opMoveTo(source, doc, op); break;
     case 'remove': out = opRemove(source, doc, op); break;
+    case 'insert': out = opInsert(source, doc, op); break;
     default: throw new Error('unknown op: ' + op.op);
   }
 
@@ -570,6 +662,7 @@ function createUndoTracker(cap) {
 function createEditorMiddleware({ root }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
   const undo = createUndoTracker(50);
+  let paletteCache = null;
   return function editorMiddleware(req, res, next) {
     let url;
     try {
@@ -588,6 +681,20 @@ function createEditorMiddleware({ root }) {
         });
         res.end(data);
       });
+      return;
+    }
+    if (url.pathname === '/__visual-editor/palette' && req.method === 'GET') {
+      const refusedRead = rejectReadReason(req);
+      if (refusedRead) { sendJson(res, 403, { ok: false, error: refusedRead }); return; }
+      try {
+        // Cached: the scan walks the project tree, and the answer only changes
+        // when dependencies or component files do. ?fresh=1 forces a rescan.
+        if (!paletteCache || url.searchParams.get('fresh')) paletteCache = discover(root);
+        sendJson(res, 200, { ok: true, ...paletteCache });
+      } catch (err) {
+        // Discovery is a convenience; never let it take the editor down.
+        sendJson(res, 200, { ok: false, error: String((err && err.message) || err) });
+      }
       return;
     }
     if (url.pathname === '/__visual-editor/edit' && req.method === 'POST') {

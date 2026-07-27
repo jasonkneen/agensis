@@ -71,6 +71,7 @@
     undo: 'M3.5 6.5h6a3.5 3.5 0 1 1 0 7H6M3.5 6.5l3-3M3.5 6.5l3 3',
     x: 'M4 4l8 8M12 4l-8 8',
     dock: 'M2.5 3.5h11v9h-11zM10.5 3.5v9',
+    plus: 'M8 3v10M3 8h10',
     live: 'M2.5 2.5h11v3h-11zM2.5 10.5h11v3h-11zM5.8 8h4.4M8 5.8v4.4',
     jStart: 'M3 3v10M5.5 5h2.5v6H5.5zM9.5 5H12v6H9.5z',
     jCenter: 'M5 5h2.5v6H5zM8.8 5h2.5v6H8.8z',
@@ -339,6 +340,24 @@
       '.tmore:hover { color: var(--blue); }',
       '.tempty { color: var(--tx3); padding: 18px 14px; text-align: center; font: 11px system-ui, sans-serif; }',
       '',
+      '/* ---- palette ---- */',
+      '#palette { flex: none; display: none; flex-direction: column; max-height: 46%;',
+      '  border-bottom: 1px solid var(--line); }',
+      '#palette.show { display: flex; }',
+      '#palbody { overflow: auto; overscroll-behavior: contain; padding: 4px 0 8px; }',
+      '.palgroup { font: 600 9px/1 system-ui, sans-serif; letter-spacing: .13em; color: var(--tx3);',
+      '  padding: 8px 10px 4px; display: flex; align-items: center; gap: 6px; }',
+      '.palgroup .n { color: var(--tx3); opacity: .7; font-weight: 400; letter-spacing: 0; }',
+      '.palitem { display: flex; align-items: center; gap: 6px; padding: 3px 10px; cursor: pointer;',
+      '  white-space: nowrap; }',
+      '.palitem:hover { background: #141924; }',
+      '.palitem .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--tx); }',
+      '.palitem .meta { flex: none; font-size: 9px; color: var(--tx3); }',
+      '.palitem.off { opacity: .45; cursor: not-allowed; }',
+      '.palitem.off:hover { background: transparent; }',
+      '.palnote { color: var(--tx3); font-size: 9.5px; padding: 2px 10px 6px; line-height: 1.45;',
+      '  white-space: normal; }',
+      '',
       '/* ---- inspector ---- */',
       '#eltag { display: flex; align-items: baseline; gap: 5px; min-width: 0; font-size: 12px;',
       '  white-space: nowrap; overflow: hidden; }',
@@ -518,6 +537,9 @@
   var searchClear = h('span', { class: 'ibtn', id: 'searchclear', title: 'Clear (Esc)' }, [svgIcon('x')]);
   var searchWrap = h('div', { id: 'searchwrap' }, [svgIcon('search'), searchIn, searchClear]);
   var treeBox = h('div', { class: 'pbody', id: 'tree' });
+  var addBtn = h('button', { class: 'ibtn', title: 'Insert an element or component' }, [svgIcon('plus')]);
+  var palBody = h('div', { id: 'palbody' });
+  var paletteBox = h('div', { id: 'palette' }, [palBody]);
   var expandAllBtn = h('button', { class: 'ibtn', title: 'Expand all' }, [svgIcon('unfold')]);
   var collapseAllBtn = h('button', { class: 'ibtn', title: 'Collapse all' }, [svgIcon('fold')]);
   var treeCount = h('span', { id: 'treecount' });
@@ -528,8 +550,9 @@
       h('span', { class: 'ptitle', text: 'NAVIGATOR' }),
       treeCount,
       h('span', { class: 'pgrow' }),
-      expandAllBtn, collapseAllBtn,
+      addBtn, expandAllBtn, collapseAllBtn,
     ]),
+    paletteBox,
     searchWrap,
     treeBox,
     leftGrip,
@@ -1189,6 +1212,228 @@
   pressable(searchClear, function () {
     searchIn.value = ''; state.filter = ''; searchWrap.classList.remove('has'); rebuildTree();
   });
+
+  // -------------------------------------------------------------------------
+  // Palette — builds itself from the project, never from a hard-coded list.
+  //
+  // Three sources, in usefulness order:
+  //   1. This page. Any structure that appears more than once is, in practice,
+  //      a component — so the page's own markup is the most accurate palette
+  //      it can have. The first instance becomes the template.
+  //   2. Primitives, so an empty page is not a dead end.
+  //   3. The host project, via /__visual-editor/palette: shadcn/Radix/AI
+  //      Elements/Kibo and the project's own components, discovered from
+  //      package.json + components.json + what is actually on disk.
+  // -------------------------------------------------------------------------
+  var project = null;        // discovery payload, once it arrives
+  var paletteOpen = false;
+
+  var PRIMITIVES = [
+    { name: 'Section', html: '<section>\n</section>' },
+    { name: 'Container', html: '<div></div>' },
+    { name: 'Heading', html: '<h2>Heading</h2>' },
+    { name: 'Paragraph', html: '<p>Text</p>' },
+    { name: 'Button', html: '<button type="button">Button</button>' },
+    { name: 'Link', html: '<a href="#">Link</a>' },
+    { name: 'Image', html: '<img src="" alt="">' },
+    { name: 'List', html: '<ul>\n<li>Item</li>\n</ul>' },
+    { name: 'Divider', html: '<hr>' },
+  ];
+
+  var MAX_TEMPLATE = 4000;
+
+  function titleCase(s) {
+    return String(s).split(/[-_]/).filter(Boolean)
+      .map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ');
+  }
+
+  /** Structures that repeat on this page, most-repeated first. */
+  function derivePagePalette() {
+    var groups = Object.create(null);
+    var all = document.body.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (isOurs(el)) continue;
+      var cls = typeof el.className === 'string' ? el.className.trim() : '';
+      if (!cls) continue; // unclassed markup is too generic to be a "component"
+      var key = el.tagName.toLowerCase() + '.' + cls.split(/\s+/).slice(0, 3).join('.');
+      var g = groups[key];
+      if (!g) {
+        g = groups[key] = { key: key, el: el, count: 0, name: titleCase(cls.split(/\s+/)[0]) };
+      }
+      g.count++;
+      // Prefer the richest instance as the template — a card with content is a
+      // better starting point than an empty one.
+      if (el.outerHTML.length > g.el.outerHTML.length && el.outerHTML.length <= MAX_TEMPLATE) g.el = el;
+    }
+    var out = [];
+    for (var k in groups) {
+      var it = groups[k];
+      if (it.count < 2) continue;                        // once is not a pattern
+      if (it.el.outerHTML.length > MAX_TEMPLATE) continue;
+      out.push(it);
+    }
+    out.sort(function (a, b) {
+      return (b.count - a.count) || (b.el.outerHTML.length - a.el.outerHTML.length);
+    });
+    return out.slice(0, 20);
+  }
+
+  function rootTagOf(html) {
+    var m = /^\s*<\s*([a-zA-Z][\w:-]*)/.exec(html);
+    return m ? m[1].toLowerCase() : 'div';
+  }
+
+  /**
+   * Where a new `tag` should land relative to the selection.
+   *
+   * "Inside whatever can contain it" is the obvious rule and the wrong one:
+   * with a card selected, adding a Card nested one card inside another. The
+   * intent behind picking a palette item that matches your selection is nearly
+   * always "another one of these", so same-tag goes beside, not within.
+   */
+  function insertTargetFor(tag, sel) {
+    var body = document.body;
+    if (!sel || !sel.isConnected || sel === body) {
+      return { parent: body, index: pageChildren(body).length };
+    }
+    var selTag = sel.tagName.toLowerCase();
+    var kids = pageChildren(sel);
+    var hasText = (sel.textContent || '').trim() !== '';
+    var isEmpty = kids.length === 0 && !hasText;
+    // Go inside only for a genuine container of something else: a populated
+    // wrapper (append alongside its children) or an empty one.
+    if (selTag !== tag && canContain(selTag, tag) && (kids.length > 0 || isEmpty)) {
+      return { parent: sel, index: kids.length };
+    }
+    var p = sel.parentElement;
+    if (p && p !== document.documentElement && canContain(p.tagName.toLowerCase(), tag)) {
+      return { parent: p, index: pageChildren(p).indexOf(sel) + 1 };
+    }
+    return { parent: body, index: pageChildren(body).length };
+  }
+
+  /**
+   * Insert a snippet next to / inside the selection. The path is captured
+   * before the DOM is touched, per the rule the rest of this file follows.
+   */
+  function insertSnippet(html, label) {
+    var tag = rootTagOf(html);
+    var target = insertTargetFor(tag, state.selected);
+    var parent = target.parent, index = target.index;
+    if (!canContain(parent.tagName.toLowerCase(), tag)) {
+      setStatus('cannot put <' + tag + '> there', 'err');
+      return;
+    }
+
+    var parentPath = elementPath(parent);   // BEFORE mutating
+    if (!parentPath) { setStatus('cannot resolve insert target', 'err'); return; }
+
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    var node = tmp.firstElementChild;
+    if (!node) { setStatus('nothing to insert', 'err'); return; }
+
+    var sibs = pageChildren(parent);
+    var ref = index < sibs.length ? sibs[index] : (parent === document.body ? host : null);
+    var redo = function () { parent.insertBefore(node, ref); };
+    var undo = function () { if (node.parentNode) node.parentNode.removeChild(node); };
+    redo();
+
+    var file = fileFor(parent);
+    if (file) {
+      sendEdit({ op: 'insert', file: file, parentPath: parentPath, index: index, html: html },
+        { undo: undo, redo: redo });
+    }
+    select(node);
+    setStatus('added ' + (label || tag), 'ok');
+  }
+
+  function palItem(label, meta, onPick, disabledWhy) {
+    var row = h('div', { class: 'palitem' + (disabledWhy ? ' off' : ''), title: disabledWhy || ('Insert ' + label) }, [
+      h('span', { class: 'nm', text: label }),
+      meta ? h('span', { class: 'meta', text: meta }) : null,
+    ]);
+    if (!disabledWhy) pressable(row, onPick);
+    return row;
+  }
+
+  function groupHead(title, n) {
+    return h('div', { class: 'palgroup' }, [
+      h('span', { text: title }),
+      n != null ? h('span', { class: 'n', text: String(n) }) : null,
+    ]);
+  }
+
+  function rebuildPalette() {
+    palBody.textContent = '';
+
+    var page = derivePagePalette();
+    if (page.length) {
+      palBody.appendChild(groupHead('ON THIS PAGE', page.length));
+      page.forEach(function (g) {
+        palBody.appendChild(palItem(g.name, '×' + g.count, function () {
+          insertSnippet(g.el.outerHTML, g.name);
+        }));
+      });
+    }
+
+    palBody.appendChild(groupHead('ELEMENTS'));
+    PRIMITIVES.forEach(function (p) {
+      palBody.appendChild(palItem(p.name, null, function () { insertSnippet(p.html, p.name); }));
+    });
+
+    if (!project) return;
+    // Component libraries only mean something in a file the editor can write
+    // components into. Say so plainly rather than offering a dead button.
+    var jsxReady = false; // set true when a JSX locator backs the current file
+    var why = jsxReady ? null : 'Needs JSX file support — discovered, not yet insertable';
+
+    (project.libraries || []).forEach(function (lib) {
+      if (lib.headless || !lib.components || !lib.components.length) return;
+      palBody.appendChild(groupHead(lib.label.toUpperCase(), lib.componentCount));
+      lib.components.slice(0, 60).forEach(function (c) {
+        palBody.appendChild(palItem(c.name, null, function () {}, why));
+      });
+    });
+
+    var own = project.components || [];
+    if (own.length) {
+      palBody.appendChild(groupHead('PROJECT COMPONENTS', own.length));
+      own.slice(0, 40).forEach(function (c) {
+        palBody.appendChild(palItem(c.name, null, function () {}, why));
+      });
+    }
+
+    var libs = (project.libraries || []).filter(function (l) { return l.headless || !l.componentCount; });
+    if (libs.length) {
+      palBody.appendChild(groupHead('ALSO INSTALLED'));
+      palBody.appendChild(h('div', {
+        class: 'palnote',
+        text: libs.map(function (l) { return l.label; }).join(' · '),
+      }));
+    }
+  }
+
+  function setPaletteOpen(on) {
+    paletteOpen = !!on;
+    paletteBox.classList.toggle('show', paletteOpen);
+    addBtn.classList.toggle('on', paletteOpen);
+    if (paletteOpen) rebuildPalette();
+  }
+  addBtn.addEventListener('click', function () { setPaletteOpen(!paletteOpen); });
+
+  /** Ask the server what the host project is made of. Entirely optional. */
+  function loadProject() {
+    fetch('/__visual-editor/palette', { headers: { accept: 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (p) {
+        if (!p || !p.ok) return;
+        project = p;
+        if (paletteOpen) rebuildPalette();
+      })
+      .catch(function () { /* discovery is a nicety; ignore */ });
+  }
 
   // -------------------------------------------------------------------------
   // Breadcrumbs
@@ -3047,6 +3292,7 @@
   setSelectMode(true);
   setLivePreview(prefs.livePreview);
   applyPanelWidths();
+  loadProject();   // async; the palette fills in when it lands
   rebuildTree();
   rebuildProps();
 })();

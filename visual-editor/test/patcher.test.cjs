@@ -259,6 +259,83 @@ test('moveTo rejects a missing target parent', () => {
   );
 });
 
+// -- insert (creating new content) ------------------------------------------------
+
+test('insert places new markup before a reference child, at its indent', () => {
+  const out = applyEdit(FIXTURE, {
+    op: 'insert', parentPath: [1, 1], index: 1, html: '<li>NEW</li>',
+  });
+  assert.ok(out.includes('<li>a</li>\n    <li>NEW</li>\n    <li>b</li>'), out);
+});
+
+test('insert appends as last child using the sibling indent', () => {
+  const out = applyEdit(FIXTURE, {
+    op: 'insert', parentPath: [1, 1], index: 3, html: '<li>NEW</li>',
+  });
+  assert.ok(out.includes('<li>c</li>\n    <li>NEW</li>\n  </ul>'), out);
+});
+
+test('insert into an empty one-liner parent keeps it a one-liner', () => {
+  const out = applyEdit(FIXTURE, {
+    op: 'insert', parentPath: [1, 3], index: 0, html: '<span>hi</span>',
+  });
+  assert.ok(out.includes('<div class="empty"><span>hi</span></div>'), out);
+});
+
+test('insert accepts a nested subtree and counts it correctly', () => {
+  const out = applyEdit(FIXTURE, {
+    op: 'insert', parentPath: [1], index: 3,
+    html: '<section class="new"><h2>T</h2><p>body</p></section>',
+  });
+  assert.ok(out.includes('<section class="new"><h2>T</h2><p>body</p></section>'), out);
+});
+
+test('insert rejects markup with more than one root', () => {
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 1], index: 0, html: '<li>a</li><li>b</li>' }),
+    /exactly one root element/
+  );
+});
+
+test('insert rejects malformed markup rather than writing a broken tag', () => {
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 1], index: 0, html: '<li>oops</div>' }),
+    /well formed|exactly one root/
+  );
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 1], index: 0, html: '   ' }),
+    /requires html/
+  );
+});
+
+test('insert validates the target parent and index like moveTo does', () => {
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 1], index: 99, html: '<li>x</li>' }),
+    /out of range/
+  );
+  assert.throws(
+    () => applyEdit(FIXTURE, { op: 'insert', parentPath: [9], index: 0, html: '<li>x</li>' }),
+    /path/
+  );
+});
+
+test('insert leaves every other byte untouched', () => {
+  const out = applyEdit(FIXTURE, {
+    op: 'insert', parentPath: [1, 1], index: 3, html: '<li>NEW</li>',
+  });
+  // Removing exactly the inserted line must give the original file back.
+  assert.strictEqual(out.replace('    <li>NEW</li>\n', ''), FIXTURE);
+});
+
+test('insert re-indents a multi-line snippet to its new depth', () => {
+  // A template lifted from two levels up must not keep the old indentation.
+  const snippet = '<article class="card">\n  <h3>T</h3>\n  <p>body</p>\n</article>';
+  const out = applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 0], index: 3, html: snippet });
+  assert.ok(out.includes(
+    '    <article class="card">\n      <h3>T</h3>\n      <p>body</p>\n    </article>'
+  ), out.slice(out.indexOf('<article'), out.indexOf('</article>') + 40));
+});
+
 // -- undo tracker -------------------------------------------------------------
 
 test('undo tracker: push/pop restores newest-first and reports empty', () => {
