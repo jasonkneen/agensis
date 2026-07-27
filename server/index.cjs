@@ -213,6 +213,19 @@ function applyEnvFile(envPath) {
 
 function loadEnvFile() {
  if (envLoaded) return;
+
+ // A test process supplies its own environment (tests/helpers/test-env.cjs) and
+ // must never inherit a developer's `.env`. This is not a convenience: reading
+ // `.env` here silently rewrote what the suite was testing — a test that deletes
+ // BOX_API_KEY to exercise the "credential not configured" refusal got the real
+ // key handed back and took the configured path instead. It also repopulated
+ // DATABASE_URL, so a code path reaching getDb() without a test db would have
+ // opened a live production connection. Unset, getDb() throws instead.
+ if (process.env.AGENSIS_TEST === '1') {
+  envLoaded = true;
+  return;
+ }
+
  envLoaded = true;
 
  const candidates = [
@@ -14661,6 +14674,9 @@ module.exports = {
   // managed-key state shape (which must never carry a preview again).
   encryptVaultSecret,
   decryptVaultSecret,
+  // Exposed for tests/env-isolation.test.cjs only: it is the one call that
+  // reports whether a test process could open a real database connection.
+  getDatabaseUrl,
   getWorkspaceSecretValue,
   setWorkspaceSecretValue,
   reencryptLegacyPlaintextSecrets,
