@@ -94,6 +94,18 @@ function indexSymbols(lines) {
 // A symbol a block declares is not a symbol a block needs injected.
 function localNames(block) {
   const local = new Set();
+  // Declarations the span makes for ITSELF. A helper defined inside the span is
+  // not a dependency — it travels with the code. project-git declares six
+  // (fetchWorkspaceRow, gitRootOf, resolveWithinRoot, parsePorcelainStatus,
+  // requireWritableGitRoot, resolveStagePaths); listing them as deps produced a
+  // module that declared each name twice and would not even parse.
+  for (const re of [
+    /(?:^|\n)\s*(?:async\s+)?function\s+([A-Za-z_]\w*)/g,
+    /(?:^|\n)\s*(?:const|let|var)\s+([A-Za-z_]\w*)\s*=/g,
+  ]) {
+    let m;
+    while ((m = re.exec(block))) local.add(m[1]);
+  }
   for (const re of [
     /\b(?:const|let|var)\s+([A-Za-z_]\w*)\s*=/g,
     /\b(?:const|let|var)\s*\{([^}]*)\}\s*=/g,
