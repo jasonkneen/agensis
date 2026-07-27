@@ -100,6 +100,10 @@ const MUST_BE_LINTED = [
   // reason `config` is a type the skill-content reader refuses, since
   // ~/.gemini/settings.json holds API keys. Extracted from server/index.cjs.
   'server/lib/capabilities.cjs',
+  // The outbound SSRF guard: whether this machine will fetch an operator-supplied
+  // URL at all. 169.254.169.254 serves cloud IAM credentials, and the response
+  // streams back to the caller. Extracted from server/index.cjs.
+  'server/lib/net-guard.cjs',
   // Holds DEEPGRAM_API_KEY and CARTESIA_API_KEY. Every line here exists to keep
   // those two strings out of a browser, so an unlinted edit is exactly the
   // mistake this whole module was written to prevent.
