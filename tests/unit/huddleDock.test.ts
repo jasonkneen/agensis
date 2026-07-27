@@ -102,3 +102,45 @@ describe('normalizeHuddleDockTab', () => {
     expect(normalizeHuddleDockTab({ tab: 'chat' })).toBe(DEFAULT_HUDDLE_DOCK_TAB);
   });
 });
+
+// The dock opened and never connected. openHuddle records WHICH conversation
+// the dock is for; the old toolbar button called startOrJoin() itself, and
+// lifting the session above AppContent dropped that step — so the panel
+// appeared, showed "connecting", and nothing ever happened.
+describe('joining once per target', () => {
+  // Mirrors the provider's guard: join when the session id changes, never on a
+  // bare re-render, and again after a close/reopen of the same conversation.
+  function joinsFor(events: Array<string | null>): number {
+    let joined = '';
+    let calls = 0;
+    for (const sessionId of events) {
+      if (sessionId === null) { joined = ''; continue; } // close clears the guard
+      if (!sessionId || joined === sessionId) continue;
+      joined = sessionId;
+      calls += 1;
+    }
+    return calls;
+  }
+
+  it('joins once when a conversation is opened', () => {
+    expect(joinsFor(['a'])).toBe(1);
+  });
+
+  it('does NOT re-join on re-renders of the same conversation', () => {
+    expect(joinsFor(['a', 'a', 'a'])).toBe(1);
+  });
+
+  it('joins the new conversation when switching', () => {
+    expect(joinsFor(['a', 'b'])).toBe(2);
+  });
+
+  it('joins again after closing and reopening the SAME conversation', () => {
+    // Without clearing the guard on close, reopening sat inert forever because
+    // it had been joined once before.
+    expect(joinsFor(['a', null, 'a'])).toBe(2);
+  });
+
+  it('never joins without a target', () => {
+    expect(joinsFor([null, '', null])).toBe(0);
+  });
+});

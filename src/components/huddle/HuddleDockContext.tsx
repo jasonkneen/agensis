@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useEffect, useRef, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { useHuddle } from '@/hooks/useHuddle';
 
 // ---------------------------------------------------------------------------
@@ -63,9 +63,27 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
     setCollapsed(false);
   }, []);
 
+  // JOIN the call once per target. openHuddle only records WHICH conversation
+  // the dock is for; without this the panel opened and nothing ever connected,
+  // because the old toolbar button called startOrJoin() itself and the lifted
+  // path dropped that step. Keyed on sessionId so re-renders do not re-join,
+  // and so switching conversations joins the new one exactly once.
+  const joinedRef = useRef<string>('');
+  const startOrJoin = session?.startOrJoin;
+  useEffect(() => {
+    const sessionId = target?.sessionId || '';
+    if (!sessionId || !startOrJoin) return;
+    if (joinedRef.current === sessionId) return;
+    joinedRef.current = sessionId;
+    void startOrJoin();
+  }, [target?.sessionId, startOrJoin]);
+
   const closeHuddle = useCallback(() => {
     setTarget(null);
     setCollapsed(false);
+    // Clear the guard, so reopening the SAME conversation later joins again
+    // rather than sitting inert because it was joined once before.
+    joinedRef.current = '';
   }, []);
 
   const value = useMemo<HuddleDockValue>(
