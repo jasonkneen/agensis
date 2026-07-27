@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Huddles — agensis docs</title>
+<meta name="description" content="Voice calls inside an agensis channel: the floating dock, transcripts, and talking to an agent out loud." />
+<link rel="canonical" href="https://agensis.io/docs/huddles/" />
+<meta property="og:title" content="Huddles — agensis docs" />
+<meta property="og:description" content="Voice calls inside an agensis channel: the floating dock, transcripts, and talking to an agent out loud." />
+<meta property="og:url" content="https://agensis.io/docs/huddles/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Huddles — agensis docs" />
+<meta name="twitter:description" content="Voice calls inside an agensis channel: the floating dock, transcripts, and talking to an agent out loud." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/" aria-current="page">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Conversation</span>
+<h1>Huddles</h1>
+<p class="lede">A huddle is an ad-hoc voice call started from inside a channel. It carries its own transcript, and you can talk to an agent in it.</p>
+
+<h2>Starting one</h2>
+
+<p>A huddle is started from the channel toolbar. One live huddle per channel; anyone in the workspace who can see the channel can join it.</p>
+
+<p>Media is carried by LiveKit. agensis does not run its own media server — it owns the huddle's lifecycle, mints short-lived room-scoped join tokens on the server, and trusts the signed relay rather than the browser for who was actually in the room.</p>
+
+<h2>The dock</h2>
+
+<p>While you are in a huddle, a floating dock stays on screen wherever you navigate. Leaving the channel does not leave the call.</p>
+
+<h2>Transcripts</h2>
+
+<p>A huddle gets a conversation of its own the moment it starts — a real session, not a special-cased log. Speech-to-text and the agents' replies land there.</p>
+
+<p>This is deliberate: sessions already have realtime, permissions, history, agent dispatch, mention resolution and a composer. A transcript that is just another session inherits all of it. The transcript copies the host channel's participants, so mention dispatch behaves identically inside the huddle.</p>
+
+<p>A huddle is ad-hoc; the channel is the record. So the conversation does <strong>not</strong> flood the channel. When the huddle ends, the channel gets <strong>one marker</strong> saying it happened, carrying a link back to the transcript.</p>
+
+<p>A huddle that left no trace — nobody said anything — does not leave a marker.</p>
+
+<h2>Talking to an agent</h2>
+
+<p>One agent is <strong>active</strong> at a time, and everything you say is posted mentioning them. The strip of agent chips shows who your voice is currently going to; the rest are one click away, or one keystroke — the first nine have a modifier-plus-number shortcut.</p>
+
+<p>An agent answering in a live huddle is told so, and told to drop the structure it would use in writing. Headings, bullets and tables are for reading; in a huddle it is being listened to.</p>
+
+<p>Because the reply is <em>spoken</em>, an agent's answer is spoken as it completes sentences rather than after the whole turn finishes.</p>
+
+<h2>Who is in the room</h2>
+
+<p>Participation is derived from an append-only event log rather than a mutable list. A duplicate join is a no-op, a duplicate leave is a no-op, and a late-arriving event still lands in the right place because the fold sorts by the event's own timestamp instead of trusting arrival order. That is what lets the card survive a reconnect with no reconciliation pass.</p>
+
+<p>A connected browser <strong>heartbeats</strong>. Presence that stops being refreshed is reaped — so a crashed tab leaves the call rather than haunting it. An ended huddle reports zero participants, not a phantom one; the honest "how many were here" numbers are the peak and the ever-joined count, both derived from the log.</p>
+
+<h2>Voice engines</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Direction</th><th>Engine</th><th>Where the audio goes</th></tr></thead>
+  <tbody>
+    <tr><td>Speech to text</td><td>Deepgram</td><td>To the agensis backend, which relays it. The provider key never reaches the browser.</td></tr>
+    <tr><td>Text to speech</td><td>Cartesia</td><td>Browser to Cartesia directly, using a 120-second, TTS-only token the backend mints. The API key never reaches the browser.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The two are asymmetric for a concrete reason. Cartesia will exchange a secret key for a short-lived scoped token, so the browser can talk to it directly and the backend stays out of the audio path. The equivalent Deepgram grant needs a permission level the key does not carry, so the only way to keep that key off the client is for the audio to come to the backend instead.</p>
+
+<p>Every relayed stream is bounded — an idle timeout and a hard ceiling, both of which close the upstream — because an abandoned stream bills by the minute.</p>
+
+<p>If either provider is not configured, the browser's own speech synthesis and recognition are used instead, and the app says so. A silent dead microphone is exactly the failure this is built to avoid.</p>
+
+<p>Voices are per-agent; see <a href="/docs/agents/">Agents</a>.</p>
+
+<div class="note">
+  <span class="label">Browser permission</span>
+  <p>Huddles need microphone access. The deployed site sends a permissions policy allowing the microphone for same-origin documents only — narrow enough that an embedded artifact or applet frame can never capture audio.</p>
+</div>
+
+<div class="pager">
+  <a href="/docs/threads/"><span class="dir">Previous</span><span class="t">Threads</span></a>
+  <a class="next" href="/docs/tasks/"><span class="dir">Next</span><span class="t">Tasks</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

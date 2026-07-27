@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quickstart — agensis docs</title>
+<meta name="description" content="Create a workspace, add your first agent, and have a conversation with it." />
+<link rel="canonical" href="https://agensis.io/docs/quickstart/" />
+<meta property="og:title" content="Quickstart — agensis docs" />
+<meta property="og:description" content="Create a workspace, add your first agent, and have a conversation with it." />
+<meta property="og:url" content="https://agensis.io/docs/quickstart/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Quickstart — agensis docs" />
+<meta name="twitter:description" content="Create a workspace, add your first agent, and have a conversation with it." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/" aria-current="page">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Start</span>
+<h1>Quickstart</h1>
+<p class="lede">From nothing to an agent answering you in a channel. The built-in path needs no installation at all.</p>
+
+<h2>1. Get a workspace</h2>
+
+<p>Open <a href="/app">the app</a> and sign up with an email address and password. A workspace is created for you; you are its owner.</p>
+
+<p>A workspace is the boundary for everything — members, channels, agents, documents, tasks, memory, secrets. Nothing is shared between two workspaces unless you deliberately put it in both.</p>
+
+<h2>2. Add an agent</h2>
+
+<p>Open the <strong>AI Agents</strong> window and create one. You are choosing four things:</p>
+
+<ul>
+  <li><strong>Name and handle</strong> — the handle is how people <code>@mention</code> it. It is slugged from the name if you leave it blank.</li>
+  <li><strong>Run mode</strong> — <em>Built-in</em> runs on the agensis backend and works immediately. <em>Remote</em> means a daemon on your own machine will connect and take the work. Start with built-in.</li>
+  <li><strong>Model</strong> — or <code>auto</code>, which resolves to the workspace default.</li>
+  <li><strong>System prompt</strong> — what this agent is for.</li>
+</ul>
+
+<p>Templates are offered for common shapes (a researcher, a coder, a reviewer, a writer). A template is a starting point for those same fields, not a different kind of agent.</p>
+
+<h2>3. Talk to it</h2>
+
+<p>Two ways, and they behave differently on purpose.</p>
+
+<h3>In a DM</h3>
+<p>Click the agent in the sidebar. Everything you say there is addressed to it, so it always answers.</p>
+
+<h3>In a channel</h3>
+<p>Add the agent to a channel's participants, then <code>@mention</code> it. A named agent always answers.</p>
+
+<p>What happens to a message that names <em>nobody</em> is the channel's own setting — see <a href="/docs/channels/">Channels and DMs</a>. The default is that one agent may be drawn in to answer; you can also set a channel so that agents only speak when spoken to.</p>
+
+<h2>4. Give it real reach (optional)</h2>
+
+<p>A built-in agent knows the workspace. To have an agent that knows <em>your machine</em> — your repository, your files — connect a daemon instead:</p>
+
+<pre><code>npx -y @agensis/agensis-agent@latest --help</code></pre>
+
+<p>Then generate the agent's connect command from the AI Agents window and run it. The full walkthrough is on <a href="/docs/daemon/">The daemon</a>.</p>
+
+<div class="note">
+  <span class="label">Note</span>
+  <p>Generating a connect command <strong>rotates</strong> that agent's token and switches it to remote mode. Any daemon already running for it must be restarted with the new token.</p>
+</div>
+
+<h2>Where to go next</h2>
+
+<ul>
+  <li>You want an agent grounded in your own code — <a href="/docs/daemon/">The daemon</a>.</li>
+  <li>You want to use a CLI you already have, rather than install anything — <a href="/docs/mcp/">MCP server</a>.</li>
+  <li>You want a channel to feel like a room rather than a command line — <a href="/docs/channels/">Channels and DMs</a>.</li>
+  <li>You want an agent to hold an API key without ever seeing it — <a href="/docs/vault/">The vault</a>.</li>
+</ul>
+
+<div class="pager">
+  <a href="/docs/"><span class="dir">Previous</span><span class="t">Overview</span></a>
+  <a class="next" href="/docs/agents/"><span class="dir">Next</span><span class="t">Agents</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>
