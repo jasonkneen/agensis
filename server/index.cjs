@@ -2707,10 +2707,26 @@ function shellQuote(value) {
  return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, profile = null }) {
- const resolvedModel = resolveAnthropicModel(model);
+function normalizeExecutionRuntime(value) {
+ const runtime = String(value || '').trim().toLowerCase();
+ return runtime === 'claude' || runtime === 'codex' || runtime === 'amp' ? runtime : '';
+}
+
+function resolveExecutionModel(model, runtime) {
+ const value = String(model || '').trim();
+ return runtime && runtime !== 'claude'
+  ? (value || 'auto')
+  : resolveAnthropicModel(value);
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null, profile = null }) {
+ const resolvedRuntime = normalizeExecutionRuntime(runtime);
+ const resolvedModel = resolveExecutionModel(model, resolvedRuntime);
  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
+ const commandModelArgs = resolvedRuntime === 'amp' || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
+  ? []
+  : ['--model', shellQuote(resolvedModel)];
  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
  const profileName = profile === false ? '' : slugHandle(profile || handle || displayName || 'agent');
  if (resolvedPermissionMode === 'yolo') {
@@ -2720,6 +2736,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   'agensis',
   'connect',
   ...(profileName ? ['--profile', shellQuote(profileName)] : []),
+  ...(resolvedRuntime ? ['--runtime', shellQuote(resolvedRuntime)] : []),
   '--url',
   shellQuote(baseUrl),
   '--token',
@@ -2732,8 +2749,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   shellQuote(handle),
   '--name',
   shellQuote(displayName),
-  '--model',
-  shellQuote(resolvedModel),
+  ...commandModelArgs,
   ...commandPermissionArgs,
  ].join(' ');
  return { localCommand: portableCommand, portableCommand };
@@ -2756,7 +2772,8 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
  if (!isAgentEnabled(agent)) throw new Error('Agent is deactivated');
  const token = createAgentConnectToken();
  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
- const resolvedModel = resolveAnthropicModel(model || agent.model);
+ const resolvedRuntime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
+ const resolvedModel = resolveExecutionModel(model || agent.model, resolvedRuntime);
  // F7: do NOT silently escalate. An unspecified mode stays 'default' (least
  // privilege), matching the Netlify connect path (normalizeAgentPermissionMode).
  // A caller wanting full host access must pass permission_mode: 'yolo' explicitly.
@@ -2787,6 +2804,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   name: updateRows[0]?.name || agent.name,
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
+  runtime: resolvedRuntime,
   profile: profile === null ? resolvedHandle : profile,
  });
  return {
@@ -2800,6 +2818,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
   permission_mode: resolvedPermissionMode,
+  runtime: resolvedRuntime || null,
   permissionFlags: agentPermissionFlags(resolvedPermissionMode),
  };
 }
@@ -5141,7 +5160,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage });
    if (result && result.ok) started = true;
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing
@@ -6637,7 +6656,7 @@ const {
  markAgentConnectionOffline, isConnectionSocketLive,
  isConnectionSocketOpen, updateAgentHeartbeat, handleAgentMemorySync,
  handleAgentSkillSync, handleAgentCapabilitiesSync, capabilitiesShapeValid,
- capabilitiesDriftNudges, ampRuntimeFromMessage, refreshConnectedAgentConfigs, touchMcpPresence,
+ capabilitiesDriftNudges, ampRuntimeFromMessage, executionRuntimesFromMessage, refreshConnectedAgentConfigs, touchMcpPresence,
  hasMcpPresence, pruneOfflineConnections, reconcileAgentConnectionsAtStartup,
  applyAgentIdentity, repairCorruptedAgentIdentities,
  AGENT_DISCONNECT_CLOSE_MESSAGES, AGENT_IDENTITY_SELECT, connectedAgents,
@@ -7412,6 +7431,7 @@ module.exports = {
   insertActiveAgentJob,
   buildWhereClause,
   buildDaemonPrompt,
+  agentConnectionCommand,
   // Reply cadence — the pending-wake bookkeeping. The DECISION is pure and lives
   // in shared/replyCadence.cjs; these are only the seams a test needs to prove
   // that a held turn is booked (and never double-booked) rather than dropped.
@@ -7530,6 +7550,8 @@ module.exports = {
   hasActiveBurstJob,
   capabilitiesShapeValid,
   ampRuntimeFromMessage,
+  executionRuntimesFromMessage,
+  refreshConnectedAgentConfigs,
   capabilitiesDriftNudges,
   reachFromMessage,
   reachIsDirect,

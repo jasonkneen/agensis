@@ -378,7 +378,7 @@ test('the Sandbox Agent template is a daemon agent carrying both bundled skills'
   const { SANDBOX_OVERALL_SKILL_ID, SANDBOX_BOX_SKILL_ID } = require('../server/sandbox-skills.cjs');
   assert.match(TEMPLATES, /id: 'sandbox', name: 'Sandbox Agent', handle: 'sandbox'/);
   assert.match(TEMPLATES, new RegExp(`skills: \\['${SANDBOX_OVERALL_SKILL_ID}', '${SANDBOX_BOX_SKILL_ID}'\\]`));
-  assert.match(TEMPLATES, /runMode: 'daemon', icon: Box/);
+  assert.match(TEMPLATES, /runMode: 'daemon', runtime: 'claude', icon: Box/);
 });
 
 // The old path is deliberately untouched: run_mode='sandbox' still routes to the

@@ -614,15 +614,14 @@ export interface AgentCapabilities {
  commands?: Array<{ name: string; parent?: string | null }>;
  clis: string[];
  mcpServers: string[];
- runtimes?: {
-  amp?: {
-   id: 'amp';
-   available: boolean;
-   version: string;
-   reason: string | null;
-   project: { id: string; name: string; repository: string } | null;
-  };
- };
+ runtimes?: Partial<Record<'claude' | 'codex' | 'amp', {
+  id: 'claude' | 'codex' | 'amp';
+  label?: string;
+  available: boolean;
+  version?: string;
+  reason?: string | null;
+  project?: { id: string; name: string; repository: string } | null;
+ }>>;
  sharedModels?: SharedAgentModel[];
  codingRoute?: boolean;
  shared?: boolean;

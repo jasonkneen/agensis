@@ -37,11 +37,63 @@ export interface AgentTemplate {
   tools: string[];
   skills: string[];
   runMode: 'builtin' | 'daemon' | 'sandbox';
+  runtime?: AgentExecutionRuntime;
   metadata?: Record<string, unknown>;
   icon: LucideIcon;
   /** Bundled avatar (from AGENT_AVATAR_CHOICES) used by one-click creation flows
    *  like onboarding. The Agents window form keeps its own avatar default. */
   avatar?: string;
+}
+
+export type AgentExecutionRuntime = 'claude' | 'codex' | 'amp';
+
+export interface AgentRuntimeChoice {
+  id: AgentExecutionRuntime;
+  label: string;
+  available: boolean | null;
+  reason: string | null;
+}
+
+const EXECUTION_RUNTIME_LABELS: Record<AgentExecutionRuntime, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  amp: 'Amp',
+};
+
+export function runtimeChoicesFromConnections(connections: Array<{
+  status?: string;
+  capabilities?: {
+    runtimes?: Partial<Record<AgentExecutionRuntime, { id?: string; available?: boolean; reason?: string | null }>>;
+    clis?: string[];
+  };
+}>): AgentRuntimeChoice[] {
+  return (Object.keys(EXECUTION_RUNTIME_LABELS) as AgentExecutionRuntime[]).map(id => {
+    const reports = connections
+      .filter(connection => connection.status !== 'offline')
+      .map(connection => connection.capabilities?.runtimes?.[id])
+      .filter((runtime): runtime is NonNullable<typeof runtime> => runtime?.id === id);
+    if (reports.length === 0) {
+      return { id, label: EXECUTION_RUNTIME_LABELS[id], available: null, reason: 'not_reported' };
+    }
+    const available = reports.some(runtime => runtime.available === true);
+    return {
+      id,
+      label: EXECUTION_RUNTIME_LABELS[id],
+      available,
+      reason: available ? null : reports.find(runtime => runtime.reason)?.reason || `${id}_not_available`,
+    };
+  });
+}
+
+export function agentMetadataWithRuntime(
+  metadata: Record<string, unknown> | null | undefined,
+  runtime: AgentExecutionRuntime,
+  runMode: AgentTemplate['runMode'],
+): Record<string, unknown> {
+  const next = { ...(metadata || {}) };
+  if (runMode === 'daemon') next.runtime = runtime;
+  else delete next.runtime;
+  return next;
 }
 
 // Starter templates shown in the create gallery. Picking one prefills the form —
@@ -65,26 +117,26 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     id: 'coder', name: 'Coder', handle: 'coder', category: 'Engineering',
     description: 'A local coding agent that runs on your machine via the daemon.',
     systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
-    tools: [], skills: [], runMode: 'daemon', icon: Terminal,
+    tools: [], skills: [], runMode: 'daemon', runtime: 'claude', icon: Terminal,
     avatar: '/agent-avatars/set1-raccoon-denim.png',
   },
   {
     id: 'amp-orb', name: 'Amp Orb', handle: 'amp-orb', category: 'Engineering',
     description: 'Runs each conversation as a persistent Amp thread in an Amp-managed orb.',
     systemPrompt: 'You are an Amp coding agent working in an Amp-managed orb. Work directly in the repository, stream meaningful progress, verify changes before reporting completion, and keep the linked Amp thread as the source of continuity for this conversation.',
-    tools: [], skills: [], runMode: 'daemon', metadata: { runtime: 'amp' }, icon: Terminal,
+    tools: [], skills: [], runMode: 'daemon', runtime: 'amp', icon: Terminal,
   },
   {
     id: 'reviewer', name: 'Code Reviewer', handle: 'reviewer', category: 'Engineering',
     description: 'Reviews diffs for bugs, risks, and style — reports only what matters.',
     systemPrompt: 'You are a senior code reviewer. Review changes for correctness, security, and clarity. Report concrete, high-signal issues with file:line references; skip nitpicks and praise.',
-    tools: [], skills: [], runMode: 'daemon', icon: ShieldCheck,
+    tools: [], skills: [], runMode: 'daemon', runtime: 'claude', icon: ShieldCheck,
   },
   {
     id: 'devops', name: 'DevOps', handle: 'devops', category: 'Engineering',
     description: 'Helps with deploys, CI, infra config, and debugging ops issues.',
     systemPrompt: 'You are a pragmatic DevOps engineer. Help with CI/CD, deployment, infrastructure, and incident debugging. Prefer boring, reliable solutions and explain the blast radius of any change.',
-    tools: [], skills: [], runMode: 'daemon', icon: Rocket,
+    tools: [], skills: [], runMode: 'daemon', runtime: 'claude', icon: Rocket,
   },
   // The Sandbox Agent. Its provider knowledge is NOT in this prompt — it comes
   // from the skill layer named in `skills` and resolved by
@@ -114,7 +166,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     ].join('\n'),
     tools: [],
     skills: ['sandbox-provisioning', 'sandbox-provider-box'],
-    runMode: 'daemon', icon: Box,
+    runMode: 'daemon', runtime: 'claude', icon: Box,
   },
   // The OTHER sandbox agent, and the distinction is the whole point: this one
   // helps a person stand up a sandbox THEY own, on their own provider account,
@@ -152,7 +204,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     ].join('\n'),
     tools: [],
     skills: ['sandbox-setup', 'sandbox-setup-e2b'],
-    runMode: 'daemon', icon: Terminal,
+    runMode: 'daemon', runtime: 'claude', icon: Terminal,
   },
   {
     id: 'writer', name: 'Writer', handle: 'writer', category: 'Content',
@@ -191,7 +243,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     id: 'qa', name: 'QA Tester', handle: 'qa', category: 'Engineering',
     description: 'Designs test cases and hunts for edge cases and regressions.',
     systemPrompt: 'You are a QA engineer. Design thorough test cases, probe edge cases and failure modes, and report reproducible steps. Think adversarially about what could break.',
-    tools: [], skills: [], runMode: 'daemon', icon: Wrench,
+    tools: [], skills: [], runMode: 'daemon', runtime: 'claude', icon: Wrench,
   },
   {
     id: 'translator', name: 'Translator', handle: 'translator', category: 'Content',

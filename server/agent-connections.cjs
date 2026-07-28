@@ -81,6 +81,7 @@ function createAgentConnections(deps = {}) {
   deactivated: 'Agent deactivated',
   disconnected: 'Agent disconnected',
   superseded: 'Replaced by a newer connection for this agent',
+  runtime_mismatch: 'Agent execution runtime changed; reconnect with the new command',
  };
 
  // Phase 1 of a daemon disconnect: take this agent's live connections OUT of the
@@ -116,9 +117,12 @@ function createAgentConnections(deps = {}) {
  async function closeTakenAgentDaemons(taken, reason) {
   if (taken.length === 0) return taken;
   const closeMessage = AGENT_DISCONNECT_CLOSE_MESSAGES[reason] || AGENT_DISCONNECT_CLOSE_MESSAGES.deactivated;
+  const disabledReason = reason === 'runtime_mismatch'
+   ? 'Agent execution runtime changed; reconnect with its new connection command.'
+   : reason;
   for (const entry of taken) {
    if (entry.keepSocket) continue;
-   sendWs(entry.ws, { type: 'agent_disabled', reason });
+   sendWs(entry.ws, { type: 'agent_disabled', reason: disabledReason, code: reason === 'runtime_mismatch' ? reason : undefined });
    try { entry.ws.close(1008, closeMessage); } catch { /* already closing */ }
   }
   for (const entry of taken) await markConnectionOffline(entry.connectionId);
@@ -202,9 +206,23 @@ function createAgentConnections(deps = {}) {
    }
    const agent = agentRuntimePayload(row);
    if (!agent?.id || !agent.workspace_id) continue;
+   const expectedRuntime = configuredExecutionRuntime(agent);
    for (const entry of connectedAgents.values()) {
     if (String(entry.agentId) !== String(agent.id)) continue;
     if (String(entry.workspaceId) !== String(agent.workspace_id)) continue;
+    const connectedRuntime = normalizeExecutionRuntime(parseJsonObject(entry.metadata).executionRuntime);
+    if (expectedRuntime && connectedRuntime !== expectedRuntime) {
+     // Runtime is part of the execution boundary, not a hot-reloadable agent
+     // preference. Remove the stale daemon from dispatch synchronously and make
+     // it reconnect with the newly generated --runtime command. Without this,
+     // changing a legacy agent from Claude to Codex could leave its old Claude
+     // daemon online long enough to execute one job with the wrong runtime.
+     void closeTakenAgentDaemons(
+      takeAgentDaemonConnections(agent.id, agent.workspace_id),
+      'runtime_mismatch',
+     );
+     break;
+    }
     entry.handle = agent.handle;
     entry.name = agent.name;
     entry.agent = agent;
@@ -311,7 +329,31 @@ function createAgentConnections(deps = {}) {
  // with IDENTITY_COLUMNS in shared/agentIdentity.cjs — a field missing here reads
  // as empty, so the declaration always looks like a change and rewrites the row
  // on every reconnect.
- const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, enabled, version from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+ const AGENT_IDENTITY_SELECT = 'select id, name, avatar, accent_color, description, soul, identity, run_mode, metadata, enabled, version from workspace_agents where id = $1 and workspace_id = $2 limit 1';
+
+ const SUPPORTED_EXECUTION_RUNTIMES = new Set(['claude', 'codex', 'amp']);
+
+ function normalizeExecutionRuntime(value) {
+  const runtime = String(value || '').trim().toLowerCase();
+  return SUPPORTED_EXECUTION_RUNTIMES.has(runtime) ? runtime : '';
+ }
+
+ function configuredExecutionRuntime(agent) {
+  return normalizeExecutionRuntime(parseJsonObject(agent?.metadata).runtime);
+ }
+
+ function assertMatchingExecutionRuntime(agent, connectionMetadata) {
+  const expected = configuredExecutionRuntime(agent);
+  if (!expected) return;
+  const actual = normalizeExecutionRuntime(parseJsonObject(connectionMetadata).executionRuntime);
+  if (actual === expected) return;
+  const detail = actual
+   ? `declared ${actual}`
+   : 'did not declare an execution runtime';
+  const error = forbidden(`Agent requires the ${expected} runtime, but this daemon ${detail}`);
+  error.code = 'runtime_mismatch';
+  throw error;
+ }
 
  // How many times a declaration re-reads and retries after losing a write race.
  // Losing three in a row means a human is actively editing the row this second;
@@ -419,6 +461,8 @@ function createAgentConnections(deps = {}) {
   }
   const agentRows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
   if (!isAgentEnabled(agentRows[0])) throw forbidden('Agent is deactivated');
+  const metadata = parseJsonObject(message.metadata);
+  assertMatchingExecutionRuntime(agentRows[0], metadata);
   // The agent declares who it is on every connect; a human's explicit change
   // survives it. Best effort on purpose — a rejected avatar must never be the
   // reason a daemon cannot come online.
@@ -431,7 +475,6 @@ function createAgentConnections(deps = {}) {
   const name = String(message.name || auth.name || handle).trim() || handle;
   const host = String(message.host || '').slice(0, 180);
   const cwd = String(message.cwd || '').slice(0, 500);
-  const metadata = parseJsonObject(message.metadata);
   const connectionId = crypto.randomUUID();
 
   // Drop this agent's dead (offline) rows up front so a reconnect replaces them
@@ -451,6 +494,26 @@ function createAgentConnections(deps = {}) {
       returning *`,
    [connectionId, workspaceId, agentId, name, handle, host, cwd, metadata],
   );
+  // Identity reconciliation and stale-row cleanup above both await. The agent's
+  // selected runtime can change while those operations are in flight, so the
+  // declaration we validated at the start of registration may no longer match.
+  // Re-read after creating the row but BEFORE publishing it into the in-memory
+  // dispatch map. There is deliberately no await between this final validation
+  // and connectedAgents.set below, so a same-process config update cannot slip
+  // between the check and publication.
+  const finalAgentRows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, workspaceId]);
+  try {
+   if (!isAgentEnabled(finalAgentRows[0])) throw forbidden('Agent is deactivated');
+   assertMatchingExecutionRuntime(finalAgentRows[0], metadata);
+  } catch (error) {
+   try {
+    await getDb().unsafe('delete from agent_connections where id = $1 returning *', [connectionId]);
+   } catch {
+    // Best effort: the rejected row was never published as live and normal
+    // offline pruning remains the cleanup backstop.
+   }
+   throw error;
+  }
   const connection = publicAgentConnection(rows[0]);
   ws.agentConnectionId = connectionId;
   ws.agentId = agentId;
@@ -476,7 +539,7 @@ function createAgentConnections(deps = {}) {
   // take → set with NO await between them, so two registers racing inside one
   // tick still leave exactly one live entry.
   const superseded = takeAgentDaemonConnections(agentId, workspaceId, ws);
-  connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, host, cwd, agent: auth.agent });
+  connectedAgents.set(connectionId, { ws, connectionId, workspaceId, agentId, handle, name, host, cwd, metadata, agent: auth.agent });
   notifyDbSubscribers('agent_connections', 'INSERT', [connection]);
   if (superseded.length > 0) {
    // Name the loser AND the winner: an operator reading this needs to know which
@@ -522,6 +585,26 @@ function createAgentConnections(deps = {}) {
     }
     : null,
   };
+ }
+
+ function executionRuntimesFromMessage(value) {
+  const input = parseJsonObject(value);
+  const runtimes = {};
+  for (const [id, label] of [['claude', 'Claude'], ['codex', 'Codex']]) {
+   const runtime = parseJsonObject(input[id]);
+   if (runtime.id !== id) continue;
+   const available = runtime.available === true;
+   runtimes[id] = {
+    id,
+    label,
+    available,
+    version: String(runtime.version || '').slice(0, 120),
+    reason: available ? null : (runtime.reason ? String(runtime.reason).slice(0, 100) : null),
+   };
+  }
+  const amp = ampRuntimeFromMessage(input);
+  if (amp) runtimes.amp = { ...amp, label: 'Amp' };
+  return runtimes;
  }
 
  // Pure drift decision, extracted so it can be unit-tested without a DB. Given the last
@@ -711,10 +794,7 @@ function createAgentConnections(deps = {}) {
    commands: Array.isArray(message.commands) ? message.commands : [],
    clis: Array.isArray(message.clis) ? message.clis : [],
    mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
-   runtimes: (() => {
-    const amp = ampRuntimeFromMessage(message.runtimes);
-    return amp ? { amp } : {};
-   })(),
+   runtimes: executionRuntimesFromMessage(message.runtimes),
    sharedModels: sharedModelsFromMessage(message.sharedModels),
    codingRoute: message.codingRoute === true,
    shared: message.shared === true,
@@ -765,6 +845,7 @@ function createAgentConnections(deps = {}) {
  return {
   applyAgentIdentity,
   ampRuntimeFromMessage,
+  executionRuntimesFromMessage,
   capabilitiesDriftNudges,
   capabilitiesShapeValid,
   closeTakenAgentDaemons,

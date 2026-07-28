@@ -336,7 +336,11 @@ function createBuiltinTurn(deps = {}) {
  // An Amp thread belongs to one Agensis conversation lane, not merely to the
  // agent. The same Amp agent can be working in several channels and threads at
  // once; reusing its newest thread globally would cross-contaminate all of them.
- async function loadAmpThreadBinding({ workspaceId, agentId, sessionId, threadParentId = null }) {
+ async function loadAmpThreadBinding({ workspaceId, agentId, sessionId, threadParentId = null, isDirectMessage = false }) {
+  // A DM is already a single human↔agent conversation, so its stable Amp lane
+  // is the session itself. The UI still hangs each reply from the latest user
+  // message, but those transient message ids must not create a fresh orb.
+  const laneThreadParentId = isDirectMessage ? null : threadParentId;
   const rows = await getDb().unsafe(
    `select metadata from agent_jobs
       where workspace_id = $1
@@ -347,7 +351,7 @@ function createBuiltinTurn(deps = {}) {
         and coalesce(metadata->>'ampLaneThreadParentId', metadata->>'threadParentId', '') = $4
       order by finished_at desc nulls last, created_at desc
       limit 1`,
-   [workspaceId, agentId, sessionId, threadParentId ? String(threadParentId) : ''],
+   [workspaceId, agentId, sessionId, laneThreadParentId ? String(laneThreadParentId) : ''],
   );
   const metadata = rows[0]?.metadata && typeof rows[0].metadata === 'object'
    ? rows[0].metadata
@@ -364,7 +368,7 @@ function createBuiltinTurn(deps = {}) {
    : { id: 'amp' };
  }
 
- async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
+ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
@@ -840,8 +844,9 @@ function createBuiltinTurn(deps = {}) {
   notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
   const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
+  const ampLaneThreadParentId = isDirectMessage ? null : workThreadParentId;
   const ampRuntime = isAmpRuntimeAgent(agent)
-   ? await loadAmpThreadBinding({ workspaceId, agentId: agent.id, sessionId, threadParentId: workThreadParentId })
+   ? await loadAmpThreadBinding({ workspaceId, agentId: agent.id, sessionId, threadParentId: workThreadParentId, isDirectMessage })
    : null;
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
@@ -868,7 +873,7 @@ function createBuiltinTurn(deps = {}) {
      mode: 'daemon',
      ...(ampRuntime ? {
       runtime: 'amp',
-      ampLaneThreadParentId: workThreadParentId || null,
+      ampLaneThreadParentId,
       ...(ampRuntime.threadId ? { ampThreadId: ampRuntime.threadId, ampThreadUrl: ampRuntime.threadUrl } : {}),
      } : {}),
     },

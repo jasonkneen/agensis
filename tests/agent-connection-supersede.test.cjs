@@ -35,6 +35,8 @@ const agentRow = (overrides = {}) => ({
   description: '',
   soul: '',
   identity: {},
+  run_mode: 'daemon',
+  metadata: {},
   enabled: true,
   version: 1,
   ...overrides,
@@ -78,7 +80,7 @@ function agentSocket(label, { workspaceId = WORKSPACE, agentId = AGENT } = {}) {
 
 // Fake DB covering exactly the statements a register (and the eviction it may
 // trigger) runs. Records the connection rows so a test can see which survived.
-function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [] } = {}) {
+function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [], onConnectionInserted = null } = {}) {
   const rows = new Map();
   const log = [];
   const db = {
@@ -101,7 +103,7 @@ function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [] } = {
         return deleted;
       }
       if (text.startsWith('insert into agent_connections')) {
-        const [id, workspace_id, agent_id, name, handle, host, cwd, , metadata] = params;
+        const [id, workspace_id, agent_id, name, handle, host, cwd, metadata] = params;
         const row = {
           id,
           workspace_id,
@@ -118,6 +120,7 @@ function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [] } = {
           updated_at: new Date().toISOString(),
         };
         rows.set(id, row);
+        if (onConnectionInserted) onConnectionInserted({ agents, row });
         return [row];
       }
       if (text.startsWith('update agent_connections set status =')) {
@@ -136,6 +139,12 @@ function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [] } = {
           rows.delete(id);
         }
         return deleted;
+      }
+      if (text.startsWith('delete from agent_connections where id =')) {
+        const row = rows.get(params[0]);
+        if (!row) return [];
+        rows.delete(params[0]);
+        return [row];
       }
       if (text.startsWith('select * from agent_jobs where connection_id')) {
         return runningJobs.filter((job) => job.connection_id === params[0]);
@@ -197,6 +206,101 @@ test('a second register for the same agent evicts the first, leaving ONE live co
   // And its roster row is gone, so the agent is not listed twice.
   assert.deepEqual(db.liveIds(), [second.agentConnectionId]);
   assert.equal(db.rows.size, 1, 'the superseded connection row is deleted, not left offline');
+});
+
+test('an explicitly selected runtime accepts only a matching daemon declaration', async () => {
+  const db = connectionDb({
+    agents: { [AGENT]: agentRow({ metadata: { runtime: 'amp' } }) },
+  });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('amp');
+  await register(ws, { metadata: { runtime: 'agensis', executionRuntime: 'amp' } });
+
+  assert.equal(liveFor(AGENT).length, 1);
+  assert.equal(ws.messages('agent_registered').length, 1);
+  assert.equal(db.rows.get(ws.agentConnectionId).metadata.executionRuntime, 'amp');
+});
+
+test('an explicitly selected runtime rejects a mismatching daemon without changing the agent', async () => {
+  const agent = agentRow({ metadata: { runtime: 'amp', host_folders: ['/workspace'] } });
+  const db = connectionDb({ agents: { [AGENT]: agent } });
+  __test.setTestDb(db);
+
+  await assert.rejects(
+    register(agentSocket('claude'), { metadata: { runtime: 'agensis', executionRuntime: 'claude' } }),
+    (error) => error?.status === 403 && error?.code === 'runtime_mismatch' && /requires the amp runtime/i.test(error.message),
+  );
+
+  assert.equal(liveFor(AGENT).length, 0);
+  assert.equal(db.rows.size, 0, 'a rejected daemon never creates a connection row');
+  assert.deepEqual(agent.metadata, { runtime: 'amp', host_folders: ['/workspace'] }, 'registration never mutates agent metadata');
+});
+
+test('an explicitly selected runtime rejects an old daemon that does not declare one', async () => {
+  const db = connectionDb({
+    agents: { [AGENT]: agentRow({ metadata: { runtime: 'codex' } }) },
+  });
+  __test.setTestDb(db);
+
+  await assert.rejects(
+    register(agentSocket('legacy')),
+    (error) => error?.status === 403 && error?.code === 'runtime_mismatch' && /did not declare/i.test(error.message),
+  );
+  assert.equal(liveFor(AGENT).length, 0);
+});
+
+test('registration revalidates runtime after its asynchronous setup work', async () => {
+  const agents = { [AGENT]: agentRow({ metadata: { runtime: 'claude' } }) };
+  const db = connectionDb({
+    agents,
+    onConnectionInserted: () => {
+      agents[AGENT] = agentRow({ metadata: { runtime: 'amp' } });
+    },
+  });
+  __test.setTestDb(db);
+
+  await assert.rejects(
+    register(agentSocket('racing-claude'), { metadata: { runtime: 'agensis', executionRuntime: 'claude' } }),
+    (error) => error?.code === 'runtime_mismatch' && /requires the amp runtime/i.test(error.message),
+  );
+
+  assert.equal(liveFor(AGENT).length, 0, 'the stale daemon is never published into the dispatch map');
+  assert.equal(db.rows.size, 0, 'the provisional connection row is removed on final validation failure');
+});
+
+test('a legacy agent still accepts an old daemon with no runtime declaration', async () => {
+  const db = connectionDb();
+  __test.setTestDb(db);
+
+  const ws = agentSocket('legacy');
+  await register(ws);
+
+  assert.equal(liveFor(AGENT).length, 1);
+  assert.equal(ws.messages('agent_registered').length, 1);
+});
+
+test('changing an online agent runtime disconnects the stale daemon before another dispatch', async () => {
+  const db = connectionDb({
+    agents: { [AGENT]: agentRow({ metadata: { runtime: 'claude' } }) },
+  });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('claude');
+  await register(ws, { metadata: { runtime: 'agensis', executionRuntime: 'claude' } });
+
+  __test.refreshConnectedAgentConfigs('UPDATE', [{
+    ...agentRow({ metadata: { runtime: 'amp' } }),
+    workspace_id: WORKSPACE,
+  }]);
+  assert.equal(liveFor(AGENT).length, 0, 'the mismatched daemon leaves the dispatch map synchronously');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(ws.messages('agent_disabled')[0].code, 'runtime_mismatch');
+  assert.match(ws.messages('agent_disabled')[0].reason, /runtime changed/i);
+  assert.equal(ws.closed.code, 1008);
+  assert.equal(ws.closed.reason, __test.AGENT_DISCONNECT_CLOSE_MESSAGES.runtime_mismatch);
+  assert.equal(db.rows.get(ws.agentConnectionId).status, 'offline');
 });
 
 test('the evicted socket is told WHY, on both the message and the close frame', async () => {
