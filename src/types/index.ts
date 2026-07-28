@@ -130,11 +130,18 @@ export interface Message {
  // `content` is a complete sentence, so a client that does not know the kind
  // still renders something true; huddle_id below is what makes it a link back
  // to the transcript.
+ // ...and 'permission_request' for the card a daemon agent raises when a tool
+ // call needs a human's yes. Its `content` is the settled sentence once decided
+ // ("Allowed by Jason: Bash · git clone …"), so a client that does not know the
+ // kind still reads something true; permission_request_id below is what turns it
+ // into a card with buttons.
  message_kind?: string | null;
  tool_name?: string | null;
  tool_detail?: string | null;
  /** Set only on a huddle marker row. Null/absent everywhere else. */
  huddle_id?: string | null;
+ /** Set only on a permission-request card. Points at agent_permission_requests.id. */
+ permission_request_id?: string | null;
  // "Send to channel": a thread reply that is ALSO shown in the channel/DM view.
  // An agent works inside a thread and flags only its final answer; a human can
  // flag a reply from the thread composer. The row KEEPS its thread_parent_id, so a
@@ -513,6 +520,40 @@ export const AI_MODELS: AIModel[] = [
 ];
 
 export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';
+
+/** How long a grant lasts. 'always' is stored on the agent and survives restarts. */
+export type PermissionScope = 'once' | 'session' | 'always';
+
+/**
+ * One "may I run this?" a daemon agent raised, and the answer it got.
+ *
+ * The row is the source of truth for the card in the transcript: the anchor
+ * message carries only a human-readable fallback, because a client that does
+ * not know this kind must still render something honest.
+ */
+export interface PermissionRequest {
+ id: string;
+ workspaceId: string;
+ agentId: string;
+ jobId: string | null;
+ sessionId: string | null;
+ messageId: string | null;
+ toolName: string;
+ toolDetail: string;
+ title: string;
+ description: string;
+ /** The exact rule strings an "always allow" would make permanent, e.g. `Bash(git clone:*)`. */
+ rules: string[];
+ /** Which buttons this request may be answered with — 'always' only when there is a rule to store. */
+ scopes: PermissionScope[];
+ status: 'pending' | 'allowed' | 'denied' | 'expired';
+ scope: PermissionScope | '';
+ decidedBy: string | null;
+ decidedByName: string;
+ decidedAt: string | null;
+ expiresAt: string | null;
+ createdAt: string | null;
+}
 
 export interface DocumentVersion {
  id: string;

@@ -63,6 +63,11 @@ const {
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const {
+ createAgentPermissions,
+ ensureAgentPermissionsSchema,
+ mountAgentPermissionRoutes,
+} = require('./agent-permissions.cjs');
 const { channelIntentNote } = require('../shared/channelIntent.cjs');
 const {
  ORB_MAX_BODY_BYTES,
@@ -1706,6 +1711,14 @@ async function ensureRuntimeSchema() {
   await ensureHuddlesSchema(getDb());
  } catch (error) {
   console.warn('[backend] huddles schema migration failed:', error.message || error);
+ }
+
+ // Interactive tool approvals, same arrangement: the table lives with its
+ // module (server/agent-permissions.cjs) and its DDL runs here.
+ try {
+  await ensureAgentPermissionsSchema(getDb());
+ } catch (error) {
+  console.warn('[backend] agent permissions schema migration failed:', error.message || error);
  }
 
  // --- Cost metering -------------------------------------------------------
@@ -6735,6 +6748,22 @@ const {
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
+// Interactive tool approvals. Stateless like agent jobs, and for the same
+// reason: a pending approval must survive a server restart, because the daemon
+// on the other side is still holding its turn open waiting for the answer.
+const agentPermissions = createAgentPermissions({
+ badRequest, forbidden, getDb, parseJsonObject,
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
+ sendWs: (...a) => realtime.sendWs(...a),
+ getConnectedAgents: () => agentConnections.connectedAgents,
+});
+const {
+ decideAgentPermissionRequest, expireConnectionPermissionRequests,
+ expireStalePermissionRequests, handleAgentPermissionRequest,
+ publicPermissionRequest, revokeAgentPermissionRule,
+} = agentPermissions;
+
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
 // wakes own live timers — see server/task-dispatch.cjs.
 const taskDispatch = createTaskDispatch({
@@ -6762,6 +6791,7 @@ const {
 // because its socket handlers call into these.
 const agentConnections = createAgentConnections({
  agentRuntimePayload, applyIdentityDeclaration, bindDbParam, drainAgentTaskQueue,
+ expireConnectionPermissionRequests,
  failConnectionJobs, finalizeStuckJob, forbidden, getDb, inferenceBroker,
  isAgentEnabled, logConnectionActivity, normalizeSkillDocuments, parseJsonObject,
  publicAgentConnection, publicFarmEnrolledAgent, quoteIdent, reachFromMessage,
@@ -6797,6 +6827,7 @@ const realtime = createRealtime({
  handleAgentCapabilitiesSync,
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
  handleAgentJobStep, handleAgentMemorySync, handleAgentSkillSync,
+ handleAgentPermissionRequest,
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
@@ -7028,6 +7059,7 @@ function createApp() {
  mountInferenceRoutes(app, { ...coreDeps(), authorizeUserOrFarmWorkspace, bindInferenceAbort, createOpenAIInferenceStreamRelay, inferenceBroker, liveSharedModelRoutes, publicInferenceModel });
 
  mountConnectionsRoutes(app, { ...coreDeps(), buildInboxSql, isConnectionSocketLive, publicAgentConnection });
+ mountAgentPermissionRoutes(app, { ...coreDeps(), decideAgentPermissionRequest, publicPermissionRequest, revokeAgentPermissionRule });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
@@ -7461,7 +7493,7 @@ function startBackendServer(port = DEFAULT_PORT) {
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); }, 30_000);
+ const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {
@@ -7688,6 +7720,12 @@ module.exports = {
   cancelFarmAgentJob,
   handleAgentJobDelta,
   handleAgentJobStep,
+  handleAgentPermissionRequest,
+  decideAgentPermissionRequest,
+  expireStalePermissionRequests,
+  expireConnectionPermissionRequests,
+  revokeAgentPermissionRule,
+  publicPermissionRequest,
   handleAgentJobSegment,
   agentStepContent,
   agentStepParts,

@@ -30,6 +30,7 @@ function createAgentConnections(deps = {}) {
   applyIdentityDeclaration,
   bindDbParam,
   drainAgentTaskQueue,
+  expireConnectionPermissionRequests,
   failConnectionJobs,
   finalizeStuckJob,
   forbidden,
@@ -233,6 +234,9 @@ function createAgentConnections(deps = {}) {
   connectedAgents.delete(connectionId);
   inferenceBroker.failConnection(connectionId, 'The inference agent connection disconnected.');
   void failConnectionJobs(connectionId, 'the daemon disconnected');
+  // The process that would have acted on an approval is gone; a card still
+  // offering Allow/Deny would be a button that does nothing.
+  void expireConnectionPermissionRequests(connectionId);
   try {
    const rows = await getDb().unsafe(
     `update agent_connections

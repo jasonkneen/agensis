@@ -94,6 +94,9 @@ import {
 } from '../../lib/messageAttachments';
 import { ToolStepGroup } from '../chat/ToolStepGroup';
 import { buildTranscriptRows } from '../chat/toolSteps';
+import { PermissionRequestCard } from '../chat/PermissionRequestCard';
+import { isPermissionRequestMessage } from '../chat/permissionRequests';
+import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { isBroadcastFromThread } from '../chat/channelView';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
@@ -912,6 +915,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // Consecutive tool steps collapse into one chip row; every other message keeps its
   // own row at its original position. Order is never changed.
   const shownRows = useMemo(() => buildTranscriptRows(shownMessages), [shownMessages]);
+
+  // Tool approvals. A permission_request message is only an ANCHOR — its state
+  // (still open? granted for how long? by whom?) lives on the request row, which
+  // arrives over realtime, so the card is looked up by id rather than rendered
+  // from the message alone. A card whose row has not arrived yet falls back to
+  // the message's own sentence, which is always true if less useful.
+  const {
+    byId: permissionRequestsById,
+    busyId: permissionBusyId,
+    decide: decidePermission,
+  } = usePermissionRequests(workspaceId || null);
 
   // Marker runs, resolved once per message list rather than per row: the row
   // loop needs to know both "does a group START here" and "is this marker
@@ -1846,6 +1860,31 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                         );
                       }
                       const msg = row.message;
+                      // An agent is BLOCKED on this one: its turn is parked
+                      // waiting for a click, and with no click the tool call is
+                      // refused. It gets a card with buttons, not a bubble.
+                      if (isPermissionRequestMessage(msg)) {
+                        const request = msg.permission_request_id
+                          ? permissionRequestsById.get(msg.permission_request_id)
+                          : undefined;
+                        if (request) {
+                          return (
+                            <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>
+                              <PermissionRequestCard
+                                request={request}
+                                busy={permissionBusyId === request.id}
+                                onDecide={async (behavior, scope) => {
+                                  const { error } = await decidePermission(request.id, behavior, scope);
+                                  if (error) throw new Error(error);
+                                }}
+                              />
+                            </MessageScrollerItem>
+                          );
+                        }
+                        // No row yet (still loading, or already pruned): the
+                        // message's own content is a complete sentence, so fall
+                        // through and render it as an ordinary line.
+                      }
                       // "You were in a huddle" — a fact about the channel, not
                       // something anyone said in it. One quiet line where the
                       // whole voice conversation used to be dumped.

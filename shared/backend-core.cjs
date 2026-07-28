@@ -76,6 +76,15 @@ const ALLOWED_TABLES = new Set([
  // so a client cannot forge or erase a delivery record. Same shape as
  // agent_schedule_runs, for the same reason.
  'orb_deliveries',
+ // Interactive tool approvals. READ through the generic /db path so the card in
+ // the transcript goes live the instant a daemon asks, over the same realtime
+ // db_changes subscription every other table uses. Every WRITE is gated to
+ // 'manage' below and goes through POST
+ // /backend/workspaces/:id/permission-requests/:requestId instead — the answer
+ // has to reach the daemon holding the turn open, and a row flipped straight to
+ // 'allowed' via /backend/db/update would show "Approved" under a tool call
+ // that never ran.
+ 'agent_permission_requests',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -153,6 +162,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
+ 'agent_permission_requests',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -206,6 +216,11 @@ const DB_TABLE_ACCESS = {
  // delivery id and make the next real delivery look like a duplicate, and a
  // client DELETE would erase the audit trail. Reads stay at 'read'.
  orb_deliveries: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Read-only to the client, same shape and same reason as orb_deliveries: the
+ // rows are written by the daemon socket and settled by the decide route, which
+ // is where the "did the answer actually reach the agent?" check lives. A
+ // client-forged or client-updated row would claim a grant nothing acted on.
+ agent_permission_requests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,

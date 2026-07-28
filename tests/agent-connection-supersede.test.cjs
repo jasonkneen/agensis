@@ -140,6 +140,13 @@ function connectionDb({ agents = { [AGENT]: agentRow() }, runningJobs = [] } = {
       if (text.startsWith('select * from agent_jobs where connection_id')) {
         return runningJobs.filter((job) => job.connection_id === params[0]);
       }
+      // A disconnecting daemon's parked tool approvals expire with its jobs —
+      // the process that would act on an answer is gone. No pending rows in
+      // this fixture, so it returns none; the point is that the sweep is part
+      // of the disconnect path and not an unexpected write.
+      if (text.startsWith('update agent_permission_requests set status = \'expired\'')) {
+        return [];
+      }
       if (text.startsWith('insert into activity_events')) {
         return [];
       }

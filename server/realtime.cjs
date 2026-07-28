@@ -39,6 +39,7 @@ function createRealtime(deps = {}) {
   handleAgentJobSegment,
   handleAgentJobStep,
   handleAgentMemorySync,
+  handleAgentPermissionRequest,
   handleAgentSkillSync,
   handlePeerListRequest,
   handlePeerTicketRequest,
@@ -462,6 +463,10 @@ function createRealtime(deps = {}) {
      }
      if (message.action === 'agent_job_segment') {
       await handleAgentJobSegment(ws, message);
+      return;
+     }
+     if (message.action === 'agent_permission_request') {
+      await handleAgentPermissionRequest(ws, message);
       return;
      }
      if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {
