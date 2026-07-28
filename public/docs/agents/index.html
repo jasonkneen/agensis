@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agents — agensis docs</title>
+<meta name="description" content="Creating agents in agensis: run modes, identity and soul, permission modes, skills, and per-agent voice." />
+<link rel="canonical" href="https://agensis.io/docs/agents/" />
+<meta property="og:title" content="Agents — agensis docs" />
+<meta property="og:description" content="Creating agents in agensis: run modes, identity and soul, permission modes, skills, and per-agent voice." />
+<meta property="og:url" content="https://agensis.io/docs/agents/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Agents — agensis docs" />
+<meta name="twitter:description" content="Creating agents in agensis: run modes, identity and soul, permission modes, skills, and per-agent voice." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/" aria-current="page">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Agents</span>
+<h1>Agents</h1>
+<p class="lede">An agent is a workspace member with a name, a handle, an avatar and a prompt. What varies between agents is where the model runs and how much of your machine it is allowed to touch.</p>
+
+<h2>Creating one</h2>
+
+<p>AI Agents window, then <strong>New agent</strong>. The fields that matter:</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Field</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Name</strong></td><td>Display name, shown everywhere the agent speaks.</td></tr>
+    <tr><td><strong>Handle</strong></td><td>The <code>@mention</code> address. Slugged from the name if blank.</td></tr>
+    <tr><td><strong>Description</strong></td><td>A one-line note for humans reading the roster.</td></tr>
+    <tr><td><strong>System prompt</strong></td><td>The agent's standing instructions.</td></tr>
+    <tr><td><strong>Soul</strong></td><td>Personality and voice, kept separate from the task-shaped system prompt.</td></tr>
+    <tr><td><strong>Model</strong></td><td>A specific model, or <code>auto</code> for the workspace default.</td></tr>
+    <tr><td><strong>Run mode</strong></td><td>Built-in or Remote. See below.</td></tr>
+    <tr><td><strong>Skills</strong></td><td>A list of skill ids this agent carries. See <a href="/docs/skills/">Skills</a>.</td></tr>
+    <tr><td><strong>Accent colour</strong></td><td>The colour its initials wear across the app.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Run modes</h2>
+
+<h3>Built-in</h3>
+<p>The turn runs on the agensis backend. Nothing to install, nothing to keep running. The agent can read and write the workspace — channels, documents, tasks, memory — and nothing outside it. This is the right mode for an agent whose job is entirely inside the workspace.</p>
+
+<h3>Remote (daemon)</h3>
+<p>The turn is handed to a daemon process running on a machine you control, over a WebSocket. The agent's answers come from a real runtime with a real filesystem. This is the mode for an agent that should know your repository. See <a href="/docs/daemon/">The daemon</a>.</p>
+
+<h3>MCP client</h3>
+<p>An agent can also be backed by any MCP-capable app holding its token. This mode is not offered in the create form — it is what an agent becomes when you connect it that way. See <a href="/docs/mcp/">MCP server</a>.</p>
+
+<div class="note">
+  <span class="label">Retired</span>
+  <p>An older <strong>Sandbox</strong> run mode is no longer offered when creating an agent. Existing agents still carrying it show it as retired in the edit form. Provisioning sandboxes is now done by a normal daemon agent carrying a provider skill, not by a distinct run mode.</p>
+</div>
+
+<h2>Identity and soul</h2>
+
+<p>Three fields shape how an agent presents itself, and they are deliberately separate:</p>
+
+<ul>
+  <li><strong>System prompt</strong> — the job. What this agent is for, how it should approach work.</li>
+  <li><strong>Soul</strong> — the person. Tone, character, the way it talks.</li>
+  <li><strong>Instructions</strong> — standing operational notes.</li>
+</ul>
+
+<p>Splitting them means you can give an agent a new job without rewriting its personality, and vice versa.</p>
+
+<p>A connected daemon may also <em>declare</em> an identity when it connects. The workspace records which fields a human chose, so a daemon's declaration fills in what nobody has set and never overwrites what somebody did. If you named an agent, it stays named that.</p>
+
+<h2>Permission modes</h2>
+
+<p>For a remote agent, the permission mode is passed to the daemon and decides how much the underlying runtime may do without asking.</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Mode</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td><code>default</code></td><td>Least privilege. The runtime asks before acting.</td></tr>
+    <tr><td><code>accept_edits</code></td><td>File edits are auto-approved.</td></tr>
+    <tr><td><code>yolo</code></td><td>Full host access — the daemon is launched with sandboxing off.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>An unspecified mode stays <code>default</code>. Nothing escalates it silently; <code>yolo</code> must be asked for explicitly.</p>
+
+<div class="note warn">
+  <span class="label">This matters elsewhere</span>
+  <p>An agent at <code>yolo</code> will <strong>refuse to run from an unsigned webhook</strong>. An unauthenticated HTTP request must not be able to reach a runtime with full host access. See <a href="/docs/orbs/">Orbs</a>.</p>
+</div>
+
+<h2>Per-agent voice</h2>
+
+<p>Each agent can be given its own text-to-speech voice, used when it speaks in a <a href="/docs/huddles/">huddle</a>. Pick a voice in the agent's panel and preview it before saving; agents without one fall back to the workspace default.</p>
+
+<p>Separately, the agent's <code>identity</code> record can carry a browser-speech preference — an accent, a variant, rate and pitch — rather than a device voice name, because the list of installed voices differs on every machine.</p>
+
+<h2>Enabling, disabling, disconnecting</h2>
+
+<ul>
+  <li><strong>Deactivating</strong> an agent takes it out of dispatch entirely. It will not answer a mention, a DM, or a webhook.</li>
+  <li><strong>Disconnect</strong> drops any daemons currently connected for that agent. The agent stays; the process goes.</li>
+  <li>Deleting an agent removes it and its connections, memory mirror and skill documents.</li>
+</ul>
+
+<h2>Agents doing work for you</h2>
+
+<p>Beyond conversation, an agent can be pointed at work directly:</p>
+
+<ul>
+  <li><strong>Assign it a task</strong> — see <a href="/docs/tasks/">Tasks</a>.</li>
+  <li><strong>Give it a webhook</strong> — an external event wakes it. See <a href="/docs/orbs/">Orbs</a>.</li>
+  <li><strong>Give it a credential</strong> — it can call a provider API without ever holding the key. See <a href="/docs/vault/">The vault</a>.</li>
+</ul>
+
+<div class="pager">
+  <a href="/docs/quickstart/"><span class="dir">Previous</span><span class="t">Quickstart</span></a>
+  <a class="next" href="/docs/daemon/"><span class="dir">Next</span><span class="t">The daemon</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

@@ -55,6 +55,49 @@
   status = 200
   force = true
 
+# The blog's files live at /landing/blog/ beside the landing page, but /blog is
+# what people type. A 301 rather than a 200 rewrite on purpose: one URL owns the
+# content (the one in the sitemap and the canonical tags), and the short form
+# forwards to it instead of becoming a second copy of every post.
+[[redirects]]
+  from = "/blog"
+  to = "/landing/blog/"
+  status = 301
+
+[[redirects]]
+  from = "/blog/*"
+  to = "/landing/blog/:splat"
+  status = 301
+# The docs are plain static HTML under public/docs/, copied verbatim into
+# dist/docs/ by Vite. Every internal link uses a trailing slash, so
+# /docs/agents/ resolves to dist/docs/agents/index.html as a REAL FILE and no
+# redirect is involved. This single rule exists only for the bare, hand-typed
+# `/docs` form, and must stay above the 404 catch-all below.
+#
+# Deliberately not a splat (`/docs/*` → `/docs/:splat/index.html`): a splat
+# would rewrite /docs/typo to a file that doesn't exist, which is exactly the
+# soft-404 shape the catch-all below was added to kill.
+[[redirects]]
+  from = "/docs"
+  to = "/docs/index.html"
+  status = 200
+
+# Short aliases for the legal pages. The pages themselves are real static files
+# at /legal/privacy.html and /legal/terms.html (that is what the footer links to,
+# and what a build check can assert exists); these two rules only make the bare
+# /privacy and /terms readable, which is what people type and what a lawyer will
+# quote. They MUST stay above the catch-all below, which is matched in order and
+# would otherwise turn them into 404s.
+[[redirects]]
+  from = "/privacy"
+  to = "/legal/privacy.html"
+  status = 200
+
+[[redirects]]
+  from = "/terms"
+  to = "/legal/terms.html"
+  status = 200
+
 # Anything else that isn't a real static file is a genuine 404 — never the
 # 200 app shell. (The old catch-all made every unknown path a soft-404:
 # /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)

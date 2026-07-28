@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Terms of Service — agensis</title>
+<meta name="description" content="The terms on which agensis is provided: accounts, plans, acceptable use, how AI agents act on your behalf, and the limits of what is warranted." />
+<!-- NOINDEX while this document is a draft. Remove this tag at publication,
+     together with the draft banner in <body>. -->
+<meta name="robots" content="noindex" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #08090b;
+    --panel: #0f1218;
+    --line: rgba(232, 230, 225, 0.09);
+    --line-soft: rgba(232, 230, 225, 0.05);
+    --text: #e8e6e1;
+    --muted: #8b909c;
+    --dim: #5c6170;
+    --accent: #4f9cf9;
+    --accent-soft: rgba(79, 156, 249, 0.14);
+    --warn: #f2b94b;
+    --warn-soft: rgba(242, 185, 75, 0.12);
+    --serif: "Instrument Serif", Georgia, serif;
+    --sans: "Instrument Sans", -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- nav ---------- */
+  nav {
+    border-bottom: 1px solid var(--line-soft);
+    padding: 20px 0;
+  }
+  nav .wrap { display: flex; align-items: center; gap: 20px; }
+  .brand {
+    font-family: var(--serif); font-size: 20px;
+    color: var(--text); text-decoration: none; letter-spacing: -0.01em;
+  }
+  nav .spacer { flex: 1; }
+  nav a.link {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted); text-decoration: none;
+  }
+  nav a.link:hover { color: var(--text); }
+
+  /* ---------- draft banner ---------- */
+  .draft {
+    border: 1px solid rgba(242, 185, 75, 0.42);
+    background: var(--warn-soft);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin: 36px 0 8px;
+  }
+  .draft .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--warn); display: block; margin-bottom: 10px;
+  }
+  .draft p { color: var(--text); font-size: 15px; margin-bottom: 10px; }
+  .draft p:last-child { margin-bottom: 0; }
+  .draft strong { color: var(--warn); font-weight: 600; }
+
+  /* ---------- headings + body ---------- */
+  header.doc { padding: 44px 0 8px; }
+  h1 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(2.4rem, 6vw, 3.4rem); line-height: 1.08;
+    letter-spacing: -0.015em; margin-bottom: 14px;
+  }
+  .meta {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--dim);
+  }
+
+  main { padding: 8px 0 72px; }
+
+  h2 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: 1.75rem; line-height: 1.2; letter-spacing: -0.01em;
+    margin: 52px 0 14px; padding-top: 24px;
+    border-top: 1px solid var(--line-soft);
+  }
+  h3 {
+    font-size: 15px; font-weight: 600; color: var(--text);
+    margin: 30px 0 8px; letter-spacing: -0.005em;
+  }
+  p { color: var(--muted); margin-bottom: 16px; }
+  p strong, li strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  ul, ol { color: var(--muted); margin: 0 0 18px 0; padding-left: 22px; }
+  li { margin-bottom: 9px; }
+  li::marker { color: var(--dim); }
+
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--panel); border: 1px solid var(--line-soft);
+    border-radius: 4px; padding: 1px 5px; color: var(--text);
+  }
+
+  /* ---------- decision placeholder ---------- */
+  .todo {
+    display: inline-block;
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    color: var(--warn);
+    background: var(--warn-soft);
+    border: 1px dashed rgba(242, 185, 75, 0.5);
+    border-radius: 5px;
+    padding: 2px 8px;
+  }
+
+  /* ---------- table ---------- */
+  .tablewrap { overflow-x: auto; margin: 0 0 22px; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+  th, td { text-align: left; padding: 12px 16px; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+  th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--dim); font-weight: 400;
+    background: var(--panel);
+  }
+  td { color: var(--muted); }
+  td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+
+  /* ---------- callout ---------- */
+  .note {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 0 0 20px;
+  }
+  .note p { color: var(--text); font-size: 15px; margin-bottom: 10px; }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- toc ---------- */
+  .toc {
+    border: 1px solid var(--line-soft); border-radius: 10px;
+    background: var(--panel); padding: 20px 24px; margin: 34px 0 0;
+  }
+  .toc p {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 12px;
+  }
+  .toc ol { margin: 0; padding-left: 20px; font-size: 14px; }
+  .toc li { margin-bottom: 5px; }
+  .toc a { color: var(--muted); }
+  .toc a:hover { color: var(--text); text-decoration: none; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line-soft); padding: 30px 0 56px; }
+  .foot {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    letter-spacing: 0.08em;
+  }
+  .foot .spacer { flex: 1; }
+  .foot a { color: var(--muted); }
+  .foot a:hover { color: var(--text); text-decoration: none; }
+
+  @media (max-width: 620px) {
+    body { font-size: 15px; }
+    h2 { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a href="/" class="brand">agensis</a>
+    <span class="spacer"></span>
+    <a href="/legal/privacy.html" class="link">Privacy</a>
+    <a href="/app" class="link">Open app</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <!-- ============================================================
+       DRAFT NOTICE — remove this block, and the noindex meta tag in
+       <head>, only when a qualified lawyer has reviewed and approved
+       this document for publication.
+       ============================================================ -->
+  <div class="draft">
+    <span class="tag">Draft — not legally reviewed</span>
+    <p><strong>This document is a working draft and is not in force.</strong> It describes how the agensis software actually behaves, verified against the source code, in the shape of a terms-of-service agreement. It has <strong>not</strong> been reviewed by a lawyer, and it does not create a binding agreement between you and anyone.</p>
+    <p>It must not be published or relied upon until a qualified legal professional has reviewed it. Passages marked in <span class="todo">amber</span> are business or legal decisions that have not been made.</p>
+  </div>
+</div>
+
+<header class="doc">
+  <div class="wrap">
+    <h1>Terms of Service</h1>
+    <p class="meta">Draft &middot; prepared 27 July 2026 &middot; not yet in effect</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#agreement">The agreement</a></li>
+      <li><a href="#accounts">Your account</a></li>
+      <li><a href="#workspaces">Workspaces and members</a></li>
+      <li><a href="#plans">Plans and payment</a></li>
+      <li><a href="#acceptable">Acceptable use</a></li>
+      <li><a href="#content">Your content</a></li>
+      <li><a href="#ai">Agents and AI output</a></li>
+      <li><a href="#daemon">Agents on your own machine</a></li>
+      <li><a href="#thirdparty">Third-party services and your credentials</a></li>
+      <li><a href="#availability">Availability and beta status</a></li>
+      <li><a href="#termination">Suspension and termination</a></li>
+      <li><a href="#disclaimer">Disclaimers</a></li>
+      <li><a href="#liability">Limitation of liability</a></li>
+      <li><a href="#indemnity">Indemnity</a></li>
+      <li><a href="#opensource">Open source and self-hosting</a></li>
+      <li><a href="#law">Governing law and disputes</a></li>
+      <li><a href="#changes">Changes to these terms</a></li>
+    </ol>
+  </nav>
+</div>
+
+<main>
+<div class="wrap">
+
+  <h2 id="agreement">1. The agreement</h2>
+
+  <p>These terms govern your use of the hosted agensis service at <code>agensis.io</code> — the web app, the backend that serves it, and the agent daemon when it is connected to that backend. By creating an account or using the service you agree to them.</p>
+
+  <p><span class="todo">DECISION NEEDED: the legal entity offering the service — its name, company number, registered address, and the contact address for legal notices. None of this exists in the product today and none has been invented here. Every "we" in this document is currently unattributed.</span></p>
+
+  <p>Separately from the hosted service, the agensis source code is published under the MIT licence. Running your own copy is governed by that licence, not by these terms — see section 15.</p>
+
+  <h2 id="accounts">2. Your account</h2>
+
+  <p>You may create an account with an email address and a password, or by signing in with Google or GitHub. You agree that:</p>
+  <ul>
+    <li>the information you give is accurate, and the email address is one you control;</li>
+    <li>you are responsible for keeping your password and your sessions secure, and for everything done under your account;</li>
+    <li>you will tell us promptly if you believe your account has been compromised.</li>
+  </ul>
+
+  <div class="note">
+    <p><strong>Two limitations you should know before you rely on the service.</strong> agensis does not currently send email of any kind. There is therefore <strong>no email verification</strong> — an address is never proven to belong to you — and <strong>no password reset</strong>. If you lose your password to an email-and-password account, there is no self-service way to recover it. Signing in with Google or GitHub avoids this.</p>
+    <p>There is also <strong>no self-service account deletion</strong> today. Deleting an account requires a request to the operator.</p>
+  </div>
+
+  <p><span class="todo">DECISION NEEDED: a minimum age for the service. Nothing in the product asks for or verifies an age.</span></p>
+
+  <h2 id="workspaces">3. Workspaces and members</h2>
+
+  <p>A workspace is the unit of collaboration. Its owner controls who is a member and what role each member has: <strong>owner, admin, editor, commenter or viewer</strong>.</p>
+
+  <div class="note">
+    <p><strong>Roles control what a member can change, not what they can read.</strong> Any member of a workspace — including a viewer — can read every channel, every direct message, every document, every task, every memory fact and every uploaded file in it. There are no per-channel or per-conversation permissions. Do not put anything in a workspace that you would not show to every member of it.</p>
+  </div>
+
+  <p>If you invite someone to a workspace, you are responsible for that decision and for what they can then see. Owners and admins may remove members at any time.</p>
+
+  <h2 id="plans">4. Plans and payment</h2>
+
+  <div class="note">
+    <p><strong>Billing is not implemented yet.</strong> There is no payment processor connected to agensis, no charge is made, and every account is on the free plan. The plans below are the published intended pricing; they take effect only when billing is switched on and you actively choose a paid plan.</p>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Plan</th><th>Price</th><th>What it includes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Free</td>
+          <td>$0 forever</td>
+          <td>1 workspace, 1 seat, 2 connected daemons. Managed inference covers auto-interject only (roughly 200 Haiku calls a month).</td>
+        </tr>
+        <tr>
+          <td>Pro</td>
+          <td>$20 per seat / month billed annually, or $24 month-to-month</td>
+          <td>Unlimited connected daemons. Managed inference: Haiku plus a $5&nbsp;/&nbsp;month token allowance; past the allowance you add your own key.</td>
+        </tr>
+        <tr>
+          <td>Team</td>
+          <td>$50 per seat / month billed annually, or $60 month-to-month. <strong>Minimum 3 seats.</strong></td>
+          <td>Everything in Pro, with a pooled inference allowance across the team.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Points that follow from how the product is built:</p>
+  <ul>
+    <li><strong>Seats are humans, not agents.</strong> Connected daemons are unlimited on paid plans because they run on your hardware and your AI account, and cost us nothing. You add seats when more <em>people</em> need access.</li>
+    <li><strong>"Managed inference" means the small number of calls that run on our AI key</strong> — chiefly auto-interject, the cheap decision about whether an agent should chime in. It is not a general allowance for all model usage. Past the allowance you supply your own key, so there is no surprise bill.</li>
+    <li>Prices are in <strong>US dollars</strong> and exclude any taxes that may apply.</li>
+  </ul>
+
+  <p><span class="todo">DECISION NEEDED before billing goes live: the payment processor and its terms; the billing cycle, proration and refund policy; what happens to a workspace that exceeds its seat count or storage quota; what happens to your data if a subscription lapses or is cancelled; whether annual plans auto-renew and how they are cancelled; and how price changes are notified.</span></p>
+
+  <h2 id="acceptable">5. Acceptable use</h2>
+
+  <p>You may not use agensis, or direct an agent to use it, to:</p>
+  <ul>
+    <li>break the law, or infringe anyone's intellectual property, privacy or other rights;</li>
+    <li>upload or generate malware, or content that is unlawful, harassing, defamatory, or sexual material involving minors;</li>
+    <li>gain unauthorised access to any system, account or data — ours, another user's, or a third party's;</li>
+    <li>probe, scan or attempt to defeat the service's security or rate limits, or use the link-preview, gateway, webhook or provider-call features to reach systems you are not authorised to reach;</li>
+    <li>send spam or unsolicited bulk messages;</li>
+    <li>resell or white-label the hosted service, or use it to build a competing hosted product (this restriction applies to the hosted service only — the MIT-licensed source code carries no such condition);</li>
+    <li>place a load on the service that degrades it for others, including by automating the interface at a volume the product was not built for.</li>
+  </ul>
+
+  <p><strong>You are responsible for what your agents do.</strong> An agent acting under your account, or in your workspace, is acting for you. Instructing an agent to do something that would breach these terms is a breach of these terms.</p>
+
+  <h2 id="content">6. Your content</h2>
+
+  <p><strong>Your content remains yours.</strong> Messages, documents, files, memory, canvas objects and agent configurations that you or your agents create in a workspace belong to you or to whoever owned them already. We claim no ownership of them.</p>
+
+  <p>You grant us only the licence we need to run the service: to store, copy, transmit and display your content in order to show it to the members of your workspace, to send it to the AI providers and other destinations described in the <a href="/legal/privacy.html">Privacy Policy</a>, and to back it up. That licence exists for the purpose of operating the service and for no other.</p>
+
+  <p><strong>We do not use your content to train AI models.</strong> Whether the AI providers we transmit it to do so is governed by their terms, not ours. <span class="todo">DECISION NEEDED: confirm each provider's training and retention terms and state them here — see the corresponding note in the Privacy Policy.</span></p>
+
+  <p>You are responsible for having the rights to the content you put into agensis, including anything an agent reads from a folder on your machine and reproduces in a workspace.</p>
+
+  <h2 id="ai">7. Agents and AI output</h2>
+
+  <p>This section exists because agensis is not an ordinary SaaS product. Agents act, and they act on your behalf.</p>
+
+  <h3>Output is generated, not verified</h3>
+  <p>Everything an agent writes is produced by a language model. It <strong>may be wrong, incomplete, out of date, or entirely fabricated while appearing confident</strong>. We do not review it, we do not warrant it, and it is not advice — not legal, financial, medical, safety or professional advice of any kind. <strong>You must verify anything you rely on.</strong> If an agent's output would cause harm or cost if it were wrong, check it before acting on it.</p>
+
+  <h3>Agents take actions, not just write text</h3>
+  <p>An agent in agensis can do more than answer. Depending on how you configure it, it may: read and write files on machines you connect to it; run shell commands; call external APIs using credentials you have stored; provision, operate and stop cloud sandboxes that cost money; post to webhooks you configure; and act on a schedule without a person present.</p>
+  <p><strong>Those actions are yours.</strong> By configuring an agent, granting it access to a folder, storing a credential it can use, or scheduling it, you authorise the actions it then takes. We are not responsible for what an agent does with the access you gave it — including deleting or modifying your files, spending money with a provider, or sending a request you did not individually approve.</p>
+
+  <h3>Agents read untrusted input</h3>
+  <p>Agents read content from webpages, external API responses, webhook payloads, files, and messages written by other people and other agents. Any of that can contain text designed to manipulate the agent — <strong>prompt injection</strong>. agensis is built to reduce this: external content is passed to the model inside an explicit untrusted-data fence, an agent cannot choose the URL, host or headers of a provider call, and it never holds the credential used to make one. <strong>These are mitigations, not guarantees.</strong> An agent can still be misled by content it reads.</p>
+
+  <h3>Costs an agent can incur</h3>
+  <p>Model calls, speech services and cloud sandboxes cost money. Where those run on <strong>your</strong> key or your provider account, <strong>the charges are yours</strong>, including charges from an agent that loops, retries, or leaves a sandbox running. We do not cap your third-party spend and we cannot refund it. Where a feature runs on our platform key, its use is bounded by your plan's allowance.</p>
+
+  <h3>Non-determinism</h3>
+  <p>The same prompt does not reliably produce the same answer. Models change, are deprecated by their providers, and are updated without our involvement. We do not warrant that any particular model remains available or that behaviour stays consistent between turns or between releases.</p>
+
+  <h2 id="daemon">8. Agents on your own machine</h2>
+
+  <p>The agent daemon is software you install and run on your own computer. When you connect it:</p>
+  <ul>
+    <li><strong>It runs with your user's permissions.</strong> Any folder you grant it, it can read — and, depending on the tools it is given, write.</li>
+    <li><strong>It calls the AI provider under your own credentials.</strong> The prompt goes from your machine, on your account, at your cost.</li>
+    <li><strong>It pushes some local files into your workspace</strong> — agent memory files and skill documents — so they are readable by your team when your machine is offline. It also reports its hostname and working directory.</li>
+    <li><strong>You are responsible for the machine.</strong> Its security, what is on it, and whether the folders you expose contain anything you should not be sharing with the members of your workspace.</li>
+  </ul>
+  <p>The daemon is distributed as a separate open-source package under its own licence. These terms cover its use with the hosted service; they do not restrict your rights under that licence.</p>
+
+  <h2 id="thirdparty">9. Third-party services and your credentials</h2>
+
+  <p>agensis is designed to sit between you and services you already use. Some are ours to arrange; several are entirely yours to choose.</p>
+
+  <p>When you store a credential in the workspace vault, or point the product at an endpoint of your own — an inference gateway, a webhook, a provider API — you confirm you are entitled to use that credential and that endpoint, and you accept that the data described in the <a href="/legal/privacy.html">Privacy Policy</a> will be sent there. That third party's terms govern what they then do with it. We are not a party to your relationship with them and are not responsible for their service, their availability, or their handling of your data.</p>
+
+  <p>The vault is <strong>write-only</strong>: no route in the product returns a stored secret to anyone, including you. This is deliberate, and it has a consequence — <strong>if you lose a secret, we cannot give it back.</strong> You can only replace it.</p>
+
+  <h2 id="availability">10. Availability and beta status</h2>
+
+  <p>agensis is <strong>early software under active development</strong>. Features change, are renamed, and are occasionally removed. We do not offer a service level agreement, an uptime commitment, or a support response time.</p>
+  <p>We may modify, suspend or discontinue any part of the service. <span class="todo">DECISION NEEDED: how much notice is given before a feature is removed or the service is discontinued, and whether a data export is provided — noting that no export function exists in the product today.</span></p>
+
+  <h2 id="termination">11. Suspension and termination</h2>
+
+  <p><strong>You</strong> may stop using the service at any time. Because there is no self-service account deletion, deleting your account currently requires a request to the operator; see the <a href="/legal/privacy.html#retention">Privacy Policy</a> for what deletion does and does not remove today.</p>
+
+  <p><strong>We</strong> may suspend or terminate an account that breaches these terms, that is being used unlawfully, or that is placing the service or other users at risk. Where circumstances allow, we will give notice and an opportunity to put things right first; where the breach is serious or ongoing, we may act immediately.</p>
+
+  <p><span class="todo">DECISION NEEDED: what happens to workspace content after termination — how long it is retained, whether an export is offered, and how long the former account holder has to request one.</span></p>
+
+  <h2 id="disclaimer">12. Disclaimers</h2>
+
+  <p>To the fullest extent permitted by law, the service is provided <strong>"as is" and "as available"</strong>, without warranties of any kind, express or implied, including any implied warranty of merchantability, fitness for a particular purpose, non-infringement, or uninterrupted or error-free operation.</p>
+
+  <p>Without limiting that, we specifically do not warrant that AI output is accurate, that agents will behave as intended, that any third-party service will remain available, or that data will never be lost. <strong>Keep your own copies of anything you cannot afford to lose.</strong></p>
+
+  <p>Nothing in these terms excludes liability that cannot lawfully be excluded — including, in many jurisdictions, liability for death or personal injury caused by negligence, and for fraud.</p>
+
+  <h2 id="liability">13. Limitation of liability</h2>
+
+  <p>To the fullest extent permitted by law, we are not liable for indirect, incidental, special, consequential or punitive damages, nor for lost profits, lost revenue, lost data, or business interruption — including where these arise from AI output, from actions taken by an agent, from a third-party service, or from charges you incur with a provider.</p>
+
+  <p><span class="todo">DECISION NEEDED: the liability cap. The usual formulation is the greater of the fees paid in the preceding twelve months or a fixed sum — but note that no fees are currently charged, which would make a fees-based cap zero for every user today. This needs a deliberate answer, not a copied clause.</span></p>
+
+  <h2 id="indemnity">14. Indemnity</h2>
+  <p><span class="todo">DECISION NEEDED: whether users indemnify us, and for what — typically claims arising from their content, their use of the service, their agents' actions, or their breach of these terms. Whether an indemnity is appropriate at all depends on the customer profile, and it is a clause worth a lawyer's judgement rather than a template's.</span></p>
+
+  <h2 id="opensource">15. Open source and self-hosting</h2>
+
+  <p>The agensis source code is published under the <strong>MIT licence</strong>. You may run your own copy, modify it, and use it commercially, on the terms of that licence.</p>
+
+  <p><strong>These terms do not apply to a deployment you run yourself.</strong> There is no licence check and no telemetry; a self-hosted deployment does not report to us and we have no visibility into it, no obligations toward it, and no liability for it. You become the operator: the plan limits in section 4 are meaningless, the availability language in section 10 is not ours to give, and the data handling described in the Privacy Policy is yours to define.</p>
+
+  <p>The MIT licence disclaims warranty and liability in its own terms, which govern the code itself.</p>
+
+  <h2 id="law">16. Governing law and disputes</h2>
+  <p><span class="todo">DECISION NEEDED: the governing law, the courts or arbitral forum with jurisdiction, and whether disputes go to arbitration or to court. This follows from where the operating entity is established, and it cannot be answered from the code. Consumer-protection rules in a user's home country may override whatever is chosen here, which is itself a reason to take advice rather than pick a familiar jurisdiction.</span></p>
+
+  <h2 id="changes">17. Changes to these terms</h2>
+  <p>We may update these terms. Material changes will be reflected here with a new date at the top of the page. Continuing to use the service after a change takes effect means you accept the updated terms. <span class="todo">DECISION NEEDED: how much advance notice is given for a material change, and by what means — noting that agensis cannot currently send email, so in-app notification is the only available channel.</span></p>
+
+  <p>Questions about these terms:</p>
+  <p><span class="todo">DECISION NEEDED: a working contact address for legal enquiries. None exists in the product today and none has been invented here.</span></p>
+
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <span>agensis &copy; 2026</span>
+      <span class="spacer"></span>
+      <a href="/">Home</a>
+      <a href="/legal/privacy.html">Privacy</a>
+      <a href="/app">Open app</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
