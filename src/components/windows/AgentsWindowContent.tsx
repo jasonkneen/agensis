@@ -107,11 +107,10 @@ import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import {
   AGENT_LAYOUT_VIEW_PREF,
-  AGENT_SPLIT_PREF,
+  AGENT_SPLIT_BOUNDS,
   AGENTS_SPLIT_HIDE_BELOW,
   AGENTS_SPLIT_ONLY_BELOW,
   agentFormBarPlacement,
-  agentSplitGridHeight,
   toggleAgentSelection,
   type AgentLayoutView,
 } from '../../lib/agentsView';
@@ -979,16 +978,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // need. That is the whole behaviour: dragging up genuinely
                 // shrinks it and it scrolls inside itself, instead of the pair
                 // sharing one scroller where growing the roster pushes the map
-                // off the bottom. Neither pane can be dragged away —
-                // agentSplitGridHeight re-clamps against the measured container
-                // on every render, so a window resize cannot orphan one either.
+                // off the bottom. Neither pane can be dragged away — usePaneSplit
+                // re-clamps against the measured container on every render, so a
+                // window resize cannot orphan one either.
                 return (
                   <div className="flex min-h-0 flex-1 flex-col px-1 pt-1.5 pb-2">
-                    <div ref={attachSplit} className="flex min-h-0 flex-1 flex-col">
+                    <div ref={split.containerRef} className="flex min-h-0 flex-1 flex-col">
                       {/* pb-2 is the gutter between the panes, INSIDE the grid
                           pane's own box, so the two heights still sum to the
                           container the clamp was handed. */}
-                      <div className="relative shrink-0 pb-2" style={{ height: `${splitGridHeight}px` }}>
+                      <div className="relative shrink-0 pb-2" style={{ height: `${split.size}px` }}>
                         <div className="h-full overflow-y-auto pr-0.5">{grid}</div>
                         {/* The same invisible grab strip the account list uses,
                             turned on its side: a hairline that only appears

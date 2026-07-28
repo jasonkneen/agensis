@@ -121,7 +121,21 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
 
       {tab === 'files' ? (
         <div className="min-h-0 flex-1">
-          <AgentMemoryBrowser workspaceId={workspaceId} agents={agents} userId={userId} userEmail={userEmail} />
+          <AgentMemoryBrowser
+            workspaceId={workspaceId}
+            agents={agents}
+            userId={userId}
+            userEmail={userEmail}
+            // Agent files are a read-only mirror, so the file browser has no
+            // way to write a memory. This is the real one: its suggestion chips
+            // hand a category back and land the user in the facts composer with
+            // it selected, rather than offering a button that does nothing.
+            onStartFact={category => {
+              setNewCategory(category);
+              setAddingNew(true);
+              setTab('facts');
+            }}
+          />
         </div>
       ) : (
       <>
