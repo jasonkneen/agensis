@@ -37,6 +37,7 @@ export interface AgentTemplate {
   tools: string[];
   skills: string[];
   runMode: 'builtin' | 'daemon' | 'sandbox';
+  metadata?: Record<string, unknown>;
   icon: LucideIcon;
   /** Bundled avatar (from AGENT_AVATAR_CHOICES) used by one-click creation flows
    *  like onboarding. The Agents window form keeps its own avatar default. */
@@ -66,6 +67,12 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
     tools: [], skills: [], runMode: 'daemon', icon: Terminal,
     avatar: '/agent-avatars/set1-raccoon-denim.png',
+  },
+  {
+    id: 'amp-orb', name: 'Amp Orb', handle: 'amp-orb', category: 'Engineering',
+    description: 'Runs each conversation as a persistent Amp thread in an Amp-managed orb.',
+    systemPrompt: 'You are an Amp coding agent working in an Amp-managed orb. Work directly in the repository, stream meaningful progress, verify changes before reporting completion, and keep the linked Amp thread as the source of continuity for this conversation.',
+    tools: [], skills: [], runMode: 'daemon', metadata: { runtime: 'amp' }, icon: Terminal,
   },
   {
     id: 'reviewer', name: 'Code Reviewer', handle: 'reviewer', category: 'Engineering',

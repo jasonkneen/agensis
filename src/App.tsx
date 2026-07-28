@@ -140,7 +140,7 @@ import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
 import { PresenceRoster } from './components/presence/PresenceRoster';
-import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, OrbConfigInput, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -951,7 +951,6 @@ function AppContent() {
     webhooks: agentWebhooks,
     createWebhook: createAgentWebhook,
     updateWebhook: updateAgentWebhook,
-    configureWebhook: configureAgentWebhook,
   } = useAgentWebhooks(activeWorkspaceId || null);
 
   const [selectedAgent, setSelectedAgent] = useState<WorkspaceAgent | null>(null);
@@ -2248,7 +2247,6 @@ function AppContent() {
                   onDisconnectAgent={disconnectAgent}
                   onCreateAgentWebhook={createAgentWebhook}
                   onUpdateAgentWebhook={updateAgentWebhook}
-                  onConfigureAgentWebhook={configureAgentWebhook}
                   onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
                   topLevelMessages={topLevelMessages}
                   threadMessages={threadMessages}
@@ -2579,7 +2577,6 @@ function CanvasLayerScene({
   onSessionMetaSaved,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
-  onConfigureAgentWebhook,
   onOpenConnections,
   topLevelMessages,
   threadMessages,
@@ -2674,7 +2671,6 @@ function CanvasLayerScene({
   onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
-  onConfigureAgentWebhook: (id: string, config: OrbConfigInput) => Promise<{ webhook: AgentWebhook | null; error: string | null }>;
   onOpenConnections: () => void;
   topLevelMessages: import('./types').Message[];
   threadMessages: import('./types').Message[];
@@ -3189,7 +3185,6 @@ function CanvasLayerScene({
                   onDisconnectAgent={onDisconnectAgent}
                   onCreateWebhook={onCreateAgentWebhook}
                   onUpdateWebhook={onUpdateAgentWebhook}
-                  onConfigureWebhook={onConfigureAgentWebhook}
                   onOpenConnections={onOpenConnections}
                 />
               </Suspense>

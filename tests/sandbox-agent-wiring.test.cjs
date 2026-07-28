@@ -21,8 +21,8 @@
 //   3. A CREDENTIAL LEAKING BACK OUT. The vault LIST route returns a masked
 //      preview of every key it does not explicitly exclude.
 //
-// Source-scan assertions in the style of tests/orbs-wiring.test.cjs and
-// tests/jsonb-bind-hygiene.test.cjs: they are the only kind that can catch
+// Source-scan assertions in the style of tests/jsonb-bind-hygiene.test.cjs: they
+// are the only kind that can catch
 // "someone wired two of the three places".
 // ============================================================================
 

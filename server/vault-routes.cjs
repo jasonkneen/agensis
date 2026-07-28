@@ -5,10 +5,10 @@
 // than imported, so the auth, RBAC and rate-limit contract stays single-sourced
 // in index.cjs / shared/backend-core.cjs and this file cannot drift from it.
 //
-// The workspace vault: every credential a workspace holds, in four namespaces —
+// The workspace vault: every credential a workspace holds, in three groups —
 // the platform-managed keys (MANAGED_SECRET_KEYS), sandbox:<provider>:<credential>
-// for a provider skill's API key, orb:<webhook id> for an orb's signing secret,
-// and anything else as a user-defined shared secret. classifyVaultKey (shared
+// for a provider skill's API key, and anything else as a user-defined shared
+// secret. classifyVaultKey (shared
 // with the Netlify mirror) decides which namespace a key is in and therefore
 // which of these routes may write it.
 //
@@ -90,10 +90,8 @@ function mountVaultRoutes(app, deps = {}) {
  // /sandbox-credentials read already applied.
  //
  // Namespaced entries are no longer EXCLUDED, they are CLASSIFIED: each entry
- // carries its group ('managed' | 'provider' | 'orb' | 'shared'), the thing that
- // owns it, and the write lane that may change it. That is what makes showing them
- // safe — `orb:<id>` arrives with lane 'none' and a name, so it reads as part of
- // that orb rather than as a loose row someone might delete.
+ // carries its group ('managed' | 'provider' | 'shared'), the thing that owns it,
+ // and the write lane that may change it.
  app.get('/backend/workspaces/:id/vault', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
@@ -145,10 +143,10 @@ function mountVaultRoutes(app, deps = {}) {
    const key = String(req.params.key || '').trim();
    if (!workspaceId || !key) return jsonError(res, 400, new Error('workspace id and key are required'));
    // The charset is the namespace guard: no colon means this route can never
-   // reach a `sandbox:` or `orb:` entry, whatever the caller sends.
+   // reach a `sandbox:` entry, whatever the caller sends.
    if (!VAULT_KEY_RE.test(key)) {
     return jsonError(res, 400, new Error(key.includes(':')
-     ? 'Namespaced vault entries are set by the surface that owns them: a provider credential through /sandbox-credentials, an orb signing secret from the orb panel.'
+     ? 'Namespaced vault entries are set by the surface that owns them.'
      : 'key must be 1-128 chars of letters, digits, _ . -'));
    }
    if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(res, 400, new Error('That key is managed elsewhere'));
@@ -225,7 +223,7 @@ function mountVaultRoutes(app, deps = {}) {
    // The credential name defaults to api_key; both halves are validated by
    // sandboxCredentialKey, which returns '' rather than building a key it is not
    // sure about — so a provider name carrying a colon can never forge a
-   // different vault entry (e.g. an ANTHROPIC_API_KEY or an orb signing secret).
+   // different vault entry (for example ANTHROPIC_API_KEY).
    const key = sandboxCredentialKey(req.params.provider, req.body?.credential || 'api_key');
    if (!key) return jsonError(res, 400, new Error('provider must be lowercase letters, digits, - or _, and credential must be lowercase letters, digits or _'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');

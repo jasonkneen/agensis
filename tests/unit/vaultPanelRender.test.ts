@@ -9,12 +9,9 @@ import type { VaultEntry } from '../../src/hooks/useWorkspaceVault';
 //   1. NO VALUE REACHES THE DOM. The panel is fed entries that carry no value —
 //      because the route cannot return one — and the rendered text is checked for
 //      any part of a plausible secret anyway. A masked preview used to live here.
-//   2. AN ORB ROW OFFERS NO WRITE. Its lane is 'none', so there must be no input
-//      and no delete button on it: a "delete" that silently 503s every delivery of
-//      that orb is worse than no button.
-//   3. A PROVIDER SLOT IS WRITABLE EVEN WHEN UNSET. That is the whole fix — before
+//   2. A PROVIDER SLOT IS WRITABLE EVEN WHEN UNSET. That is the whole fix — before
 //      it, a Box key had nowhere to be typed.
-//   4. NAMESPACED ENTRIES SIT UNDER THEIR OWNER, not loose in a list.
+//   3. NAMESPACED ENTRIES SIT UNDER THEIR OWNER, not loose in a list.
 
 const WS = 'ws-1';
 const NEVER_RENDERED = 'box_live_ThisMustNeverAppear';
@@ -48,14 +45,6 @@ const ENTRIES: VaultEntry[] = [
     configured: false,
     updated_at: null,
     env: 'BOX_API_KEY',
-  }),
-  entry({
-    key: 'orb:5f3ab19c-1111-4111-8111-111111111111',
-    group: 'orb',
-    lane: 'none',
-    owner: '5f3ab19c-1111-4111-8111-111111111111',
-    ownerLabel: 'GitHub pushes',
-    label: 'Signing secret',
   }),
   entry({ key: 'STRIPE_TOKEN', label: 'STRIPE_TOKEN', description: 'billing' }),
 ];
@@ -98,14 +87,12 @@ afterEach(() => {
 });
 
 describe('the vault panel', () => {
-  it('groups entries under the provider or orb that owns them', async () => {
+  it('groups entries under the provider that owns them', async () => {
     await mount();
     const text = container.textContent ?? '';
     expect(text).toContain('Provider credentials');
     expect(text).toContain('Box sandboxes');
     expect(text).toContain('API key');
-    expect(text).toContain('Orb signing secrets');
-    expect(text).toContain('GitHub pushes');
     expect(text).toContain('Shared secrets');
     // The raw key is shown as the technical identifier under the friendly label,
     // so an operator can match it to what an agent quotes when it is missing.
@@ -130,7 +117,7 @@ describe('the vault panel', () => {
     }
   });
 
-  it('offers a write on an unset provider slot and none at all on an orb entry', async () => {
+  it('offers a write on an unset provider slot', async () => {
     await mount();
     const rows = [...container.querySelectorAll('div.rounded-md.border')];
 
@@ -142,12 +129,6 @@ describe('the vault panel', () => {
     // Nothing to delete yet.
     expect(providerRow!.querySelector('[aria-label^="Delete"]')).toBeNull();
     expect(providerRow!.textContent).toContain('BOX_API_KEY');
-
-    const orbRow = rows.find(row => row.textContent?.includes('Signing secret'));
-    expect(orbRow).toBeTruthy();
-    expect(orbRow!.querySelector('input')).toBeNull();
-    expect(orbRow!.querySelector('[aria-label^="Delete"]')).toBeNull();
-    expect(orbRow!.textContent).toContain('Managed by its orb.');
 
     const sharedRow = rows.find(row => row.textContent?.includes('STRIPE_TOKEN'));
     expect(sharedRow!.textContent).toContain('Replace');

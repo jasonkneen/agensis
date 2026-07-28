@@ -34,7 +34,7 @@ const root = path.resolve(__dirname, '..', '..');
 // Modules Wave 4 lifted out of index.cjs that are NOT route surfaces, so the
 // `-routes.cjs` glob does not find them. Listed explicitly rather than globbed
 // because server/ also holds modules that were ALWAYS separate — mcp.cjs,
-// huddles.cjs, voice.cjs, orbs.cjs, link-preview.cjs, skills.cjs. Those were
+// huddles.cjs, voice.cjs, link-preview.cjs, skills.cjs. Those were
 // never part of index.cjs, and sweeping them in would silently widen every
 // assertion below to cover code these tests never meant to describe.
 const EXTRACTED_NON_ROUTE_MODULES = [

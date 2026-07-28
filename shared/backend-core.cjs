@@ -70,12 +70,6 @@ const ALLOWED_TABLES = new Set([
  // dedicated, rate-limited POST /backend/feedback route (any signed-in user),
  // never by a browser reaching /backend/db/insert.
  'feedback_reports',
- // Orb delivery ledger (plans/021). READ through the generic /db path so the
- // delivery list is live over realtime db_changes; every write comes from the
- // trigger route itself, and DB_TABLE_ACCESS gates generic writes to 'manage'
- // so a client cannot forge or erase a delivery record. Same shape as
- // agent_schedule_runs, for the same reason.
- 'orb_deliveries',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -106,7 +100,6 @@ const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
  workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config', 'identity']),
- agent_webhooks: new Set(['payload_fields']),
  agent_connections: new Set(['metadata', 'capabilities']),
  agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
@@ -152,7 +145,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'activity_events', 'workspace_members',
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
- 'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
+ 'huddles', 'huddle_events', 'feedback_reports',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -201,11 +194,6 @@ const DB_TABLE_ACCESS = {
  // run_agents path can't bypass that validation; runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
- // Orb deliveries are written ONLY by the trigger route (which is where the
- // dedupe gate lives): a client-forged row would let an attacker pre-claim a
- // delivery id and make the next real delivery look like a duplicate, and a
- // client DELETE would erase the audit trail. Reads stay at 'read'.
- orb_deliveries: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
@@ -1211,18 +1199,12 @@ async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSec
 // ----------------------------------------------------------------------------
 // THE VAULT SURFACE (2026-07).
 //
-// One workspace vault, four namespaces, ONE classification — here, so the Fly
+// One workspace vault, three groups, ONE classification — here, so the Fly
 // route and the Netlify mirror cannot disagree about what an entry IS.
 //
-// Why namespaces existed but were INVISIBLE: the vault list route excluded every
-// `orb:` and `sandbox:` key, because the flat "shared secrets" list it fed had no
-// way to say "this belongs to the Box provider skill" or "this is an orb's
-// signing secret" — an orb secret sitting loose in that list looks deletable, and
-// deleting it silently 503s every delivery. Excluding them made the list honest
-// and the entries unreachable: with no surface of its own, `sandbox:box:api_key`
-// could not be entered at all. This layer is that surface. Each entry says which
-// GROUP it belongs to, which THING owns it, and which write LANE owns it, so a
-// namespaced entry reads as part of its provider/orb instead of a loose row.
+// Provider keys use the `sandbox:` namespace. Each entry says which GROUP it
+// belongs to, which provider owns it, and which write LANE owns it, so a
+// namespaced credential cannot be mistaken for a loose shared secret.
 //
 // Every entry here is WRITE-ONLY. `listWorkspaceVaultEntries` does not select
 // `value` or `secret_cipher` at all — not "selects and redacts": a route cannot
@@ -1232,29 +1214,24 @@ async function setWorkspaceSecretValue(workspaceId, key, value, { db, getAuthSec
 // ----------------------------------------------------------------------------
 
 // User-definable vault keys. The colon is deliberately excluded so a user key can
-// never collide with (or overwrite) a `sandbox:`/`orb:` namespaced entry through
+// never collide with (or overwrite) a `sandbox:` namespaced entry through
 // the generic PUT/DELETE routes.
 const VAULT_KEY_RE = /^[A-Za-z0-9_.-]{1,128}$/;
 
-// The two namespace prefixes. Duplicated as literals rather than imported from
+// The provider namespace prefix. Duplicated as a literal rather than imported from
 // server/sandbox-skills.cjs because the Netlify function must not pull in the Fly
 // server's module graph; tests/workspace-vault.test.cjs asserts they agree.
 const SANDBOX_VAULT_PREFIX = 'sandbox:';
-const ORB_VAULT_PREFIX = 'orb:';
 
 // The columns that hold secret material. Used by the realtime strip and asserted
 // against every vault SELECT projection in tests.
 const VAULT_SECRET_COLUMNS = ['value', 'secret_cipher'];
 
-// group -> which route may write it. 'orb' has no vault write lane on purpose:
-// an orb's signing secret is rotated from the orb's own panel, where the operator
-// can also re-register it with the provider. Deleting it from a generic secrets
-// list would break every delivery with no hint why.
+// group -> which route may write it.
 const VAULT_WRITE_LANES = {
  managed: 'managed',
  provider: 'provider',
  shared: 'shared',
- orb: 'none',
 };
 
 function titleCaseSlug(value) {
@@ -1316,18 +1293,11 @@ function classifyVaultKey(key, { managedKeys = [] } = {}) {
    credential,
   };
  }
- if (raw.startsWith(ORB_VAULT_PREFIX)) {
-  const orbId = raw.slice(ORB_VAULT_PREFIX.length);
-  return {
-   key: raw,
-   group: 'orb',
-   lane: VAULT_WRITE_LANES.orb,
-   owner: orbId,
-   ownerLabel: orbId ? `Orb ${orbId.slice(0, 8)}` : 'Orb',
-   label: 'Signing secret',
-   provider: '',
-   credential: '',
-  };
+ // Unknown namespaced rows may remain after an integration is removed. Never
+ // present one as a writable shared secret: the generic route deliberately
+ // cannot address keys containing a colon.
+ if (raw.includes(':')) {
+  return { key: raw, group: 'unknown', lane: 'none', owner: '', ownerLabel: '', label: raw, provider: '', credential: '' };
  }
  return {
   key: raw,
@@ -1359,9 +1329,7 @@ async function listWorkspaceSecretMeta(workspaceId, { db }) {
 /**
  * Every credential this workspace has stored, as write-only entries.
  *
- * Includes the namespaced ones. Orb entries are labelled with their orb's name
- * (one extra indexed read) so the entry reads as belonging to that orb rather
- * than as an opaque `orb:<uuid>`.
+ * Includes namespaced provider entries and safely classifies unknown namespaces.
  */
 async function listWorkspaceVaultEntries(workspaceId, { db, managedKeys = [] }) {
  const rows = await listWorkspaceSecretMeta(workspaceId, { db });
@@ -1373,26 +1341,6 @@ async function listWorkspaceVaultEntries(workspaceId, { db, managedKeys = [] }) 
   updated_at: row.updated_at || null,
  }));
 
- const orbIds = entries.filter((entry) => entry.group === 'orb' && entry.owner).map((entry) => entry.owner);
- if (orbIds.length > 0) {
-  // Names only, and only for orbs in THIS workspace — the id came from a row that
-  // is already workspace-scoped, and the where clause re-scopes it anyway.
-  const named = new Map();
-  try {
-   const orbRows = await db(
-    'select id, name from agent_webhooks where workspace_id = $1',
-    [String(workspaceId)],
-   );
-   for (const orb of Array.isArray(orbRows) ? orbRows : []) named.set(String(orb.id), orb.name || '');
-  } catch {
-   // A deployment whose schema predates orbs must still render the vault.
-  }
-  for (const entry of entries) {
-   if (entry.group !== 'orb') continue;
-   const name = named.get(entry.owner);
-   if (name) entry.ownerLabel = name;
-  }
- }
  return entries;
 }
 
@@ -1742,7 +1690,6 @@ module.exports = {
  VAULT_META_SELECT,
  VAULT_WRITE_LANES,
  SANDBOX_VAULT_PREFIX,
- ORB_VAULT_PREFIX,
  classifyVaultKey,
  credentialLabel,
  listWorkspaceSecretMeta,
