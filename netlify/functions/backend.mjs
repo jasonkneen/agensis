@@ -419,15 +419,32 @@ function agentPermissionFlags(permissionMode) {
  return normalizeAgentPermissionMode(permissionMode) === 'yolo' ? ['--no-sandbox', '--yolo'] : [];
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode }) {
- const resolvedModel = resolveAnthropicModel(model);
+function normalizeExecutionRuntime(value) {
+ const runtime = String(value || '').trim().toLowerCase();
+ return runtime === 'claude' || runtime === 'codex' || runtime === 'amp' ? runtime : '';
+}
+
+function resolveExecutionModel(model, runtime) {
+ const value = String(model || '').trim();
+ return runtime && runtime !== 'claude'
+  ? (value || 'auto')
+  : resolveAnthropicModel(value);
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null }) {
+ const resolvedRuntime = normalizeExecutionRuntime(runtime);
+ const resolvedModel = resolveExecutionModel(model, resolvedRuntime);
  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
+ const commandModelArgs = resolvedRuntime === 'amp' || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
+  ? []
+  : ['--model', shellQuote(resolvedModel)];
  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
  if (resolvedPermissionMode === 'yolo') commandPermissionArgs.push('--no-sandbox');
  const portableCommand = [
   'agensis',
   'connect',
+  ...(resolvedRuntime ? ['--runtime', shellQuote(resolvedRuntime)] : []),
   '--url',
   shellQuote(baseUrl),
   '--token',
@@ -440,8 +457,7 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
   shellQuote(handle),
   '--name',
   shellQuote(displayName),
-  '--model',
-  shellQuote(resolvedModel),
+  ...commandModelArgs,
   ...commandPermissionArgs,
  ].join(' ');
  return { localCommand: portableCommand, portableCommand };
@@ -1395,7 +1411,8 @@ async function buildCursorBuddyAgentConnectionCommand({ agentId, workspaceId = n
  if (agent.enabled === false) throw new Error('Agent is deactivated');
  const token = createAgentConnectToken();
  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
- const resolvedModel = resolveAnthropicModel(model || agent.model);
+ const resolvedRuntime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
+ const resolvedModel = resolveExecutionModel(model || agent.model, resolvedRuntime);
  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode || agent.permission_mode);
  const updateRows = await query(
   `update workspace_agents
@@ -1420,6 +1437,7 @@ async function buildCursorBuddyAgentConnectionCommand({ agentId, workspaceId = n
   name: updateRows[0]?.name || agent.name,
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
+  runtime: resolvedRuntime,
  });
  return {
   agent: updateRows[0],
@@ -1432,6 +1450,7 @@ async function buildCursorBuddyAgentConnectionCommand({ agentId, workspaceId = n
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
   permission_mode: resolvedPermissionMode,
+  runtime: resolvedRuntime || null,
   permissionFlags: agentPermissionFlags(resolvedPermissionMode),
  };
 }
@@ -1649,7 +1668,8 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
  if (agent.enabled === false) return jsonError(403, new Error('Agent is deactivated'));
  await assertWorkspaceRole({ userId, workspaceId: agent.workspace_id, capability: 'manage', db: query });
  const handle = slugHandle(body?.handle || agent.handle || agent.name);
- const model = resolveAnthropicModel(body?.model || agent.model);
+ const runtime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
+ const model = resolveExecutionModel(body?.model || agent.model, runtime);
  const permissionMode = normalizeAgentPermissionMode(body?.permissionMode || body?.permission_mode || agent.permission_mode);
  const baseUrl = daemonBaseUrl();
  if (!baseUrl) {
@@ -1685,6 +1705,7 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
   name: updateRows[0]?.name || agent.name,
   model: updateRows[0]?.model || agent.model,
   permissionMode,
+  runtime,
  });
  return json({
   data: {
@@ -1698,6 +1719,7 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
    model,
    permissionMode,
    permission_mode: permissionMode,
+   runtime: runtime || null,
    permissionFlags: agentPermissionFlags(permissionMode),
   },
   error: null,

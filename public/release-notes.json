@@ -3,8 +3,9 @@
     "version": "amp-orb-runtime",
     "date": "2026-07-28",
     "title": "An Amp orb can live inside an Agensis conversation",
-    "summary": "Add the Amp Orb agent, connect it from a repository through agensis-agent, and talk to it like any other workspace agent. The connected machine uses its own signed-in Amp CLI to create a fresh orb for a new conversation. Later messages continue that exact Amp thread, and its output streams into the Agensis chat while it works. The completed reply includes a link to the Amp thread. Amp credentials stay on the connected machine, and if Amp is missing, signed out, out of credit, unable to access the project, or cannot start the orb, the conversation says what needs fixing instead of quietly running a different agent.",
+    "summary": "Remote agents now choose their executor separately from where they run: Claude, Codex, or Amp. Add the Amp Orb template, connect it from a repository through agensis-agent, and talk to it like any other workspace agent. The connected machine uses its own signed-in Amp CLI to create a fresh orb for a new conversation. Later messages continue that exact Amp thread, and its output streams into the Agensis chat while it works. Amp credentials stay on the connected machine, and setup or account failures are reported instead of quietly running a different agent.",
     "highlights": [
+      "Agent setup now separates Built-in or Remote from the remote runtime — Claude, Codex or Amp — and then the model",
       "Amp Orb is available in the agent template gallery and connects through the normal agensis-agent command",
       "A new Agensis conversation starts a fresh Amp-managed orb; replies continue the same exact Amp thread",
       "Progress, tool steps and answers stream into the Agensis conversation, with an Amp thread link at the end",

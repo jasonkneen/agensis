@@ -12,6 +12,27 @@ test('Amp runtime selection is explicit agent metadata', () => {
   assert.equal(__test.isAmpRuntimeAgent({ run_mode: 'daemon' }), false);
 });
 
+test('generated daemon commands lock explicit agents to their selected runtime', () => {
+  const common = {
+    baseUrl: 'https://agensis-backend.fly.dev',
+    token: 'test-token',
+    workspaceId: 'workspace-1',
+    agentId: 'agent-1',
+    handle: 'worker',
+    name: 'Worker',
+    model: 'claude-opus-4-8',
+    permissionMode: 'default',
+  };
+
+  const ampCommand = __test.agentConnectionCommand({ ...common, runtime: 'amp', model: 'auto' }).portableCommand;
+  assert.match(ampCommand, / --runtime amp(?: |$)/);
+  assert.doesNotMatch(ampCommand, / --model /, 'Amp chooses its model inside the Amp thread');
+  assert.doesNotMatch(__test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'auto' }).portableCommand, / --model /);
+  assert.match(__test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'gpt-5.4' }).portableCommand, / --model gpt-5\.4(?: |$)/);
+  assert.match(__test.agentConnectionCommand({ ...common, runtime: 'claude', model: 'auto' }).portableCommand, / --model claude-opus-4-8(?: |$)/);
+  assert.doesNotMatch(__test.agentConnectionCommand(common).portableCommand, / --runtime /);
+});
+
 test('Amp dispatch requires the exact live daemon to advertise runtime support', () => {
   assert.equal(__test.connectionSupportsAmpRuntime({ capabilities: { runtimes: { amp: { id: 'amp', available: false } } } }), true);
   assert.equal(__test.connectionSupportsAmpRuntime({ capabilities: { runtimes: {} } }), false);
@@ -38,6 +59,36 @@ test('Amp thread binding is loaded from the exact workspace, agent, session, and
     }),
     { id: 'amp', continuationRequired: true, threadId, threadUrl: `https://ampcode.com/threads/${threadId}` },
   );
+});
+
+test('Amp direct messages reuse one session lane even when each message has a new UI thread parent', async () => {
+  const threadId = 'T-019fa798-10c0-76f8-9844-d848ba21c6d4';
+  const seenParams = [];
+  __test.setTestDb({
+    async unsafe(_sql, params) {
+      seenParams.push(params);
+      return [{ metadata: { runtime: 'amp', ampThreadId: threadId } }];
+    },
+  });
+
+  const first = await __test.loadAmpThreadBinding({
+    workspaceId: 'workspace-1',
+    agentId: 'agent-1',
+    sessionId: 'dm-1',
+    threadParentId: 'message-1',
+    isDirectMessage: true,
+  });
+  const second = await __test.loadAmpThreadBinding({
+    workspaceId: 'workspace-1',
+    agentId: 'agent-1',
+    sessionId: 'dm-1',
+    threadParentId: 'message-2',
+    isDirectMessage: true,
+  });
+
+  assert.equal(first.threadId, threadId);
+  assert.equal(second.threadId, threadId);
+  assert.deepEqual(seenParams.map((params) => params[3]), ['', ''], 'DM bindings key on the session rather than transient message parents');
 });
 
 test('a lane with a malformed prior binding requires continuation instead of requesting a new Amp thread', async () => {
@@ -123,4 +174,17 @@ test('Amp capability reports are bounded before reaching browsers', () => {
     project: null,
   });
   assert.equal(__test.ampRuntimeFromMessage({ amp: { id: 'other' } }), null);
+});
+
+test('daemon runtime capability reports expose only the supported bounded registry', () => {
+  assert.deepEqual(__test.executionRuntimesFromMessage({
+    claude: { id: 'claude', label: 'Claude', available: true, secret: 'nope' },
+    codex: { id: 'codex', label: 'Codex', available: false, reason: 'codex_not_installed', headers: { authorization: 'nope' } },
+    amp: { id: 'amp', label: 'Amp', available: false, reason: 'amp_project_unmatched' },
+    arbitrary: { id: 'arbitrary', available: true },
+  }), {
+    claude: { id: 'claude', label: 'Claude', available: true, version: '', reason: null },
+    codex: { id: 'codex', label: 'Codex', available: false, version: '', reason: 'codex_not_installed' },
+    amp: { id: 'amp', available: false, version: '', reason: 'amp_project_unmatched', project: null, label: 'Amp' },
+  });
 });

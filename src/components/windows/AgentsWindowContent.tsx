@@ -90,7 +90,14 @@ const VOICE_OPTION_LIMIT = 60;
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
-import { AGENT_TEMPLATES, type AgentTemplate } from '../../lib/agentTemplates';
+import {
+  AGENT_TEMPLATES,
+  agentMetadataWithRuntime,
+  runtimeChoicesFromConnections,
+  type AgentExecutionRuntime,
+  type AgentRuntimeChoice,
+  type AgentTemplate,
+} from '../../lib/agentTemplates';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { SkillChipsInput } from '../agents/SkillChipsInput';
 import { buildSkillEntries } from '../../lib/skillsView';
@@ -180,6 +187,8 @@ interface AgentEditForm {
   skills: string;
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
+  runtime: AgentExecutionRuntime;
+  metadata: Record<string, unknown>;
   sandboxProvider: string;
   sandboxConfig: string;
 }
@@ -202,20 +211,10 @@ function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
     skills: splitList(form.skills),
     model: form.model,
     run_mode: form.runMode,
+    metadata: agentMetadataWithRuntime(form.metadata, form.runtime, form.runMode),
     ...(form.runMode === 'sandbox' ? { sandbox_provider: form.sandboxProvider, sandbox_config: safeParseSandboxConfig(form.sandboxConfig) } : {}),
   };
 }
-
-// Coding-agent CLIs the daemon can run. "available" ones work today; the rest are
-// documented as coming soon so the picker reflects reality, not aspiration.
-const CODING_AGENT_PROVIDERS: Array<{ id: string; name: string; note: string; available: boolean }> = [
-  { id: 'claude', name: 'Claude Code CLI', note: 'Anthropic', available: true },
-  { id: 'codex', name: 'Codex CLI', note: 'OpenAI', available: true },
-  { id: 'gemini', name: 'Gemini CLI', note: 'Coming soon', available: false },
-  { id: 'cursor', name: 'Cursor CLI', note: 'Coming soon', available: false },
-  { id: 'opencode', name: 'OpenCode', note: 'Coming soon', available: false },
-  { id: 'aider', name: 'Aider', note: 'Coming soon', available: false },
-];
 
 const DEFAULT_AGENT_AVATAR = 'AI';
 const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon }> = [
@@ -247,6 +246,27 @@ function isAmpAgent(agent: WorkspaceAgent): boolean {
   return String(agent.metadata?.runtime || '').trim().toLowerCase() === 'amp';
 }
 
+function agentExecutionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {
+  const runtime = String(agent.metadata?.runtime || '').trim().toLowerCase();
+  return runtime === 'codex' || runtime === 'amp' ? runtime : 'claude';
+}
+
+function runtimeChoiceNote(choice: AgentRuntimeChoice): string {
+  if (choice.available === true) return 'ready';
+  if (choice.available === null) return 'not reported by a connected daemon';
+  switch (choice.reason) {
+    case 'amp_not_installed': return 'Amp not installed';
+    case 'amp_not_authenticated': return 'Amp not signed in';
+    case 'amp_auth_expired': return 'Amp sign-in expired';
+    case 'amp_project_not_found':
+    case 'amp_project_unmatched': return 'repository not linked to an Amp project';
+    case 'amp_project_forbidden': return 'Amp project access denied';
+    case 'codex_not_installed': return 'Codex not installed';
+    case 'claude_not_installed': return 'Claude not installed';
+    default: return 'unavailable on connected daemons';
+  }
+}
+
 function ampRuntimeStatusText(reason?: string | null): string {
   switch (reason) {
     case 'amp_not_installed': return 'Amp CLI is not installed on this machine.';
@@ -254,6 +274,7 @@ function ampRuntimeStatusText(reason?: string | null): string {
     case 'amp_not_authenticated': return 'Amp is not signed in. Run amp login on this machine.';
     case 'amp_auth_expired': return 'Amp sign-in expired. Run amp login on this machine.';
     case 'amp_project_not_found': return 'This repository is not linked to an Amp project.';
+    case 'amp_project_unmatched': return 'This repository is not linked to an Amp project.';
     case 'amp_project_forbidden': return 'This Amp account cannot access the repository project.';
     default: return 'Amp is not ready on this machine.';
   }
@@ -296,6 +317,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newSkills, setNewSkills] = useState('');
   const [newModel, setNewModel] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
+  const [newRuntime, setNewRuntime] = useState<AgentExecutionRuntime>('claude');
   const [newMetadata, setNewMetadata] = useState<Record<string, unknown>>({});
   const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
   const [newSandboxConfig, setNewSandboxConfig] = useState('{}');
@@ -438,6 +460,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     () => buildSkillSuggestions(buildSkillEntries(agents, connections), capabilities),
     [agents, connections, capabilities],
   );
+  const runtimeChoices = useMemo(() => runtimeChoicesFromConnections(connections), [connections]);
 
   const resetNewAgentFields = () => {
     setNewName('');
@@ -453,6 +476,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewSkills('');
     setNewModel('auto');
     setNewRunMode('builtin');
+    setNewRuntime('claude');
     setNewMetadata({});
   };
   // Awaits the write before resetting the form and going back to the list.
@@ -478,7 +502,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         skills: splitList(newSkills),
         model: newModel,
         run_mode: newRunMode,
-        metadata: newMetadata,
+        metadata: agentMetadataWithRuntime(newMetadata, newRuntime, newRunMode),
         ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
       });
     } finally {
@@ -503,6 +527,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewSkills(tpl.skills.join(', '));
     setNewModel('auto');
     setNewRunMode(tpl.runMode);
+    setNewRuntime(tpl.runtime || 'claude');
     setNewMetadata(tpl.metadata || {});
     setNewAvatar(DEFAULT_AGENT_AVATAR);
     setNewOpenPetAvatarId('');
@@ -572,6 +597,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         agent={connectAgent}
         open={connectAgentId != null}
         onOpenChange={(o) => { if (!o) setConnectAgentId(null); }}
+        runtimeChoices={runtimeChoices}
         webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
         onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
@@ -651,7 +677,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
                           <span className="text-sm font-semibold">{tpl.name}</span>
                           <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">{tpl.category} · {tpl.runMode === 'daemon' ? 'Remote' : 'Built-in'}</span>
+                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
+                            {tpl.category} · {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
+                          </span>
                         </button>
                       );
                     })}
@@ -683,6 +711,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 skills={newSkills}
                 model={newModel}
                 runMode={newRunMode}
+                runtime={newRuntime}
+                runtimeChoices={runtimeChoices}
                 capabilities={capabilities}
                 skillSuggestions={skillSuggestions}
                 onNameChange={setNewName}
@@ -703,17 +733,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onToolsChange={setNewTools}
                 onSkillsChange={setNewSkills}
                 onModelChange={setNewModel}
-                onRunModeChange={(value) => {
-                  setNewRunMode(value);
-                  if (value !== 'daemon') {
-                    setNewMetadata(current => {
-                      if (current.runtime !== 'amp') return current;
-                      const next = { ...current };
-                      delete next.runtime;
-                      return next;
-                    });
-                  }
-                }}
+                onRunModeChange={setNewRunMode}
+                onRuntimeChange={setNewRuntime}
                 sandboxProvider={newSandboxProvider}
                 sandboxConfig={newSandboxConfig}
                 onSandboxProviderChange={setNewSandboxProvider}
@@ -994,6 +1015,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onDelete={() => handleDelete(selectedAgent.id)}
                   onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
                   capabilities={capabilities}
+                  runtimeChoices={runtimeChoices}
                   skillSuggestions={skillSuggestions}
                   webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                   connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
@@ -1037,6 +1059,8 @@ function AgentFormActionBar({
   placement,
   dormant,
   runMode,
+  runtime,
+  runtimeChoices,
   model,
   modelChoices,
   canSubmit,
@@ -1044,6 +1068,7 @@ function AgentFormActionBar({
   submitLabel,
   submitIcon,
   onRunModeChange,
+  onRuntimeChange,
   onModelChange,
   onCancel,
   onSubmit,
@@ -1053,6 +1078,8 @@ function AgentFormActionBar({
   /** Initial state only — after mount the pane toggles `invisible` on the ref. */
   dormant?: boolean;
   runMode: 'builtin' | 'daemon' | 'sandbox';
+  runtime: AgentExecutionRuntime;
+  runtimeChoices: AgentRuntimeChoice[];
   model: string;
   modelChoices: { id: string; label: string }[];
   canSubmit: boolean;
@@ -1060,6 +1087,7 @@ function AgentFormActionBar({
   submitLabel: string;
   submitIcon: React.ReactNode;
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
+  onRuntimeChange: (value: AgentExecutionRuntime) => void;
   onModelChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -1084,7 +1112,7 @@ function AgentFormActionBar({
         onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
         size="sm"
         className="max-w-48"
-        aria-label="Agent runtime"
+        aria-label="Agent execution location"
       >
         <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
         <NativeSelectOption value="daemon">Remote</NativeSelectOption>
@@ -1098,12 +1126,27 @@ function AgentFormActionBar({
           <NativeSelectOption value="sandbox" disabled>Sandbox (retired)</NativeSelectOption>
         )}
       </NativeSelect>
+      {runMode === 'daemon' && (
+        <NativeSelect
+          value={runtime}
+          onChange={event => onRuntimeChange(event.target.value as AgentExecutionRuntime)}
+          size="sm"
+          className="max-w-72"
+          aria-label="Agent execution runtime"
+        >
+          {runtimeChoices.map(choice => (
+            <NativeSelectOption key={choice.id} value={choice.id}>
+              {choice.label} — {runtimeChoiceNote(choice)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      )}
       <NativeSelect
         value={model}
         onChange={e => onModelChange(e.target.value)}
         size="sm"
         className="max-w-56"
-        aria-label="Built-in agent model"
+        aria-label="Agent model"
       >
         {modelChoices.map(option => (
           <NativeSelectOption key={option.id} value={option.id}>
@@ -1138,6 +1181,8 @@ function AgentForm({
   skills,
   model,
   runMode,
+  runtime,
+  runtimeChoices,
   capabilities,
   skillSuggestions,
   onNameChange,
@@ -1153,6 +1198,7 @@ function AgentForm({
   onSkillsChange,
   onModelChange,
   onRunModeChange,
+  onRuntimeChange,
   sandboxProvider,
   sandboxConfig,
   onSandboxProviderChange,
@@ -1177,6 +1223,8 @@ function AgentForm({
   skills: string;
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
+  runtime: AgentExecutionRuntime;
+  runtimeChoices: AgentRuntimeChoice[];
   sandboxProvider: string;
   sandboxConfig: string;
   capabilities: SystemCapabilities | null;
@@ -1195,6 +1243,7 @@ function AgentForm({
   onSkillsChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
+  onRuntimeChange: (value: AgentExecutionRuntime) => void;
   onSandboxProviderChange: (value: string) => void;
   onSandboxConfigChange: (value: string) => void;
   onCancel: () => void;
@@ -1210,7 +1259,7 @@ function AgentForm({
    */
   extraSections?: React.ReactNode;
 }) {
-  const options = modelOptions(model);
+  const options = modelOptions(model, runMode, runtime);
   const canSubmit = Boolean(name.trim());
   const paneRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1261,6 +1310,8 @@ function AgentForm({
 
   const actionBarProps = {
     runMode,
+    runtime,
+    runtimeChoices,
     model,
     modelChoices: options,
     canSubmit,
@@ -1268,6 +1319,10 @@ function AgentForm({
     submitLabel,
     submitIcon,
     onRunModeChange,
+    onRuntimeChange: (value: AgentExecutionRuntime) => {
+      onRuntimeChange(value);
+      if (value !== 'claude' && model !== 'auto') onModelChange('auto');
+    },
     onModelChange,
     onCancel,
     onSubmit,
@@ -1548,6 +1603,7 @@ function AgentDetailPane({
   onDelete,
   onToggleEnabled,
   capabilities,
+  runtimeChoices,
   skillSuggestions,
   webhooks,
   connections,
@@ -1568,6 +1624,7 @@ function AgentDetailPane({
   onDelete: () => void;
   onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
+  runtimeChoices: AgentRuntimeChoice[];
   /** Passed straight through to the Skills field; built once for both forms. */
   skillSuggestions: SkillSuggestion[];
   webhooks: AgentWebhook[];
@@ -1604,6 +1661,8 @@ function AgentDetailPane({
   const [editSkills, setEditSkills] = useState('');
   const [editModel, setEditModel] = useState('auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
+  const [editRuntime, setEditRuntime] = useState<AgentExecutionRuntime>('claude');
+  const [editRuntimeSelectionDirty, setEditRuntimeSelectionDirty] = useState(false);
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
   // The voice DRAFT for the edit form. The voice controls used to live in the
@@ -1635,6 +1694,8 @@ function AgentDetailPane({
       skills: joinList(agent.skills),
       model: agent.model || 'auto',
       runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
+      runtime: agentExecutionRuntime(agent),
+      metadata: { ...(agent.metadata || {}) },
       sandboxProvider: agent.sandbox_provider || 'e2b',
       sandboxConfig: JSON.stringify(agent.sandbox_config || {}, null, 2),
     };
@@ -1651,6 +1712,8 @@ function AgentDetailPane({
     setEditSkills(seed.skills);
     setEditModel(seed.model);
     setEditRunMode(seed.runMode);
+    setEditRuntime(seed.runtime);
+    setEditRuntimeSelectionDirty(false);
     setEditSandboxProvider(seed.sandboxProvider);
     setEditSandboxConfig(seed.sandboxConfig);
     const seedVoice = readAgentVoice(agent);
@@ -1710,6 +1773,8 @@ function AgentDetailPane({
       skills: editSkills,
       model: editModel,
       runMode: editRunMode,
+      runtime: editRuntime,
+      metadata: { ...(agent.metadata || {}) },
       sandboxProvider: editSandboxProvider,
       sandboxConfig: editSandboxConfig,
     });
@@ -1721,20 +1786,20 @@ function AgentDetailPane({
         (updates as Record<string, unknown>)[key] = next;
       }
     }
+    // Runtime/location are an execution boundary. Realtime can change them
+    // while this form is open; an unrelated description/avatar save must not
+    // write the stale draft back over that newer choice. Metadata has no other
+    // editable fields in this form, so omit both sparse fields unless the human
+    // actually touched one of the two execution selectors.
+    if (!editRuntimeSelectionDirty) {
+      delete updates.run_mode;
+      delete updates.metadata;
+    }
     // The voice draft rides the same rule: only a CHANGED voice is sent, as
     // `identity.voice` — the one identity key a client may write. The server
     // grafts it onto the stored column and records the human's choice.
     if (JSON.stringify(editVoice) !== JSON.stringify(voiceBaseline.current)) {
       updates.identity = { voice: editVoice };
-    }
-    // runtime=amp is meaningful only on a daemon agent. If the operator
-    // deliberately converts this template to Built-in, clear the hidden runtime
-    // marker in the same sparse update instead of leaving an agent that looks
-    // built-in in the form but still dispatches to Amp.
-    if (ampAgent && editRunMode !== 'daemon') {
-      const metadata = { ...(agent.metadata || {}) };
-      delete metadata.runtime;
-      updates.metadata = metadata;
     }
     if (Object.keys(updates).length === 0) {
       // Nothing changed — closing the editor without a write is the whole point.
@@ -1768,6 +1833,8 @@ function AgentDetailPane({
             skills={editSkills}
             model={editModel}
             runMode={editRunMode}
+            runtime={editRuntime}
+            runtimeChoices={runtimeChoices}
             capabilities={capabilities}
             skillSuggestions={skillSuggestions}
             onNameChange={setEditName}
@@ -1788,7 +1855,14 @@ function AgentDetailPane({
             onToolsChange={setEditTools}
             onSkillsChange={setEditSkills}
             onModelChange={setEditModel}
-            onRunModeChange={setEditRunMode}
+            onRunModeChange={(value) => {
+              setEditRunMode(value);
+              setEditRuntimeSelectionDirty(true);
+            }}
+            onRuntimeChange={(value) => {
+              setEditRuntime(value);
+              setEditRuntimeSelectionDirty(true);
+            }}
             sandboxProvider={editSandboxProvider}
             sandboxConfig={editSandboxConfig}
             onSandboxProviderChange={setEditSandboxProvider}
@@ -1841,8 +1915,9 @@ function AgentDetailPane({
             <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{agent.description || 'No description'}</p>
             <div className="mt-2 flex flex-wrap gap-1">
               <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
-                {ampAgent ? 'Amp orb' : agent.run_mode === 'daemon' ? 'remote daemon' : agent.run_mode === 'external' ? 'MCP client' : 'built-in'}
+                {agentTransportLabel(agent.run_mode)}
               </Badge>
+              {agent.run_mode === 'daemon' && <Badge variant="outline">{agentExecutionRuntime(agent)}</Badge>}
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
               <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
               {!agentActive && <Badge variant="secondary">deactivated</Badge>}
@@ -1900,7 +1975,8 @@ function AgentDetailPane({
 
         <div className="mt-3 grid gap-3">
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Mode" value={ampAgent ? 'Amp-managed orb' : agentTransportLabel(agent.run_mode)} />
+            <AgentDetailField label="Location" value={agentTransportLabel(agent.run_mode)} />
+            {agent.run_mode === 'daemon' && <AgentDetailField label="Runtime" value={agentExecutionRuntime(agent) === 'amp' ? 'Amp (managed orb)' : agentExecutionRuntime(agent)} />}
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
             {ampAgent && !isConnected && <div className="text-xs text-muted-foreground">Connect this agent to a machine running agensis-agent and Amp.</div>}
@@ -2103,6 +2179,7 @@ function AgentConnectDialog({
   agent,
   open,
   onOpenChange,
+  runtimeChoices,
   webhooks,
   onCreateWebhook,
   onToggleWebhook,
@@ -2110,6 +2187,7 @@ function AgentConnectDialog({
   agent: WorkspaceAgent | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  runtimeChoices: AgentRuntimeChoice[];
   webhooks: AgentWebhook[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
@@ -2263,20 +2341,21 @@ function AgentConnectDialog({
               <div>
                 <p className="mb-2 text-xs font-medium text-muted-foreground">Supported coding agents your daemon can run</p>
                 <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(140px,1fr))]">
-                  {CODING_AGENT_PROVIDERS.map(provider => (
+                  {runtimeChoices.map(runtime => (
                     <div
-                      key={provider.id}
+                      key={runtime.id}
                       className={cn(
                         'flex flex-col gap-1 rounded-lg border p-2.5',
-                        provider.available ? 'border-border bg-card/50' : 'border-dashed border-border/60 bg-card/20 opacity-70',
+                        agentExecutionRuntime(agent) === runtime.id ? 'border-primary/60 bg-primary/10' : 'border-border bg-card/50',
                       )}
                     >
                       <div className="flex items-center gap-1.5">
                         <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate text-xs font-semibold">{provider.name}</span>
+                        <span className="truncate text-xs font-semibold">{runtime.label}</span>
+                        {agentExecutionRuntime(agent) === runtime.id && <Badge variant="outline" className="ml-auto text-[9px]">Selected</Badge>}
                       </div>
-                      <span className={cn('text-[10px]', provider.available ? 'text-emerald-500' : 'text-muted-foreground')}>
-                        {provider.available ? 'Available' : provider.note}
+                      <span className={cn('text-[10px]', runtime.available ? 'text-emerald-500' : 'text-muted-foreground')}>
+                        {runtimeChoiceNote(runtime)}
                       </span>
                     </div>
                   ))}
@@ -2897,7 +2976,13 @@ function formatRelativeTime(value?: string | null) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-function modelOptions(current: string) {
+function modelOptions(current: string, runMode: 'builtin' | 'daemon' | 'sandbox', runtime: AgentExecutionRuntime) {
+  if (runMode === 'daemon' && runtime !== 'claude') {
+    const defaultOption = { id: 'auto', label: `${runtime === 'amp' ? 'Amp' : 'Codex'} default` };
+    return current && current !== 'auto'
+      ? [{ id: current, label: `${current} (saved)` }, defaultOption]
+      : [defaultOption];
+  }
   if (!current || AI_MODELS.some(model => model.id === current)) {
     return AI_MODELS;
   }

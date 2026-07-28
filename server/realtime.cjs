@@ -489,7 +489,13 @@ function createRealtime(deps = {}) {
       return;
      }
     } catch (error) {
-     sendWs(ws, { type: 'error', message: error?.message || 'Realtime request rejected' });
+     if (error?.code === 'runtime_mismatch') {
+      const message = error?.message || 'Agent runtime mismatch';
+      sendWs(ws, { type: 'agent_disabled', reason: message, code: 'runtime_mismatch' });
+      try { ws.close(1008, 'Agent runtime mismatch'); } catch { /* already closing */ }
+      return;
+     }
+     sendWs(ws, { type: 'error', code: error?.code || undefined, message: error?.message || 'Realtime request rejected' });
     }
    });
 
