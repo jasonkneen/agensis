@@ -7550,6 +7550,7 @@ module.exports = {
   agentHasAnyActiveJob,
   claimTaskDispatch,
   releaseTaskDispatch,
+  taskQueuePosition,
   TASK_ASSIGN_CLAIM_MS,
   TASK_QUEUE_MAX_STRIKES,
   TASK_QUEUE_SCAN_LIMIT,
