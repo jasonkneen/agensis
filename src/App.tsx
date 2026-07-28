@@ -1,3 +1,4 @@
+import { NewChannelDialog } from './components/chat/NewChannelDialog';
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
@@ -1154,8 +1155,22 @@ function AppContent() {
     setMobileDrawerOpen(false);
   }, [topWindowId]);
 
-  const handleNewChat = useCallback(async () => {
-    const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
+  // The "+" beside Channels opens the template gallery rather than creating a
+  // channel outright. Creation still happens here, once a template is picked.
+  const [newChannelOpen, setNewChannelOpen] = useState(false);
+  const handleNewChat = useCallback(() => { setNewChannelOpen(true); }, []);
+
+  const createChannelFromTemplate = useCallback(async (draft: {
+    title: string; icon: string; description: string; intent: string; conversation_mode: string;
+  }) => {
+    const { session, failure } = await createSession('auto', {
+      canvas_id: activeLayerId,
+      ...(draft.title ? { title: draft.title } : {}),
+      ...(draft.icon ? { icon: draft.icon } : {}),
+      ...(draft.description ? { description: draft.description } : {}),
+      ...(draft.intent ? { intent: draft.intent } : {}),
+      conversation_mode: draft.conversation_mode,
+    } as Partial<import('./types').ChatSession>);
     if (!session) {
       reportWriteFailure('create the channel', failure);
       return;
@@ -2544,6 +2559,11 @@ function AppContent() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
+      <NewChannelDialog
+        open={newChannelOpen}
+        onOpenChange={setNewChannelOpen}
+        onCreate={createChannelFromTemplate}
+      />
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
       <FeedbackButton
         workspaceId={activeWorkspaceId || null}
