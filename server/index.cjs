@@ -7433,7 +7433,7 @@ function createApp() {
 
  // Web-only egress for the browser panel; the desktop shell uses <webview> and
  // never calls this. Auth + rate limit are both mandatory — see the module header.
- installBrowserProxy(app, { requireAuth, rateLimiter: browserProxyRateLimiter });
+ installBrowserProxy(app, { requireAuth, rateLimiter: browserProxyRateLimiter, rateLimitBlocked });
 
  mountAiChatRoutes(app, {
   ...coreDeps(),
