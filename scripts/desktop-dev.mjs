@@ -1,22 +1,22 @@
 /**
- * Dev loop for the Native SDK desktop shell.
+ * Dev loop for the Electron desktop shell.
  *
- * Same shape as the old electron:dev: ensure the local backend is up, then
- * hand off to `zig build dev` in desktop/ which starts Vite (via app.zon)
- * and launches the native WebView shell against it.
+ * Ensures the local backend is up, starts Vite on 127.0.0.1:5173, then
+ * launches Electron (`npx electron .`, resolved via the "main" field in
+ * package.json → electron/main.cjs) against the Vite dev server.
+ * AGENSIS_BACKEND_EXTERNAL=1 tells electron/main.cjs to never start its own
+ * in-process backend, so the sidecar started here is the only one.
  */
 import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const desktopDir = path.join(root, 'desktop');
 const isWindows = process.platform === 'win32';
 const npmCmd = isWindows ? 'npm.cmd' : 'npm';
+const npxCmd = isWindows ? 'npx.cmd' : 'npx';
+const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
 let shuttingDown = false;
+let electronProcess;
 let backendProcess;
-let nativeProcess;
 
 async function isBackendRunning(url = 'http://127.0.0.1:3142/backend/health') {
   try {
@@ -38,38 +38,58 @@ function killProcess(child) {
 
 async function waitForServer(url, timeoutMs = 30_000) {
   const start = Date.now();
+
   while (Date.now() - start < timeoutMs) {
     try {
       const response = await fetch(url, { method: 'GET' });
       if (response.ok) return;
     } catch {
-      // keep polling
+      // keep polling until Vite is ready
     }
     await new Promise(resolve => setTimeout(resolve, 300));
   }
-  throw new Error(`Timed out waiting for ${url}`);
+
+  throw new Error(`Timed out waiting for Vite dev server at ${url}`);
 }
 
-function shutdown() {
+function shutdown(viteProcess) {
   if (shuttingDown) return;
   shuttingDown = true;
-  killProcess(nativeProcess);
+  killProcess(electronProcess);
   killProcess(backendProcess);
+  killProcess(viteProcess);
 }
 
 async function main() {
   const backendAlreadyRunning = await isBackendRunning();
 
   if (!backendAlreadyRunning) {
-    backendProcess = spawn(npmCmd, ['run', 'backend'], {
-      cwd: root,
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
+    backendProcess = spawn(
+      npmCmd,
+      ['run', 'backend'],
+      {
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+        },
+      },
+    );
     await waitForServer('http://127.0.0.1:3142/backend/health');
   }
 
-  const cleanup = () => shutdown();
+  const viteProcess = spawn(
+    npmCmd,
+    ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--strictPort'],
+    {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        BROWSER: 'none',
+      },
+    },
+  );
+
+  const cleanup = () => shutdown(viteProcess);
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
   process.on('exit', cleanup);
@@ -78,31 +98,39 @@ async function main() {
     backendProcess.on('exit', (code) => {
       if (!shuttingDown) {
         console.error(`Backend server exited early with code ${code ?? 'unknown'}`);
-        shutdown();
+        shutdown(viteProcess);
         process.exit(code ?? 1);
       }
     });
   }
 
-  // `zig build dev` builds the shell, starts Vite from app.zon, and launches it.
-  nativeProcess = spawn('zig', ['build', 'dev'], {
-    cwd: desktopDir,
+  viteProcess.on('exit', (code) => {
+    if (!shuttingDown) {
+      console.error(`Vite exited early with code ${code ?? 'unknown'}`);
+      shutdown(viteProcess);
+      process.exit(code ?? 1);
+    }
+  });
+
+  await waitForServer(devUrl);
+
+  electronProcess = spawn(npxCmd, ['electron', '.'], {
     stdio: 'inherit',
     env: {
       ...process.env,
-      BROWSER: 'none',
+      VITE_DEV_SERVER_URL: devUrl,
       AGENSIS_BACKEND_EXTERNAL: '1',
     },
   });
 
-  nativeProcess.on('exit', (code) => {
-    shutdown();
+  electronProcess.on('exit', (code) => {
+    shutdown(viteProcess);
     process.exit(code ?? 0);
   });
 }
 
 main().catch((error) => {
-  console.error('[desktop:dev] Failed to start Native SDK desktop shell');
+  console.error('[desktop:dev] Failed to start Electron dev mode');
   console.error(error);
   process.exit(1);
 });

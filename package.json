@@ -6,6 +6,7 @@
   "homepage": "https://agensis.io",
   "license": "MIT",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -26,10 +27,10 @@
     "reset:test-account": "node --env-file=.env scripts/reset-test-account.cjs",
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:build": "node scripts/desktop-build.mjs",
-    "desktop:dist": "node scripts/desktop-build.mjs",
+    "desktop:dist": "node scripts/desktop-build.mjs --publish never",
     "electron:dev": "node scripts/desktop-dev.mjs",
     "electron:build": "node scripts/desktop-build.mjs",
-    "electron:dist": "node scripts/desktop-build.mjs"
+    "electron:dist": "node scripts/desktop-build.mjs --publish never"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -88,6 +89,8 @@
     "@types/react-dom": "19",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
+    "electron": "^43.0.0",
+    "electron-builder": "^25.1.8",
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
@@ -101,5 +104,85 @@
     "typescript-eslint": "^8.3.0",
     "vite": "^5.4.2",
     "vitest": "^4.1.9"
+  },
+  "build": {
+    "appId": "io.agensis.app",
+    "productName": "agensis",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
   }
 }
