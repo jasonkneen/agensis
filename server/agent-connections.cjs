@@ -47,6 +47,7 @@ function createAgentConnections(deps = {}) {
   quoteIdent,
   reachFromMessage,
   repairStoredIdentity,
+  resumeDaemonBridges,
   sendWs,
   sharedModelsFromMessage,
   slugHandle,
@@ -200,6 +201,17 @@ function createAgentConnections(deps = {}) {
  function isConnectionSocketOpen(connectionId) {
   const entry = connectedAgents.get(connectionId);
   return Boolean(entry && entry.ws?.readyState === 1);
+ }
+
+ // Push a frame to a daemon addressed by CONNECTION ID rather than by agent.
+ // Channel bridges need this: a bridge is pinned to the machine that holds the
+ // WhatsApp/Signal keys, so "whichever daemon is serving this agent" — which is
+ // what findConnectedAgent answers — is the wrong question. Returns false rather
+ // than throwing when the socket is gone; the caller decides what a miss means.
+ function sendToConnection(connectionId, payload) {
+  const entry = connectedAgents.get(connectionId);
+  if (!entry?.ws) return false;
+  return sendWs(entry.ws, payload);
  }
 
  function refreshConnectedAgentConfigs(eventType, rows) {
@@ -615,6 +627,17 @@ function createAgentConnections(deps = {}) {
   if (readopted.length > 0) {
    console.log(`[agensis] @${handle} reconnected with ${readopted.length} job(s) still running; kept them alive on connection ${connectionId}`);
   }
+  // A daemon restart loses every live provider socket it was holding — the
+  // WhatsApp companion session, the signal-cli process, the OpenClaw client.
+  // Nothing else would ever bring them back, so a reconnect re-homes this
+  // workspace's daemon-lane bridges onto the new connection and starts them.
+  if (resumeDaemonBridges) {
+   void Promise.resolve(resumeDaemonBridges(workspaceId, connectionId))
+    .then((started) => {
+     if (started > 0) console.log(`[agensis] resumed ${started} channel bridge(s) on connection ${connectionId}`);
+    })
+    .catch((error) => console.error('resumeDaemonBridges failed', error));
+  }
   void logConnectionActivity(connection, 'agent_connected');
   sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
  }
@@ -930,6 +953,7 @@ function createAgentConnections(deps = {}) {
   reconcileAgentConnectionsAtStartup,
   refreshConnectedAgentConfigs,
   registerAgentConnection,
+  sendToConnection,
   repairCorruptedAgentIdentities,
   takeAgentDaemonConnections,
   touchMcpPresence,
