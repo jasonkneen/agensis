@@ -100,6 +100,11 @@ function installDb({ job = JOB, request = REQUEST, agentMetadata = {}, role = 'o
       }
       if (n.startsWith('select metadata from workspace_agents')) return [{ metadata: agentMetadata }];
       if (n.startsWith('update workspace_agents set metadata')) return [{ id: params[0], metadata: params[2] }];
+      if (n.startsWith('update workspace_agents set permission_mode')) {
+        // Mirror the real WHERE: a mismatched agent or workspace updates nothing.
+        if (params[0] !== 'agent-1' || params[1] !== 'ws-1') return [];
+        return [{ id: params[0], workspace_id: params[1], permission_mode: params[2] }];
+      }
       if (n.startsWith('select display_name, email from app_users')) return [{ display_name: 'Jason', email: 'j@x.io' }];
       if (n.startsWith('update messages set content')) return [{ id: params[0], content: params[1] }];
       // enforceWorkspaceRole, mirrored query for query. Answering these loosely
@@ -381,6 +386,50 @@ test('permanent rules ride the job payload, so a grant survives into later jobs'
   });
   assert.deepEqual(payload.metadata.permission_rules, ['Bash(git clone:*)']);
   assert.deepEqual(payload.metadata.host_folders, ['/root']);
+});
+
+// --- permission mode --------------------------------------------------------
+
+test('setting the permission mode writes the column the generic db path strips', async () => {
+  // `permission_mode` is in PRIVILEGED_DB_COLUMNS_BY_TABLE, so a
+  // /backend/db/update carrying it is silently emptied. The Agents window's
+  // radio buttons shipped pointed at that path: they moved, the optimistic
+  // state made it look saved, and a reload showed the old value. This route is
+  // the reason they now persist.
+  const calls = installDb();
+  const mode = await __test.setAgentPermissionMode({
+    userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', permissionMode: 'yolo',
+  });
+  assert.equal(mode, 'yolo');
+  const update = calls.find((call) => call.n.startsWith('update workspace_agents set permission_mode'));
+  assert.ok(update, 'the column must be written directly');
+  assert.deepEqual(update.params, ['agent-1', 'ws-1', 'yolo']);
+});
+
+test('changing an agent’s access needs manage, not write', async () => {
+  installDb({ role: 'editor' });
+  // Otherwise a member holding only `write` could flip an agent to Full access
+  // and hand themselves unrestricted shell on the daemon host — which is
+  // exactly what the privileged-column strip exists to prevent.
+  await assert.rejects(
+    () => __test.setAgentPermissionMode({
+      userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', permissionMode: 'yolo',
+    }),
+    /permission|manage|not allowed|forbidden/i,
+  );
+});
+
+test('an unrecognised mode is rejected rather than quietly downgraded to default', async () => {
+  installDb();
+  // normalizeAgentPermissionMode maps anything unknown to 'default'. Accepting
+  // a typo'd 'yolo!' as a deliberate choice would report success for a setting
+  // the human did not make.
+  await assert.rejects(
+    () => __test.setAgentPermissionMode({
+      userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', permissionMode: 'yolo!',
+    }),
+    /permission_mode must be/,
+  );
 });
 
 // --- revoking ---------------------------------------------------------------

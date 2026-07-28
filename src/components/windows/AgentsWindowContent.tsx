@@ -3034,6 +3034,40 @@ function AccessSection({
   const mode: AgentPermissionMode = agent.permission_mode || 'default';
   const rules = normalizeList((agent.metadata as Record<string, unknown> | null)?.permission_rules);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Through a dedicated route, NOT onUpdateAgent. `permission_mode` is in
+  // PRIVILEGED_DB_COLUMNS_BY_TABLE, so the generic /backend/db/update path
+  // deletes it silently — the radios moved, the optimistic state made it look
+  // saved, and a reload showed the old value. The strip is right: without it a
+  // member holding only `write` could flip an agent to Full access and hand
+  // themselves unrestricted shell on the daemon host. So the write goes through
+  // a manage-gated route instead.
+  const setMode = async (next: AgentPermissionMode) => {
+    if (!workspaceId || next === mode) return;
+    setError('');
+    setSaving(true);
+    try {
+      const response = await fetch(
+        apiUrl(`/backend/workspaces/${workspaceId}/agents/${agent.id}/permission-mode`),
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({ permission_mode: next }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.error) {
+        setError(String(payload.error || 'Could not change this agent’s access'));
+        return;
+      }
+      // Only after the server confirms. Updating first is what made the broken
+      // version look like it worked.
+      onUpdateAgent(agent.id, { permission_mode: payload.data?.permission_mode ?? next });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // Through the dedicated route, not a metadata write: `metadata` is MANAGE_ONLY
   // in the column rules, and routing this here keeps granting and revoking a
@@ -3079,7 +3113,8 @@ function AccessSection({
               className="mt-1"
               name={`permission-mode-${agent.id}`}
               checked={mode === option.value}
-              onChange={() => onUpdateAgent(agent.id, { permission_mode: option.value })}
+              disabled={saving}
+              onChange={() => void setMode(option.value)}
             />
             <span className="min-w-0">
               <span className="block font-semibold">{option.label}</span>
