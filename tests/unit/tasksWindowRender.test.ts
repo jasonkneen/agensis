@@ -414,12 +414,29 @@ describe('task editor: schedule fields', () => {
 });
 
 describe('task editor: dependency picker', () => {
+  // Rows the search list renders — CommandItem, one per selectable candidate.
+  function pickerOptionLabels() {
+    return Array.from(container.querySelectorAll('[data-slot="command-item"]'))
+      .map(el => el.textContent || '');
+  }
+
+  function pickerSearchInput() {
+    const input = container.querySelector<HTMLInputElement>('[data-slot="command-input"]');
+    if (!input) throw new Error('no dependency search box');
+    return input;
+  }
+
+  it('exposes a search box, not a wall of checkboxes', () => {
+    render(CHAIN);
+    expandFirstRow(); // row "a"
+    expect(container.querySelector('[data-slot="command-input"]')).toBeTruthy();
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  });
+
   it('offers every task that would not create a cycle, and no others', () => {
     render(CHAIN);
     expandFirstRow(); // row "a"
-    const labels = Array.from(container.querySelectorAll('label'))
-      .filter(l => l.querySelector('input[type="checkbox"]'))
-      .map(l => l.textContent || '');
+    const labels = pickerOptionLabels();
     // b and c transitively depend on a, so neither may be offered back to a.
     expect(labels.some(l => l.includes('Unrelated D'))).toBe(true);
     expect(labels.some(l => l.includes('Chain step B'))).toBe(false);
@@ -427,27 +444,56 @@ describe('task editor: dependency picker', () => {
     expect(labels.some(l => l.includes('Chain step A'))).toBe(false);
   });
 
-  it('commits a ticked dependency as a task id array', () => {
+  it('commits a selected dependency as a task id array', () => {
     const updates: Update[] = [];
     render(CHAIN, updates);
     expandFirstRow();
-    const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
-    if (!box) throw new Error('no dependency checkbox');
-    click(box);
+    const option = container.querySelector('[data-slot="command-item"]');
+    if (!option) throw new Error('no dependency option');
+    click(option);
     expect(updates).toEqual([{ id: 'a', updates: { depends_on: ['d'] } }]);
   });
 
-  it('un-ticks an existing dependency back to an empty list', () => {
+  it('removes an existing dependency via its chip', () => {
     const updates: Update[] = [];
     render(CHAIN, updates);
-    // Expand row "b", whose only dependency is "a".
+    // Expand row "b", whose only dependency is "a" — it renders as a chip.
     const expands = container.querySelectorAll('button[aria-label="Expand task"]');
     click(expands[1]);
-    const boxes = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
-    const ticked = boxes.find(b => b.checked);
-    expect(ticked).toBeTruthy();
-    click(ticked!);
+    const remove = container.querySelector('button[aria-label="Remove dependency Chain step A"]');
+    expect(remove).toBeTruthy();
+    click(remove!);
     expect(updates).toEqual([{ id: 'b', updates: { depends_on: [] } }]);
+  });
+
+  // The point of the rework: don't dump the whole workspace into the panel.
+  const MANY: Task[] = [
+    makeTask({ id: 'root', title: 'Root task', created_at: localIso(2026, 7, 1) }),
+    ...Array.from({ length: 7 }, (_, i) =>
+      makeTask({ id: `o${i + 1}`, title: `Option ${i + 1}`, created_at: localIso(2026, 7, 2 + i) })),
+  ];
+
+  it('shows only the 5 most recent open tasks before you type', () => {
+    render(MANY);
+    expandFirstRow(); // row "root": every Option is a legal candidate
+    const labels = pickerOptionLabels();
+    expect(labels).toHaveLength(5);
+    // Newest first: Options 7..3 are shown, the two oldest are not.
+    expect(labels.some(l => l.includes('Option 7'))).toBe(true);
+    expect(labels.some(l => l.includes('Option 3'))).toBe(true);
+    expect(labels.some(l => l.includes('Option 2'))).toBe(false);
+    expect(labels.some(l => l.includes('Option 1'))).toBe(false);
+  });
+
+  it('filters the full candidate set once you search', () => {
+    render(MANY);
+    expandFirstRow();
+    // "Option 1" is the oldest, so it is hidden until searched for.
+    expect(pickerOptionLabels().some(l => l.includes('Option 1'))).toBe(false);
+    setInputValue(pickerSearchInput(), 'Option 1');
+    const labels = pickerOptionLabels();
+    expect(labels.some(l => l.includes('Option 1'))).toBe(true);
+    expect(labels.some(l => l.includes('Option 7'))).toBe(false);
   });
 });
 

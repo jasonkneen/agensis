@@ -40,6 +40,7 @@ import {
   dependencyCandidates as resolveDependencyCandidates,
   dueDateFromExclusiveEnd,
   fromDateInputValue,
+  isClosedTask,
   labelFitsInsideBar,
   resolveTaskFocus,
   WIDEST_TASK_FILTERS,
@@ -57,6 +58,7 @@ import {
   Command,
   CommandEmpty,
   CommandGroup,
+  CommandInput,
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
@@ -760,6 +762,158 @@ function TaskRow({
   );
 }
 
+// Number of tasks shown before the user types anything. Kept small on purpose:
+// the picker is "recent open tasks, then search" — a long default list is the
+// checkbox wall this replaced.
+const DEPENDENCY_RECENT_LIMIT = 5;
+// Ceiling on search results so a broad query in a big workspace can't render
+// hundreds of rows into the panel.
+const DEPENDENCY_SEARCH_LIMIT = 50;
+
+// The "Depends on" editor. Selected dependencies show as removable chips; a
+// search box below defaults to the most-recently-created OPEN candidates and
+// filters the full candidate set (any status) once the user types. Candidates
+// already exclude this task and anything that would close a dependency cycle.
+function DependencyPicker({
+  task,
+  allTasks,
+  onChangeDependsOn,
+}: {
+  task: Task;
+  allTasks: Task[];
+  onChangeDependsOn: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const dependsOn = taskDependsOn(task);
+
+  const candidates = useMemo(
+    () => resolveDependencyCandidates(task, allTasks),
+    [allTasks, task],
+  );
+
+  // Newest first — the ordering both the recent list and search results use.
+  const byNewest = useMemo(() => {
+    return candidates
+      .slice()
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  }, [candidates]);
+
+  // Selected deps resolve from ALL tasks, not just candidates, so an existing
+  // dependency always renders as a chip even in the edge case where it fell out
+  // of the candidate set — the user can still see and remove it.
+  const selected = useMemo(() => {
+    const byId = new Map(allTasks.map(item => [item.id, item]));
+    return dependsOn.map(id => byId.get(id)).filter((item): item is Task => Boolean(item));
+  }, [allTasks, dependsOn]);
+
+  const selectedIds = useMemo(() => new Set(dependsOn), [dependsOn]);
+
+  const trimmed = query.trim().toLowerCase();
+  // Empty query -> the N most recent OPEN candidates. Typing -> every candidate
+  // (any status) whose title matches, capped. Already-selected tasks live in the
+  // chip row above, so they're excluded from the list either way.
+  const visible = useMemo(() => {
+    const unselected = byNewest.filter(candidate => !selectedIds.has(candidate.id));
+    if (!trimmed) {
+      return unselected.filter(candidate => !isClosedTask(candidate)).slice(0, DEPENDENCY_RECENT_LIMIT);
+    }
+    return unselected
+      .filter(candidate => String(candidate.title || '').toLowerCase().includes(trimmed))
+      .slice(0, DEPENDENCY_SEARCH_LIMIT);
+  }, [byNewest, selectedIds, trimmed]);
+
+  const addDependency = (id: string) => {
+    if (selectedIds.has(id)) return;
+    onChangeDependsOn([...dependsOn, id]);
+    setQuery('');
+  };
+
+  const removeDependency = (id: string) => {
+    onChangeDependsOn(dependsOn.filter(depId => depId !== id));
+  };
+
+  return (
+    <section className="flex flex-col gap-2">
+      <Marker>
+        <MarkerIcon>
+          <Link2 />
+        </MarkerIcon>
+        <MarkerContent>Depends on {selected.length > 0 && `(${selected.length})`}</MarkerContent>
+      </Marker>
+
+      {candidates.length === 0 && selected.length === 0 ? (
+        <p className="px-1 text-xs text-muted-foreground">No other tasks to depend on yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {selected.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {selected.map(dep => (
+                <span
+                  key={dep.id}
+                  className={cn(
+                    'inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted/50 py-0.5 pr-1 pl-2.5 text-xs',
+                    isClosedTask(dep) && 'text-muted-foreground',
+                  )}
+                >
+                  <span className={cn('min-w-0 truncate', isClosedTask(dep) && 'line-through')}>{dep.title}</span>
+                  <button
+                    type="button"
+                    className="grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => removeDependency(dep.id)}
+                    aria-label={`Remove dependency ${dep.title}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <Command
+            shouldFilter={false}
+            className="rounded-xl border border-border bg-transparent p-0"
+          >
+            <CommandInput
+              value={query}
+              onValueChange={setQuery}
+              placeholder="Search tasks to depend on..."
+            />
+            <CommandList className="max-h-[min(240px,40vh)]">
+              <CommandEmpty>
+                {trimmed ? 'No matching tasks.' : 'No open tasks to depend on.'}
+              </CommandEmpty>
+              {visible.length > 0 && (
+                <CommandGroup heading={trimmed ? 'Results' : 'Recent open tasks'}>
+                  {visible.map(candidate => (
+                    <CommandItem
+                      key={candidate.id}
+                      value={candidate.id}
+                      onSelect={() => addDependency(candidate.id)}
+                    >
+                      <Plus className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span
+                        className={cn(
+                          'min-w-0 flex-1 truncate',
+                          candidate.status === 'done' && 'text-muted-foreground line-through',
+                        )}
+                      >
+                        {candidate.title}
+                      </span>
+                      <Badge variant="outline" className="shrink-0">
+                        {STATUS_LABELS[candidate.status] ?? candidate.status}
+                      </Badge>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+            </CommandList>
+          </Command>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TaskDetail({
   task,
   subtasks,
@@ -897,23 +1051,6 @@ function TaskDetail({
     setPendingMentionAgent(null);
   };
 
-  // Candidate dependencies: every other task in the workspace, minus anything
-  // that (transitively) already depends on THIS one. Excluding only the DIRECT
-  // dependents was not enough — A->B->C left "C depends on A" selectable, and a
-  // cycle hangs any topological layout.
-  const dependsOn = taskDependsOn(task);
-  const dependencyCandidates = useMemo(
-    () => resolveDependencyCandidates(task, allTasks),
-    [allTasks, task],
-  );
-
-  const toggleDependency = (candidateId: string) => {
-    const set = new Set(dependsOn);
-    if (set.has(candidateId)) set.delete(candidateId);
-    else set.add(candidateId);
-    onChangeDependsOn(Array.from(set));
-  };
-
   // The x/y badge on the row above counts EVERY subtask, so the hidden ones are
   // still accounted for — this only stops "Hide done" leaving them on screen.
   const visibleSubtasks = useMemo(() => applyHideDone(subtasks, Boolean(hideDone)), [subtasks, hideDone]);
@@ -964,40 +1101,7 @@ function TaskDetail({
         )}
       </section>
 
-      <section className="flex flex-col gap-2">
-        <Marker>
-          <MarkerIcon>
-            <Link2 />
-          </MarkerIcon>
-          <MarkerContent>Depends on {dependsOn.length > 0 && `(${dependsOn.length})`}</MarkerContent>
-        </Marker>
-        {dependencyCandidates.length === 0 ? (
-          <p className="px-1 text-xs text-muted-foreground">No other tasks to depend on yet.</p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            {dependencyCandidates.map(candidate => {
-              const checked = dependsOn.includes(candidate.id);
-              return (
-                <label
-                  key={candidate.id}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/50"
-                >
-                  <input
-                    type="checkbox"
-                    className="size-3.5 accent-primary"
-                    checked={checked}
-                    onChange={() => toggleDependency(candidate.id)}
-                  />
-                  <span className={cn('min-w-0 flex-1 truncate', candidate.status === 'done' && 'text-muted-foreground line-through')}>
-                    {candidate.title}
-                  </span>
-                  <Badge variant="outline" className="shrink-0">{STATUS_LABELS[candidate.status] ?? candidate.status}</Badge>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </section>
+      <DependencyPicker task={task} allTasks={allTasks} onChangeDependsOn={onChangeDependsOn} />
 
       <section className="flex flex-col gap-2">
         <Marker>
