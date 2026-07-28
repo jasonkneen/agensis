@@ -115,8 +115,10 @@ describe('the vault panel', () => {
   it('shows state instead of a value, and never renders a preview', async () => {
     await mount();
     const text = container.textContent ?? '';
+    const setDate = new Date('2026-07-20T10:00:00.000Z')
+      .toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
     expect(text).toContain('Not set');
-    expect(text).toContain('Set 20 Jul 2026');
+    expect(text).toContain(`Set ${setDate}`);
     expect(text).not.toContain(NEVER_RENDERED);
     expect(text).not.toContain('•••');
     expect(text).not.toContain('…');

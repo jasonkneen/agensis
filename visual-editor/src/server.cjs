@@ -3,8 +3,8 @@
  * visual-dev-editor — server side.
  *
  * Exposes:
- *   createEditorMiddleware({ root })  — connect-style (req, res, next) middleware
- *   startServer({ root, port })       — standalone static server w/ script injection
+ *   createEditorMiddleware({ root, targets? }) — connect-style middleware
+ *   startServer({ root, port, targets? })      — standalone static server + injection
  *   applyEdit(source, op)             — pure string patcher (exported for tests)
  *   resolveFilePath(root, rel)        — safe path resolution (exported for tests)
  *
@@ -678,8 +678,61 @@ function createUndoTracker(cap) {
   };
 }
 
+function normalizeTargetFile(file) {
+  if (typeof file !== 'string' || !file.trim() || file.includes('\\')) return null;
+  const normalized = path.posix.normalize(file.trim().replace(/^\/+/, ''));
+  if (normalized === '.' || normalized === '..' || normalized.startsWith('../')) return null;
+  return normalized;
+}
+
+/**
+ * Turn configured application routes, or discovered static HTML files, into
+ * one client shape. Configuration is authoritative so SPAs can describe real
+ * routes and avoid listing partials or fixtures as pages.
+ */
+function normalizePageTargets(targets, discoveredPages = []) {
+  const configured = Array.isArray(targets);
+  const input = configured ? targets : discoveredPages;
+  const seen = new Set();
+  const out = [];
+
+  for (const raw of input.slice(0, 80)) {
+    const target = typeof raw === 'string' ? { href: raw } : raw;
+    if (!target || typeof target !== 'object') continue;
+    let hrefValue;
+    if (configured) {
+      hrefValue = target.href || target.path;
+    } else if (typeof target.path === 'string') {
+      hrefValue = '/' + target.path.split('/').map(encodeURIComponent).join('/');
+    }
+    if (typeof hrefValue !== 'string' || !hrefValue.trim()) continue;
+
+    let url;
+    try { url = new URL(hrefValue.trim(), 'http://localhost/'); } catch { continue; }
+    if (url.origin !== 'http://localhost') continue;
+    const href = url.pathname + url.search + url.hash;
+    if (seen.has(href)) continue;
+
+    const fileValue = configured ? target.file : target.path;
+    const file = fileValue == null ? null : normalizeTargetFile(fileValue);
+    if (fileValue != null && !file) continue;
+    let fallback = url.pathname.split('/').filter(Boolean).pop() || 'Home';
+    try { fallback = decodeURIComponent(fallback); } catch { /* keep encoded path text */ }
+    const title = typeof target.title === 'string' && target.title.trim()
+      ? target.title.trim()
+      : fallback.replace(/\.[^.]+$/, '').split(/[-_]+/).filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Page';
+
+    const normalized = { title, href };
+    if (file) normalized.file = file;
+    out.push(normalized);
+    seen.add(href);
+  }
+  return out;
+}
+
 /** connect-style middleware: handles /__visual-editor/*, calls next() otherwise. */
-function createEditorMiddleware({ root }) {
+function createEditorMiddleware({ root, targets }) {
   if (!root) throw new Error('createEditorMiddleware requires { root }');
   const undo = createUndoTracker(50);
   // Short-lived, not permanent: `npx shadcn add button` mid-session must show
@@ -716,6 +769,7 @@ function createEditorMiddleware({ root }) {
         const stale = Date.now() - paletteCachedAt > PALETTE_TTL_MS;
         if (!paletteCache || stale || url.searchParams.get('fresh')) {
           paletteCache = discover(root);
+          paletteCache.pages = normalizePageTargets(targets, paletteCache.pages);
           paletteCachedAt = Date.now();
         }
         sendJson(res, 200, { ok: true, ...paletteCache });
@@ -820,8 +874,8 @@ function serveStatic(root, req, res) {
   });
 }
 
-function startServer({ root, port }) {
-  const middleware = createEditorMiddleware({ root });
+function startServer({ root, port, targets }) {
+  const middleware = createEditorMiddleware({ root, targets });
   const server = http.createServer((req, res) => {
     // Last-resort net: an exception thrown synchronously in a request handler
     // is an uncaught exception, which terminates the whole dev server.
@@ -850,5 +904,6 @@ module.exports = {
   applyEdit,
   resolveFilePath,
   createUndoTracker,
+  normalizePageTargets,
   INJECT,
 };

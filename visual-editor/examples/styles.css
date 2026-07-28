@@ -70,6 +70,13 @@ body {
 }
 
 .nav-links a:hover { color: var(--ink); }
+.nav-links a[aria-current="page"] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
 
 /* Hero */
 
@@ -154,6 +161,20 @@ h1 {
 
 /* Sections */
 
+.page-hero {
+  padding: 76px 0 64px;
+  background: linear-gradient(160deg, #f4f6fb 0%, #ffffff 70%);
+  border-bottom: 1px solid #e7eaf2;
+}
+
+.page-hero h1 {
+  max-width: 14ch;
+}
+
+.page-hero .lede {
+  margin-bottom: 0;
+}
+
 .section { padding: 88px 0; }
 
 .section-alt {
@@ -211,6 +232,26 @@ h2 {
   font-weight: 700;
   text-decoration: none;
   font-size: 14px;
+}
+
+.case-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.case-study {
+  min-width: 0;
+}
+
+.case-study h2 {
+  font-size: 26px;
+  margin-bottom: 12px;
+}
+
+.case-study > p:not(.eyebrow) {
+  color: var(--muted);
+  min-height: 5.4em;
 }
 
 /* Services */
@@ -321,6 +362,7 @@ h2 {
 @media (max-width: 800px) {
   .hero-inner { grid-template-columns: 1fr; }
   .card-grid { grid-template-columns: 1fr; }
+  .case-grid { grid-template-columns: 1fr; }
   .service-list { grid-template-columns: 1fr; }
   h1 { font-size: 38px; }
 }

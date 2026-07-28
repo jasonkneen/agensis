@@ -11,7 +11,7 @@
  *
  * Exports:
  *   discover(root) -> { root, framework, packageManager, aliases, libraries,
- *                       components, uiDir, warnings }
+ *                       components, pages, uiDir, warnings }
  */
 
 const fs = require('fs');
@@ -19,9 +19,15 @@ const path = require('path');
 
 const MAX_SCAN_FILES = 400;
 const MAX_WALK_DEPTH = 6;
+const MAX_PAGE_DEPTH = 4;
+const MAX_PAGES = 80;
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit',
   'coverage', '.cache', 'vendor', '.turbo', '.output', 'public', 'static',
+]);
+const PAGE_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit',
+  'coverage', '.cache', 'vendor', '.turbo', '.output',
 ]);
 
 function readJson(file) {
@@ -30,6 +36,72 @@ function readJson(file) {
   } catch {
     return null;
   }
+}
+
+function decodeHtmlText(value) {
+  function codePoint(raw, radix) {
+    const point = parseInt(raw, radix);
+    return Number.isInteger(point) && point >= 0 && point <= 0x10ffff
+      ? String.fromCodePoint(point) : '\ufffd';
+  }
+  return String(value)
+    .replace(/&#(\d+);/g, (_m, n) => codePoint(n, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n) => codePoint(n, 16))
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_m, name) => ({
+      amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+    })[name.toLowerCase()]);
+}
+
+function readPageSource(file) {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size <= 512 * 1024) return fs.readFileSync(file, 'utf8');
+  } catch { /* unreadable files are not entry points */ }
+  return '';
+}
+
+function pageTitle(source, rel) {
+  const match = /<title(?:\s[^>]*)?>([\s\S]*?)<\/title\s*>/i.exec(source);
+  if (match) {
+    const title = decodeHtmlText(match[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim());
+    if (title) return title;
+  }
+  const base = path.basename(rel, path.extname(rel));
+  const fallback = base.toLowerCase() === 'index' && path.dirname(rel) !== '.'
+    ? path.basename(path.dirname(rel)) : base;
+  return fallback.split(/[-_]+/).filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Page';
+}
+
+/** HTML entry points under the served root, for switching the editor's target. */
+function discoverPages(rootDir) {
+  const pages = [];
+  function walk(dir, depth) {
+    if (depth > MAX_PAGE_DEPTH || pages.length >= MAX_PAGES) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (pages.length >= MAX_PAGES) return;
+      if (entry.name.startsWith('.') || PAGE_SKIP_DIRS.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+      } else if (entry.isFile() && /\.html?$/i.test(entry.name)) {
+        const source = readPageSource(full);
+        // Be conservative: fragments, email templates and test fixtures are
+        // not navigable application targets just because their suffix is HTML.
+        if (!/(?:<!doctype\s+html\b|<html(?:\s|>))/i.test(source)) continue;
+        const rel = path.relative(rootDir, full).split(path.sep).join('/');
+        pages.push({ path: rel, title: pageTitle(source, rel) });
+      }
+    }
+  }
+  walk(rootDir, 0);
+  return pages.sort((a, b) => {
+    if (a.path === 'index.html' || a.path === 'index.htm') return -1;
+    if (b.path === 'index.html' || b.path === 'index.htm') return 1;
+    return a.path.localeCompare(b.path);
+  });
 }
 
 function isDir(p) {
@@ -323,8 +395,17 @@ function discover(root) {
     uiDir: uiDir ? path.relative(projectDir, uiDir) : null,
     libraries,
     components: components.slice(0, 200),
+    pages: discoverPages(rootDir),
     warnings,
   };
 }
 
-module.exports = { discover, pascal, readExports, resolveAlias, findUp, CATALOG };
+module.exports = {
+  discover,
+  discoverPages,
+  pascal,
+  readExports,
+  resolveAlias,
+  findUp,
+  CATALOG,
+};

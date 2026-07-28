@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 test('no JSON.stringify reaches a ::jsonb bind on the Fly server', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
   const lines = source.split('\n');
   const offenders = [];
 

@@ -25,11 +25,29 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.resolve(__dirname, '..', 'server', 'index.cjs'), 'utf8');
+const source = require('./helpers/fly-lane.cjs').flyLaneSource();
+
+// Slice one function's body out of the lane.
+//
+// These functions moved to server/agent-jobs.cjs (Wave 4 of the index.cjs
+// reduction), where they are nested inside createAgentJobs() and therefore close
+// with ' }' rather than '}'. The old bound — indexOf('\n}\n') — no longer
+// matched the function's own close, so it ran on to the MODULE's close and the
+// "body" silently grew to include every function after it. Positive assertions
+// would then pass on a neighbour's code. Bound on the close at the declaration's
+// own indent instead.
+function functionBody(text, declaration) {
+  const start = text.indexOf(declaration);
+  assert.ok(start > 0, `could not find ${declaration}`);
+  const lineStart = text.lastIndexOf('\n', start) + 1;
+  const indent = text.slice(lineStart, start);
+  const close = text.indexOf(`\n${indent}}\n`, start);
+  assert.ok(close > start, `could not bound ${declaration}`);
+  return text.slice(start, close);
+}
 
 test('the stuck-job reaper measures content progress, not liveness ticks', () => {
-  const reaper = source.slice(source.indexOf('async function reapStuckAgentJobs'));
-  const body = reaper.slice(0, reaper.indexOf('\n}\n'));
+  const body = functionBody(source, 'async function reapStuckAgentJobs');
 
   // Non-farm jobs must be judged on lastContentAt, with started_at only as the
   // fallback for a job that has not produced anything yet.

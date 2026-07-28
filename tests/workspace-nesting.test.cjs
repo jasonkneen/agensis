@@ -44,7 +44,7 @@ function migrationSource() {
 }
 
 test('workspaces.parent_id exists in all three schema places', () => {
-  const runtime = read('server/index.cjs');
+  const runtime = require('./helpers/fly-lane.cjs').flyLaneSource();
   const canonical = read('database/neon-schema.sql');
   const migration = migrationSource();
 
@@ -64,7 +64,7 @@ test('the parent FK is ON DELETE RESTRICT — never CASCADE, never SET NULL', ()
   // agency parent. SET NULL would silently promote them to top level AND strip
   // every member whose access was inherited. Only RESTRICT forces the operator
   // to decide.
-  for (const source of [read('server/index.cjs'), read('database/neon-schema.sql'), migrationSource()]) {
+  for (const source of [require('./helpers/fly-lane.cjs').flyLaneSource(), read('database/neon-schema.sql'), migrationSource()]) {
     assert.match(source, /REFERENCES workspaces\(id\) ON DELETE RESTRICT/);
     assert.doesNotMatch(source, /parent_id\)?\s+REFERENCES workspaces\(id\) ON DELETE CASCADE/);
     assert.doesNotMatch(source, /workspaces_parent_id_fkey[\s\S]{0,200}ON DELETE (CASCADE|SET NULL)/);
@@ -75,7 +75,7 @@ test('cycles are refused by the database itself, not only by the API gate', () =
   // A cycle is a denial of service, not a cosmetic problem: the ancestor walk
   // sits in the authorization path. The CHECK covers the 1-cycle; the trigger
   // covers every longer one, for every writer (daemon, MCP, psql, migration).
-  for (const source of [read('server/index.cjs'), read('database/neon-schema.sql'), migrationSource()]) {
+  for (const source of [require('./helpers/fly-lane.cjs').flyLaneSource(), read('database/neon-schema.sql'), migrationSource()]) {
     assert.match(source, /CHECK \(parent_id IS NULL OR parent_id <> id\)/);
     assert.match(source, /CREATE OR REPLACE FUNCTION workspaces_reject_parent_cycle\(\)/);
     assert.match(source, /cannot be its own ancestor/);
@@ -87,7 +87,7 @@ test('cycles are refused by the database itself, not only by the API gate', () =
   // accepts a chain the other rejects. The runtime bootstrap interpolates the
   // shared constant directly; the two .sql files cannot, so the literal they
   // carry is pinned to it here.
-  assert.match(read('server/index.cjs'), /steps > \$\{WORKSPACE_MAX_DEPTH\}/);
+  assert.match(require('./helpers/fly-lane.cjs').flyLaneSource(), /steps > \$\{WORKSPACE_MAX_DEPTH\}/);
   const literal = new RegExp(`steps > ${tree.WORKSPACE_MAX_DEPTH}\\b`);
   assert.match(read('database/neon-schema.sql'), literal);
   assert.match(migrationSource(), literal);
@@ -97,7 +97,7 @@ test('parent_id reaches the client — projected by BOTH backends', () => {
   // `icon` and `is_system` were each missing from this exact projection while
   // the column existed, and the UI degraded silently instead of erroring. The
   // column, the SELECT list and the projection function all have to agree.
-  const server = read('server/index.cjs');
+  const server = require('./helpers/fly-lane.cjs').flyLaneSource();
   const netlify = read('netlify/functions/backend.mjs');
   for (const source of [server, netlify]) {
     assert.match(source, /w\.is_system, w\.parent_id/, 'the /backend/workspaces SELECT must list w.parent_id');

@@ -39,7 +39,9 @@ const root = path.resolve(__dirname, '..');
 const core = require('../shared/backend-core.cjs');
 const tenantAdmin = require('../shared/tenant-admin.cjs');
 
-const serverSource = fs.readFileSync(path.join(root, 'server/index.cjs'), 'utf8');
+// The Fly LANE, not one file — the tenants routes moved to
+// server/tenants-routes.cjs in Wave 2 of the index.cjs reduction.
+const serverSource = require('./helpers/fly-lane.cjs').flyLaneSource();
 const netlifySource = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 const OWNER_EMAIL = 'owner@example.test';

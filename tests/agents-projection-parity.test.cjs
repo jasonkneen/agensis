@@ -51,7 +51,10 @@ function mapperKeys(source, functionName) {
   return keys.sort();
 }
 
-const flySource = read('server/index.cjs');
+// The Fly LANE — the /agents route moved to server/workspaces-routes.cjs in
+// Wave 2 of the index.cjs reduction, while the bootstrap select stayed put.
+// This test compares the two, so it must see both.
+const flySource = require('./helpers/fly-lane.cjs').flyLaneSource();
 const netlifySource = read('netlify/functions/backend.mjs');
 
 function routeSlice(source, marker, label) {

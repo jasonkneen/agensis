@@ -47,7 +47,10 @@ function visualEditor(options = {}) {
     },
 
     configureServer(server) {
-      const middleware = createEditorMiddleware({ root: options.editRoot || root });
+      const middleware = createEditorMiddleware({
+        root: options.editRoot || root,
+        targets: options.targets,
+      });
       server.middlewares.use((req, res, next) => middleware(req, res, next));
     },
 

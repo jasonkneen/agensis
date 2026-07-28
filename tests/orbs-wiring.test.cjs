@@ -31,7 +31,9 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const SERVER = read('server/index.cjs');
+// The Fly LANE, not one file — Wave 2 of the index.cjs reduction moves route
+// blocks into server/*-routes.cjs. See tests/helpers/fly-lane.cjs.
+const SERVER = require('./helpers/fly-lane.cjs').flyLaneSource();
 const NEON = read('database/neon-schema.sql');
 const NETLIFY = read('netlify/functions/backend.mjs');
 const MIGRATION = read('supabase/migrations/20260726160000_orbs.sql');
@@ -104,8 +106,16 @@ test('payload_fields is registered as a jsonb column so both backends bind it fo
 function orbRouteSource() {
   const start = SERVER.indexOf("app.post('/backend/webhooks/:token'");
   assert.ok(start > 0, 'the orb trigger route must exist');
-  const end = SERVER.indexOf("app.post('/backend/auth/signup'", start);
-  assert.ok(end > start, 'could not bound the orb trigger route');
+  // Bound on the NEXT registration of any kind, not on a named neighbouring
+  // route. The old bound was app.post('/backend/auth/signup'), which moved to
+  // server/auth-routes.cjs in Wave 2 of the index.cjs reduction: the marker was
+  // still found — further along the concatenated lane — so the slice silently
+  // grew to half the backend and picked up a runAnthropicCompletion belonging to
+  // somebody else. A slice whose end marker can drift into another file is not a
+  // slice of one route.
+  const rest = SERVER.slice(start + 1);
+  const next = rest.search(/\n (?:app\.(?:get|post|put|patch|delete|all)\(|mount[A-Z]\w*Routes\()/);
+  const end = next >= 0 ? start + 1 + next : SERVER.length;
   return SERVER.slice(start, end);
 }
 
