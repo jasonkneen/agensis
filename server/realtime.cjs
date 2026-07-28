@@ -41,6 +41,7 @@ function createRealtime(deps = {}) {
   handleAgentMemorySync,
   handleAgentPermissionRequest,
   handleAgentSkillSync,
+  handleBridgeMessage,
   handlePeerListRequest,
   handlePeerTicketRequest,
   inferenceBroker,
@@ -490,6 +491,15 @@ function createRealtime(deps = {}) {
      }
      if (message.action === 'agent_permission_request') {
       await handleAgentPermissionRequest(ws, message);
+      return;
+     }
+     // The daemon lane's inbound: a WhatsApp/Signal/OpenClaw message the daemon
+     // received on the user's machine, relayed up the socket it already holds.
+     // Scoped to the connection that sent it (handleBridgeInbound re-checks the
+     // bridge belongs to this connection), so one daemon cannot post into
+     // another workspace's bridged channel.
+     if (message.action === 'bridge_inbound' || message.action === 'bridge_status') {
+      await handleBridgeMessage(ws, message);
       return;
      }
      if (['agent_inference_started', 'agent_inference_delta', 'agent_inference_result', 'agent_inference_error'].includes(message.action)) {

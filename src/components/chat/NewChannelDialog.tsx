@@ -18,6 +18,8 @@ import {
   filterChannelTemplates,
   type ChannelTemplate,
 } from '@/lib/channelTemplates';
+import { bridgeSpec } from '@/lib/bridgeProviders';
+import { apiUrl, apiAuthHeaders } from '@/lib/backendClient';
 
 // ---------------------------------------------------------------------------
 // The "+" beside Channels opens this instead of silently creating "New Channel".
@@ -59,7 +61,9 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
   };
 
   const pick = async (tpl: ChannelTemplate) => {
-    // A bridge opens its setup preview instead of creating anything.
+    // A bridge needs credentials before it can be created, so it opens its own
+    // setup step rather than creating a channel on the spot.
+    if (tpl.kind === 'bridge') { setPreview(tpl); return; }
     if (!canCreateFromTemplate(tpl)) { setPreview(tpl); return; }
     setCreating(true);
     try {
@@ -74,7 +78,12 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl">
         {preview ? (
-          <BridgePreview template={preview} onBack={() => setPreview(null)} />
+          <BridgeSetup
+            template={preview}
+            onBack={() => setPreview(null)}
+            onCreate={onCreate}
+            onClose={() => handleOpenChange(false)}
+          />
         ) : (
           <>
             <DialogHeader>
@@ -156,13 +165,68 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
 }
 
 /**
- * What a bridge WOULD ask for. Nothing here submits — the transport does not
- * exist, and a form that accepted a bot token and did nothing with it would be
- * a worse lie than an empty screen. The fields are shown disabled so the shape
- * of the eventual setup is visible without pretending to work.
+ * Setting up a bridge: create the channel, then attach the transport to it.
+ *
+ * The order matters and is not negotiable — a bridge row references a
+ * session_id, so the channel has to exist first. If the bridge call then fails
+ * (bad bot token, usually) the channel SURVIVES rather than being rolled back:
+ * the user's other settings are already on it, and re-entering one token beats
+ * re-creating everything. The channel is left plain, and Edit channel can
+ * retry the connection.
  */
-function BridgePreview({ template, onBack }: { template: ChannelTemplate; onBack: () => void }) {
+function BridgeSetup({
+  template, onBack, onCreate, onClose,
+}: {
+  template: ChannelTemplate;
+  onBack: () => void;
+  onCreate: (draft: ReturnType<typeof channelDraftFromTemplate>) => void | Promise<void>;
+  onClose: () => void;
+}) {
   const Icon = template.icon;
+  const spec = bridgeSpec(template.id);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [externalId, setExternalId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  // Set once the bridge exists. Slack's delivery URL contains the bridge id, so
+  // it cannot be shown before creation — and the user needs it to finish setup
+  // in Slack. Holding the dialog open on this result is the only honest order.
+  const [created, setCreated] = useState<{ eventUrl?: string; setupHint?: string; needsDaemon?: boolean } | null>(null);
+
+  const submit = async () => {
+    if (!spec) return;
+    const missing = spec.fields.filter(f => !String(values[f.key] || '').trim());
+    if (missing.length) {
+      setError(`Fill in ${missing.map(f => f.label).join(' and ')}.`);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const session = await onCreate(channelDraftFromTemplate(template));
+      const sessionId = (session as { id?: string } | undefined)?.id;
+      if (!sessionId) throw new Error('The channel was created but its id came back empty.');
+
+      const res = await fetch(apiUrl('/backend/bridges'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ sessionId, provider: template.id, externalId: externalId.trim(), config: values }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || `Connect failed (${res.status})`);
+      // Slack needs its event URL pasted back into the Slack app, and the daemon
+      // providers need a moment to report a QR — so the dialog stays open on the
+      // result rather than vanishing at the point the user still has work to do.
+      if (json?.data?.eventUrl && spec.provider === 'slack') { setCreated(json.data); return; }
+      if (spec.lane === 'daemon') { setCreated(json.data ?? {}); return; }
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <DialogHeader>
@@ -178,52 +242,105 @@ function BridgePreview({ template, onBack }: { template: ChannelTemplate; onBack
         <DialogDescription>{template.description}</DialogDescription>
       </DialogHeader>
 
-      <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3 text-sm">
-        <div className="font-medium text-foreground">Not connected yet</div>
-        <p className="mt-1 text-muted-foreground">
-          {template.unavailableNote} Nothing on this screen sends or stores anything,
-          and no channel is created — it shows what connecting will ask for.
-        </p>
-      </div>
+      {spec?.warning && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-foreground">
+          {spec.warning}
+        </div>
+      )}
 
-      <div className="space-y-3 opacity-60">
-        <FieldPreview label="Channel name" value={template.title} />
-        <FieldPreview
-          label={template.id === 'openclaw' ? 'Node endpoint' : 'Account'}
-          value={template.id === 'openclaw' ? 'wss://node.example/openclaw' : 'Not connected'}
-        />
-        <FieldPreview
-          label="Credential"
-          value="Stored write-only in the workspace vault"
-        />
-        <FieldPreview label="House style" value={template.intent} multiline />
-      </div>
+      <p className="text-sm text-muted-foreground">{spec?.summary}</p>
+
+      {/* Credentials the user copies out of somebody else's dashboard. They are
+          write-only: the API never sends them back, so an existing bridge shows
+          blank fields rather than a masked value that cannot be edited. */}
+      {spec?.fields.map(field => (
+        <div key={field.key}>
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {field.label}
+          </label>
+          <Input
+            type={field.secret ? 'password' : 'text'}
+            value={values[field.key] ?? ''}
+            placeholder={field.placeholder}
+            autoComplete="off"
+            onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
+          />
+          {field.help && <p className="mt-1 text-xs text-muted-foreground">{field.help}</p>}
+        </div>
+      ))}
+
+      {spec?.externalIdLabel && (
+        <div>
+          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {spec.externalIdLabel}
+          </label>
+          <Input
+            value={externalId}
+            placeholder={spec.externalIdPlaceholder}
+            autoComplete="off"
+            onChange={e => setExternalId(e.target.value)}
+          />
+          {spec.externalIdHelp && <p className="mt-1 text-xs text-muted-foreground">{spec.externalIdHelp}</p>}
+        </div>
+      )}
+
+      {spec && spec.steps.length > 0 && (
+        <div className="rounded-lg border border-border bg-muted/30 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Then, in {template.name}
+          </div>
+          <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
+            {spec.steps.map(step => <li key={step}>{step}</li>)}
+          </ol>
+        </div>
+      )}
+
+      {created?.eventUrl && (
+        <div className="rounded-lg border border-border bg-background p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Event URL</div>
+          <code className="mt-1 block break-all text-xs text-foreground">{created.eventUrl}</code>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={() => void navigator.clipboard?.writeText(created.eventUrl ?? '')}
+          >
+            Copy
+          </Button>
+        </div>
+      )}
+
+      {created?.needsDaemon && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          The channel is connected, but no agensis daemon is running in this workspace yet —
+          this bridge starts as soon as one connects.
+        </p>
+      )}
+
+      {created && !created.eventUrl && !created.needsDaemon && (
+        <p className="text-sm text-muted-foreground">
+          Connected. {created.setupHint}
+        </p>
+      )}
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={onBack}>
-          Back
-        </Button>
-        <Button type="button" size="sm" disabled title="This bridge is not built yet">
-          <Plus data-icon="inline-start" />
-          Connect
-        </Button>
+        {created ? (
+          <Button type="button" size="sm" onClick={onClose}>Done</Button>
+        ) : (
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={onBack} disabled={busy}>
+              Back
+            </Button>
+            <Button type="button" size="sm" onClick={() => void submit()} disabled={busy}>
+              <Plus data-icon="inline-start" />
+              {busy ? 'Connecting…' : 'Create and connect'}
+            </Button>
+          </>
+        )}
       </div>
     </>
-  );
-}
-
-function FieldPreview({ label, value, multiline }: { label: string; value: string; multiline?: boolean }) {
-  return (
-    <div>
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div
-        className={cn(
-          'rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground',
-          multiline && 'min-h-[64px] whitespace-pre-wrap',
-        )}
-      >
-        {value || '—'}
-      </div>
-    </div>
   );
 }

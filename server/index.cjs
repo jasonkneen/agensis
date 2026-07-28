@@ -124,6 +124,11 @@ const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
 const { mountConnectionsRoutes } = require('./connections-routes.cjs');
 const { mountSessionsRoutes } = require('./sessions-routes.cjs');
 const { mountAgentWebhooksRoutes } = require('./agent-webhooks-routes.cjs');
+const { createChannelBridges } = require('./channel-bridges.cjs');
+const {
+ telegramAdapter, telegramSetWebhook, slackAdapter, mountBridgeRoutes,
+} = require('./bridge-routes.cjs');
+const { mountBridgeAdminRoutes } = require('./bridge-admin-routes.cjs');
 const { mountPetsRoutes } = require('./pets-routes.cjs');
 const { mountHealthRoutes } = require('./health-routes.cjs');
 const {
@@ -838,6 +843,70 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+    -- A channel fed by an OUTSIDE network. One row = one (channel, provider,
+    -- external chat) triple, so a channel mirrors exactly one remote room and a
+    -- remote room lands in exactly one channel.
+    --
+    -- The lane is where the transport actually runs, and it is a property of the
+    -- PROVIDER, not a preference:
+    --   'hub'    Telegram, Slack — the network pushes to a public URL, so Fly
+    --            can own the socket and the credential.
+    --   'daemon' WhatsApp, Signal, OpenClaw — these need to be a linked DEVICE
+    --            (or, for OpenClaw, to reach 127.0.0.1:18789). No hosted server
+    --            can hold that; it runs on the user's machine and relays over
+    --            the daemon's existing WS.
+    --
+    -- The config column holds provider credentials the USER supplies (bot token,
+    -- signing secret, gateway url). external_id is the remote chat id — always
+    -- the stable id, never a display name, because names get renamed.
+    CREATE TABLE IF NOT EXISTS channel_bridges (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      provider text NOT NULL,
+      lane text NOT NULL,
+      external_id text NOT NULL DEFAULT '',
+      config jsonb NOT NULL DEFAULT '{}'::jsonb,
+      -- The daemon currently carrying this bridge. ON DELETE SET NULL so pruning
+      -- an offline connection marks the bridge unattached instead of deleting it.
+      connection_id uuid REFERENCES agent_connections(id) ON DELETE SET NULL,
+      status text NOT NULL DEFAULT 'pending',
+      last_error text,
+      last_inbound_at timestamptz,
+      last_outbound_at timestamptz,
+      enabled boolean NOT NULL DEFAULT true,
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_bridges_workspace_id ON channel_bridges(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_channel_bridges_session_id ON channel_bridges(session_id);
+    -- Outbound reads this on every message insert; keep it a single index hit.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_bridges_session ON channel_bridges(session_id);
+    ALTER TABLE channel_bridges DROP CONSTRAINT IF EXISTS channel_bridges_provider_check;
+    ALTER TABLE channel_bridges ADD CONSTRAINT channel_bridges_provider_check
+      CHECK (provider IN ('telegram', 'slack', 'whatsapp', 'signal', 'openclaw'));
+    ALTER TABLE channel_bridges DROP CONSTRAINT IF EXISTS channel_bridges_lane_check;
+    ALTER TABLE channel_bridges ADD CONSTRAINT channel_bridges_lane_check
+      CHECK (lane IN ('hub', 'daemon'));
+
+    -- The loop guard. Every message that crosses the bridge in EITHER direction
+    -- is recorded here, and the unique index is what makes ingest idempotent:
+    -- Telegram retries a webhook it thinks failed, Baileys replays on reconnect,
+    -- and signal-cli re-delivers on restart. Without this, one flaky delivery
+    -- becomes a duplicate message and — worse — an agent turn that runs twice.
+    CREATE TABLE IF NOT EXISTS bridge_messages (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      bridge_id uuid NOT NULL REFERENCES channel_bridges(id) ON DELETE CASCADE,
+      external_message_id text NOT NULL,
+      direction text NOT NULL,
+      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+      created_at timestamptz DEFAULT now()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bridge_messages_external
+      ON bridge_messages(bridge_id, external_message_id);
+    CREATE INDEX IF NOT EXISTS idx_bridge_messages_message_id ON bridge_messages(message_id);
 
     -- Link preview (unfurl) cache. Keyed by a hash of the NORMALIZED url and
     -- deliberately NOT workspace-scoped: the whole point is one outbound fetch
@@ -1999,6 +2068,9 @@ function jsonError(res, status, error) {
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Bridge deliveries are machine traffic and legitimately bursty — a busy Slack
+// channel or a Telegram group mid-argument outruns a human webhook by a lot.
+const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // A credentialed outbound call is not comparable to the DB reads the rest of the
 // MCP surface makes: it spends a provider's rate limit, it can provision billable
@@ -6644,6 +6716,9 @@ const agentConnections = createAgentConnections({
  isAgentEnabled, logConnectionActivity, normalizeSkillDocuments, parseJsonObject,
  publicAgentConnection, publicFarmEnrolledAgent, quoteIdent, reachFromMessage,
  rehomeRunningJobs, repairStoredIdentity, sharedModelsFromMessage, slugHandle,
+ // Forwarded lazily: channelBridges is constructed from agentConnections' own
+ // exports, so it does not exist yet at this point in the file.
+ resumeDaemonBridges: (...args) => channelBridges.resumeDaemonBridges(...args),
  // Realtime is created below, so these two are forwarded lazily rather than
  // captured — the module needs the live functions, not the bindings as they
  // stand at construction time.
@@ -6660,8 +6735,21 @@ const {
  hasMcpPresence, pruneOfflineConnections, reconcileAgentConnectionsAtStartup,
  applyAgentIdentity, repairCorruptedAgentIdentities, clearPendingJobFailures,
  AGENT_DISCONNECT_CLOSE_MESSAGES, AGENT_IDENTITY_SELECT, connectedAgents,
- registerTestConnectedAgent, listTestConnectedAgents,
+ registerTestConnectedAgent, listTestConnectedAgents, sendToConnection,
 } = agentConnections;
+
+// Channel bridges. Constructed after agentConnections because the daemon lane
+// sends through it, and lazily forwarding continueConversation/notifyDbSubscribers
+// for the same reason those are forwarded above: both are defined further down.
+const channelBridges = createChannelBridges({
+ getDb, isConnectionSocketOpen, sendToConnection,
+ continueConversation: (...args) => continueConversation(...args),
+ notifyDbSubscribers: (...args) => realtime.notifyDbSubscribers(...args),
+});
+// The hub lane's two providers. Registered here rather than inside the module so
+// a test can construct channelBridges with no adapters and no network at all.
+channelBridges.registerHubAdapter(telegramAdapter());
+channelBridges.registerHubAdapter(slackAdapter());
 
 // One relay for the process; per-socket state hangs off `ws.voiceStt`.
 const voiceRelay = createVoiceRelay();
@@ -6676,6 +6764,7 @@ const realtime = createRealtime({
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
  handleAgentJobStep, handleAgentMemorySync, handleAgentSkillSync,
  handleAgentPermissionRequest,
+ handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
@@ -6886,6 +6975,20 @@ function createApp() {
  mountAgentWebhooksRoutes(app, {
   ...coreDeps(), broadcastGlobal, continueConversation, hashAgentToken,
   inviteTokenLookupParams, verifyNetlifyDeploySignature, webhookRateLimiter,
+ });
+
+ // Slack signs the RAW bytes. `req.rawBody` is already captured by the
+ // express.json verify hook above (it exists for Netlify's JWS), so the Slack
+ // HMAC reuses it rather than mounting a second parser for one path —
+ // re-serializing the parsed object reorders keys and the signature stops
+ // matching, which is the classic way this breaks.
+ mountBridgeRoutes(app, {
+  ...coreDeps(), bridges: channelBridges, bridgeRateLimiter,
+ });
+ mountBridgeAdminRoutes(app, {
+  ...coreDeps(), bridges: channelBridges, findConnectedAgent, requestBaseUrl,
+  resolveWorkspaceIdForSession, telegramSetWebhook,
+  getWorkspaceRole, roleHasWorkspaceCapability,
  });
 
  mountWorkspacesRoutes(app, {
@@ -7101,6 +7204,19 @@ function createApp() {
    );
 
    notifyDbSubscribers(table, 'INSERT', result);
+
+   // A message posted into a bridged channel goes out to the outside network it
+   // mirrors. Fire-and-forget AFTER the row is written and broadcast: a Telegram
+   // outage must never cost somebody the message they just sent in the app.
+   // emitBridgeOutbound itself refuses anything that came IN over the bridge, so
+   // this cannot echo.
+   if (table === 'messages') {
+    for (const row of result) {
+     void channelBridges.emitBridgeOutbound(row).catch((error) =>
+      console.error('emitBridgeOutbound failed', error),
+     );
+    }
+   }
 
    // A human comment that @mentions an agent wakes that agent in its DM. Fire-and-
    // forget so the insert responds immediately; each mention is guarded internally.
